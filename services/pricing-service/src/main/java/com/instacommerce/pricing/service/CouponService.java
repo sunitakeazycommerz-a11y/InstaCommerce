@@ -78,10 +78,10 @@ public class CouponService {
 
     @Transactional
     public void redeemCoupon(String code, UUID userId, UUID orderId, long discountCents) {
-        Coupon coupon = couponRepository.findByCodeIgnoreCase(code)
+        Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)
                 .orElseThrow(() -> new CouponNotFoundException(code));
 
-        // Thread-safe redemption: check limits again inside transaction
+        // Thread-safe redemption: lock coupon row and check limits inside transaction
         if (coupon.getTotalLimit() != null && coupon.getTotalRedeemed() >= coupon.getTotalLimit()) {
             throw new InvalidCouponException("Coupon has reached its total redemption limit");
         }
@@ -96,11 +96,12 @@ public class CouponService {
         redemption.setUserId(userId);
         redemption.setOrderId(orderId);
         redemption.setDiscountCents(discountCents);
+        redemption.setSingleUse(coupon.isSingleUse());
 
         try {
             couponRedemptionRepository.save(redemption);
         } catch (DataIntegrityViolationException ex) {
-            // Unique constraint violation for single-use coupons
+            // Constraint violation for single-use coupon redemptions
             throw new InvalidCouponException("Coupon has already been used");
         }
 

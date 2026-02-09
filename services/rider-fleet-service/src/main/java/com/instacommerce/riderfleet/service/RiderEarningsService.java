@@ -6,7 +6,6 @@ import com.instacommerce.riderfleet.exception.RiderNotFoundException;
 import com.instacommerce.riderfleet.repository.RiderEarningRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,19 +44,18 @@ public class RiderEarningsService {
         riderRepository.findById(riderId)
             .orElseThrow(() -> new RiderNotFoundException(riderId.toString()));
 
-        List<RiderEarning> earnings = earningRepository.findByRiderIdAndEarnedAtBetween(riderId, fromDate, toDate);
-
-        long totalDeliveryFee = earnings.stream().mapToLong(RiderEarning::getDeliveryFeeCents).sum();
-        long totalTip = earnings.stream().mapToLong(RiderEarning::getTipCents).sum();
-        long totalIncentive = earnings.stream().mapToLong(RiderEarning::getIncentiveCents).sum();
+        long totalDeliveryFee = earningRepository.sumDeliveryFeeCents(riderId, fromDate, toDate);
+        long totalTip = earningRepository.sumTipCents(riderId, fromDate, toDate);
+        long totalIncentive = earningRepository.sumIncentiveCents(riderId, fromDate, toDate);
         long total = totalDeliveryFee + totalTip + totalIncentive;
+        long count = earningRepository.countByRiderIdAndEarnedAtBetween(riderId, fromDate, toDate);
 
         return new EarningsSummaryResponse(
             total,
             totalDeliveryFee,
             totalTip,
             totalIncentive,
-            earnings.size(),
+            count,
             fromDate,
             toDate
         );

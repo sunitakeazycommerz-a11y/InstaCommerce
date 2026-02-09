@@ -38,8 +38,15 @@ public class DeliveryController {
     @GetMapping("/{id}/eta")
     public ResponseEntity<ETAResponse> getETA(@PathVariable UUID id) {
         DeliveryResponse delivery = deliveryService.getById(id);
+        TrackingResponse latest = trackingService.findLatestLocation(id).orElse(null);
+        double fromLat = latest != null
+            ? latest.latitude().doubleValue()
+            : delivery.pickupLat().doubleValue();
+        double fromLng = latest != null
+            ? latest.longitude().doubleValue()
+            : delivery.pickupLng().doubleValue();
         ETAResponse eta = etaService.calculateETA(
-            delivery.pickupLat().doubleValue(), delivery.pickupLng().doubleValue(),
+            fromLat, fromLng,
             delivery.dropoffLat().doubleValue(), delivery.dropoffLng().doubleValue());
         return ResponseEntity.ok(eta);
     }

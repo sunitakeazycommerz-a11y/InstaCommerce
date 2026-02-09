@@ -1,6 +1,8 @@
 package com.instacommerce.order.workflow;
 
+import com.instacommerce.order.dto.request.CartItem;
 import com.instacommerce.order.dto.request.CheckoutRequest;
+import com.instacommerce.order.exception.CheckoutFailedException;
 import com.instacommerce.order.exception.InsufficientStockException;
 import com.instacommerce.order.exception.PaymentDeclinedException;
 import com.instacommerce.order.workflow.activities.CartActivities;
@@ -62,6 +64,17 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
     public CheckoutResult execute(CheckoutRequest request) {
         Saga saga = new Saga(new Saga.Options.Builder().setParallelCompensation(false).build());
         try {
+            long subtotalCents = 0L;
+            for (CartItem item : request.items()) {
+                long lineTotal = Math.multiplyExact(item.quantity().longValue(), item.unitPriceCents());
+                subtotalCents = Math.addExact(subtotalCents, lineTotal);
+            }
+            long discountCents = request.discountCents();
+            long totalCents = subtotalCents - discountCents;
+            if (totalCents < 0) {
+                throw new CheckoutFailedException("Discount exceeds subtotal.");
+            }
+
             currentStatus = "RESERVING_INVENTORY";
             ReserveResult reserveResult = inventory.reserveInventory(
                 request.idempotencyKey(),
@@ -72,7 +85,7 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             currentStatus = "AUTHORIZING_PAYMENT";
             PaymentResult paymentResult = payment.authorizePayment(
                 request.idempotencyKey(),
-                request.totalCents(),
+                totalCents,
                 request.currency(),
                 "pay-" + request.idempotencyKey());
             saga.addCompensation(payment::voidPayment, paymentResult.paymentId());
@@ -82,9 +95,9 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 .userId(request.userId())
                 .storeId(request.storeId())
                 .items(request.items())
-                .subtotalCents(request.subtotalCents())
-                .discountCents(request.discountCents())
-                .totalCents(request.totalCents())
+                .subtotalCents(subtotalCents)
+                .discountCents(discountCents)
+                .totalCents(totalCents)
                 .currency(request.currency())
                 .couponCode(request.couponCode())
                 .reservationId(toUuid(reserveResult.reservationId()))

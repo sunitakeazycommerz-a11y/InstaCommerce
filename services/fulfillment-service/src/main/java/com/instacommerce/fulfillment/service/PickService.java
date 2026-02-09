@@ -111,6 +111,7 @@ public class PickService {
         PickItem item = pickItemRepository.findByPickTask_OrderIdAndProductId(orderId, productId)
             .orElseThrow(() -> new PickItemNotFoundException(orderId, productId));
         PickItemStatus previousStatus = item.getStatus();
+        int previousPickedQty = item.getPickedQty();
         applyItemUpdate(item, request);
         pickItemRepository.save(item);
 
@@ -124,9 +125,9 @@ public class PickService {
             eventPublisher.publishEvent(new OrderStatusUpdateEvent(orderId, "PACKING", "picking-started"));
         }
 
-        if (request.status() == PickItemStatus.MISSING && previousStatus != PickItemStatus.MISSING) {
-            int missingQty = item.getQuantity() - item.getPickedQty();
-            substitutionService.handleMissingItem(task, item, missingQty);
+        int missingQtyDelta = calculateMissingQtyDelta(previousStatus, previousPickedQty, item);
+        if (missingQtyDelta > 0) {
+            substitutionService.handleMissingItem(task, item, missingQtyDelta);
         }
 
         if (isTaskCompleted(task)) {
@@ -199,6 +200,22 @@ public class PickService {
 
     private boolean areItemsPicked(PickTask task) {
         return pickItemRepository.countByPickTask_IdAndStatus(task.getId(), PickItemStatus.PENDING) == 0;
+    }
+
+    private int calculateMissingQtyDelta(PickItemStatus previousStatus, int previousPickedQty, PickItem item) {
+        int previousMissingQty = missingQtyForStatus(previousStatus, item.getQuantity(), previousPickedQty);
+        int currentMissingQty = missingQtyForStatus(item.getStatus(), item.getQuantity(), item.getPickedQty());
+        return Math.max(currentMissingQty - previousMissingQty, 0);
+    }
+
+    private int missingQtyForStatus(PickItemStatus status, int quantity, int pickedQty) {
+        if (status == PickItemStatus.MISSING) {
+            return Math.max(quantity - pickedQty, 0);
+        }
+        if (status == PickItemStatus.PICKED && pickedQty < quantity) {
+            return quantity - pickedQty;
+        }
+        return 0;
     }
 
     private void completeTask(PickTask task) {

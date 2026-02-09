@@ -7,8 +7,11 @@ import com.instacommerce.warehouse.dto.response.CapacityResponse;
 import com.instacommerce.warehouse.exception.StoreNotFoundException;
 import com.instacommerce.warehouse.repository.StoreCapacityRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
+import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.Optional;
 import java.util.UUID;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -33,23 +36,27 @@ public class CapacityService {
 
     @Transactional(readOnly = true)
     public CapacityResponse getStoreCapacity(UUID storeId, LocalDateTime now) {
-        LocalDate date = now.toLocalDate();
-        int hour = now.getHour();
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> new StoreNotFoundException(storeId));
+        ZonedDateTime storeNow = toStoreTime(store, now);
+        LocalDate date = storeNow.toLocalDate();
+        int hour = storeNow.getHour();
         Optional<StoreCapacity> capacity = capacityRepository
                 .findByStoreIdAndDateAndHour(storeId, date, hour);
         if (capacity.isPresent()) {
             return StoreMapper.toCapacityResponse(capacity.get());
         }
-        Store store = storeRepository.findById(storeId)
-                .orElseThrow(() -> new StoreNotFoundException(storeId));
         return new CapacityResponse(storeId, date, hour, 0,
                 store.getCapacityOrdersPerHour(), true);
     }
 
     @Transactional
     public boolean canAcceptOrder(UUID storeId, LocalDateTime now) {
-        LocalDate date = now.toLocalDate();
-        int hour = now.getHour();
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> new StoreNotFoundException(storeId));
+        ZonedDateTime storeNow = toStoreTime(store, now);
+        LocalDate date = storeNow.toLocalDate();
+        int hour = storeNow.getHour();
         Optional<StoreCapacity> capacity = capacityRepository
                 .findByStoreIdAndDateAndHour(storeId, date, hour);
         if (capacity.isEmpty()) {
@@ -61,26 +68,14 @@ public class CapacityService {
 
     @Transactional
     public boolean incrementOrderCount(UUID storeId, LocalDateTime now) {
-        LocalDate date = now.toLocalDate();
-        int hour = now.getHour();
-        Optional<StoreCapacity> existing = capacityRepository
-                .findByStoreIdAndDateAndHour(storeId, date, hour);
-
-        if (existing.isPresent()) {
-            int updated = capacityRepository.incrementOrderCount(existing.get().getId());
-            return updated > 0;
-        }
-
         Store store = storeRepository.findById(storeId)
                 .orElseThrow(() -> new StoreNotFoundException(storeId));
-        StoreCapacity capacity = new StoreCapacity();
-        capacity.setStore(store);
-        capacity.setDate(date);
-        capacity.setHour(hour);
-        capacity.setCurrentOrders(1);
-        capacity.setMaxOrders(store.getCapacityOrdersPerHour());
-        capacityRepository.save(capacity);
-        return true;
+        ZonedDateTime storeNow = toStoreTime(store, now);
+        LocalDate date = storeNow.toLocalDate();
+        int hour = storeNow.getHour();
+        int updated = capacityRepository.incrementOrderCount(
+                storeId, date, hour, store.getCapacityOrdersPerHour());
+        return updated > 0;
     }
 
     @Scheduled(cron = "0 0 0 * * *")
@@ -90,5 +85,19 @@ public class CapacityService {
         LocalDate cutoff = LocalDate.now().minusDays(7);
         int deleted = capacityRepository.deleteOlderThan(cutoff);
         log.info("Capacity cleanup: deleted {} records older than {}", deleted, cutoff);
+    }
+
+    private ZonedDateTime toStoreTime(Store store, LocalDateTime now) {
+        ZoneId storeZone = resolveZoneId(store.getTimezone());
+        return now.atZone(ZoneId.systemDefault()).withZoneSameInstant(storeZone);
+    }
+
+    private ZoneId resolveZoneId(String timezone) {
+        String value = (timezone == null || timezone.isBlank()) ? "UTC" : timezone.trim();
+        try {
+            return ZoneId.of(value);
+        } catch (DateTimeException ex) {
+            throw new IllegalArgumentException("Invalid timezone");
+        }
     }
 }

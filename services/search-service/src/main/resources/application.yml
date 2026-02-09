@@ -14,10 +14,13 @@ spring:
     username: ${SEARCH_DB_USER:postgres}
     password: ${sm://db-password-search:${SEARCH_DB_PASSWORD}}
     hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
-      connection-timeout: 5000
+      maximum-pool-size: 50
+      minimum-idle: 20
+      connection-timeout: 3000
       max-lifetime: 1800000
+      leak-detection-threshold: 60000
+      data-source-properties:
+        options: "-c statement_timeout=5000"
   jpa:
     hibernate:
       ddl-auto: validate

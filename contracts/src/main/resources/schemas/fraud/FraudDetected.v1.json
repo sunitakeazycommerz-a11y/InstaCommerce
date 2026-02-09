@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FraudDetected",
+  "type": "object",
+  "required": ["signalId", "userId", "orderId", "score", "riskLevel", "action", "rulesTriggered"],
+  "properties": {
+    "signalId": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string", "format": "uuid" },
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "riskLevel": { "type": "string" },
+    "action": { "type": "string" },
+    "rulesTriggered": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

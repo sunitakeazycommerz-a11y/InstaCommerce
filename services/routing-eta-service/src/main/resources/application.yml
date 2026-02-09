@@ -37,7 +37,7 @@ spring:
   cache:
     type: caffeine
     caffeine:
-      spec: maximumSize=100000,expireAfterWrite=30s
+      spec: maximumSize=100000,expireAfterWrite=10s
 
 routing:
   jwt:
@@ -46,6 +46,9 @@ routing:
   eta:
     average-speed-kmh: ${ETA_AVG_SPEED_KMH:25}
     preparation-time-minutes: ${ETA_PREP_TIME_MINUTES:3}
+    road-distance-multiplier: ${ETA_ROAD_DISTANCE_MULTIPLIER:1.4}
+    peak-speed-multiplier: ${ETA_PEAK_SPEED_MULTIPLIER:0.6}
+    night-speed-multiplier: ${ETA_NIGHT_SPEED_MULTIPLIER:1.2}
 
 google:
   maps:

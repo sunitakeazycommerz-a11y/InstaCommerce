@@ -1,5 +1,6 @@
 package com.instacommerce.inventory.controller;
 
+import com.instacommerce.inventory.dto.request.StockAdjustBatchRequest;
 import com.instacommerce.inventory.dto.request.StockAdjustRequest;
 import com.instacommerce.inventory.dto.request.StockCheckRequest;
 import com.instacommerce.inventory.dto.response.StockCheckItemResponse;
@@ -45,5 +46,11 @@ public class StockController {
     @PreAuthorize("hasRole('ADMIN')")
     public StockCheckItemResponse adjust(@Valid @RequestBody StockAdjustRequest request) {
         return inventoryService.adjustStock(request);
+    }
+
+    @PostMapping("/adjust-batch")
+    @PreAuthorize("hasRole('ADMIN')")
+    public StockCheckResponse adjustBatch(@Valid @RequestBody StockAdjustBatchRequest request) {
+        return inventoryService.adjustStockBatch(request);
     }
 }

@@ -51,6 +51,9 @@ public class AuditQueryService {
             if (criteria.eventType() != null && !criteria.eventType().isBlank()) {
                 predicates.add(cb.equal(root.get("eventType"), criteria.eventType()));
             }
+            if (criteria.correlationId() != null && !criteria.correlationId().isBlank()) {
+                predicates.add(cb.equal(root.get("correlationId"), criteria.correlationId()));
+            }
             if (criteria.fromDate() != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), criteria.fromDate()));
             }

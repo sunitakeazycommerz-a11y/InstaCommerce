@@ -17,3 +17,29 @@ services:
     tag: dev
   notification-service:
     tag: dev
+  search-service:
+    tag: dev
+  pricing-service:
+    tag: dev
+  cart-service:
+    tag: dev
+  checkout-orchestrator-service:
+    tag: dev
+  warehouse-service:
+    tag: dev
+  rider-fleet-service:
+    tag: dev
+  routing-eta-service:
+    tag: dev
+  wallet-loyalty-service:
+    tag: dev
+  audit-trail-service:
+    tag: dev
+  fraud-detection-service:
+    tag: dev
+  config-feature-flag-service:
+    tag: dev
+  mobile-bff-service:
+    tag: dev
+  admin-gateway-service:
+    tag: dev

@@ -2,10 +2,13 @@ package com.instacommerce.riderfleet.service;
 
 import com.instacommerce.riderfleet.config.RiderFleetProperties;
 import com.instacommerce.riderfleet.domain.model.Rider;
+import com.instacommerce.riderfleet.domain.model.RiderAssignment;
 import com.instacommerce.riderfleet.domain.model.RiderAvailability;
 import com.instacommerce.riderfleet.domain.model.RiderStatus;
+import com.instacommerce.riderfleet.exception.DuplicateAssignmentException;
 import com.instacommerce.riderfleet.exception.NoAvailableRiderException;
 import com.instacommerce.riderfleet.exception.RiderNotFoundException;
+import com.instacommerce.riderfleet.repository.RiderAssignmentRepository;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
 import java.math.BigDecimal;
@@ -13,6 +16,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,15 +26,18 @@ public class RiderAssignmentService {
 
     private final RiderRepository riderRepository;
     private final RiderAvailabilityRepository availabilityRepository;
+    private final RiderAssignmentRepository assignmentRepository;
     private final OutboxService outboxService;
     private final RiderFleetProperties properties;
 
     public RiderAssignmentService(RiderRepository riderRepository,
                                    RiderAvailabilityRepository availabilityRepository,
+                                   RiderAssignmentRepository assignmentRepository,
                                    OutboxService outboxService,
                                    RiderFleetProperties properties) {
         this.riderRepository = riderRepository;
         this.availabilityRepository = availabilityRepository;
+        this.assignmentRepository = assignmentRepository;
         this.outboxService = outboxService;
         this.properties = properties;
     }
@@ -42,6 +49,10 @@ public class RiderAssignmentService {
      */
     @Transactional
     public UUID assignRider(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng) {
+        if (assignmentRepository.existsByOrderId(orderId)) {
+            throw new DuplicateAssignmentException(orderId);
+        }
+
         double radiusKm = properties.getAssignment().getDefaultRadiusKm();
 
         RiderAvailability availability = availabilityRepository
@@ -56,6 +67,16 @@ public class RiderAssignmentService {
 
         availability.setAvailable(false);
         availabilityRepository.save(availability);
+
+        RiderAssignment assignment = new RiderAssignment();
+        assignment.setOrderId(orderId);
+        assignment.setRiderId(rider.getId());
+        assignment.setStoreId(storeId);
+        try {
+            assignmentRepository.save(assignment);
+        } catch (DataIntegrityViolationException ex) {
+            throw new DuplicateAssignmentException(orderId);
+        }
 
         outboxService.publish("Rider", rider.getId().toString(), "RiderAssigned",
             Map.of("riderId", rider.getId(), "orderId", orderId, "storeId", storeId));

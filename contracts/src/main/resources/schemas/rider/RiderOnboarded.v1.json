@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RiderOnboarded",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "phone",
+    "vehicleType",
+    "status",
+    "ratingAvg",
+    "totalDeliveries",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "name": { "type": "string" },
+    "phone": { "type": "string" },
+    "email": { "type": "string" },
+    "vehicleType": { "type": "string" },
+    "licenseNumber": { "type": "string" },
+    "status": { "type": "string" },
+    "ratingAvg": { "type": "number" },
+    "totalDeliveries": { "type": "integer", "minimum": 0 },
+    "storeId": { "type": "string", "format": "uuid" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

@@ -7,9 +7,7 @@ import com.instacommerce.featureflag.domain.model.FeatureFlag;
 import com.instacommerce.featureflag.domain.model.FlagOverride;
 import com.instacommerce.featureflag.dto.response.FlagEvaluationResponse;
 import com.instacommerce.featureflag.repository.FeatureFlagRepository;
-import com.instacommerce.featureflag.repository.FlagOverrideRepository;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -31,14 +29,14 @@ public class FlagEvaluationService {
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
 
     private final FeatureFlagRepository flagRepository;
-    private final FlagOverrideRepository overrideRepository;
+    private final FlagOverrideService overrideService;
     private final ObjectMapper objectMapper;
 
     public FlagEvaluationService(FeatureFlagRepository flagRepository,
-                                 FlagOverrideRepository overrideRepository,
+                                 FlagOverrideService overrideService,
                                  ObjectMapper objectMapper) {
         this.flagRepository = flagRepository;
-        this.overrideRepository = overrideRepository;
+        this.overrideService = overrideService;
         this.objectMapper = objectMapper;
     }
 
@@ -48,18 +46,32 @@ public class FlagEvaluationService {
             return new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
         }
 
-        // 1. Check user-specific override first
+        FlagOverride override = null;
         if (userId != null) {
-            Optional<FlagOverride> override = overrideRepository
-                    .findActiveByFlagIdAndUserId(flag.getId(), userId, Instant.now());
-            if (override.isPresent()) {
-                return new FlagEvaluationResponse(key,
-                        parseValue(override.get().getOverrideValue()),
-                        FlagEvaluationResponse.SOURCE_OVERRIDE);
-            }
+            Optional<FlagOverride> overrideCandidate = overrideService
+                    .findActiveOverride(flag.getKey(), flag.getId(), userId);
+            override = overrideCandidate.orElse(null);
         }
 
-        // 2. Evaluate based on flag type
+        return evaluate(flag, key, userId, context, override);
+    }
+
+    @Cacheable(value = "flags", key = "#key")
+    public FeatureFlag loadFlag(String key) {
+        return flagRepository.findByKey(key).orElse(null);
+    }
+
+    FlagEvaluationResponse evaluate(FeatureFlag flag, String key, UUID userId, Map<String, Object> context,
+                                    FlagOverride override) {
+        if (flag == null) {
+            return new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
+        }
+        if (override != null) {
+            return new FlagEvaluationResponse(key,
+                    parseValue(override.getOverrideValue()),
+                    FlagEvaluationResponse.SOURCE_OVERRIDE);
+        }
+
         return switch (flag.getFlagType()) {
             case BOOLEAN -> new FlagEvaluationResponse(key, flag.isEnabled(),
                     FlagEvaluationResponse.SOURCE_DEFAULT);
@@ -72,11 +84,6 @@ public class FlagEvaluationService {
                     parseValue(flag.getDefaultValue()),
                     FlagEvaluationResponse.SOURCE_DEFAULT);
         };
-    }
-
-    @Cacheable(value = "flags", key = "#key")
-    public FeatureFlag loadFlag(String key) {
-        return flagRepository.findByKey(key).orElse(null);
     }
 
     private FlagEvaluationResponse evaluatePercentage(FeatureFlag flag, String key, UUID userId) {
@@ -98,7 +105,9 @@ public class FlagEvaluationService {
         try {
             List<String> targetUsers = objectMapper.readValue(flag.getTargetUsers(), STRING_LIST_TYPE);
             boolean isTargeted = targetUsers.contains(userId.toString());
-            return new FlagEvaluationResponse(key, isTargeted, FlagEvaluationResponse.SOURCE_DEFAULT);
+            return new FlagEvaluationResponse(key, isTargeted,
+                    isTargeted ? FlagEvaluationResponse.SOURCE_USER_LIST
+                            : FlagEvaluationResponse.SOURCE_DEFAULT);
         } catch (Exception e) {
             log.warn("Failed to parse target_users for flag '{}': {}", key, e.getMessage());
             return new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
@@ -109,7 +118,7 @@ public class FlagEvaluationService {
     static int computeBucket(UUID userId, String flagKey) {
         String input = userId.toString() + ":" + flagKey;
         int hash = Hashing.murmur3_32_fixed().hashString(input, StandardCharsets.UTF_8).asInt();
-        return Math.abs(hash % 100);
+        return (hash & 0x7FFFFFFF) % 100;
     }
 
     private Object parseValue(String value) {

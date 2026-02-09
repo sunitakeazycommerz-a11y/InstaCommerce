@@ -38,7 +38,6 @@ public class DefaultJwtService implements JwtService {
             .expiration(Date.from(expiresAt))
             .claim("roles", roles)
             .claim("aud", "instacommerce-api")
-            .claim("email", user.getEmail())
             .id(UUID.randomUUID().toString())
             .header().keyId(keyLoader.getKeyId()).and()
             .signWith(keyLoader.getPrivateKey(), Jwts.SIG.RS256)

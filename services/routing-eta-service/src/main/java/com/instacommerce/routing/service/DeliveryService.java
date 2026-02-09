@@ -36,6 +36,11 @@ public class DeliveryService {
     public DeliveryResponse createDelivery(UUID orderId, UUID riderId, UUID storeId,
                                            BigDecimal pickupLat, BigDecimal pickupLng,
                                            BigDecimal dropoffLat, BigDecimal dropoffLng) {
+        var existing = deliveryRepository.findByOrderId(orderId);
+        if (existing.isPresent()) {
+            log.info("Delivery already exists for order {}", orderId);
+            return toResponse(existing.get());
+        }
         var eta = etaService.calculateETA(
             pickupLat.doubleValue(), pickupLng.doubleValue(),
             dropoffLat.doubleValue(), dropoffLng.doubleValue());
@@ -90,12 +95,13 @@ public class DeliveryService {
         Delivery delivery = deliveryRepository.findById(deliveryId)
             .orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
 
+        validateTransition(delivery.getStatus(), DeliveryStatus.DELIVERED);
         delivery.setStatus(DeliveryStatus.DELIVERED);
         delivery.setDeliveredAt(Instant.now());
 
         if (delivery.getStartedAt() != null) {
-            long minutes = Duration.between(delivery.getStartedAt(), delivery.getDeliveredAt()).toMinutes();
-            delivery.setActualMinutes((int) minutes);
+            long seconds = Duration.between(delivery.getStartedAt(), delivery.getDeliveredAt()).toSeconds();
+            delivery.setActualMinutes((int) Math.round(seconds / 60.0));
         }
 
         delivery = deliveryRepository.save(delivery);

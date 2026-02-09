@@ -1,6 +1,7 @@
 package com.instacommerce.checkout.workflow.activity;
 
 import com.instacommerce.checkout.dto.PaymentAuthResult;
+import io.temporal.activity.Activity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,21 +21,46 @@ public class PaymentActivityImpl implements PaymentActivity {
 
     @Override
     public PaymentAuthResult authorizePayment(long amountCents, String paymentMethodId, String idempotencyKey) {
-        log.info("Authorizing payment amount={} paymentMethod={} idempotencyKey={}", amountCents, paymentMethodId, idempotencyKey);
-        return restTemplate.postForObject("/api/payments/authorize",
-            Map.of("amountCents", amountCents, "paymentMethodId", paymentMethodId, "idempotencyKey", idempotencyKey),
+        String resolvedKey = resolveIdempotencyKey(idempotencyKey);
+        log.info("Authorizing payment amount={} paymentMethod={} idempotencyKey={}", amountCents, paymentMethodId, resolvedKey);
+        return restTemplate.postForObject("/payments/authorize",
+            Map.of("amountCents", amountCents, "paymentMethodId", paymentMethodId, "idempotencyKey", resolvedKey),
             PaymentAuthResult.class);
     }
 
     @Override
     public void capturePayment(String paymentId) {
-        log.info("Capturing payment={}", paymentId);
-        restTemplate.postForObject("/api/payments/{paymentId}/capture", null, Void.class, paymentId);
+        String idempotencyKey = resolveIdempotencyKey(null);
+        log.info("Capturing payment={} idempotencyKey={}", paymentId, idempotencyKey);
+        restTemplate.postForObject("/payments/{paymentId}/capture",
+            Map.of("idempotencyKey", idempotencyKey), Void.class, paymentId);
     }
 
     @Override
     public void voidPayment(String paymentId) {
-        log.info("Voiding payment={}", paymentId);
-        restTemplate.postForObject("/api/payments/{paymentId}/void", null, Void.class, paymentId);
+        String idempotencyKey = resolveIdempotencyKey(null);
+        log.info("Voiding payment={} idempotencyKey={}", paymentId, idempotencyKey);
+        restTemplate.postForObject("/payments/{paymentId}/void",
+            Map.of("idempotencyKey", idempotencyKey), Void.class, paymentId);
+    }
+
+    @Override
+    public void refundPayment(String paymentId, long amountCents) {
+        String idempotencyKey = resolveIdempotencyKey(null);
+        log.info("Refunding payment={} amountCents={} idempotencyKey={}", paymentId, amountCents, idempotencyKey);
+        restTemplate.postForObject("/payments/{paymentId}/refund",
+            Map.of(
+                "amountCents", amountCents,
+                "reason", "CHECKOUT_COMPENSATION",
+                "idempotencyKey", idempotencyKey
+            ), Void.class, paymentId);
+    }
+
+    private String resolveIdempotencyKey(String providedKey) {
+        String activityId = Activity.getExecutionContext().getInfo().getActivityId();
+        if (providedKey == null || providedKey.isBlank()) {
+            return activityId;
+        }
+        return providedKey + "-" + activityId;
     }
 }

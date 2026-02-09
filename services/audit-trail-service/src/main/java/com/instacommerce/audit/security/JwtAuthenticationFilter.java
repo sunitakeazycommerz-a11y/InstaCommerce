@@ -27,6 +27,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
     private final AuditProperties auditProperties;
+    private volatile PublicKey cachedPublicKey;
 
     public JwtAuthenticationFilter(AuditProperties auditProperties) {
         this.auditProperties = auditProperties;
@@ -66,6 +67,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private PublicKey loadPublicKey() throws Exception {
+        PublicKey key = cachedPublicKey;
+        if (key != null) {
+            return key;
+        }
+        synchronized (this) {
+            if (cachedPublicKey == null) {
+                cachedPublicKey = parsePublicKey();
+            }
+            return cachedPublicKey;
+        }
+    }
+
+    private PublicKey parsePublicKey() throws Exception {
         String pem = auditProperties.getJwt().getPublicKey()
                 .replace("-----BEGIN PUBLIC KEY-----", "")
                 .replace("-----END PUBLIC KEY-----", "")

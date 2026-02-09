@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,16 +27,14 @@ public class TrendingService {
         this.trendingQueryRepository = trendingQueryRepository;
     }
 
+    @Async
     @Transactional
-    @CacheEvict(value = "trending", allEntries = true)
     public void recordQuery(String query) {
         if (query == null || query.isBlank()) {
             return;
         }
         String normalized = query.trim().toLowerCase();
-        trendingQueryRepository.findByQuery(normalized).ifPresentOrElse(
-                TrendingQuery::incrementHitCount,
-                () -> trendingQueryRepository.save(new TrendingQuery(normalized)));
+        trendingQueryRepository.upsertHit(normalized);
     }
 
     @Cacheable(value = "trending", key = "#limit")

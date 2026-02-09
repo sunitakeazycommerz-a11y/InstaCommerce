@@ -1,6 +1,9 @@
 package com.instacommerce.riderfleet.service;
 
+import com.instacommerce.riderfleet.domain.model.Rider;
 import com.instacommerce.riderfleet.domain.model.RiderAvailability;
+import com.instacommerce.riderfleet.domain.model.RiderStatus;
+import com.instacommerce.riderfleet.exception.InvalidRiderStateException;
 import com.instacommerce.riderfleet.exception.RiderNotFoundException;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
@@ -40,8 +43,12 @@ public class RiderAvailabilityService {
 
     @Transactional
     public void toggleAvailability(UUID riderId, boolean available) {
-        riderRepository.findById(riderId)
+        Rider rider = riderRepository.findById(riderId)
             .orElseThrow(() -> new RiderNotFoundException(riderId.toString()));
+        if (rider.getStatus() != RiderStatus.ACTIVE) {
+            throw new InvalidRiderStateException(
+                "Rider must be ACTIVE to toggle availability, current: " + rider.getStatus());
+        }
 
         RiderAvailability availability = availabilityRepository.findByRiderId(riderId)
             .orElseThrow(() -> new RiderNotFoundException(riderId.toString()));

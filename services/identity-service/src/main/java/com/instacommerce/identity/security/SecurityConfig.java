@@ -37,7 +37,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/login", "/auth/register", "/auth/refresh").permitAll()
                         .requestMatchers("/.well-known/**", "/actuator/**", "/error").permitAll()
-                        .requestMatchers("/auth/revoke").authenticated()
+                        .requestMatchers("/auth/revoke", "/auth/logout").authenticated()
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                     .authenticationEntryPoint(authenticationEntryPoint)

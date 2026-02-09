@@ -153,9 +153,9 @@ public class ProductService {
             .orElseThrow(() -> new ProductNotFoundException(id));
         product.setActive(false);
         Product saved = productRepository.save(product);
-        outboxService.recordProductEvent(saved, "ProductUpdated");
+        outboxService.recordProductEvent(saved, "ProductDeactivated");
         auditLogService.log(null,
-            "PRODUCT_UPDATED",
+            "PRODUCT_DEACTIVATED",
             "Product",
             saved.getId().toString(),
             Map.of("sku", saved.getSku(), "active", saved.isActive()));

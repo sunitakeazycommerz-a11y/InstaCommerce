@@ -41,7 +41,14 @@ public class DomainEventConsumer {
                     "payment.events",
                     "inventory.events",
                     "fulfillment.events",
-                    "rider.events"
+                    "rider.events",
+                    "notification.events",
+                    "search.events",
+                    "pricing.events",
+                    "promotion.events",
+                    "customer-support.events",
+                    "returns.events",
+                    "warehouse.events"
             },
             groupId = "${spring.kafka.consumer.group-id}",
             concurrency = "3"
@@ -73,6 +80,7 @@ public class DomainEventConsumer {
         String aggregateId = envelope.has("aggregateId") ? envelope.get("aggregateId").asText() : null;
 
         String correlationId = envelope.has("correlationId") ? envelope.get("correlationId").asText() : null;
+        String action = envelope.has("action") ? envelope.get("action").asText() : eventType;
 
         Map<String, Object> details = null;
         if (envelope.has("payload")) {
@@ -86,7 +94,7 @@ public class DomainEventConsumer {
                 actorType,
                 aggregateType,
                 aggregateId,
-                eventType,
+                action,
                 details,
                 null,
                 null,

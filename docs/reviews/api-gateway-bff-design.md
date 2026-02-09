@@ -16,13 +16,13 @@
 4. [Mobile BFF (Backend for Frontend)](#4-mobile-bff-backend-for-frontend)
 5. [Admin Operations Gateway](#5-admin-operations-gateway)
 6. [Implementation Plan](#6-implementation-plan)
-7. [Appendices](#7-appendices)
+7. [Competitive Analysis — How Top Q-Commerce Companies Handle This](#7-competitive-analysis--how-top-q-commerce-companies-handle-this)
 
 ---
 
 ## 1. Executive Summary
 
-InstaCommerce currently routes all external traffic through a single Istio VirtualService with simple prefix-based routing to 18 backend services. While functional, this architecture lacks:
+InstaCommerce currently routes all external traffic through a single Istio Gateway + VirtualService on `api.instacommerce.dev`, with 24 prefix-based routes defined in `values.yaml` across 18 service names (two are placeholders: `mobile-bff-service` and `admin-gateway-service` are not yet implemented; payment/inventory remain internal-only). While functional, this architecture lacks:
 
 - **Centralized cross-cutting concerns** — No gateway-level rate limiting, JWT validation, CORS, compression, or API versioning.
 - **Mobile optimization** — Mobile clients make N+1 calls to compose screens; no aggregation layer.
@@ -31,11 +31,11 @@ InstaCommerce currently routes all external traffic through a single Istio Virtu
 
 This document designs three new architectural components:
 
-| Component | Purpose | Technology |
-|-----------|---------|------------|
-| **API Gateway** | Edge proxy: auth, rate limiting, routing, CORS, versioning | Istio Gateway + Envoy filters + EnvoyFilter CRDs |
-| **Mobile BFF** | Screen-optimized aggregation for iOS/Android | Spring Boot 3 (WebFlux) — reactive |
-| **Admin Gateway** | Ops dashboard APIs with RBAC | Spring Boot 3 (MVC) — traditional |
+| Component | Purpose | Technology | Repo Status |
+|-----------|---------|------------|-------------|
+| **API Gateway** | Edge proxy: auth, rate limiting, routing, CORS, versioning | Istio Gateway + Envoy filters + EnvoyFilter CRDs | **Exists (basic)** |
+| **Mobile BFF** | Screen-optimized aggregation for iOS/Android | Spring Boot 3 (WebFlux) — reactive | **Planned (not in repo yet)** |
+| **Admin Gateway** | Ops dashboard APIs with RBAC | Spring Boot 3 (MVC) — traditional | **Planned (not in repo yet)** |
 
 ### Architecture Overview
 
@@ -48,15 +48,15 @@ This document designs three new architectural components:
                           ┌──────────────────────▼──────────────────────────────┐
                           │           Istio Ingress Gateway (Envoy)             │
                           │  ┌─────────────────────────────────────────────┐    │
-                          │  │  EnvoyFilter: JWT · Rate Limit · CORS ·    │    │
-                          │  │  Compression · Correlation-ID · Headers    │    │
+                          │  │  EnvoyFilter: Security headers (current) · │    │
+                          │  │  JWT · Rate Limit · CORS · Compression      │    │
                           │  └─────────────────────────────────────────────┘    │
                           └───────┬──────────────────┬───────────────┬──────────┘
                                   │                  │               │
                     ┌─────────────▼────┐  ┌──────────▼─────┐  ┌─────▼──────────┐
-                    │  api.insta...dev  │  │ m.insta...dev  │  │admin.insta.dev │
-                    │  Direct routing   │  │  Mobile BFF    │  │ Admin Gateway  │
-                    │  to 18 services   │  │  (aggregator)  │  │   (RBAC)       │
+                     │  api.insta...dev  │  │ m.insta...dev  │  │admin.insta.dev │
+                     │  Direct routing   │  │  Mobile BFF    │  │ Admin Gateway  │
+                     │  to 16 live svcs  │  │  (aggregator)  │  │   (RBAC)       │
                     └────────┬─────────┘  └───────┬────────┘  └───────┬────────┘
                              │                    │                   │
                     ┌────────▼────────────────────▼───────────────────▼────────┐
@@ -73,6 +73,8 @@ This document designs three new architectural components:
                     └─────────────────────────────────────────────────────────┘
 ```
 
+> **Repo alignment:** `values.yaml` currently exposes only `api.instacommerce.dev`. Mobile/admin routes exist as stubs but would be served on the api domain until `m.instacommerce.dev`/`admin.instacommerce.dev` hosts are added.
+
 ---
 
 ## 2. Current State Analysis
@@ -80,24 +82,25 @@ This document designs three new architectural components:
 ### 2.1 What Exists Today
 
 **Istio Gateway** (`deploy/helm/templates/istio/gateway.yaml`):
-- Single HTTPS listener on port 443 for `api.instacommerce.dev`
+- Single HTTPS listener on port 443; hosts sourced from `values.yaml` `istio.gateway.hosts` (currently only `api.instacommerce.dev`)
 - TLS termination via `instacommerce-tls` credential
 
 **VirtualService** (`deploy/helm/templates/istio/virtual-service.yaml`):
-- 20 prefix-based routes mapping `/api/v1/*` to 18 backend services
-- All routes target port 8080 (hardcoded — **bug**: search=8086, pricing=8087, cart=8088, etc.)
+- 24 prefix-based routes in `values.yaml` `istio.routes` (includes `/bff/mobile/v1`, `/m/v1`, `/admin/v1` stubs)
+- Ports are derived from `values.yaml` `services.<service>.port` (no port overrides in routes)
+- `mobile-bff-service` and `admin-gateway-service` are routed but not present in `services/`
 - No timeouts, retries, fault injection, or header manipulation
 
-**DestinationRules**:
+**DestinationRules** (`deploy/helm/templates/istio/destination-rule.yaml`):
 - Connection pooling: 100 TCP / 1000 HTTP2 max connections per service
 - Outlier detection: eject after 5 consecutive 5xx errors for 30s
 - No service-specific tuning
 
 **Security**:
 - `PeerAuthentication`: STRICT mTLS mesh-wide
-- `RequestAuthentication`: JWT validation only on payment-service and inventory-service (internal services)
-- `AuthorizationPolicy`: payment & inventory restricted to order-service and fulfillment-service principals
-- EnvoyFilter for security headers (X-Content-Type-Options, X-Frame-Options, HSTS, CSP)
+- `RequestAuthentication`: JWT validation only on payment-service and inventory-service (templated from `values.yaml`)
+- `AuthorizationPolicy`: allow-only for payment & inventory to order-service and fulfillment-service service accounts
+- EnvoyFilter for security headers (X-Content-Type-Options, X-Frame-Options, HSTS, X-XSS-Protection, CSP)
 - **No JWT validation at the gateway edge** — each service validates its own tokens
 
 ### 2.2 Gaps Identified
@@ -108,7 +111,8 @@ This document designs three new architectural components:
 | No rate limiting | Vulnerable to abuse, no per-user throttling | P0 |
 | No CORS at gateway | Each service configures CORS independently (or doesn't) | P1 |
 | No API versioning strategy | Cannot evolve APIs without breaking clients | P1 |
-| Hardcoded port 8080 in VirtualService | Routing broken for services on non-8080 ports | P0 — Bug |
+| Only `api.instacommerce.dev` host | No dedicated mobile/admin/ws hostnames or routes | P1 |
+| Route stubs without services | `/bff/mobile/v1`, `/m/v1`, `/admin/v1` return 503 until services exist | P1 |
 | No mobile BFF | Mobile app makes 5-8 calls per screen | P0 |
 | No admin API surface | Admin ops go through same consumer API | P1 |
 | No request/response transformation | No correlation IDs, no header stripping | P1 |
@@ -119,6 +123,8 @@ This document designs three new architectural components:
 ---
 
 ## 3. API Gateway Layer
+
+**Repository alignment:** The repo currently includes the basic Gateway/VirtualService/DestinationRule/PeerAuthentication, the security-headers EnvoyFilter, and per-service RequestAuthentication/AuthorizationPolicy for payment/inventory. Route stubs for `/bff/mobile/v1`, `/m/v1`, and `/admin/v1` already exist in `values.yaml`, but the services do not. Everything else in this section (rate limiting, gateway JWT auth, CORS, compression, request limits, load shedding, API keys, WebSockets) is proposed and not yet implemented in the chart.
 
 ### 3.1 Technology Decision: Istio Gateway + EnvoyFilter (Enhanced)
 
@@ -135,21 +141,19 @@ This document designs three new architectural components:
 ### 3.2 Gateway Hosts
 
 ```yaml
-# deploy/helm/values.yaml — enhanced gateway configuration
+# deploy/helm/values.yaml — gateway configuration (current + planned)
 istio:
   gateway:
     name: instacommerce-gateway
-    servers:
-      - hosts: ["api.instacommerce.dev"]          # Consumer API
-        port: { number: 443, name: https-api, protocol: HTTPS }
-      - hosts: ["m.instacommerce.dev"]             # Mobile BFF
-        port: { number: 443, name: https-mobile, protocol: HTTPS }
-      - hosts: ["admin.instacommerce.dev"]         # Admin Gateway
-        port: { number: 443, name: https-admin, protocol: HTTPS }
-      - hosts: ["ws.instacommerce.dev"]            # WebSocket (tracking)
-        port: { number: 443, name: https-ws, protocol: HTTPS }
+    hosts:
+      - api.instacommerce.dev        # current
+      # - m.instacommerce.dev        # planned
+      # - admin.instacommerce.dev    # planned
+      # - ws.instacommerce.dev       # planned
     tlsSecret: instacommerce-tls
 ```
+
+The current `gateway.yaml` template renders a single HTTPS server; all hosts share the same TLS settings and certificate. If separate listeners or TLS policies are required, update the template accordingly.
 
 ### 3.3 Rate Limiting
 
@@ -163,7 +167,7 @@ Client → Envoy (Ingress) → rate limit check → rate-limit-service (envoy-ra
 
 #### Rate Limit Service Deployment
 
-Deploy Envoy's reference `ratelimit` service backed by Redis:
+Deploy Envoy's reference `ratelimit` service backed by Redis (not in repo yet; requires new Helm templates under `deploy/helm/templates/ratelimit/` and values wiring):
 
 ```yaml
 # deploy/helm/templates/ratelimit/deployment.yaml
@@ -177,7 +181,7 @@ spec:
     spec:
       containers:
         - name: ratelimit
-          image: envoyproxy/ratelimit:latest
+          image: envoyproxy/ratelimit:v1.6.0   # pin, avoid :latest
           env:
             - name: REDIS_SOCKET_TYPE
               value: tcp
@@ -204,6 +208,8 @@ spec:
 ```
 
 #### Rate Limit Configuration
+
+> **Note:** Per-user limits require deriving `x-user-id` at the gateway (see §3.8). Until then, enforce per-IP limits only.
 
 ```yaml
 # ConfigMap: ratelimit-config
@@ -325,7 +331,7 @@ spec:
           rate_limits:
             - actions:
                 - request_headers:
-                    header_name: x-user-id
+                    header_name: x-user-id      # requires claim extraction
                     descriptor_key: user_id
                 - request_headers:
                     header_name: ":path"
@@ -349,7 +355,7 @@ Retry-After: 42                  # Only on 429 responses
 
 ### 3.4 Authentication — Gateway-Level JWT Validation
 
-Move JWT validation from individual services to the Istio ingress gateway:
+Add gateway-level JWT validation (keep the existing payment/inventory policies during migration):
 
 ```yaml
 # deploy/helm/templates/istio/request-authentication-gateway.yaml
@@ -362,8 +368,8 @@ spec:
     matchLabels:
       istio: ingressgateway
   jwtRules:
-    - issuer: "https://identity.instacommerce.dev"
-      jwksUri: "http://identity-service.instacommerce.svc.cluster.local/.well-known/jwks.json"
+    - issuer: "instacommerce-identity"   # matches current values.yaml
+      jwksUri: "http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json"
       forwardOriginalToken: true
       outputPayloadToHeader: x-jwt-payload    # Forward decoded claims as header
       fromHeaders:
@@ -401,155 +407,136 @@ spec:
               - "/readyz"
 ```
 
-**JWT Claims Propagation**: After gateway validation, decoded claims are forwarded as headers to backend services:
+**JWT Claims Propagation**: After gateway validation, the raw payload is forwarded and downstream services can decode it:
 
 ```
-x-user-id: usr_abc123          # Extracted from JWT sub claim
-x-user-role: CUSTOMER          # Extracted from JWT role claim  
-x-user-email: user@email.com   # Extracted from JWT email claim
 x-jwt-payload: <base64>        # Full decoded payload
+x-authenticated: true          # Optional marker set by gateway filter
 ```
 
-Backend services trust these headers (since they come via mTLS from the gateway) and no longer need to validate JWTs themselves.
+Downstream services must only trust these headers when they originate from the gateway (mTLS + edge header stripping). If per-user rate limiting or convenience headers are required, add a Lua/WASM filter to decode `x-jwt-payload` and set `x-user-id`/`x-user-role` (or keep decoding in downstream services).
 
 ### 3.5 Request Routing — Enhanced VirtualService
 
-Fix the current routing bugs and add versioning, timeouts, retries:
+Extend the current routing configuration with versioning, timeouts, and retries (ports are derived from `values.yaml` `services.<service>.port`):
 
 ```yaml
-# deploy/helm/values.yaml — enhanced routes
+# deploy/helm/values.yaml — enhanced routes (ports come from values.services.*.port)
 istio:
   routes:
     # --- Identity & Auth ---
     - prefix: /api/v1/auth
       service: identity-service
-      port: 8080
       timeout: 5s
       retries: { attempts: 2, perTryTimeout: 2s, retryOn: "5xx,reset" }
 
     - prefix: /api/v1/users
       service: identity-service
-      port: 8080
       timeout: 5s
 
     # --- Catalog & Search ---
     - prefix: /api/v1/products
       service: catalog-service
-      port: 8080
       timeout: 3s
       retries: { attempts: 2, perTryTimeout: 1500ms, retryOn: "5xx,reset,connect-failure" }
 
     - prefix: /api/v1/categories
       service: catalog-service
-      port: 8080
       timeout: 3s
 
     - prefix: /api/v1/search
       service: search-service
-      port: 8086                    # FIX: was hardcoded 8080
       timeout: 2s
       retries: { attempts: 1, perTryTimeout: 1500ms }
 
     - prefix: /api/v1/pricing
       service: pricing-service
-      port: 8087                    # FIX: was hardcoded 8080
       timeout: 2s
 
     # --- Cart & Checkout ---
     - prefix: /api/v1/cart
       service: cart-service
-      port: 8088                    # FIX: was hardcoded 8080
       timeout: 3s
 
     - prefix: /api/v1/checkout
       service: checkout-orchestrator-service
-      port: 8089                    # FIX: was hardcoded 8080
       timeout: 30s                  # Checkout is a saga — longer timeout
-      retries: { attempts: 0 }     # No retries for checkout (idempotency risk)
+      retries: { attempts: 0 }      # No retries for checkout (idempotency risk)
 
     # --- Orders ---
     - prefix: /api/v1/orders
       service: order-service
-      port: 8080
       timeout: 5s
 
     # --- Fulfillment & Delivery ---
     - prefix: /api/v1/fulfillment
       service: fulfillment-service
-      port: 8080
       timeout: 5s
 
     - prefix: /api/v1/stores
       service: warehouse-service
-      port: 8090                    # FIX: was hardcoded 8080
       timeout: 3s
 
     - prefix: /api/v1/riders
       service: rider-fleet-service
-      port: 8091                    # FIX: was hardcoded 8080
       timeout: 5s
 
     - prefix: /api/v1/deliveries
       service: routing-eta-service
-      port: 8092                    # FIX: was hardcoded 8080
       timeout: 5s
 
     - prefix: /api/v1/tracking
       service: routing-eta-service
-      port: 8092                    # FIX: was hardcoded 8080
       timeout: 5s
 
     # --- Financial ---
     - prefix: /api/v1/wallet
       service: wallet-loyalty-service
-      port: 8093                    # FIX: was hardcoded 8080
       timeout: 5s
 
     - prefix: /api/v1/loyalty
       service: wallet-loyalty-service
-      port: 8093
       timeout: 3s
 
     - prefix: /api/v1/referral
       service: wallet-loyalty-service
-      port: 8093
       timeout: 3s
 
     # --- Platform ---
     - prefix: /api/v1/notifications
       service: notification-service
-      port: 8080
       timeout: 3s
 
     - prefix: /api/v1/fraud
       service: fraud-detection-service
-      port: 8095                    # FIX: was hardcoded 8080
       timeout: 3s
 
     - prefix: /api/v1/flags
       service: config-feature-flag-service
-      port: 8096                    # FIX: was hardcoded 8080
       timeout: 2s
 
     - prefix: /api/v1/audit
       service: audit-trail-service
-      port: 8094                    # FIX: was hardcoded 8080
       timeout: 5s
 
-    # --- BFF Routes ---
+    # --- BFF Routes (stubs exist in values.yaml) ---
+    - prefix: /bff/mobile/v1     # legacy alias (deprecate)
+      service: mobile-bff-service
+      timeout: 5s
+
     - prefix: /m/v1
-      service: mobile-bff
-      port: 8080
+      service: mobile-bff-service
       timeout: 5s
 
-    # --- Admin Routes ---
+    # --- Admin Routes (stub exists in values.yaml) ---
     - prefix: /admin/v1
-      service: admin-gateway
-      port: 8080
+      service: admin-gateway-service
       timeout: 30s
 ```
 
-Updated VirtualService template with per-route timeouts, retries, and correct ports:
+Ports are pulled from `values.yaml` `services.<service>.port`; `values.yaml` already includes `/bff/mobile/v1`, `/m/v1`, and `/admin/v1` routes, but service entries for `mobile-bff-service` and `admin-gateway-service` are missing—add them (e.g., 8097/8099) and deprecate `/bff/mobile/v1` once clients migrate to `/m/v1`.
+
+Proposed VirtualService template changes to support per-route timeouts/retries (ports already come from `values.services`):
 
 ```yaml
 # deploy/helm/templates/istio/virtual-service.yaml (enhanced)
@@ -574,7 +561,7 @@ spec:
         - destination:
             host: {{ .service }}
             port:
-              number: {{ .port | default 8080 }}
+              number: {{ (index $.Values.services .service).port }}
       {{- if .timeout }}
       timeout: {{ .timeout }}
       {{- end }}
@@ -591,6 +578,8 @@ spec:
 ### 3.6 API Versioning Strategy
 
 **Strategy**: URI-path versioning (`/api/v1/`, `/api/v2/`) with header-based override.
+
+> **Repo alignment:** Versioned routes are not yet defined in `values.yaml`; adding v2 requires new route entries and service/controller support.
 
 ```
 /api/v1/products       → catalog-service (v1 controller)
@@ -632,6 +621,8 @@ spec:
 ```
 
 ### 3.7 CORS — Centralized Configuration
+
+> **Repo alignment:** No CORS policy exists today. Prefer `corsPolicy` on the VirtualService when possible; use EnvoyFilter only for truly global defaults.
 
 ```yaml
 # deploy/helm/templates/istio/envoyfilter-cors.yaml
@@ -707,7 +698,7 @@ spec:
                   end
                 end
                 
-                -- Extract user ID from JWT and set as header
+                -- Mark as authenticated if JWT payload is present
                 local jwt_payload = request_handle:headers():get("x-jwt-payload")
                 if jwt_payload ~= nil then
                   -- Decoded by Istio RequestAuthentication
@@ -763,7 +754,7 @@ spec:
 | Endpoint | Max Size | Rationale |
 |----------|----------|-----------|
 | `POST /api/v1/auth/*` | 16 KB | Auth payloads are small |
-| `POST /api/v1/products` (admin) | 5 MB | Product images as base64 |
+| `POST /admin/v1/catalog/products` | 5 MB | Product images as base64 (prefer object storage uploads) |
 | `POST /admin/v1/catalog/import` | 50 MB | Bulk CSV import |
 | `POST /api/v1/cart/*` | 64 KB | Cart operations |
 | `POST /api/v1/checkout/*` | 128 KB | Checkout payload |
@@ -836,6 +827,8 @@ spec:
 
 Enhanced DestinationRules with per-service circuit breaker tuning:
 
+> **Repo alignment:** `destination-rule.yaml` currently applies the same pool/outlier settings to every service; per-service tuning requires extending values and template logic.
+
 ```yaml
 # deploy/helm/values.yaml — per-service circuit breaker config
 circuitBreakers:
@@ -885,7 +878,7 @@ circuitBreakers:
 
 ### 3.12 Load Shedding
 
-**Strategy**: Priority-based load shedding using Envoy's overload manager + custom Lua filter.
+**Strategy**: Priority-based load shedding using Envoy's overload manager + custom Lua filter (not in repo yet; consider WASM or ext_authz for more complex logic).
 
 ```yaml
 # deploy/helm/templates/istio/envoyfilter-load-shedding.yaml
@@ -969,7 +962,7 @@ Content-Type: application/json
 
 ### 3.13 API Key Management
 
-For third-party integrations (store POS systems, delivery aggregators, analytics partners):
+For third-party integrations (store POS systems, delivery aggregators, analytics partners). Prefer `ext_authz` or a dedicated auth service over Lua HTTP calls where possible; not in repo yet.
 
 ```yaml
 # deploy/helm/templates/istio/envoyfilter-apikey.yaml
@@ -1041,6 +1034,8 @@ spec:
 | `internal` | Unlimited | All | Internal tools |
 
 ### 3.14 WebSocket Support — Real-Time Tracking
+
+> **Repo alignment:** No WebSocket VirtualService exists today; this requires a new template and `ws.instacommerce.dev` host entry.
 
 ```yaml
 # deploy/helm/values.yaml — WebSocket route
@@ -1116,9 +1111,18 @@ spec:
 }
 ```
 
+### 3.15 Observability & SLOs
+
+- **Access logs**: enable gateway access logs with request/response sizes, latency, status, user/device identifiers (PII-safe).
+- **Metrics**: track `http_requests_total`, `http_request_duration_seconds`, 4xx/5xx rates, JWT auth failures, and rate-limit denials.
+- **Tracing**: propagate `x-correlation-id` and W3C Trace Context; sample 1% baseline, 10% on errors.
+- **Alerts**: extend `monitoring/prometheus-rules.yaml` with gateway-specific SLOs (p99 latency, 5xx >1%, ratelimit error rate, authn failure spikes).
+
 ---
 
 ## 4. Mobile BFF (Backend for Frontend)
+
+> **Repo alignment:** `mobile-bff-service` does not exist in `services/` yet; add it (port 8097) plus Helm service values (routes already exist in `values.yaml`).
 
 ### 4.1 Service Overview
 
@@ -1130,11 +1134,13 @@ spec:
 | Purpose | Aggregate multiple backend calls into mobile-optimized responses |
 | Latency Target | p99 < 2s for all endpoints |
 
+`values.yaml` currently routes both `/bff/mobile/v1` and `/m/v1` to the same service. Standardize on `/m/v1` and deprecate `/bff/mobile/v1` after client migration.
+
 **Why WebFlux:** BFF is I/O-bound — waiting on 3-7 parallel backend calls. WebFlux + `WebClient` provides native async composition via `Mono.zip()`. With Project Loom (Java 21 virtual threads), traditional Spring MVC could also work, but WebFlux gives richer reactive operators for timeout/fallback composition.
 
 ### 4.2 Aggregation Endpoints
 
-#### Home Screen (`GET /bff/mobile/v1/home`)
+#### Home Screen (`GET /m/v1/home`)
 
 Aggregates 7 services in parallel:
 
@@ -1145,7 +1151,7 @@ Aggregates 7 services in parallel:
 Client ──► BFF ─┼─── cart-service ─────────── cart item count
                 ├─── warehouse-service ────── nearest store + ETA
                 ├─── order-service ────────── active order count
-                └─── feature-flag-service ─── feature flags
+                └─── config-feature-flag-service ─── feature flags
 ```
 
 **Response (mobile-optimized, ~2KB):**
@@ -1182,7 +1188,7 @@ Client ──► BFF ─┼─── cart-service ──────────
 
 **Implementation Pattern:**
 ```java
-@GetMapping("/home")
+@GetMapping("/m/v1/home")
 public Mono<HomeResponse> getHome(@RequestHeader("X-User-Id") String userId,
         @RequestHeader(value = "X-Location-Lat", required = false) Double lat,
         @RequestHeader(value = "X-Location-Lng", required = false) Double lng) {
@@ -1203,22 +1209,22 @@ public Mono<HomeResponse> getHome(@RequestHeader("X-User-Id") String userId,
 }
 ```
 
-#### Product Detail (`GET /bff/mobile/v1/product/{id}`)
+#### Product Detail (`GET /m/v1/product/{id}`)
 - Aggregates: catalog (detail) + pricing (price + promos) + inventory (stock) + search (related)
 - Price shown is server-authoritative (not cached, not client-supplied)
 
-#### Search Results (`GET /bff/mobile/v1/search?q=milk&page=0`)
+#### Search Results (`GET /m/v1/search?q=milk&page=0`)
 - Aggregates: search (results) → batch pricing + batch inventory in one call each
 - Batch calls with product ID list to avoid N+1
 
-#### Cart (`GET /bff/mobile/v1/cart`)
+#### Cart (`GET /m/v1/cart`)
 - Aggregates: cart (items) + pricing (revalidate prices) + inventory (recheck stock) + wallet (balance)
 - **Critical:** BFF re-checks prices on every cart view. If price changed, returns `priceChanged: true`
 
-#### Checkout Summary (`GET /bff/mobile/v1/checkout/summary`)
+#### Checkout Summary (`GET /m/v1/checkout/summary`)
 - Aggregates: cart + pricing (final) + wallet (balance) + fraud (pre-check) + warehouse (delivery slot)
 
-#### Active Orders (`GET /bff/mobile/v1/orders/active`)
+#### Active Orders (`GET /m/v1/orders/active`)
 - Aggregates: order (active) + fulfillment (status) + routing-eta (live ETA + rider location)
 - Returns WebSocket URL for real-time tracking
 
@@ -1229,8 +1235,8 @@ public Mono<HomeResponse> getHome(@RequestHeader("X-User-Id") String userId,
 | pricing-service | Return last Caffeine-cached price (5min TTL) |
 | inventory-service | Show "Check availability" instead of stock count |
 | search-service | Fall back to catalog basic search |
-| wallet-service | Hide wallet section |
-| feature-flag-service | Use hardcoded defaults |
+| wallet-loyalty-service | Hide wallet section |
+| config-feature-flag-service | Use hardcoded defaults |
 | routing-eta-service | Show "Tracking unavailable" |
 
 All calls use Resilience4j circuit breakers (50% failure → open for 30s) + `.onErrorReturn(fallback)`.
@@ -1246,6 +1252,8 @@ All calls use Resilience4j circuit breakers (50% failure → open for 30s) + `.o
 ---
 
 ## 5. Admin Operations Gateway
+
+> **Repo alignment:** `admin-gateway-service` does not exist in `services/` yet; add it (port 8099) plus Helm service values (route already exists in `values.yaml`).
 
 ### 5.1 Service Overview
 
@@ -1294,28 +1302,33 @@ SUPER_ADMIN        → All permissions
 ## 6. Implementation Plan
 
 ### Phase 1: Gateway Foundation (Weeks 1-3)
-- Deploy Envoy RLS with Redis for centralized rate limiting
-- Configure gateway-level JWT validation (Istio RequestAuthentication)
+- Deploy Envoy RLS with Redis for centralized rate limiting (new Helm templates + EnvoyFilter)
+- Configure gateway-level JWT validation (Istio RequestAuthentication/AuthorizationPolicy)
+- Extend Helm chart for per-route timeouts/retries, CORS, compression, and request-size limits
 - Standardize error responses across all routes
 - Deploy Cloud Armor WAF rules (OWASP, DDoS, geo-blocking)
+- Add gateway observability (access logs, metrics, alerts)
 
 ### Phase 2: Mobile BFF (Weeks 3-6)
 - Create `mobile-bff-service` (WebFlux skeleton + Helm + Docker)
 - Implement home, product detail, search, cart, checkout aggregation endpoints
 - Add circuit breakers, fallbacks, Caffeine caching
+- Confirm `/m/v1` routing (already in values) + add `m.instacommerce.dev` host in gateway
 - Load test: 10K concurrent users with k6
 
-### Phase 3: Rider BFF + Admin Gateway (Weeks 6-10)
-- Create `rider-bff-service` — dashboard, delivery detail, location streaming
+### Phase 3: Admin Gateway (Weeks 6-10)
 - Create `admin-gateway-service` — RBAC, dashboards, order/inventory management
 - Integrate audit trail for all admin actions
 - Set up Cloud IAP for admin access control
+- Confirm `/admin/v1` routing (already in values) + add `admin.instacommerce.dev` host in gateway
 
 ### Phase 4: Advanced (Weeks 10-14)
 - B2B API key management + per-partner rate limits
 - GraphQL federation evaluation for mobile BFF v2
 - CDN integration (Cloud CDN) for static assets + product images
 - API analytics pipeline (request logs → BigQuery → dashboards)
+
+**Out of scope:** Rider BFF is a separate track; create a dedicated design doc if/when needed.
 
 ---
 

@@ -108,25 +108,25 @@ public class PaymentTransactionHelper {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Payment completeCaptured(UUID paymentId) {
+    public Payment completeCaptured(UUID paymentId, long capturedCents) {
         Payment payment = paymentRepository.findById(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         payment.setStatus(PaymentStatus.CAPTURED);
-        payment.setCapturedCents(payment.getAmountCents());
+        payment.setCapturedCents(capturedCents);
         Payment saved = paymentRepository.save(payment);
-        ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
+        ledgerService.recordDoubleEntry(saved.getId(), capturedCents,
             "authorization_hold", "merchant_payable", "CAPTURE", saved.getId().toString(), "Capture");
         outboxService.publish("Payment", saved.getId().toString(), "PaymentCaptured",
             Map.of("orderId", saved.getOrderId(),
                 "paymentId", saved.getId(),
-                "amountCents", saved.getAmountCents(),
+                "amountCents", capturedCents,
                 "currency", saved.getCurrency()));
         auditLogService.log(null,
             "PAYMENT_CAPTURED",
             "Payment",
             saved.getId().toString(),
             Map.of("orderId", saved.getOrderId(),
-                "amountCents", saved.getAmountCents(),
+                "amountCents", capturedCents,
                 "currency", saved.getCurrency()));
         return saved;
     }
@@ -168,6 +168,14 @@ public class PaymentTransactionHelper {
         outboxService.publish("Payment", saved.getId().toString(), "PaymentVoided",
             Map.of("orderId", saved.getOrderId(),
                 "paymentId", saved.getId(),
+                "amountCents", saved.getAmountCents(),
+                "currency", saved.getCurrency(),
+                "voidedAt", voidedAt.toString()));
+        auditLogService.log(null,
+            "PAYMENT_VOIDED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
                 "amountCents", saved.getAmountCents(),
                 "currency", saved.getCurrency(),
                 "voidedAt", voidedAt.toString()));

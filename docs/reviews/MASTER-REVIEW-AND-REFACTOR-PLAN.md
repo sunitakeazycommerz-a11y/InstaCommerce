@@ -271,6 +271,23 @@ All 18 services share a consistent project structure:
 | C4 | Audit log per-service (no tamper evidence) | all services | MEDIUM | M |
 | C5 | No data retention policies automated | all services | MEDIUM | M |
 
+### Status Update (Post-Phase 6 Refactor)
+
+**Completed fixes (from plan.md):**
+- [x] S1-S3, S5-S11 — auth revoke protection, notification security, Caffeine rate limiting, CORS, webhook verification, JWT claims, service-to-service auth, Stripe thread-safety, securityContext, NetworkPolicies
+- [x] D1-D4, D6, D10-D11 — payment TX boundaries, refund lock/ledger, inventory events, OrderPlaced SKU, refund precision, fulfillment HTTP-in-TX
+- [x] P1-P5, P7, P9 — REST timeouts, notification retry, Kafka DLQ, admin pagination, caching, HikariCP tuning, template caching
+- [x] O1-O5, O7 — rolling updates, anti-affinity, circuit breaking, ShedLock, HPA updates
+- [x] C1, C5 — append-only audit logs, retention jobs
+- [x] Phase 6 criticals — cart price validation, wallet payment verification + ledger, checkout idempotency/compensation, outbox cleanup, VirtualService port alignment
+
+**Remaining gaps:**
+- [ ] S4, S12 — admin `@PreAuthorize` in fulfillment; token revocation latency
+- [ ] D5, D7-D9 — PaymentVoided amountCents, missing/duplicate schemas, refund on post-checkout cancel
+- [ ] P6, P8, P10 — pricing N+1, consumer concurrency, auto-offset reset defaults
+- [ ] O6, O8-O10 — Terraform state locking, business metrics, notification HPA, quotas/limits
+- [ ] C2-C4 — PCI segmentation, GDPR consent, tamper-evident centralized audit
+
 ---
 
 ## Section 4: Per-Service Refactoring Roadmap
@@ -1011,6 +1028,7 @@ This document consolidates findings from 8 prior reviews:
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-02-07 | Chief Architect | Initial creation — consolidated all prior reviews |
+| 1.1 | 2026-02-07 | Chief Architect | Status update — Phase 6 fixes completed; remaining gaps summarized |
 
 ---
 

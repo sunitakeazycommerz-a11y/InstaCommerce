@@ -14,6 +14,7 @@ public record StoreResponse(
     String pincode,
     BigDecimal latitude,
     BigDecimal longitude,
+    String timezone,
     String status,
     int capacityOrdersPerHour,
     List<ZoneResponse> zones,

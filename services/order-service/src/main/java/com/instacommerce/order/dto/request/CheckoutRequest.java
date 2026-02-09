@@ -15,7 +15,7 @@ import java.util.UUID;
 public record CheckoutRequest(
     @NotNull UUID userId,
     @NotBlank String storeId,
-    @Valid @NotEmpty List<CartItem> items,
+    @Valid @NotEmpty @Size(max = 50) List<CartItem> items,
     @NotNull @Positive Long subtotalCents,
     @NotNull @PositiveOrZero Long discountCents,
     @NotNull @Positive Long totalCents,

@@ -44,11 +44,11 @@ public class RefundTransactionHelper {
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         if (payment.getStatus() != PaymentStatus.CAPTURED
-            && payment.getStatus() != PaymentStatus.PARTIALLY_REFUNDED
-            && payment.getStatus() != PaymentStatus.REFUNDED) {
+            && payment.getStatus() != PaymentStatus.PARTIALLY_REFUNDED) {
             throw new PaymentInvalidStateException(paymentId, payment.getStatus());
         }
-        long available = payment.getCapturedCents() - payment.getRefundedCents();
+        long pendingAmount = refundRepository.sumPendingAmountByPaymentId(paymentId);
+        long available = payment.getCapturedCents() - payment.getRefundedCents() - pendingAmount;
         if (request.amountCents() > available) {
             throw new RefundExceedsChargeException(paymentId, request.amountCents(), available);
         }

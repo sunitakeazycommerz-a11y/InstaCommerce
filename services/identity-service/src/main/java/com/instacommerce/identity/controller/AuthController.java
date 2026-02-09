@@ -5,7 +5,6 @@ import com.instacommerce.identity.dto.request.RefreshRequest;
 import com.instacommerce.identity.dto.request.RegisterRequest;
 import com.instacommerce.identity.dto.request.RevokeRequest;
 import com.instacommerce.identity.dto.response.AuthResponse;
-import com.instacommerce.identity.dto.response.RegisterResponse;
 import com.instacommerce.identity.exception.TraceIdProvider;
 import com.instacommerce.identity.service.AuthService;
 import com.instacommerce.identity.util.RequestContextUtil;
@@ -30,10 +29,10 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<RegisterResponse> register(@Valid @RequestBody RegisterRequest request,
-                                                     HttpServletRequest httpRequest) {
+    public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request,
+                                                 HttpServletRequest httpRequest) {
         String traceId = traceIdProvider.resolveTraceId(httpRequest);
-        RegisterResponse response = authService.register(request,
+        AuthResponse response = authService.register(request,
             RequestContextUtil.resolveIp(httpRequest),
             RequestContextUtil.resolveUserAgent(httpRequest),
             traceId);
@@ -62,6 +61,16 @@ public class AuthController {
     public ResponseEntity<Void> revoke(@Valid @RequestBody RevokeRequest request, HttpServletRequest httpRequest) {
         String traceId = traceIdProvider.resolveTraceId(httpRequest);
         authService.revoke(request,
+            RequestContextUtil.resolveIp(httpRequest),
+            RequestContextUtil.resolveUserAgent(httpRequest),
+            traceId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(HttpServletRequest httpRequest) {
+        String traceId = traceIdProvider.resolveTraceId(httpRequest);
+        authService.logout(
             RequestContextUtil.resolveIp(httpRequest),
             RequestContextUtil.resolveUserAgent(httpRequest),
             traceId);

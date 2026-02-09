@@ -2,6 +2,7 @@ package com.instacommerce.notification.provider;
 
 import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.notification.domain.model.NotificationChannel;
+import java.util.HashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,17 +42,23 @@ public class SendGridEmailProvider implements NotificationProvider {
     public String send(NotificationSendRequest request) {
         String apiKey = notificationProperties.getProviders().getSendgrid().getApiKey();
         String fromEmail = notificationProperties.getProviders().getSendgrid().getFromEmail();
+        String listUnsubscribeUrl = notificationProperties.getProviders().getSendgrid().getListUnsubscribeUrl();
         if (apiKey == null || apiKey.isBlank() || fromEmail == null || fromEmail.isBlank()) {
             throw new ProviderPermanentException("SendGrid credentials are not configured");
         }
-        Map<String, Object> payload = Map.of(
-            "personalizations", new Object[] {
-                Map.of("to", new Object[] { Map.of("email", request.recipient()) },
-                    "subject", request.subject())
-            },
-            "from", Map.of("email", fromEmail),
-            "content", new Object[] { Map.of("type", "text/html", "value", request.body()) }
-        );
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("personalizations", new Object[] {
+            Map.of("to", new Object[] { Map.of("email", request.recipient()) },
+                "subject", request.subject())
+        });
+        payload.put("from", Map.of("email", fromEmail));
+        payload.put("content", new Object[] { Map.of("type", "text/html", "value", request.body()) });
+        if (listUnsubscribeUrl != null && !listUnsubscribeUrl.isBlank()) {
+            payload.put("headers", Map.of(
+                "List-Unsubscribe", "<" + listUnsubscribeUrl.trim() + ">",
+                "List-Unsubscribe-Post", "List-Unsubscribe=One-Click"
+            ));
+        }
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(apiKey);

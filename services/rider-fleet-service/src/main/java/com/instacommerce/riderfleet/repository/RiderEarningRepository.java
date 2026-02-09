@@ -12,6 +12,35 @@ public interface RiderEarningRepository extends JpaRepository<RiderEarning, UUID
 
     List<RiderEarning> findByRiderIdAndEarnedAtBetween(UUID riderId, Instant from, Instant to);
 
+    long countByRiderIdAndEarnedAtBetween(UUID riderId, Instant from, Instant to);
+
+    @Query("""
+        SELECT COALESCE(SUM(e.deliveryFeeCents), 0)
+        FROM RiderEarning e
+        WHERE e.riderId = :riderId AND e.earnedAt BETWEEN :from AND :to
+        """)
+    long sumDeliveryFeeCents(@Param("riderId") UUID riderId,
+                             @Param("from") Instant from,
+                             @Param("to") Instant to);
+
+    @Query("""
+        SELECT COALESCE(SUM(e.tipCents), 0)
+        FROM RiderEarning e
+        WHERE e.riderId = :riderId AND e.earnedAt BETWEEN :from AND :to
+        """)
+    long sumTipCents(@Param("riderId") UUID riderId,
+                     @Param("from") Instant from,
+                     @Param("to") Instant to);
+
+    @Query("""
+        SELECT COALESCE(SUM(e.incentiveCents), 0)
+        FROM RiderEarning e
+        WHERE e.riderId = :riderId AND e.earnedAt BETWEEN :from AND :to
+        """)
+    long sumIncentiveCents(@Param("riderId") UUID riderId,
+                           @Param("from") Instant from,
+                           @Param("to") Instant to);
+
     @Query("""
         SELECT COALESCE(SUM(e.deliveryFeeCents + e.tipCents + e.incentiveCents), 0)
         FROM RiderEarning e

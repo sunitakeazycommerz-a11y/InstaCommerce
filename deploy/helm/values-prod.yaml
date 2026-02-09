@@ -24,3 +24,57 @@ services:
   notification-service:
     replicas: 2
     tag: prod
+  search-service:
+    replicas: 2
+    tag: prod
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-prod.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+  pricing-service:
+    replicas: 2
+    tag: prod
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-prod.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+  cart-service:
+    replicas: 2
+    tag: prod
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-prod.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+  checkout-orchestrator-service:
+    replicas: 2
+    tag: prod
+  warehouse-service:
+    replicas: 2
+    tag: prod
+  rider-fleet-service:
+    replicas: 2
+    tag: prod
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-prod.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+  routing-eta-service:
+    replicas: 2
+    tag: prod
+  wallet-loyalty-service:
+    replicas: 2
+    tag: prod
+  audit-trail-service:
+    replicas: 2
+    tag: prod
+  fraud-detection-service:
+    replicas: 2
+    tag: prod
+  config-feature-flag-service:
+    replicas: 2
+    tag: prod
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-prod.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+  mobile-bff-service:
+    replicas: 2
+    tag: prod
+  admin-gateway-service:
+    replicas: 2
+    tag: prod

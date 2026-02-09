@@ -16,11 +16,15 @@ istio:
     name: instacommerce-gateway
     hosts:
       - api.instacommerce.dev
+      - m.instacommerce.dev
+      - admin.instacommerce.dev
     tlsSecret: instacommerce-tls
   virtualService:
     name: api-routing
     hosts:
       - api.instacommerce.dev
+      - m.instacommerce.dev
+      - admin.instacommerce.dev
   routes:
     - prefix: /api/v1/auth
       service: identity-service
@@ -64,6 +68,12 @@ istio:
       service: config-feature-flag-service
     - prefix: /api/v1/audit
       service: audit-trail-service
+    - prefix: /bff/mobile/v1
+      service: mobile-bff-service
+    - prefix: /m/v1
+      service: mobile-bff-service
+    - prefix: /admin/v1
+      service: admin-gateway-service
   requestAuthentications:
     - name: payment-service-jwt
       selector:
@@ -215,6 +225,8 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8086"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///search_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
     hpa:
       minReplicas: 2
       maxReplicas: 15
@@ -231,6 +243,8 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8087"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///pricing_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
     hpa:
       minReplicas: 2
       maxReplicas: 15
@@ -247,6 +261,8 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8088"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///cart_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
     hpa:
       minReplicas: 2
       maxReplicas: 15
@@ -295,6 +311,8 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8091"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///rider_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
     hpa:
       minReplicas: 2
       maxReplicas: 8
@@ -375,9 +393,41 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8096"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///config_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
     hpa:
       minReplicas: 2
       maxReplicas: 5
+      targetCPU: 70
+
+  mobile-bff-service:
+    replicas: 2
+    image: mobile-bff-service
+    port: 8097
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8097"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 8
+      targetCPU: 70
+
+  admin-gateway-service:
+    replicas: 2
+    image: admin-gateway-service
+    port: 8099
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8099"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
       targetCPU: 70
 
 networkPolicy:

@@ -6,11 +6,13 @@ import com.instacommerce.wallet.domain.model.LoyaltyTier;
 import com.instacommerce.wallet.domain.model.LoyaltyTransaction;
 import com.instacommerce.wallet.dto.response.LoyaltyResponse;
 import com.instacommerce.wallet.exception.ApiException;
+import com.instacommerce.wallet.exception.DuplicateTransactionException;
 import com.instacommerce.wallet.repository.LoyaltyAccountRepository;
 import com.instacommerce.wallet.repository.LoyaltyTransactionRepository;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,7 +48,8 @@ public class LoyaltyService {
         LoyaltyAccount account = accountRepository.findByUserId(userId)
             .orElseGet(() -> createAccount(userId));
 
-        int pointsEarned = (int) (orderTotalCents / 100) * walletProperties.getLoyalty().getPointsPerRupee();
+        int pointsPerRupee = walletProperties.getLoyalty().getPointsPerRupee();
+        int pointsEarned = (int) ((orderTotalCents * pointsPerRupee) / 100);
         if (pointsEarned <= 0) {
             return toResponse(account);
         }
@@ -61,7 +64,11 @@ public class LoyaltyService {
         txn.setPoints(pointsEarned);
         txn.setReferenceType("ORDER");
         txn.setReferenceId(orderId);
-        transactionRepository.save(txn);
+        try {
+            transactionRepository.save(txn);
+        } catch (DataIntegrityViolationException ex) {
+            throw new DuplicateTransactionException("Transaction already exists for ref=ORDER/" + orderId);
+        }
 
         checkTierUpgrade(account);
         log.info("Earned {} points for user={} order={}", pointsEarned, userId, orderId);

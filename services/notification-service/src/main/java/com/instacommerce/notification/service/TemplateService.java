@@ -18,7 +18,7 @@ public class TemplateService {
 
     public TemplateService(ResourceLoader resourceLoader) {
         this.resourceLoader = resourceLoader;
-        this.compiler = Mustache.compiler().escapeHTML(false);
+        this.compiler = Mustache.compiler().escapeHTML(true);
     }
 
     public String render(NotificationChannel channel, String templateId, Map<String, Object> variables) {

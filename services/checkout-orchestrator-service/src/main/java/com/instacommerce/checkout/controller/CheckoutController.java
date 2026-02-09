@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.checkout.domain.CheckoutIdempotencyKey;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
+import com.instacommerce.checkout.exception.CheckoutException;
 import com.instacommerce.checkout.repository.CheckoutIdempotencyKeyRepository;
 import com.instacommerce.checkout.workflow.CheckoutWorkflow;
 import io.temporal.client.WorkflowClient;
@@ -18,6 +19,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +58,10 @@ public class CheckoutController {
             @Valid @RequestBody CheckoutRequest request,
             @AuthenticationPrincipal String principal,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+
+        if (principal == null || !principal.equals(request.userId())) {
+            throw new CheckoutException("FORBIDDEN", "Cannot checkout for another user", HttpStatus.FORBIDDEN);
+        }
 
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             idempotencyKey = UUID.randomUUID().toString();

@@ -12,6 +12,7 @@ CREATE TABLE coupons (
 CREATE TABLE coupon_redemptions (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     coupon_id       UUID         NOT NULL REFERENCES coupons(id),
+    single_use      BOOLEAN      NOT NULL DEFAULT false,
     user_id         UUID         NOT NULL,
     order_id        UUID         NOT NULL,
     discount_cents  BIGINT       NOT NULL,
@@ -19,6 +20,6 @@ CREATE TABLE coupon_redemptions (
 );
 
 CREATE UNIQUE INDEX idx_coupon_single_use ON coupon_redemptions (coupon_id, user_id)
-    WHERE coupon_id IN (SELECT id FROM coupons WHERE single_use = true);
+    WHERE single_use = true;
 
 CREATE INDEX idx_coupon_redemptions_user ON coupon_redemptions (coupon_id, user_id);

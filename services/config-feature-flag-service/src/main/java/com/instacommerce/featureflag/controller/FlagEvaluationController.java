@@ -7,6 +7,7 @@ import com.instacommerce.featureflag.service.BulkEvaluationService;
 import com.instacommerce.featureflag.service.FlagEvaluationService;
 import java.util.Map;
 import java.util.UUID;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -40,7 +41,7 @@ public class FlagEvaluationController {
 
     @PostMapping("/bulk")
     public ResponseEntity<BulkEvaluationResponse> evaluateBulk(
-            @RequestBody BulkEvaluationRequest request) {
+            @Valid @RequestBody BulkEvaluationRequest request) {
         BulkEvaluationResponse response = bulkEvaluationService.evaluateAll(
                 request.keys(), request.userId(), request.context());
         return ResponseEntity.ok(response);

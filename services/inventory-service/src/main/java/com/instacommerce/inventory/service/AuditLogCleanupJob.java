@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Component
 public class AuditLogCleanupJob {
+    private static final int BATCH_SIZE = 10000;
     private final AuditLogRepository auditLogRepository;
     private final Duration retention;
 
@@ -25,6 +26,9 @@ public class AuditLogCleanupJob {
     @Transactional
     public void purgeExpiredLogs() {
         Instant cutoff = Instant.now().minus(retention);
-        auditLogRepository.deleteByCreatedAtBefore(cutoff);
+        int deleted;
+        do {
+            deleted = auditLogRepository.deleteBatchByCreatedAtBefore(cutoff, BATCH_SIZE);
+        } while (deleted == BATCH_SIZE);
     }
 }

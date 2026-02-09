@@ -2,6 +2,7 @@ package com.instacommerce.cart.exception;
 
 import com.instacommerce.cart.dto.response.ErrorDetail;
 import com.instacommerce.cart.dto.response.ErrorResponse;
+import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import java.time.Instant;
@@ -78,6 +79,14 @@ public class GlobalExceptionHandler {
                                                             HttpServletRequest request) {
         return ResponseEntity.unprocessableEntity()
             .body(buildError("CART_INVALID", ex.getMessage(), List.of(), request));
+    }
+
+    @ExceptionHandler(OptimisticLockException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(OptimisticLockException ex,
+                                                              HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(buildError("CONCURRENT_MODIFICATION", "Cart was modified by another request. Please retry.",
+                List.of(), request));
     }
 
     @ExceptionHandler(Exception.class)

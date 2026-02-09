@@ -2,6 +2,7 @@ package com.instacommerce.featureflag.repository;
 
 import com.instacommerce.featureflag.domain.model.FlagOverride;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -17,4 +18,10 @@ public interface FlagOverrideRepository extends JpaRepository<FlagOverride, UUID
     Optional<FlagOverride> findActiveByFlagIdAndUserId(@Param("flagId") UUID flagId,
                                                        @Param("userId") UUID userId,
                                                        @Param("now") Instant now);
+
+    @Query("SELECT o FROM FlagOverride o WHERE o.flagId IN :flagIds AND o.userId = :userId " +
+           "AND (o.expiresAt IS NULL OR o.expiresAt > :now)")
+    List<FlagOverride> findActiveByFlagIdsAndUserId(@Param("flagIds") List<UUID> flagIds,
+                                                    @Param("userId") UUID userId,
+                                                    @Param("now") Instant now);
 }

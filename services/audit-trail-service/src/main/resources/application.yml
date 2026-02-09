@@ -36,18 +36,21 @@ spring:
     consumer:
       group-id: ${AUDIT_KAFKA_GROUP:audit-trail-service}
       auto-offset-reset: earliest
+      enable-auto-commit: false
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       properties:
         max.poll.interval.ms: 600000
         max.poll.records: 100
+    listener:
+      ack-mode: record
 
 audit:
   jwt:
     issuer: ${AUDIT_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${AUDIT_JWT_PUBLIC_KEY}}
   partition:
-    retention-days: ${AUDIT_PARTITION_RETENTION_DAYS:90}
+    retention-days: ${AUDIT_PARTITION_RETENTION_DAYS:365}
     future-months: ${AUDIT_PARTITION_FUTURE_MONTHS:3}
   dlq-topic: ${AUDIT_DLQ_TOPIC:audit.dlq}
 

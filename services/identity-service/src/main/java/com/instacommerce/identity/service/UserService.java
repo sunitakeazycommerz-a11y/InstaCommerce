@@ -6,6 +6,7 @@ import com.instacommerce.identity.dto.request.ChangePasswordRequest;
 import com.instacommerce.identity.dto.response.UserResponse;
 import com.instacommerce.identity.exception.InvalidCredentialsException;
 import com.instacommerce.identity.exception.UserNotFoundException;
+import com.instacommerce.identity.repository.RefreshTokenRepository;
 import com.instacommerce.identity.repository.UserRepository;
 import java.util.Map;
 import java.util.UUID;
@@ -24,15 +25,18 @@ public class UserService {
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
+    private final RefreshTokenRepository refreshTokenRepository;
 
     public UserService(UserRepository userRepository,
                        UserMapper userMapper,
                        PasswordEncoder passwordEncoder,
-                       AuditService auditService) {
+                       AuditService auditService,
+                       RefreshTokenRepository refreshTokenRepository) {
         this.userRepository = userRepository;
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
+        this.refreshTokenRepository = refreshTokenRepository;
     }
 
     public UserResponse getCurrentUser() {
@@ -81,6 +85,7 @@ public class UserService {
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
+        refreshTokenRepository.revokeAllActiveByUserId(user.getId());
         auditService.logAction(user.getId(),
             "PASSWORD_CHANGED",
             "User",

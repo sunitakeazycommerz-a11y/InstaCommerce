@@ -52,7 +52,7 @@ public class AuditProperties {
     }
 
     public static class Partition {
-        private int retentionDays = 90;
+        private int retentionDays = 365;
         private int futureMonths = 3;
 
         public int getRetentionDays() {

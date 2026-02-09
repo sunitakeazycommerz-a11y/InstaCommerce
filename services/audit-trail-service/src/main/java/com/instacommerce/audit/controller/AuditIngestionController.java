@@ -4,6 +4,7 @@ import com.instacommerce.audit.dto.AuditEventRequest;
 import com.instacommerce.audit.dto.AuditEventResponse;
 import com.instacommerce.audit.service.AuditIngestionService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -29,7 +30,7 @@ public class AuditIngestionController {
     }
 
     @PostMapping("/events/batch")
-    public ResponseEntity<Void> ingestBatch(@Valid @RequestBody List<AuditEventRequest> requests) {
+    public ResponseEntity<Void> ingestBatch(@Valid @Size(max = 1000) @RequestBody List<AuditEventRequest> requests) {
         ingestionService.ingestBatch(requests);
         return ResponseEntity.status(HttpStatus.CREATED).build();
     }

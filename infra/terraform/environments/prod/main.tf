@@ -53,3 +53,24 @@ module "secret_manager" {
   env        = var.env
   secrets    = var.secrets
 }
+
+module "bigquery" {
+  source     = "../../modules/bigquery"
+  project_id = var.project_id
+  env        = var.env
+  location   = var.region
+}
+
+module "data_lake" {
+  source     = "../../modules/data-lake"
+  project_id = var.project_id
+  env        = var.env
+  location   = var.region
+}
+
+module "dataflow" {
+  source     = "../../modules/dataflow"
+  project_id = var.project_id
+  env        = var.env
+  location   = var.region
+}

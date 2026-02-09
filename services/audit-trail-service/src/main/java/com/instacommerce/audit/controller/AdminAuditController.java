@@ -33,13 +33,14 @@ public class AdminAuditController {
             @RequestParam(required = false) String resourceId,
             @RequestParam(required = false) String sourceService,
             @RequestParam(required = false) String eventType,
+            @RequestParam(required = false) String correlationId,
             @RequestParam(required = false) Instant fromDate,
             @RequestParam(required = false) Instant toDate,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
         AuditSearchCriteria criteria = new AuditSearchCriteria(
-                actorId, resourceType, resourceId, sourceService, eventType,
+                actorId, resourceType, resourceId, sourceService, eventType, correlationId,
                 fromDate, toDate, page, size);
         return queryService.query(criteria);
     }
@@ -51,12 +52,13 @@ public class AdminAuditController {
             @RequestParam(required = false) String resourceId,
             @RequestParam(required = false) String sourceService,
             @RequestParam(required = false) String eventType,
+            @RequestParam(required = false) String correlationId,
             @RequestParam(required = false) Instant fromDate,
             @RequestParam(required = false) Instant toDate,
             HttpServletResponse response) throws IOException {
 
         AuditSearchCriteria criteria = new AuditSearchCriteria(
-                actorId, resourceType, resourceId, sourceService, eventType,
+                actorId, resourceType, resourceId, sourceService, eventType, correlationId,
                 fromDate, toDate, 0, Integer.MAX_VALUE);
         exportService.exportCsv(criteria, response);
     }

@@ -1,6 +1,5 @@
 package com.instacommerce.fraud.service;
 
-import com.instacommerce.fraud.domain.model.VelocityCounter;
 import com.instacommerce.fraud.repository.VelocityCounterRepository;
 import java.time.Duration;
 import java.time.Instant;
@@ -23,26 +22,8 @@ public class VelocityService {
         Duration window = windowDuration(counterType);
         Instant windowStart = now.truncatedTo(ChronoUnit.HOURS);
         Instant windowEnd = windowStart.plus(window);
-
-        velocityCounterRepository
-                .findByEntityTypeAndEntityIdAndCounterTypeAndWindowContaining(
-                        entityType, entityId, counterType, now)
-                .ifPresentOrElse(
-                        counter -> {
-                            counter.setCounterValue(counter.getCounterValue() + 1);
-                            velocityCounterRepository.save(counter);
-                        },
-                        () -> {
-                            VelocityCounter counter = new VelocityCounter();
-                            counter.setEntityType(entityType);
-                            counter.setEntityId(entityId);
-                            counter.setCounterType(counterType);
-                            counter.setCounterValue(1);
-                            counter.setWindowStart(windowStart);
-                            counter.setWindowEnd(windowEnd);
-                            velocityCounterRepository.save(counter);
-                        }
-                );
+        velocityCounterRepository.upsertCounter(
+                entityType, entityId, counterType, 1, windowStart, windowEnd);
     }
 
     @Transactional
@@ -51,26 +32,8 @@ public class VelocityService {
         Duration window = windowDuration(counterType);
         Instant windowStart = now.truncatedTo(ChronoUnit.HOURS);
         Instant windowEnd = windowStart.plus(window);
-
-        velocityCounterRepository
-                .findByEntityTypeAndEntityIdAndCounterTypeAndWindowContaining(
-                        entityType, entityId, counterType, now)
-                .ifPresentOrElse(
-                        counter -> {
-                            counter.setCounterValue(counter.getCounterValue() + amount);
-                            velocityCounterRepository.save(counter);
-                        },
-                        () -> {
-                            VelocityCounter counter = new VelocityCounter();
-                            counter.setEntityType(entityType);
-                            counter.setEntityId(entityId);
-                            counter.setCounterType(counterType);
-                            counter.setCounterValue(amount);
-                            counter.setWindowStart(windowStart);
-                            counter.setWindowEnd(windowEnd);
-                            velocityCounterRepository.save(counter);
-                        }
-                );
+        velocityCounterRepository.upsertCounter(
+                entityType, entityId, counterType, amount, windowStart, windowEnd);
     }
 
     @Transactional(readOnly = true)

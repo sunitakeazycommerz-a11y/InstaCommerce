@@ -43,7 +43,7 @@ public class ReferralService {
 
     @Transactional
     public void redeemReferral(String code, UUID newUserId) {
-        ReferralCode referralCode = referralCodeRepository.findByCode(code.toUpperCase())
+        ReferralCode referralCode = referralCodeRepository.findByCodeForUpdate(code.toUpperCase())
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "REFERRAL_NOT_FOUND",
                 "Referral code not found: " + code));
 

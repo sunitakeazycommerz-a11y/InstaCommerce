@@ -10,6 +10,7 @@ import com.instacommerce.order.dto.request.CartItem;
 import com.instacommerce.order.dto.response.OrderResponse;
 import com.instacommerce.order.dto.response.OrderStatusResponse;
 import com.instacommerce.order.dto.response.OrderSummaryResponse;
+import com.instacommerce.order.exception.InvalidOrderStateException;
 import com.instacommerce.order.exception.OrderNotFoundException;
 import com.instacommerce.order.repository.OrderRepository;
 import com.instacommerce.order.repository.OrderStatusHistoryRepository;
@@ -115,6 +116,9 @@ public class OrderService {
             .orElseThrow(() -> new OrderNotFoundException(orderId));
         if (order.getStatus() == OrderStatus.CANCELLED) {
             return;
+        }
+        if (order.getStatus() != OrderStatus.PENDING && order.getStatus() != OrderStatus.PLACED) {
+            throw new InvalidOrderStateException("User cancellation is only allowed before packing starts.");
         }
         OrderStateMachine.validate(order.getStatus(), OrderStatus.CANCELLED);
         OrderStatus previous = order.getStatus();

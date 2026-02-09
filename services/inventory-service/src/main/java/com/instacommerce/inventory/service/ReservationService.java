@@ -35,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ReservationService {
+    private static final String LOCK_TIMEOUT_HINT = "jakarta.persistence.lock.timeout";
     private final ReservationRepository reservationRepository;
     private final StockItemRepository stockItemRepository;
     private final ReservationProperties reservationProperties;
@@ -261,6 +262,7 @@ public class ReservationService {
                 .setParameter("pid", productId)
                 .setParameter("sid", storeId)
                 .setLockMode(LockModeType.PESSIMISTIC_WRITE)
+                .setHint(LOCK_TIMEOUT_HINT, inventoryProperties.getLockTimeoutMs())
                 .getSingleResult();
         } catch (NoResultException ex) {
             throw new ProductNotFoundException(productId, storeId);

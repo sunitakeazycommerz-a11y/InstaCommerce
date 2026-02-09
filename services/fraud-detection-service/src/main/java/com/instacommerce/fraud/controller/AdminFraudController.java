@@ -7,6 +7,7 @@ import com.instacommerce.fraud.dto.request.FraudRuleRequest;
 import com.instacommerce.fraud.exception.FraudRuleNotFoundException;
 import com.instacommerce.fraud.repository.FraudRuleRepository;
 import com.instacommerce.fraud.service.BlocklistService;
+import com.instacommerce.fraud.service.RuleConditionValidator;
 import jakarta.validation.Valid;
 import java.util.Map;
 import java.util.UUID;
@@ -31,11 +32,14 @@ public class AdminFraudController {
 
     private final FraudRuleRepository fraudRuleRepository;
     private final BlocklistService blocklistService;
+    private final RuleConditionValidator ruleConditionValidator;
 
     public AdminFraudController(FraudRuleRepository fraudRuleRepository,
-                                BlocklistService blocklistService) {
+                                BlocklistService blocklistService,
+                                RuleConditionValidator ruleConditionValidator) {
         this.fraudRuleRepository = fraudRuleRepository;
         this.blocklistService = blocklistService;
+        this.ruleConditionValidator = ruleConditionValidator;
     }
 
     // --- Rules CRUD ---
@@ -55,6 +59,7 @@ public class AdminFraudController {
     @ResponseStatus(HttpStatus.CREATED)
     @CacheEvict(value = "fraudRules", allEntries = true)
     public FraudRule createRule(@Valid @RequestBody FraudRuleRequest request) {
+        ruleConditionValidator.validate(request.ruleType(), request.conditionJson());
         FraudRule rule = new FraudRule();
         rule.setName(request.name());
         rule.setRuleType(request.ruleType());
@@ -69,6 +74,7 @@ public class AdminFraudController {
     @PutMapping("/rules/{id}")
     @CacheEvict(value = "fraudRules", allEntries = true)
     public FraudRule updateRule(@PathVariable UUID id, @Valid @RequestBody FraudRuleRequest request) {
+        ruleConditionValidator.validate(request.ruleType(), request.conditionJson());
         FraudRule rule = fraudRuleRepository.findById(id)
                 .orElseThrow(() -> new FraudRuleNotFoundException(id));
         rule.setName(request.name());

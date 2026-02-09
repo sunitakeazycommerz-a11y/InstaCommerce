@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class InventoryProperties {
     private final Jwt jwt = new Jwt();
     private int lowStockThreshold = 10;
+    private int lockTimeoutMs = 2000;
 
     public Jwt getJwt() {
         return jwt;
@@ -17,6 +18,14 @@ public class InventoryProperties {
 
     public void setLowStockThreshold(int lowStockThreshold) {
         this.lowStockThreshold = lowStockThreshold;
+    }
+
+    public int getLockTimeoutMs() {
+        return lockTimeoutMs;
+    }
+
+    public void setLockTimeoutMs(int lockTimeoutMs) {
+        this.lockTimeoutMs = lockTimeoutMs;
     }
 
     public static class Jwt {

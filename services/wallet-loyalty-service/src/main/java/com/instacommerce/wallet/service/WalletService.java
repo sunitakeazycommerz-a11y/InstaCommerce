@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -52,7 +53,6 @@ public class WalletService {
     @CacheEvict(value = "walletBalance", key = "#userId")
     public WalletTransactionResponse credit(UUID userId, long amountCents,
                                             ReferenceType refType, String refId, String description) {
-        checkIdempotency(refType, refId);
         Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
             .orElseGet(() -> createWallet(userId));
 
@@ -71,7 +71,6 @@ public class WalletService {
     @CacheEvict(value = "walletBalance", key = "#userId")
     public WalletTransactionResponse debit(UUID userId, long amountCents,
                                            ReferenceType refType, String refId, String description) {
-        checkIdempotency(refType, refId);
         Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new WalletNotFoundException("Wallet not found for user: " + userId));
 
@@ -105,14 +104,6 @@ public class WalletService {
         return walletRepository.save(wallet);
     }
 
-    private void checkIdempotency(ReferenceType refType, String refId) {
-        transactionRepository.findByReferenceTypeAndReferenceId(refType, refId)
-            .ifPresent(existing -> {
-                throw new DuplicateTransactionException(
-                    "Transaction already exists for ref=" + refType + "/" + refId);
-            });
-    }
-
     private WalletTransaction recordTransaction(Wallet wallet, Type type, long amountCents,
                                                  ReferenceType refType, String refId, String description) {
         WalletTransaction txn = new WalletTransaction();
@@ -123,7 +114,12 @@ public class WalletService {
         txn.setReferenceType(refType);
         txn.setReferenceId(refId);
         txn.setDescription(description);
-        return transactionRepository.save(txn);
+        try {
+            return transactionRepository.save(txn);
+        } catch (DataIntegrityViolationException ex) {
+            throw new DuplicateTransactionException(
+                "Transaction already exists for ref=" + refType + "/" + refId);
+        }
     }
 
     private WalletTransactionResponse toResponse(WalletTransaction txn) {

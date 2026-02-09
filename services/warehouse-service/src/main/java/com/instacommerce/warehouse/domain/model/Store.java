@@ -48,6 +48,9 @@ public class Store {
     @Column(nullable = false, precision = 11, scale = 8)
     private BigDecimal longitude;
 
+    @Column(nullable = false, length = 50)
+    private String timezone = "UTC";
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private StoreStatus status = StoreStatus.ACTIVE;
@@ -108,6 +111,9 @@ public class Store {
 
     public BigDecimal getLongitude() { return longitude; }
     public void setLongitude(BigDecimal longitude) { this.longitude = longitude; }
+
+    public String getTimezone() { return timezone; }
+    public void setTimezone(String timezone) { this.timezone = timezone; }
 
     public StoreStatus getStatus() { return status; }
     public void setStatus(StoreStatus status) { this.status = status; }

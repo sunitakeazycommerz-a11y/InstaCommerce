@@ -8,8 +8,16 @@ import com.instacommerce.featureflag.exception.ApiException;
 import com.instacommerce.featureflag.repository.FlagAuditLogRepository;
 import com.instacommerce.featureflag.repository.FeatureFlagRepository;
 import com.instacommerce.featureflag.repository.FlagOverrideRepository;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,7 +38,10 @@ public class FlagOverrideService {
     }
 
     @Transactional
-    @CacheEvict(value = "flags", key = "#flagKey")
+    @Caching(evict = {
+        @CacheEvict(value = "flags", key = "#flagKey"),
+        @CacheEvict(value = "flag-overrides", key = "#flagKey + ':' + #request.userId()")
+    })
     public FlagOverride addOverride(String flagKey, AddOverrideRequest request, String changedBy) {
         FeatureFlag flag = flagRepository.findByKey(flagKey)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "FLAG_NOT_FOUND",
@@ -60,8 +71,11 @@ public class FlagOverrideService {
     }
 
     @Transactional
-    @CacheEvict(value = "flags", key = "#flagKey")
-    public void removeOverride(String flagKey, java.util.UUID userId, String changedBy) {
+    @Caching(evict = {
+        @CacheEvict(value = "flags", key = "#flagKey"),
+        @CacheEvict(value = "flag-overrides", key = "#flagKey + ':' + #userId")
+    })
+    public void removeOverride(String flagKey, UUID userId, String changedBy) {
         FeatureFlag flag = flagRepository.findByKey(flagKey)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "FLAG_NOT_FOUND",
                         "Flag with key '" + flagKey + "' not found"));
@@ -71,5 +85,24 @@ public class FlagOverrideService {
                         "Override not found for user " + userId));
 
         overrideRepository.delete(override);
+
+        auditLogRepository.save(new FlagAuditLog(flag.getId(), "OVERRIDE_REMOVED",
+                override.getOverrideValue() + " (user=" + userId + ")",
+                null,
+                changedBy));
+    }
+
+    @Cacheable(value = "flag-overrides", key = "#flagKey + ':' + #userId")
+    public Optional<FlagOverride> findActiveOverride(String flagKey, UUID flagId, UUID userId) {
+        return overrideRepository.findActiveByFlagIdAndUserId(flagId, userId, Instant.now());
+    }
+
+    public Map<UUID, FlagOverride> findActiveOverridesByFlagIds(List<UUID> flagIds, UUID userId) {
+        if (flagIds.isEmpty()) {
+            return Map.of();
+        }
+        return overrideRepository.findActiveByFlagIdsAndUserId(flagIds, userId, Instant.now())
+                .stream()
+                .collect(Collectors.toMap(FlagOverride::getFlagId, Function.identity()));
     }
 }

@@ -14,7 +14,7 @@ spring:
     username: ${PAYMENT_DB_USER:postgres}
     password: ${sm://db-password-payment:${PAYMENT_DB_PASSWORD}}
     hikari:
-      maximum-pool-size: 20
+      maximum-pool-size: 50
       minimum-idle: 5
       connection-timeout: 5000
       max-lifetime: 1800000
@@ -34,6 +34,8 @@ payment:
 stripe:
   api-key: ${sm://stripe-api-key:${STRIPE_API_KEY}}
   webhook-secret: ${sm://stripe-webhook-secret:${STRIPE_WEBHOOK_SECRET}}
+  connect-timeout-ms: ${STRIPE_CONNECT_TIMEOUT_MS:5000}
+  read-timeout-ms: ${STRIPE_READ_TIMEOUT_MS:15000}
 
 management:
   tracing:

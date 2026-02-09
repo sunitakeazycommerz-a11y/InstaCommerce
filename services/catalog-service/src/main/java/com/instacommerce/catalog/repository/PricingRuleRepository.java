@@ -23,4 +23,19 @@ public interface PricingRuleRepository extends JpaRepository<PricingRule, UUID> 
                                      @Param("storeId") String storeId,
                                      @Param("zoneId") String zoneId,
                                      @Param("now") Instant now);
+
+    @Query("""
+        select r from PricingRule r
+        where r.product.id in :productIds
+          and r.isActive = true
+          and (:storeId is null or r.storeId is null or r.storeId = :storeId)
+          and (:zoneId is null or r.zoneId is null or r.zoneId = :zoneId)
+          and r.validFrom <= :now
+          and (r.validTo is null or r.validTo >= :now)
+        order by r.product.id, r.priority desc
+        """)
+    List<PricingRule> findApplicableForProducts(@Param("productIds") List<UUID> productIds,
+                                                @Param("storeId") String storeId,
+                                                @Param("zoneId") String zoneId,
+                                                @Param("now") Instant now);
 }

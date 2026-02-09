@@ -17,9 +17,15 @@ import org.springframework.stereotype.Component;
 @Profile("!test")
 public class StripePaymentGateway implements PaymentGateway {
     private final String apiKey;
+    private final int connectTimeoutMs;
+    private final int readTimeoutMs;
 
-    public StripePaymentGateway(@Value("${stripe.api-key:}") String apiKey) {
+    public StripePaymentGateway(@Value("${stripe.api-key:}") String apiKey,
+                                @Value("${stripe.connect-timeout-ms:5000}") int connectTimeoutMs,
+                                @Value("${stripe.read-timeout-ms:15000}") int readTimeoutMs) {
         this.apiKey = apiKey;
+        this.connectTimeoutMs = connectTimeoutMs;
+        this.readTimeoutMs = readTimeoutMs;
     }
 
     @Override
@@ -35,10 +41,7 @@ public class StripePaymentGateway implements PaymentGateway {
                 builder.setConfirm(true);
             }
             PaymentIntentCreateParams params = builder.build();
-            RequestOptions options = RequestOptions.builder()
-                .setApiKey(apiKey)
-                .setIdempotencyKey(request.idempotencyKey())
-                .build();
+            RequestOptions options = buildOptions(request.idempotencyKey());
             PaymentIntent intent = PaymentIntent.create(params, options);
             if (isAuthorized(intent.getStatus())) {
                 return GatewayAuthResult.success(intent.getId());
@@ -48,14 +51,14 @@ public class StripePaymentGateway implements PaymentGateway {
             String declineCode = ex.getDeclineCode();
             return GatewayAuthResult.declined(declineCode != null ? declineCode : "card_declined");
         } catch (StripeException ex) {
-            throw new PaymentGatewayException("Payment processing failed");
+            throw toGatewayException(ex);
         }
     }
 
     @Override
     public GatewayCaptureResult capture(String pspReference, long amountCents) {
         ensureApiKey();
-        RequestOptions options = buildOptions();
+        RequestOptions options = buildOptions(null);
         try {
             PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
             PaymentIntentCaptureParams params = PaymentIntentCaptureParams.builder()
@@ -67,20 +70,20 @@ public class StripePaymentGateway implements PaymentGateway {
             String declineCode = ex.getDeclineCode();
             return GatewayCaptureResult.failure(declineCode != null ? declineCode : "capture_failed");
         } catch (StripeException ex) {
-            throw new PaymentGatewayException("Payment processing failed");
+            throw toGatewayException(ex);
         }
     }
 
     @Override
     public GatewayVoidResult voidAuth(String pspReference) {
         ensureApiKey();
-        RequestOptions options = buildOptions();
+        RequestOptions options = buildOptions(null);
         try {
             PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
             intent.cancel(java.util.Collections.emptyMap(), options);
             return GatewayVoidResult.success();
         } catch (StripeException ex) {
-            throw new PaymentGatewayException("Payment processing failed");
+            throw toGatewayException(ex);
         }
     }
 
@@ -92,19 +95,23 @@ public class StripePaymentGateway implements PaymentGateway {
                 .setPaymentIntent(pspReference)
                 .setAmount(amountCents)
                 .build();
-            RequestOptions options = RequestOptions.builder()
-                .setApiKey(apiKey)
-                .setIdempotencyKey(idempotencyKey)
-                .build();
+            RequestOptions options = buildOptions(idempotencyKey);
             Refund refund = Refund.create(params, options);
             return GatewayRefundResult.success(refund.getId());
         } catch (StripeException ex) {
-            throw new PaymentGatewayException("Payment processing failed");
+            throw toGatewayException(ex);
         }
     }
 
-    private RequestOptions buildOptions() {
-        return RequestOptions.builder().setApiKey(apiKey).build();
+    private RequestOptions buildOptions(String idempotencyKey) {
+        RequestOptions.RequestOptionsBuilder builder = RequestOptions.builder()
+            .setApiKey(apiKey)
+            .setConnectTimeout(connectTimeoutMs)
+            .setReadTimeout(readTimeoutMs);
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            builder.setIdempotencyKey(idempotencyKey);
+        }
+        return builder.build();
     }
 
     private boolean isAuthorized(String status) {
@@ -117,5 +124,13 @@ public class StripePaymentGateway implements PaymentGateway {
         if (apiKey == null || apiKey.isBlank()) {
             throw new PaymentGatewayException("Stripe API key is not configured");
         }
+    }
+
+    private PaymentGatewayException toGatewayException(StripeException ex) {
+        String code = ex.getCode();
+        String message = (code == null || code.isBlank())
+            ? "Payment processing failed"
+            : "Payment processing failed (stripe_code=" + code + ")";
+        return new PaymentGatewayException(message, ex);
     }
 }

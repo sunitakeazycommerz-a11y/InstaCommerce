@@ -22,6 +22,7 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
             SELECT sd.*, ts_rank(sd.search_vector, plainto_tsquery('english', :query)) AS rank
             FROM search_documents sd
             WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
               AND (:brand IS NULL OR sd.brand = :brand)
               AND (:category IS NULL OR sd.category = :category)
               AND (:minPrice IS NULL OR sd.price_cents >= :minPrice)
@@ -32,6 +33,7 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
             SELECT COUNT(*)
             FROM search_documents sd
             WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
               AND (:brand IS NULL OR sd.brand = :brand)
               AND (:category IS NULL OR sd.category = :category)
               AND (:minPrice IS NULL OR sd.price_cents >= :minPrice)
@@ -48,7 +50,7 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
     @Query(value = """
             SELECT sd.name AS suggestion, sd.category, sd.product_id
             FROM search_documents sd
-            WHERE sd.name ILIKE :prefix || '%'
+            WHERE sd.name ILIKE :prefix || '%' ESCAPE '\\'
               AND sd.in_stock = TRUE
             ORDER BY sd.name
             LIMIT :limit
@@ -59,6 +61,7 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
             SELECT sd.brand, COUNT(*) AS cnt
             FROM search_documents sd
             WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
             GROUP BY sd.brand
             ORDER BY cnt DESC
             """, nativeQuery = true)
@@ -68,6 +71,7 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
             SELECT sd.category, COUNT(*) AS cnt
             FROM search_documents sd
             WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
             GROUP BY sd.category
             ORDER BY cnt DESC
             """, nativeQuery = true)

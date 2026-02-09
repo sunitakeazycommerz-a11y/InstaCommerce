@@ -7,6 +7,7 @@ import com.instacommerce.payment.dto.request.AuthorizeRequest;
 import com.instacommerce.payment.dto.response.PaymentResponse;
 import com.instacommerce.payment.exception.PaymentDeclinedException;
 import com.instacommerce.payment.exception.PaymentGatewayException;
+import com.instacommerce.payment.exception.InvalidCaptureAmountException;
 import com.instacommerce.payment.exception.PaymentNotFoundException;
 import com.instacommerce.payment.gateway.GatewayAuthRequest;
 import com.instacommerce.payment.gateway.GatewayAuthResult;
@@ -73,14 +74,19 @@ public class PaymentService {
      * Step 3: Update to CAPTURED in a new TX.
      */
     public PaymentResponse capture(UUID paymentId) {
+        return capture(paymentId, null);
+    }
+
+    public PaymentResponse capture(UUID paymentId, Long amountCents) {
         Payment payment = txHelper.saveCapturePending(paymentId);
         if (payment.getStatus() == PaymentStatus.CAPTURED) {
             return PaymentMapper.toResponse(payment);
         }
 
+        long captureAmount = resolveCaptureAmount(payment, amountCents);
         GatewayCaptureResult result;
         try {
-            result = paymentGateway.capture(payment.getPspReference(), payment.getAmountCents());
+            result = paymentGateway.capture(payment.getPspReference(), captureAmount);
         } catch (Exception ex) {
             txHelper.revertToAuthorized(paymentId);
             throw ex;
@@ -91,7 +97,7 @@ public class PaymentService {
             throw new PaymentGatewayException(result.failureReason());
         }
 
-        Payment saved = txHelper.completeCaptured(paymentId);
+        Payment saved = txHelper.completeCaptured(paymentId, captureAmount);
         return PaymentMapper.toResponse(saved);
     }
 
@@ -128,5 +134,16 @@ public class PaymentService {
         Payment payment = paymentRepository.findById(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         return PaymentMapper.toResponse(payment);
+    }
+
+    private long resolveCaptureAmount(Payment payment, Long amountCents) {
+        long maxAmount = payment.getAmountCents();
+        if (amountCents == null) {
+            return maxAmount;
+        }
+        if (amountCents <= 0 || amountCents > maxAmount) {
+            throw new InvalidCaptureAmountException(payment.getId(), amountCents, maxAmount);
+        }
+        return amountCents;
     }
 }

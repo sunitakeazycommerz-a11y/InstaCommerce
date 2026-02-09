@@ -40,6 +40,9 @@ public class RoutingProperties {
     public static class Eta {
         private int averageSpeedKmh = 25;
         private int preparationTimeMinutes = 3;
+        private double roadDistanceMultiplier = 1.4;
+        private double peakSpeedMultiplier = 0.6;
+        private double nightSpeedMultiplier = 1.2;
 
         public int getAverageSpeedKmh() {
             return averageSpeedKmh;
@@ -55,6 +58,30 @@ public class RoutingProperties {
 
         public void setPreparationTimeMinutes(int preparationTimeMinutes) {
             this.preparationTimeMinutes = preparationTimeMinutes;
+        }
+
+        public double getRoadDistanceMultiplier() {
+            return roadDistanceMultiplier;
+        }
+
+        public void setRoadDistanceMultiplier(double roadDistanceMultiplier) {
+            this.roadDistanceMultiplier = roadDistanceMultiplier;
+        }
+
+        public double getPeakSpeedMultiplier() {
+            return peakSpeedMultiplier;
+        }
+
+        public void setPeakSpeedMultiplier(double peakSpeedMultiplier) {
+            this.peakSpeedMultiplier = peakSpeedMultiplier;
+        }
+
+        public double getNightSpeedMultiplier() {
+            return nightSpeedMultiplier;
+        }
+
+        public void setNightSpeedMultiplier(double nightSpeedMultiplier) {
+            this.nightSpeedMultiplier = nightSpeedMultiplier;
         }
     }
 }

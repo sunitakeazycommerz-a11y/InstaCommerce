@@ -39,17 +39,21 @@ notification:
     sendgrid:
       api-key: ${sm://sendgrid-api-key:${SENDGRID_API_KEY}}
       from-email: ${SENDGRID_FROM_EMAIL:no-reply@instacommerce.com}
+      list-unsubscribe-url: ${SENDGRID_LIST_UNSUBSCRIBE_URL:}
     twilio:
       account-sid: ${TWILIO_ACCOUNT_SID:}
       auth-token: ${sm://twilio-auth-token:${TWILIO_AUTH_TOKEN}}
       from-number: ${TWILIO_FROM_NUMBER:}
   identity:
     base-url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+    preference-cache-ttl: ${NOTIFICATION_PREFERENCE_CACHE_TTL:60s}
   order:
     base-url: ${ORDER_SERVICE_URL:http://localhost:8085}
   delivery:
     default-eta-minutes: ${NOTIFICATION_DEFAULT_ETA_MINUTES:15}
   dlq-topic: ${NOTIFICATION_DLQ_TOPIC:notifications.dlq}
+  retry:
+    batch-size: ${NOTIFICATION_RETRY_BATCH_SIZE:100}
 
 management:
   tracing:

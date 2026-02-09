@@ -10,6 +10,6 @@ import org.springframework.data.repository.query.Param;
 
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> {
     @Modifying
-    @Query("DELETE FROM OutboxEvent e WHERE e.createdAt < :cutoff")
+    @Query("DELETE FROM OutboxEvent e WHERE e.createdAt < :cutoff AND e.sent = true")
     int deleteByCreatedAtBefore(@Param("cutoff") Instant cutoff);
 }

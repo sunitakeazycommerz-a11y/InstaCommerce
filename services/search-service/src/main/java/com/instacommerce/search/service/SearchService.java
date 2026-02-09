@@ -55,7 +55,8 @@ public class SearchService {
                condition = "#prefix != null && #prefix.length() >= 2")
     public List<AutocompleteResult> autocomplete(String prefix, int limit) {
         log.debug("Autocomplete prefix='{}' limit={}", prefix, limit);
-        return searchDocumentRepository.autocomplete(prefix, limit).stream()
+        String safePrefix = escapeLikePattern(prefix);
+        return searchDocumentRepository.autocomplete(safePrefix, limit).stream()
                 .map(row -> new AutocompleteResult(
                         (String) row[0],
                         (String) row[1],
@@ -79,6 +80,12 @@ public class SearchService {
             log.warn("Failed to compute facets for query='{}'", query, ex);
         }
         return facets;
+    }
+
+    private String escapeLikePattern(String input) {
+        return input.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
     }
 
     private SearchResult mapToSearchResult(Object[] row) {

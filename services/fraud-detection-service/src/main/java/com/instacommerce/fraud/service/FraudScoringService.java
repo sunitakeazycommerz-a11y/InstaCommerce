@@ -54,11 +54,16 @@ public class FraudScoringService {
         List<String> triggeredRules = new ArrayList<>();
 
         for (FraudRule rule : rules) {
-            if (ruleEvaluationService.evaluateRule(rule, request)) {
-                totalScore += rule.getScoreImpact();
-                triggeredRules.add(rule.getName());
-                FraudAction ruleAction = FraudAction.valueOf(rule.getAction());
-                highestAction = FraudAction.escalate(highestAction, ruleAction);
+            try {
+                if (ruleEvaluationService.evaluateRule(rule, request)) {
+                    totalScore += rule.getScoreImpact();
+                    triggeredRules.add(rule.getName());
+                    FraudAction ruleAction = FraudAction.valueOf(rule.getAction());
+                    highestAction = FraudAction.escalate(highestAction, ruleAction);
+                }
+            } catch (Exception ex) {
+                log.error("Rule evaluation failed for {} ({}), skipping",
+                        rule.getName(), rule.getId(), ex);
             }
         }
 

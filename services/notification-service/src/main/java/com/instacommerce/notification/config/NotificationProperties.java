@@ -1,5 +1,6 @@
 package com.instacommerce.notification.config;
 
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "notification")
@@ -8,6 +9,7 @@ public class NotificationProperties {
     private final Identity identity = new Identity();
     private final Order order = new Order();
     private final Delivery delivery = new Delivery();
+    private final Retry retry = new Retry();
     private String dlqTopic = "notifications.dlq";
 
     public Providers getProviders() {
@@ -24,6 +26,10 @@ public class NotificationProperties {
 
     public Delivery getDelivery() {
         return delivery;
+    }
+
+    public Retry getRetry() {
+        return retry;
     }
 
     public String getDlqTopic() {
@@ -50,6 +56,7 @@ public class NotificationProperties {
     public static class SendGrid {
         private String apiKey;
         private String fromEmail;
+        private String listUnsubscribeUrl;
 
         public String getApiKey() {
             return apiKey;
@@ -65,6 +72,14 @@ public class NotificationProperties {
 
         public void setFromEmail(String fromEmail) {
             this.fromEmail = fromEmail;
+        }
+
+        public String getListUnsubscribeUrl() {
+            return listUnsubscribeUrl;
+        }
+
+        public void setListUnsubscribeUrl(String listUnsubscribeUrl) {
+            this.listUnsubscribeUrl = listUnsubscribeUrl;
         }
     }
 
@@ -100,6 +115,7 @@ public class NotificationProperties {
 
     public static class Identity {
         private String baseUrl;
+        private Duration preferenceCacheTtl = Duration.ofSeconds(60);
 
         public String getBaseUrl() {
             return baseUrl;
@@ -107,6 +123,14 @@ public class NotificationProperties {
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+
+        public Duration getPreferenceCacheTtl() {
+            return preferenceCacheTtl;
+        }
+
+        public void setPreferenceCacheTtl(Duration preferenceCacheTtl) {
+            this.preferenceCacheTtl = preferenceCacheTtl;
         }
     }
 
@@ -131,6 +155,18 @@ public class NotificationProperties {
 
         public void setDefaultEtaMinutes(int defaultEtaMinutes) {
             this.defaultEtaMinutes = defaultEtaMinutes;
+        }
+    }
+
+    public static class Retry {
+        private int batchSize = 100;
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
         }
     }
 }

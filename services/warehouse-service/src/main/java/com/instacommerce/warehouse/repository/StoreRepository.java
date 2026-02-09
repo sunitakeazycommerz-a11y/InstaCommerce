@@ -25,6 +25,9 @@ public interface StoreRepository extends JpaRepository<Store, UUID> {
                 ) AS distance_km
                 FROM stores s
                 WHERE s.status = 'ACTIVE'
+                  AND s.latitude BETWEEN :lat - (:radiusKm / 111.0) AND :lat + (:radiusKm / 111.0)
+                  AND s.longitude BETWEEN :lng - (:radiusKm / (111.0 * cos(radians(:lat))))
+                                       AND :lng + (:radiusKm / (111.0 * cos(radians(:lat))))
             ) sub
             WHERE sub.distance_km <= :radiusKm
             ORDER BY sub.distance_km

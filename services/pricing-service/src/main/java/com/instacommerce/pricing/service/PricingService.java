@@ -1,6 +1,7 @@
 package com.instacommerce.pricing.service;
 
 import com.instacommerce.pricing.domain.PriceRule;
+import com.instacommerce.pricing.domain.Promotion;
 import com.instacommerce.pricing.dto.request.CartItem;
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
@@ -64,10 +65,21 @@ public class PricingService {
         // Apply best applicable promotion
         List<String> appliedPromotions = new ArrayList<>();
         long promotionDiscount = 0;
-        var applicablePromotions = promotionService.findApplicable(subtotalCents, now);
-        if (!applicablePromotions.isEmpty()) {
-            var bestPromo = applicablePromotions.get(0);
-            promotionDiscount = promotionService.calculateDiscount(bestPromo, subtotalCents);
+        Promotion bestPromo = null;
+        for (Promotion promotion : promotionService.findActivePromotions()) {
+            if (subtotalCents < promotion.getMinOrderCents()) {
+                continue;
+            }
+            if (now.isBefore(promotion.getStartAt()) || !now.isBefore(promotion.getEndAt())) {
+                continue;
+            }
+            long discount = promotionService.calculateDiscount(promotion, subtotalCents);
+            if (discount > promotionDiscount) {
+                promotionDiscount = discount;
+                bestPromo = promotion;
+            }
+        }
+        if (bestPromo != null) {
             appliedPromotions.add(bestPromo.getName());
         }
 

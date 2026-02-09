@@ -1,4 +1,4 @@
-# InstaCommerce — Data Platform & ML/AI Design Document
+# Instacommerce — Data Platform & ML/AI Design Document
 
 > **Version**: 1.0 | **Status**: Design Document
 > **Scale Target**: 20M+ users, 500K+ daily orders, 10-minute delivery SLA
@@ -10,7 +10,7 @@
 
 ### The Data Gap
 
-InstaCommerce has 18 microservices generating events across every domain but **zero infrastructure** to capture, process, or learn from this data. Every Q-commerce competitor uses data/ML as a core competitive moat.
+Instacommerce has 18 microservices and Kafka-based domain events (outbox + Debezium in docker-compose), but **no centralized analytics/ML stack**—no lakehouse, feature store, or data governance/SLOs. Data is stranded in operational DBs and event topics while competitors use data/ML as a core competitive moat.
 
 ### Business Impact (Conservative Estimates at 500K orders/day, $7.50 AOV)
 
@@ -28,7 +28,7 @@ InstaCommerce has 18 microservices generating events across every domain but **z
 
 ### Recommended Approach
 
-**GCP-native Lakehouse**: BigQuery (warehouse) + Cloud Storage (lake) + Dataflow (streaming) + Vertex AI (ML). Already on GKE; managed services reduce ops overhead.
+**GCP-native Lakehouse**: keep Kafka + Debezium (already in docker-compose) as the ingestion spine, run Strimzi on GKE in prod, and land into BigQuery (warehouse) + Cloud Storage (lake) + Dataflow (streaming) + Vertex AI (ML). Managed services minimize ops while aligning with the existing Spring/GKE stack.
 
 ---
 
@@ -37,18 +37,19 @@ InstaCommerce has 18 microservices generating events across every domain but **z
 ### 2.1 Lakehouse Architecture
 
 ```
- Operational          Streaming              Analytics             ML
- ──────────          ─────────              ─────────            ────
- 18 PostgreSQL ─CDC─► Kafka ──Dataflow───► BigQuery ──────────► Vertex AI
- (Debezium)          Topics   (Beam)       (Warehouse)          (Models)
-                       │                       │                    │
-                       ▼                       ▼                    ▼
-                  Cloud Storage            Looker/Grafana      Online Predict
-                  (Data Lake)              (BI/Dashboards)     (Endpoints)
-                       │
-                       ▼
-                  Feature Store
-                  (Vertex AI)
+  Operational             Streaming / Events                  Analytics              ML
+  ──────────             ──────────────────                  ─────────            ────
+  18 PostgreSQL ─CDC/outbox─► Kafka (Strimzi) ──Dataflow───► BigQuery ──────────► Vertex AI
+  (Debezium Connect)        Topics                           (Warehouse)          (Models)
+        │                      │                                  │                   │
+        │                      ├──► Audit-trail-service           │                   │
+        ▼                      ▼                                  ▼                   ▼
+     Cloud Storage         Cloud Storage                      Looker/Grafana     Online Predict
+     (Raw/Processed)       (Data Lake)                        (BI/Dashboards)    (Endpoints)
+        │
+        ▼
+     Feature Store
+     (Vertex AI)
 ```
 
 ### 2.2 Data Flow Patterns
@@ -60,17 +61,21 @@ InstaCommerce has 18 microservices generating events across every domain but **z
 | Batch Training | BigQuery | Vertex AI Training | Model Registry | Daily | ML model training |
 | Online Serving | Feature Store | Vertex AI Prediction | Service | <50ms | Real-time inference |
 
-### 2.3 Service-to-Topic Mapping
+**Repo alignment:** current Kafka topics include `order.events`/`orders.events`, `payment.events`/`payments.events`, `identity.events`, `catalog.events`, `fulfillment.events`, `inventory.events`, `rider.events`, and `rider.location.updates`. Standardize to singular `<domain>.events` with compatibility aliases in Phase 1.
 
-| Service | CDC Topics | Domain Event Topics | Est. Events/Day |
-|---------|-----------|---------------------|-----------------|
-| order-service | orders, order_items, status_history | OrderPlaced, OrderCancelled | 2M |
-| payment-service | payments, refunds, ledger | PaymentAuthorized, RefundCompleted | 1.5M |
-| inventory-service | stock_levels, reservations | StockReserved, LowStockAlert | 5M |
-| cart-service | carts, cart_items | CartUpdated, CartAbandoned | 10M |
-| catalog-service | products, categories | ProductCreated, ProductUpdated | 50K |
-| fulfillment-service | pick_tasks, deliveries | PickCompleted, DeliveryAssigned | 1.5M |
-| rider-fleet-service | riders, shifts, earnings | RiderAssigned, DeliveryCompleted | 500K |
+### 2.3 Service-to-Topic Mapping (Repo-Aligned)
+
+**Canonical naming target:** `<domain>.events` (singular) with `<topic>.DLT` for dead-letter. Current repo uses both singular and plural in a few places; standardize in Phase 1 with dual publishing.
+
+| Domain | Producer (service) | Topic(s) in repo | Primary consumers |
+|--------|--------------------|-----------------|-------------------|
+| Identity | identity-service | identity.events | order-service (erasure), fulfillment-service (erasure), notification-service, audit-trail-service |
+| Catalog | catalog-service | catalog.events | search-service, pricing-service, audit-trail-service |
+| Order | order-service (outbox/CDC) | order.events, orders.events | fulfillment-service, notification-service, fraud-detection-service, wallet-loyalty-service, audit-trail-service |
+| Payment | payment-service | payment.events, payments.events | notification-service, fraud-detection-service, wallet-loyalty-service, audit-trail-service |
+| Inventory | inventory-service | inventory.events | audit-trail-service (additional consumers TBD) |
+| Fulfillment | fulfillment-service | fulfillment.events | notification-service, rider-fleet-service, audit-trail-service |
+| Rider | rider-fleet-service | rider.events, rider.location.updates | routing-eta-service, audit-trail-service |
 
 ---
 
@@ -91,10 +96,10 @@ InstaCommerce has 18 microservices generating events across every domain but **z
     "slot.name": "debezium_orders",
     "topic.prefix": "cdc.orders",
     "table.include.list": "public.orders,public.order_items,public.order_status_history",
-    "key.converter": "io.confluent.connect.avro.AvroConverter",
-    "key.converter.schema.registry.url": "http://schema-registry:8081",
-    "value.converter": "io.confluent.connect.avro.AvroConverter",
-    "value.converter.schema.registry.url": "http://schema-registry:8081",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
     "transforms": "unwrap",
     "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
     "heartbeat.interval.ms": "10000",
@@ -104,6 +109,8 @@ InstaCommerce has 18 microservices generating events across every domain but **z
 ```
 
 **Deploy one connector per service database** — 18 total. Use Strimzi Kafka Connect on GKE for container-native management.
+
+**Repo alignment:** docker-compose already runs Debezium Kafka Connect. Use JSON converters in dev; switch to Avro/Protobuf + Schema Registry with compatibility checks in production (see §3.4).
 
 ### 3.2 Real-Time Streaming (Cloud Dataflow / Apache Beam)
 
@@ -186,6 +193,18 @@ models/
 | ml_feature_refresh | Every 4 hours | ~20 min | Staging complete |
 | ml_training | Daily 04:00 UTC | ~2 hours | Marts complete |
 | data_quality | Every 2 hours | ~5 min | After staging |
+
+### 3.4 Event Contracts & Schema Registry (Production Readiness)
+
+**Current repo envelope (JSON):** `id`, `aggregateId`, `eventType`, `payload` (see `EventEnvelope` in services).  
+**Required production fields:** `eventTime`, `schemaVersion`, `sourceService`, `correlationId`/`traceId`, `actorId` (when available).  
+**Schema governance:** use Schema Registry (Confluent or Apicurio), enforce backward compatibility in CI, and version topics only on breaking changes.
+
+### 3.5 Backfills, Reprocessing & Idempotency
+
+- Persist raw events to Cloud Storage (`raw/`) for replay and backfills.
+- Deduplicate in BigQuery using `id + source` (MERGE) or stateful Dataflow dedupe.
+- Runbooks: rebuild partitions, recompute features, and re-score models with consistent version tags.
 
 ---
 
@@ -401,6 +420,15 @@ gs://instacommerce-data-lake/
 
 ## 5. ML/AI Use Cases
 
+**Service integration (repo-aligned):**
+- **search-service**: ranking + personalization outputs
+- **pricing-service**: dynamic pricing recommendations
+- **fraud-detection-service**: real-time fraud scores at checkout
+- **routing-eta-service**: ETA predictions fed by `rider.location.updates`
+- **rider-fleet-service**: rider assignment optimization inputs/outputs
+- **wallet-loyalty-service**: CLV segments + loyalty triggers
+- **notification-service**: personalization-driven campaigns
+
 ### 5.1 Search Ranking (Learning to Rank)
 
 **Model**: LambdaMART (Phase 1) → Two-Tower Neural (Phase 2)
@@ -484,6 +512,8 @@ User query → search-service (BM25 top 200)
 
 **Model:** LightGBM Gradient Boosted Regression
 
+**Serving:** routing-eta-service consumes `rider.location.updates` plus order/store context to return ETAs.
+
 **Three-stage prediction (Blinkit-inspired approach):**
 
 1. **Pre-order (home screen):** Conservative estimate. Updated every 5 min per zone. Inputs: zone historical avg, current queue depth, rider availability, time-of-day.
@@ -519,6 +549,8 @@ User query → search-service (BM25 top 200)
 
 **Model:** Google OR-Tools (constraint optimization) + LightGBM for travel time estimation
 
+**Serving:** rider-fleet-service executes assignments and emits `rider.events` for downstream consumers.
+
 **Objective function:** Minimize weighted sum of: total delivery time (weight 0.5), rider idle time (weight 0.2), SLA breach probability (weight 0.3)
 
 **Constraints:**
@@ -537,6 +569,8 @@ User query → search-service (BM25 top 200)
 ### 5.8 Customer Lifetime Value (CLV)
 
 **Model:** BG/NBD (frequency/recency) + Gamma-Gamma (monetary value)
+
+**Serving:** wallet-loyalty-service consumes CLV segments for tiers, rewards, and churn prevention.
 
 **Segments:**
 | Segment | Criteria | % Users | % Revenue | Strategy |
@@ -589,6 +623,12 @@ User query → search-service (BM25 top 200)
 - **Audit trail:** All model predictions logged with model version, features used, and confidence score
 - **Retraining triggers:** Data drift (PSI > 0.2), performance drop (metric < threshold), scheduled (weekly)
 
+### 6.4 Serving Reliability & SLOs
+
+- **Latency SLOs:** p95 < 30ms, p99 < 50ms for online inference; fallback to rules if breached.
+- **Availability:** multi-zone endpoints with autoscaling; circuit breakers in calling services.
+- **Feature health:** alert if feature store missing-rate >1% or freshness exceeds SLA.
+
 ---
 
 ## 7. Dashboards & Analytics
@@ -609,6 +649,8 @@ With conversion rates at each step, filterable by time, city, store, platform.
 **Rider Fleet:** Map view showing active/idle/offline riders per zone. Utilization gauge per zone. Earnings tracker.
 
 **Revenue:** Real-time GMV counter (today vs yesterday same hour), AOV trend, orders/minute graph.
+
+**Data Pipeline Health:** Kafka consumer lag, Dataflow backlog, dbt freshness, BigQuery load errors.
 
 ### 7.2 Business Intelligence (Looker)
 
@@ -634,6 +676,10 @@ With conversion rates at each step, filterable by time, city, store, platform.
 | Rider Shortage | <2 available riders in zone | P1 | Auto-surge incentive + expand zone radius |
 | Cart Abandonment | >40% increase vs baseline (1-hr) | P2 | Alert product team |
 | Model Drift | PSI > 0.2 on any production model | P2 | Alert ML team + schedule retraining |
+| Kafka Lag | >5 min lag on order/payment topics | P1 | Page data eng + scale consumers |
+| Dataflow Backlog | >10 min processing delay | P1 | Page data eng + autoscale |
+| dbt/Composer Failure | DAG failure or SLA miss | P2 | Alert analytics eng + rerun |
+| Feature Freshness | Feature store stale >1 hr | P2 | Alert ML team + fallback to cached |
 
 ---
 
@@ -680,7 +726,7 @@ expectations:
       max_value: 10000000    # $100K max sanity check
   - expect_column_values_to_be_in_set:
       column: status
-      value_set: [CREATED, CONFIRMED, PICKING, PICKED, ASSIGNED, IN_TRANSIT, DELIVERED, CANCELLED]
+      value_set: [PENDING, PLACED, PACKING, PACKED, OUT_FOR_DELIVERY, DELIVERED, CANCELLED, FAILED]
   - expect_table_row_count_to_be_between:
       min_value: 100000       # At least 100K orders/day
       max_value: 2000000      # Sanity cap
@@ -698,6 +744,12 @@ Run after every batch load. Block downstream if critical expectations fail.
 | Logs | 90 days | 1 year | Delete |
 | ML training data | 1 year | 2 years | Delete |
 | Audit events | 3 years | 7 years | 10 years |
+
+### 8.5 Data SLAs & Lineage
+
+- **Freshness SLOs:** CDC <5 min, streaming <1 min, batch <4 hours (alert on breach).
+- **Completeness:** reconcile source vs sink row counts (orders, payments, refunds).
+- **Lineage:** publish dbt docs + Data Catalog ownership tags for every dataset.
 
 ---
 
@@ -723,7 +775,7 @@ Run after every batch load. Block downstream if critical expectations fail.
 - **Key ML:** Per-store SKU assortment based on neighborhood demographics + ordering patterns. Multi-order rider batching algorithm. Dynamic delivery fee pricing. Demand-driven promotional pricing.
 - **Differentiator:** Leverages Zomato's massive food delivery dataset for cross-category demand prediction.
 
-### Key Takeaways for InstaCommerce
+### Key Takeaways for Instacommerce
 1. **Search + personalization = highest ROI** (Instacart's biggest ML investment)
 2. **Demand forecasting = operational backbone** (Zepto's core competitive advantage)
 3. **Custom ML platform pays off at scale** (DoorDash Sibyl, Instacart Lore)
@@ -738,12 +790,12 @@ Run after every batch load. Block downstream if critical expectations fail.
 
 | Week | Deliverable |
 |------|-------------|
-| 1 | Deploy Debezium CDC for order, payment, inventory services |
-| 2 | BigQuery core schema (fact_orders, fact_payments, dim tables), basic dbt staging models |
-| 3 | Cloud Dataflow streaming pipeline (order events → BigQuery), Grafana real-time dashboards |
-| 4 | Debezium for remaining services, Cloud Composer DAGs, data quality checks |
+| 1 | Deploy Debezium CDC for order, payment, inventory services + standardize topic naming (singular) with dual-publish for orders/payments |
+| 2 | BigQuery core schema (fact_orders, fact_payments, dim tables), basic dbt staging models + schema registry + event contract CI |
+| 3 | Cloud Dataflow streaming pipeline (order/payment events → BigQuery), raw event landing to Cloud Storage, Grafana real-time dashboards |
+| 4 | Debezium for remaining services, Cloud Composer DAGs, data quality checks + backfill runbook |
 
-**Exit criteria:** All 18 services streaming to BigQuery. Real-time order funnel dashboard live.
+**Exit criteria:** All 18 services streaming to BigQuery. Canonical topics in place. Real-time order funnel dashboard live.
 
 ### Phase 2: ML Foundation (Weeks 5-8)
 
@@ -792,7 +844,7 @@ Run after every batch load. Block downstream if critical expectations fail.
 | Cloud Dataflow (streaming) | $2,500 | $10,000 | $18,000 |
 | Vertex AI (training + serving) | $5,000 | $15,000 | $28,000 |
 | Cloud Storage (data lake) | $300 | $1,200 | $2,500 |
-| Debezium/Kafka Connect (Strimzi) | $1,000 | $3,000 | $5,000 |
+| Kafka (Strimzi) + Debezium Connect | $1,000 | $3,000 | $5,000 |
 | Cloud Composer (Airflow) | $800 | $1,500 | $2,500 |
 | Looker | $3,000 | $3,000 | $3,000 |
 | Feature Store | $500 | $2,000 | $4,000 |

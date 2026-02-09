@@ -9,7 +9,6 @@ import com.instacommerce.identity.dto.request.RefreshRequest;
 import com.instacommerce.identity.dto.request.RegisterRequest;
 import com.instacommerce.identity.dto.request.RevokeRequest;
 import com.instacommerce.identity.dto.response.AuthResponse;
-import com.instacommerce.identity.dto.response.RegisterResponse;
 import com.instacommerce.identity.exception.InvalidCredentialsException;
 import com.instacommerce.identity.exception.TokenExpiredException;
 import com.instacommerce.identity.exception.TokenInvalidException;
@@ -25,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +42,7 @@ public class AuthService {
     private final AuditService auditService;
     private final RateLimitService rateLimitService;
     private final AuthMetrics authMetrics;
+    private final UserService userService;
 
     public AuthService(UserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
@@ -49,7 +50,8 @@ public class AuthService {
                        TokenService tokenService,
                        AuditService auditService,
                        RateLimitService rateLimitService,
-                       AuthMetrics authMetrics) {
+                       AuthMetrics authMetrics,
+                       UserService userService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordEncoder = passwordEncoder;
@@ -57,10 +59,11 @@ public class AuthService {
         this.auditService = auditService;
         this.rateLimitService = rateLimitService;
         this.authMetrics = authMetrics;
+        this.userService = userService;
     }
 
     @Transactional
-    public RegisterResponse register(RegisterRequest request, String ipAddress, String userAgent, String traceId) {
+    public AuthResponse register(RegisterRequest request, String ipAddress, String userAgent, String traceId) {
         rateLimitService.checkRegister(ipAddress);
         String email = normalizeEmail(request.email());
         if (userRepository.findByEmailIgnoreCase(email).isPresent()) {
@@ -81,7 +84,16 @@ public class AuthService {
             ipAddress,
             userAgent,
             traceId);
-        return new RegisterResponse(saved.getId(), "Registration successful");
+        String accessToken = tokenService.generateAccessToken(saved);
+        String refreshToken = tokenService.generateRefreshToken();
+        String refreshHash = tokenService.hashRefreshToken(refreshToken);
+        RefreshToken token = new RefreshToken();
+        token.setUser(saved);
+        token.setTokenHash(refreshHash);
+        token.setExpiresAt(tokenService.refreshTokenExpiresAt());
+        refreshTokenRepository.save(token);
+        enforceMaxRefreshTokens(saved.getId());
+        return new AuthResponse(accessToken, refreshToken, tokenService.accessTokenTtlSeconds(), "Bearer");
     }
 
     @Transactional
@@ -207,6 +219,10 @@ public class AuthService {
         String refreshHash = tokenService.hashRefreshToken(request.refreshToken());
         RefreshToken existing = refreshTokenRepository.findByTokenHash(refreshHash)
             .orElseThrow(TokenInvalidException::new);
+        UUID currentUserId = userService.getCurrentUserId();
+        if (!existing.getUser().getId().equals(currentUserId)) {
+            throw new AccessDeniedException("Cannot revoke another user's token");
+        }
         if (!existing.isRevoked()) {
             existing.setRevoked(true);
             refreshTokenRepository.save(existing);
@@ -217,6 +233,21 @@ public class AuthService {
             "RefreshToken",
             existing.getId().toString(),
             Map.of("userId", existing.getUser().getId().toString()),
+            ipAddress,
+            userAgent,
+            traceId);
+    }
+
+    @Transactional
+    public void logout(String ipAddress, String userAgent, String traceId) {
+        UUID userId = userService.getCurrentUserId();
+        int revoked = refreshTokenRepository.revokeAllActiveByUserId(userId);
+        authMetrics.incrementRevoke();
+        auditService.logAction(userId,
+            "USER_LOGOUT",
+            TARGET_TYPE_USER,
+            userId.toString(),
+            Map.of("revokedTokens", revoked),
             ipAddress,
             userAgent,
             traceId);

@@ -7,8 +7,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import java.time.Instant;
 import java.util.List;
-import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -21,7 +22,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
-    private static final Logger log = Logger.getLogger(GlobalExceptionHandler.class.getName());
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
     private final TraceIdProvider traceIdProvider;
 
     public GlobalExceptionHandler(TraceIdProvider traceIdProvider) {
@@ -76,7 +77,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleFallback(Exception ex, HttpServletRequest request) {
-        log.severe("Unhandled exception on " + request.getRequestURI() + ": " + ex.getMessage());
+        log.error("Unhandled exception on {}", request.getRequestURI(), ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
             .body(buildError("INTERNAL_ERROR", "An unexpected error occurred", List.of(), request));
     }

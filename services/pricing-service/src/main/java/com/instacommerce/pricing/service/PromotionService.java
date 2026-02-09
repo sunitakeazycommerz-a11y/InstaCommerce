@@ -8,7 +8,6 @@ import com.instacommerce.pricing.exception.PromotionNotFoundException;
 import com.instacommerce.pricing.repository.PromotionRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -31,10 +30,8 @@ public class PromotionService {
 
     @Cacheable(value = "activePromotions", key = "'all'")
     @Transactional(readOnly = true)
-    public List<Promotion> findApplicable(long cartTotalCents, Instant now) {
-        return promotionRepository.findActivePromotions(now).stream()
-                .filter(p -> cartTotalCents >= p.getMinOrderCents())
-                .collect(Collectors.toList());
+    public List<Promotion> findActivePromotions() {
+        return promotionRepository.findActivePromotions();
     }
 
     public long calculateDiscount(Promotion promotion, long subtotalCents) {

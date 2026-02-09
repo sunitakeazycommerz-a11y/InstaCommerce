@@ -18,6 +18,7 @@ public record CreateStoreRequest(
     @NotBlank @Size(min = 5, max = 10) String pincode,
     @NotNull @DecimalMin("-90.0") @DecimalMax("90.0") BigDecimal latitude,
     @NotNull @DecimalMin("-180.0") @DecimalMax("180.0") BigDecimal longitude,
+    @Size(max = 50) String timezone,
     @Positive Integer capacityOrdersPerHour
 ) {
 }

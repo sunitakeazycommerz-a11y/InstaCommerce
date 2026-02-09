@@ -1,6 +1,7 @@
 package com.instacommerce.payment.controller;
 
 import com.instacommerce.payment.dto.request.AuthorizeRequest;
+import com.instacommerce.payment.dto.request.CaptureRequest;
 import com.instacommerce.payment.dto.response.PaymentResponse;
 import com.instacommerce.payment.service.PaymentService;
 import jakarta.validation.Valid;
@@ -27,8 +28,10 @@ public class PaymentController {
     }
 
     @PostMapping("/{id}/capture")
-    public PaymentResponse capture(@PathVariable UUID id) {
-        return paymentService.capture(id);
+    public PaymentResponse capture(@PathVariable UUID id,
+                                   @Valid @RequestBody(required = false) CaptureRequest request) {
+        Long amountCents = request == null ? null : request.amountCents();
+        return paymentService.capture(id, amountCents);
     }
 
     @PostMapping("/{id}/void")

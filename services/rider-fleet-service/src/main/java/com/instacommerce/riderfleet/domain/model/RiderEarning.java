@@ -7,11 +7,13 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "rider_earnings")
+@Table(name = "rider_earnings",
+    uniqueConstraints = @UniqueConstraint(name = "uk_rider_earnings_order_id", columnNames = "order_id"))
 public class RiderEarning {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

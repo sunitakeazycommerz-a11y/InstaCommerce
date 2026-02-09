@@ -14,10 +14,12 @@ spring:
     username: ${INVENTORY_DB_USER:postgres}
     password: ${sm://db-password-inventory:${INVENTORY_DB_PASSWORD}}
     hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
-      connection-timeout: 5000
+      maximum-pool-size: 60
+      minimum-idle: 15
+      connection-timeout: 3000
       max-lifetime: 1800000
+      leak-detection-threshold: 30000
+      validation-timeout: 3000
   jpa:
     hibernate:
       ddl-auto: validate
@@ -31,6 +33,7 @@ inventory:
     issuer: ${INVENTORY_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${INVENTORY_JWT_PUBLIC_KEY}}
   low-stock-threshold: ${INVENTORY_LOW_STOCK_THRESHOLD:10}
+  lock-timeout-ms: ${INVENTORY_LOCK_TIMEOUT_MS:2000}
 
 reservation:
   ttl-minutes: ${INVENTORY_RESERVATION_TTL_MINUTES:5}

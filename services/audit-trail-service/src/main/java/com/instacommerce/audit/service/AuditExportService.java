@@ -1,5 +1,6 @@
 package com.instacommerce.audit.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.dto.AuditSearchCriteria;
 import com.instacommerce.audit.repository.AuditEventRepository;
@@ -7,10 +8,10 @@ import jakarta.persistence.criteria.Predicate;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -28,9 +29,11 @@ public class AuditExportService {
     private static final int EXPORT_BATCH_SIZE = 500;
 
     private final AuditEventRepository repository;
+    private final ObjectMapper objectMapper;
 
-    public AuditExportService(AuditEventRepository repository) {
+    public AuditExportService(AuditEventRepository repository, ObjectMapper objectMapper) {
         this.repository = repository;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional(readOnly = true)
@@ -40,7 +43,7 @@ public class AuditExportService {
 
         try (PrintWriter writer = response.getWriter()) {
             writer.println("id,event_type,source_service,actor_id,actor_type,resource_type," +
-                    "resource_id,action,ip_address,user_agent,correlation_id,created_at");
+                    "resource_id,action,ip_address,user_agent,correlation_id,details,created_at");
 
             Specification<AuditEvent> spec = buildSpecification(criteria);
             int page = 0;
@@ -76,8 +79,21 @@ public class AuditExportService {
                 escapeCsv(event.getIpAddress()),
                 escapeCsv(event.getUserAgent()),
                 escapeCsv(event.getCorrelationId()),
+                escapeCsv(serializeDetails(event.getDetails())),
                 escapeCsv(event.getCreatedAt() != null ? ISO_FORMATTER.format(event.getCreatedAt()) : "")
         );
+    }
+
+    private String serializeDetails(Map<String, Object> details) {
+        if (details == null || details.isEmpty()) {
+            return "";
+        }
+        try {
+            return objectMapper.writeValueAsString(details);
+        } catch (Exception ex) {
+            log.warn("Failed to serialize audit details for export: {}", ex.getMessage());
+            return "";
+        }
     }
 
     private static String escapeCsv(String value) {
@@ -112,6 +128,9 @@ public class AuditExportService {
             }
             if (criteria.eventType() != null && !criteria.eventType().isBlank()) {
                 predicates.add(cb.equal(root.get("eventType"), criteria.eventType()));
+            }
+            if (criteria.correlationId() != null && !criteria.correlationId().isBlank()) {
+                predicates.add(cb.equal(root.get("correlationId"), criteria.correlationId()));
             }
             if (criteria.fromDate() != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), criteria.fromDate()));

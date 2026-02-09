@@ -20,7 +20,7 @@ public class PartitionMaintenanceJob {
     private final int futureMonths;
 
     public PartitionMaintenanceJob(JdbcTemplate jdbcTemplate,
-                                   @Value("${audit.partition.retention-days:90}") int retentionDays,
+                                   @Value("${audit.partition.retention-days:365}") int retentionDays,
                                    @Value("${audit.partition.future-months:3}") int futureMonths) {
         this.jdbcTemplate = jdbcTemplate;
         this.retentionDays = retentionDays;

@@ -2,7 +2,6 @@ package com.instacommerce.notification.repository;
 
 import com.instacommerce.notification.domain.model.NotificationChannel;
 import com.instacommerce.notification.domain.model.NotificationLog;
-import com.instacommerce.notification.domain.model.NotificationStatus;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -19,7 +18,14 @@ public interface NotificationLogRepository extends JpaRepository<NotificationLog
     @Query("update NotificationLog log set log.recipient = :recipient where log.userId = :userId")
     int anonymizeByUserId(@Param("userId") UUID userId, @Param("recipient") String recipient);
 
-    List<NotificationLog> findByStatusAndNextRetryAtLessThanEqual(NotificationStatus status, Instant now);
+    @Query(value = """
+        SELECT * FROM notification_log
+        WHERE status = 'RETRY_PENDING' AND next_retry_at <= :now
+        ORDER BY next_retry_at ASC
+        LIMIT :limit
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<NotificationLog> findPendingForRetry(@Param("now") Instant now, @Param("limit") int limit);
 
     @Modifying
     @Query("DELETE FROM NotificationLog log WHERE log.createdAt < :cutoff")

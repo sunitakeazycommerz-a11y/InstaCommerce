@@ -10,8 +10,11 @@ import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.exception.StoreNotFoundException;
 import com.instacommerce.warehouse.repository.StoreHoursRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
+import java.time.DateTimeException;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -80,17 +83,21 @@ public class StoreService {
         if (store.getStatus() != StoreStatus.ACTIVE) {
             return false;
         }
-        int dayOfWeek = now.getDayOfWeek().getValue() % 7;
+        ZonedDateTime storeNow = toStoreTime(store, now);
+        int dayOfWeek = storeNow.getDayOfWeek().getValue() % 7;
+        LocalTime currentTime = storeNow.toLocalTime();
+
         Optional<StoreHours> hours = storeHoursRepository.findByStoreIdAndDayOfWeek(storeId, dayOfWeek);
-        if (hours.isEmpty()) {
-            return false;
+        if (hours.isPresent() && isWithinOperatingHours(hours.get(), currentTime)) {
+            return true;
         }
-        StoreHours h = hours.get();
-        if (h.isHoliday()) {
-            return false;
-        }
-        LocalTime currentTime = now.toLocalTime();
-        return !currentTime.isBefore(h.getOpensAt()) && !currentTime.isAfter(h.getClosesAt());
+
+        int previousDay = (dayOfWeek + 6) % 7;
+        Optional<StoreHours> previousHours = storeHoursRepository.findByStoreIdAndDayOfWeek(storeId, previousDay);
+        return previousHours.isPresent()
+                && !previousHours.get().isHoliday()
+                && previousHours.get().getClosesAt().isBefore(previousHours.get().getOpensAt())
+                && !currentTime.isAfter(previousHours.get().getClosesAt());
     }
 
     @Transactional
@@ -104,6 +111,7 @@ public class StoreService {
         store.setPincode(request.pincode());
         store.setLatitude(request.latitude());
         store.setLongitude(request.longitude());
+        store.setTimezone(resolveZoneId(request.timezone()).getId());
         store.setCapacityOrdersPerHour(
                 request.capacityOrdersPerHour() != null ? request.capacityOrdersPerHour() : 100);
         store.setStatus(StoreStatus.ACTIVE);
@@ -140,5 +148,34 @@ public class StoreService {
         outboxService.publish("Store", id.toString(), "StoreDeleted",
                 Map.of("storeId", id, "name", store.getName()));
         log.info("Deleted store {}", id);
+    }
+
+    private ZonedDateTime toStoreTime(Store store, LocalDateTime now) {
+        ZoneId storeZone = resolveZoneId(store.getTimezone());
+        return now.atZone(ZoneId.systemDefault()).withZoneSameInstant(storeZone);
+    }
+
+    private ZoneId resolveZoneId(String timezone) {
+        String value = (timezone == null || timezone.isBlank()) ? "UTC" : timezone.trim();
+        try {
+            return ZoneId.of(value);
+        } catch (DateTimeException ex) {
+            throw new IllegalArgumentException("Invalid timezone");
+        }
+    }
+
+    private boolean isWithinOperatingHours(StoreHours hours, LocalTime currentTime) {
+        if (hours.isHoliday()) {
+            return false;
+        }
+        LocalTime opensAt = hours.getOpensAt();
+        LocalTime closesAt = hours.getClosesAt();
+        if (closesAt.equals(opensAt)) {
+            return true;
+        }
+        if (closesAt.isBefore(opensAt)) {
+            return !currentTime.isBefore(opensAt);
+        }
+        return !currentTime.isBefore(opensAt) && !currentTime.isAfter(closesAt);
     }
 }

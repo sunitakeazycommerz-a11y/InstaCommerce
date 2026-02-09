@@ -53,6 +53,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error", "/payments/webhook").permitAll()
+                .requestMatchers(HttpMethod.POST, "/payments/*/capture", "/payments/*/void").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/payments/*/refund").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions

@@ -15,4 +15,7 @@ public interface PaymentActivity {
 
     @ActivityMethod
     void voidPayment(String paymentId);
+
+    @ActivityMethod
+    void refundPayment(String paymentId, long amountCents);
 }

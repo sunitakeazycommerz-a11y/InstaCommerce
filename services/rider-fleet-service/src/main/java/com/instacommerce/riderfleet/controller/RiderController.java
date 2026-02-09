@@ -13,6 +13,10 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -42,6 +46,7 @@ public class RiderController {
     @PostMapping("/{id}/availability")
     public ResponseEntity<Void> toggleAvailability(@PathVariable UUID id,
                                                     @RequestParam boolean available) {
+        assertRiderAccess(id);
         availabilityService.toggleAvailability(id, available);
         return ResponseEntity.ok().build();
     }
@@ -49,6 +54,7 @@ public class RiderController {
     @PostMapping("/{id}/location")
     public ResponseEntity<Void> updateLocation(@PathVariable UUID id,
                                                 @Valid @RequestBody LocationUpdateRequest request) {
+        assertRiderAccess(id);
         availabilityService.updateLocation(id, request.lat(), request.lng());
         return ResponseEntity.ok().build();
     }
@@ -61,6 +67,7 @@ public class RiderController {
 
     @GetMapping("/{id}")
     public ResponseEntity<RiderResponse> getRider(@PathVariable UUID id) {
+        assertRiderAccess(id);
         return ResponseEntity.ok(riderService.getRider(id));
     }
 
@@ -68,6 +75,29 @@ public class RiderController {
     public ResponseEntity<EarningsSummaryResponse> getEarnings(@PathVariable UUID id,
                                                                 @RequestParam Instant from,
                                                                 @RequestParam Instant to) {
+        assertRiderAccess(id);
         return ResponseEntity.ok(earningsService.getEarningsSummary(id, from, to));
+    }
+
+    private void assertRiderAccess(UUID riderId) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new AccessDeniedException("Authentication required");
+        }
+        if (hasRole(authentication, "ROLE_ADMIN") || hasRole(authentication, "ROLE_INTERNAL")) {
+            return;
+        }
+        if (!riderId.toString().equals(authentication.getName())) {
+            throw new AccessDeniedException("Rider access denied");
+        }
+    }
+
+    private boolean hasRole(Authentication authentication, String role) {
+        for (GrantedAuthority authority : authentication.getAuthorities()) {
+            if (role.equals(authority.getAuthority())) {
+                return true;
+            }
+        }
+        return false;
     }
 }

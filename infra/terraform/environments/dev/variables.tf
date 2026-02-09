@@ -36,7 +36,17 @@ variable "databases" {
     "order_db",
     "payment_db",
     "fulfillment_db",
-    "notification_db"
+    "notification_db",
+    "search_db",
+    "pricing_db",
+    "cart_db",
+    "warehouse_db",
+    "rider_db",
+    "routing_db",
+    "wallet_db",
+    "audit_db",
+    "fraud_db",
+    "config_db"
   ]
 }
 

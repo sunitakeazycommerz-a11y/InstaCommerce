@@ -25,6 +25,9 @@ public class CouponRedemption {
     @JoinColumn(name = "coupon_id", nullable = false)
     private Coupon coupon;
 
+    @Column(name = "single_use", nullable = false)
+    private boolean singleUse;
+
     @Column(name = "user_id", nullable = false)
     private UUID userId;
 
@@ -58,6 +61,14 @@ public class CouponRedemption {
 
     public void setCoupon(Coupon coupon) {
         this.coupon = coupon;
+    }
+
+    public boolean isSingleUse() {
+        return singleUse;
+    }
+
+    public void setSingleUse(boolean singleUse) {
+        this.singleUse = singleUse;
     }
 
     public UUID getUserId() {

@@ -7,6 +7,7 @@ import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.domain.model.ProcessedWebhookEvent;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
+import com.instacommerce.payment.service.LedgerService;
 import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,13 +25,16 @@ public class WebhookEventHandler {
     private final ObjectMapper objectMapper;
     private final PaymentRepository paymentRepository;
     private final ProcessedWebhookEventRepository processedWebhookEventRepository;
+    private final LedgerService ledgerService;
 
     public WebhookEventHandler(ObjectMapper objectMapper,
                                PaymentRepository paymentRepository,
-                               ProcessedWebhookEventRepository processedWebhookEventRepository) {
+                               ProcessedWebhookEventRepository processedWebhookEventRepository,
+                               LedgerService ledgerService) {
         this.objectMapper = objectMapper;
         this.paymentRepository = paymentRepository;
         this.processedWebhookEventRepository = processedWebhookEventRepository;
+        this.ledgerService = ledgerService;
     }
 
     public void handle(String payload) {
@@ -100,37 +104,46 @@ public class WebhookEventHandler {
         }
 
         paymentRepository.findByPspReference(pspReference)
-            .ifPresent(payment -> applyEvent(payment, type, objectNode));
+            .ifPresent(payment -> applyEvent(payment, type, objectNode, eventId));
     }
 
-    private void applyEvent(Payment payment, String type, JsonNode objectNode) {
+    private void applyEvent(Payment payment, String type, JsonNode objectNode, String eventId) {
         switch (type) {
-            case "payment_intent.succeeded" -> handleCaptured(payment, objectNode);
-            case "payment_intent.canceled" -> handleVoided(payment);
+            case "payment_intent.succeeded" -> handleCaptured(payment, objectNode, eventId);
+            case "payment_intent.canceled" -> handleVoided(payment, eventId);
             case "payment_intent.payment_failed" -> handleFailed(payment);
-            case "charge.refunded" -> handleRefunded(payment, objectNode);
+            case "charge.refunded" -> handleRefunded(payment, objectNode, eventId);
             default -> log.debug("Ignoring webhook event {}", type);
         }
     }
 
-    private void handleCaptured(Payment payment, JsonNode objectNode) {
+    private void handleCaptured(Payment payment, JsonNode objectNode, String eventId) {
         if (payment.getStatus() == PaymentStatus.CAPTURED) {
             return;
         }
         long amount = longValue(objectNode, "amount_received", "amount");
-        if (amount > 0) {
-            payment.setCapturedCents(Math.max(payment.getCapturedCents(), amount));
-        }
+        long capturedAmount = amount > 0 ? amount : payment.getAmountCents();
+        long previousCaptured = payment.getCapturedCents();
+        long delta = Math.max(0L, capturedAmount - previousCaptured);
+        payment.setCapturedCents(Math.max(previousCaptured, capturedAmount));
         payment.setStatus(PaymentStatus.CAPTURED);
-        paymentRepository.save(payment);
+        Payment saved = paymentRepository.save(payment);
+        if (delta > 0) {
+            ledgerService.recordDoubleEntry(saved.getId(), delta,
+                "authorization_hold", "merchant_payable", "CAPTURE",
+                referenceId(eventId, saved), "Capture (webhook)");
+        }
     }
 
-    private void handleVoided(Payment payment) {
+    private void handleVoided(Payment payment, String eventId) {
         if (payment.getStatus() == PaymentStatus.VOIDED) {
             return;
         }
         payment.setStatus(PaymentStatus.VOIDED);
-        paymentRepository.save(payment);
+        Payment saved = paymentRepository.save(payment);
+        ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
+            "authorization_hold", "customer_receivable", "VOID",
+            referenceId(eventId, saved), "Authorization void (webhook)");
     }
 
     private void handleFailed(Payment payment) {
@@ -141,16 +154,25 @@ public class WebhookEventHandler {
         paymentRepository.save(payment);
     }
 
-    private void handleRefunded(Payment payment, JsonNode objectNode) {
+    private void handleRefunded(Payment payment, JsonNode objectNode, String eventId) {
         long refunded = longValue(objectNode, "amount_refunded");
-        if (refunded > 0) {
-            payment.setRefundedCents(Math.max(payment.getRefundedCents(), refunded));
-            if (payment.getRefundedCents() >= payment.getCapturedCents()) {
-                payment.setStatus(PaymentStatus.REFUNDED);
-            } else {
-                payment.setStatus(PaymentStatus.PARTIALLY_REFUNDED);
-            }
-            paymentRepository.save(payment);
+        if (refunded <= 0) {
+            return;
+        }
+        long previousRefunded = payment.getRefundedCents();
+        long updatedRefunded = Math.max(previousRefunded, refunded);
+        payment.setRefundedCents(updatedRefunded);
+        if (updatedRefunded >= payment.getCapturedCents()) {
+            payment.setStatus(PaymentStatus.REFUNDED);
+        } else {
+            payment.setStatus(PaymentStatus.PARTIALLY_REFUNDED);
+        }
+        Payment saved = paymentRepository.save(payment);
+        long delta = updatedRefunded - previousRefunded;
+        if (delta > 0) {
+            ledgerService.recordDoubleEntry(saved.getId(), delta,
+                "merchant_payable", "customer_receivable", "REFUND",
+                referenceId(eventId, saved), "Refund (webhook)");
         }
     }
 
@@ -178,5 +200,9 @@ public class WebhookEventHandler {
             }
         }
         return 0;
+    }
+
+    private String referenceId(String eventId, Payment payment) {
+        return (eventId == null || eventId.isBlank()) ? payment.getId().toString() : eventId;
     }
 }
