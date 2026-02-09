@@ -45,6 +45,15 @@ services:
   checkout-orchestrator-service:
     replicas: 2
     tag: prod
+  ai-orchestrator-service:
+    replicas: 2
+    tag: prod
+  ai-inference-service:
+    replicas: 2
+    tag: prod
+  dispatch-optimizer-service:
+    replicas: 2
+    tag: prod
   warehouse-service:
     replicas: 2
     tag: prod

@@ -25,6 +25,12 @@ services:
     tag: dev
   checkout-orchestrator-service:
     tag: dev
+  ai-orchestrator-service:
+    tag: dev
+  ai-inference-service:
+    tag: dev
+  dispatch-optimizer-service:
+    tag: dev
   warehouse-service:
     tag: dev
   rider-fleet-service:

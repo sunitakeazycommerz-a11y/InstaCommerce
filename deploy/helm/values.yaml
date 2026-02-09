@@ -284,6 +284,51 @@ services:
       maxReplicas: 10
       targetCPU: 70
 
+  ai-orchestrator-service:
+    replicas: 2
+    image: ai-orchestrator-service
+    port: 8100
+    resources:
+      requests: { cpu: 500m, memory: 768Mi }
+      limits: { cpu: 1000m, memory: 1536Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8100"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 8
+      targetCPU: 70
+
+  ai-inference-service:
+    replicas: 2
+    image: ai-inference-service
+    port: 8101
+    resources:
+      requests: { cpu: 750m, memory: 1024Mi }
+      limits: { cpu: 1500m, memory: 2048Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8101"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
+  dispatch-optimizer-service:
+    replicas: 2
+    image: dispatch-optimizer-service
+    port: 8102
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8102"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
   warehouse-service:
     replicas: 2
     image: warehouse-service
