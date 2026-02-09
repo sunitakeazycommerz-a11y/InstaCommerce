@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PaymentRefunded",
+  "type": "object",
+  "required": ["refundId", "paymentId", "orderId", "amountCents", "currency"],
+  "properties": {
+    "refundId": { "type": "string", "format": "uuid" },
+    "paymentId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string", "format": "uuid" },
+    "amountCents": { "type": "integer", "minimum": 0 },
+    "currency": { "type": "string" },
+    "reason": { "type": "string" },
+    "refundedAt": { "type": "string", "format": "date-time" }
+  }
+}

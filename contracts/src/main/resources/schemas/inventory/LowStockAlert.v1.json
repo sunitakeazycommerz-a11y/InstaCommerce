@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LowStockAlert",
+  "type": "object",
+  "required": ["productId", "storeId", "currentQuantity", "threshold", "detectedAt"],
+  "properties": {
+    "productId": { "type": "string", "format": "uuid" },
+    "storeId": { "type": "string" },
+    "sku": { "type": "string" },
+    "currentQuantity": { "type": "integer" },
+    "threshold": { "type": "integer" },
+    "detectedAt": { "type": "string", "format": "date-time" }
+  }
+}

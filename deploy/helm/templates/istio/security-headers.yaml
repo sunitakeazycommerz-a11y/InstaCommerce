@@ -1,0 +1,33 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: security-headers
+spec:
+  configPatches:
+    - applyTo: ROUTE_CONFIGURATION
+      patch:
+        operation: MERGE
+        value:
+          response_headers_to_add:
+            - header:
+                key: X-Content-Type-Options
+                value: nosniff
+              append: false
+            - header:
+                key: X-Frame-Options
+                value: DENY
+              append: false
+            - header:
+                key: Strict-Transport-Security
+                value: max-age=31536000; includeSubDomains
+              append: false
+            - header:
+                key: X-XSS-Protection
+                value: "1; mode=block"
+              append: false
+            - header:
+                key: Content-Security-Policy
+                value: "default-src 'self'"
+              append: false
+{{- end }}

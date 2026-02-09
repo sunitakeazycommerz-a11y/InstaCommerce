@@ -1,0 +1,18 @@
+{{- range $name, $svc := .Values.services }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app: {{ $name }}
+    {{- include "instacommerce.labels" $ | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: http
+      port: {{ $svc.port }}
+      targetPort: http
+---
+{{- end }}

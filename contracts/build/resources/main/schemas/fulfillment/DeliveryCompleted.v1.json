@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DeliveryCompleted",
+  "type": "object",
+  "required": ["orderId", "userId", "deliveredAt"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "riderId": { "type": "string", "format": "uuid" },
+    "deliveredAt": { "type": "string", "format": "date-time" }
+  }
+}

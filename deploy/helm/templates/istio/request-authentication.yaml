@@ -1,0 +1,27 @@
+{{- if .Values.istio.requestAuthentications }}
+{{- range .Values.istio.requestAuthentications }}
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: {{ .name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .selector.app }}
+  jwtRules:
+    {{- range .jwtRules }}
+    - issuer: {{ tpl .issuer $ | quote }}
+      jwksUri: {{ tpl .jwksUri $ | quote }}
+      {{- if .audiences }}
+      audiences:
+        {{- range .audiences }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- end }}
+      {{- if hasKey . "forwardOriginalToken" }}
+      forwardOriginalToken: {{ .forwardOriginalToken }}
+      {{- end }}
+    {{- end }}
+---
+{{- end }}
+{{- end }}

@@ -1,0 +1,150 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: asia-south1-docker.pkg.dev/instacommerce/images
+  JAVA_VERSION: '21'
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.set-matrix.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            identity-service: 'services/identity-service/**'
+            catalog-service: 'services/catalog-service/**'
+            inventory-service: 'services/inventory-service/**'
+            order-service: 'services/order-service/**'
+            payment-service: 'services/payment-service/**'
+            fulfillment-service: 'services/fulfillment-service/**'
+            notification-service: 'services/notification-service/**'
+            search-service: 'services/search-service/**'
+            pricing-service: 'services/pricing-service/**'
+            cart-service: 'services/cart-service/**'
+            checkout-orchestrator-service: 'services/checkout-orchestrator-service/**'
+            warehouse-service: 'services/warehouse-service/**'
+            rider-fleet-service: 'services/rider-fleet-service/**'
+            routing-eta-service: 'services/routing-eta-service/**'
+            wallet-loyalty-service: 'services/wallet-loyalty-service/**'
+            audit-trail-service: 'services/audit-trail-service/**'
+            fraud-detection-service: 'services/fraud-detection-service/**'
+            config-feature-flag-service: 'services/config-feature-flag-service/**'
+      - id: set-matrix
+        run: |
+          services=()
+          [[ "${{ steps.filter.outputs.identity-service }}" == "true" ]] && services+=("identity-service")
+          [[ "${{ steps.filter.outputs.catalog-service }}" == "true" ]] && services+=("catalog-service")
+          [[ "${{ steps.filter.outputs.inventory-service }}" == "true" ]] && services+=("inventory-service")
+          [[ "${{ steps.filter.outputs.order-service }}" == "true" ]] && services+=("order-service")
+          [[ "${{ steps.filter.outputs.payment-service }}" == "true" ]] && services+=("payment-service")
+          [[ "${{ steps.filter.outputs.fulfillment-service }}" == "true" ]] && services+=("fulfillment-service")
+          [[ "${{ steps.filter.outputs.notification-service }}" == "true" ]] && services+=("notification-service")
+          [[ "${{ steps.filter.outputs.search-service }}" == "true" ]] && services+=("search-service")
+          [[ "${{ steps.filter.outputs.pricing-service }}" == "true" ]] && services+=("pricing-service")
+          [[ "${{ steps.filter.outputs.cart-service }}" == "true" ]] && services+=("cart-service")
+          [[ "${{ steps.filter.outputs.checkout-orchestrator-service }}" == "true" ]] && services+=("checkout-orchestrator-service")
+          [[ "${{ steps.filter.outputs.warehouse-service }}" == "true" ]] && services+=("warehouse-service")
+          [[ "${{ steps.filter.outputs.rider-fleet-service }}" == "true" ]] && services+=("rider-fleet-service")
+          [[ "${{ steps.filter.outputs.routing-eta-service }}" == "true" ]] && services+=("routing-eta-service")
+          [[ "${{ steps.filter.outputs.wallet-loyalty-service }}" == "true" ]] && services+=("wallet-loyalty-service")
+          [[ "${{ steps.filter.outputs.audit-trail-service }}" == "true" ]] && services+=("audit-trail-service")
+          [[ "${{ steps.filter.outputs.fraud-detection-service }}" == "true" ]] && services+=("fraud-detection-service")
+          [[ "${{ steps.filter.outputs.config-feature-flag-service }}" == "true" ]] && services+=("config-feature-flag-service")
+          if [ ${#services[@]} -eq 0 ]; then
+            services=(identity-service catalog-service inventory-service order-service payment-service fulfillment-service notification-service search-service pricing-service cart-service checkout-orchestrator-service warehouse-service rider-fleet-service routing-eta-service wallet-loyalty-service audit-trail-service fraud-detection-service config-feature-flag-service)
+          fi
+          json=$(printf '%s\n' "${services[@]}" | jq -R -s -c 'split("\n")[:-1]')
+          echo "services=$json" >> "$GITHUB_OUTPUT"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@v0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
+  build-test:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'gradle'
+      - name: Set up Gradle
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.7
+      - name: Run tests
+        working-directory: services/${{ matrix.service }}
+        run: gradle test --no-daemon
+      - name: Build bootJar
+        working-directory: services/${{ matrix.service }}
+        run: gradle bootJar --no-daemon
+      - name: Build Image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
+            services/${{ matrix.service }}
+      - name: Authenticate to Google Cloud
+        if: github.ref == 'refs/heads/main'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Configure Docker auth
+        if: github.ref == 'refs/heads/main'
+        run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+      - name: Push to Artifact Registry
+        if: github.ref == 'refs/heads/main'
+        run: docker push ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
+
+  deploy-dev:
+    needs: [detect-changes, build-test]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yq
+        uses: mikefarah/yq@v4
+      - name: Update Helm values
+        run: |
+          for svc in $(echo '${{ needs.detect-changes.outputs.services }}' | jq -r '.[]'); do
+            yq -i ".services.${svc}.tag = \"${{ github.sha }}\"" deploy/helm/values-dev.yaml
+          done
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add deploy/helm/values-dev.yaml
+          git commit -m "chore: deploy ${GITHUB_SHA::8} to dev" || exit 0
+          git push

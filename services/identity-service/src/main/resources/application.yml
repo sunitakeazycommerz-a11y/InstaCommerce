@@ -1,0 +1,93 @@
+server:
+  port: ${SERVER_PORT:8081}
+  shutdown: graceful
+
+spring:
+  application:
+    name: identity-service
+  config:
+    import: optional:sm://
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: ${IDENTITY_DB_URL:jdbc:postgresql://localhost:5432/identity_db}
+    username: ${IDENTITY_DB_USER:postgres}
+    password: ${sm://db-password-identity:${IDENTITY_DB_PASSWORD}}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 5000
+      max-lifetime: 1800000
+      idle-timeout: 600000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+identity:
+  cors:
+    allowed-origins: ${IDENTITY_CORS_ORIGINS:http://localhost:3000,https://*.instacommerce.dev}
+  token:
+    access-ttl-seconds: ${IDENTITY_ACCESS_TTL:900}
+    refresh-ttl-seconds: ${IDENTITY_REFRESH_TTL:604800}
+    max-refresh-tokens: ${IDENTITY_MAX_REFRESH_TOKENS:5}
+  jwt:
+    issuer: ${IDENTITY_JWT_ISSUER:instacommerce-identity}
+    public-key: ${sm://jwt-rsa-public-key:${IDENTITY_JWT_PUBLIC_KEY}}
+    private-key: ${sm://jwt-rsa-private-key:${IDENTITY_JWT_PRIVATE_KEY}}
+
+resilience4j:
+  ratelimiter:
+    instances:
+      loginLimiter:
+        limitForPeriod: 5
+        limitRefreshPeriod: 60s
+        timeoutDuration: 0s
+      registerLimiter:
+        limitForPeriod: 3
+        limitRefreshPeriod: 60s
+        timeoutDuration: 0s
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://otel-collector.monitoring:4318/v1/traces}
+    metrics:
+      endpoint: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://otel-collector.monitoring:4318/v1/metrics}
+  metrics:
+    tags:
+      service: ${spring.application.name}
+      environment: ${ENVIRONMENT:dev}
+    export:
+      prometheus:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include: readinessState,db
+        liveness:
+          include: livenessState
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}

@@ -1,0 +1,391 @@
+global:
+  image:
+    registry: asia-south1-docker.pkg.dev/instacommerce/images
+    pullPolicy: IfNotPresent
+
+pdb:
+  enabled: true
+  maxUnavailable: 1
+
+ingress:
+  enabled: false
+
+istio:
+  enabled: true
+  gateway:
+    name: instacommerce-gateway
+    hosts:
+      - api.instacommerce.dev
+    tlsSecret: instacommerce-tls
+  virtualService:
+    name: api-routing
+    hosts:
+      - api.instacommerce.dev
+  routes:
+    - prefix: /api/v1/auth
+      service: identity-service
+    - prefix: /api/v1/users
+      service: identity-service
+    - prefix: /api/v1/products
+      service: catalog-service
+    - prefix: /api/v1/categories
+      service: catalog-service
+    - prefix: /api/v1/search
+      service: search-service
+    - prefix: /api/v1/pricing
+      service: pricing-service
+    - prefix: /api/v1/cart
+      service: cart-service
+    - prefix: /api/v1/checkout
+      service: checkout-orchestrator-service
+    - prefix: /api/v1/orders
+      service: order-service
+    - prefix: /api/v1/fulfillment
+      service: fulfillment-service
+    - prefix: /api/v1/stores
+      service: warehouse-service
+    - prefix: /api/v1/riders
+      service: rider-fleet-service
+    - prefix: /api/v1/deliveries
+      service: routing-eta-service
+    - prefix: /api/v1/tracking
+      service: routing-eta-service
+    - prefix: /api/v1/notifications
+      service: notification-service
+    - prefix: /api/v1/wallet
+      service: wallet-loyalty-service
+    - prefix: /api/v1/loyalty
+      service: wallet-loyalty-service
+    - prefix: /api/v1/referral
+      service: wallet-loyalty-service
+    - prefix: /api/v1/fraud
+      service: fraud-detection-service
+    - prefix: /api/v1/flags
+      service: config-feature-flag-service
+    - prefix: /api/v1/audit
+      service: audit-trail-service
+  requestAuthentications:
+    - name: payment-service-jwt
+      selector:
+        app: payment-service
+      jwtRules:
+        - issuer: instacommerce-identity
+          jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json
+    - name: inventory-service-jwt
+      selector:
+        app: inventory-service
+      jwtRules:
+        - issuer: instacommerce-identity
+          jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json
+  authorizationPolicies:
+    - name: payment-service-internal
+      selector:
+        app: payment-service
+      principals:
+        - cluster.local/ns/{{ .Release.Namespace }}/sa/order-service
+        - cluster.local/ns/{{ .Release.Namespace }}/sa/fulfillment-service
+    - name: inventory-service-internal
+      selector:
+        app: inventory-service
+      principals:
+        - cluster.local/ns/{{ .Release.Namespace }}/sa/order-service
+        - cluster.local/ns/{{ .Release.Namespace }}/sa/fulfillment-service
+
+services:
+  identity-service:
+    replicas: 2
+    image: identity-service
+    port: 8080
+    resources:
+      requests: { cpu: 500m, memory: 768Mi }
+      limits: { cpu: 1000m, memory: 1536Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///identity_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPU: 70
+
+  catalog-service:
+    replicas: 2
+    image: catalog-service
+    port: 8080
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///catalog_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 8
+      targetCPU: 70
+
+  inventory-service:
+    replicas: 2
+    image: inventory-service
+    port: 8080
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///inventory_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
+  order-service:
+    replicas: 2
+    image: order-service
+    port: 8080
+    resources:
+      requests: { cpu: 500m, memory: 768Mi }
+      limits: { cpu: 1000m, memory: 1536Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///order_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPU: 70
+
+  payment-service:
+    replicas: 2
+    image: payment-service
+    port: 8080
+    resources:
+      requests: { cpu: 500m, memory: 768Mi }
+      limits: { cpu: 1000m, memory: 1536Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///payment_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPU: 70
+
+  fulfillment-service:
+    replicas: 2
+    image: fulfillment-service
+    port: 8080
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///fulfillment_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPU: 70
+
+  notification-service:
+    replicas: 2
+    image: notification-service
+    port: 8080
+    resources:
+      requests: { cpu: 200m, memory: 256Mi }
+      limits: { cpu: 400m, memory: 512Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///notification_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPU: 70
+
+  search-service:
+    replicas: 2
+    image: search-service
+    port: 8086
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8086"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///search_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 15
+      targetCPU: 70
+
+  pricing-service:
+    replicas: 2
+    image: pricing-service
+    port: 8087
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8087"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///pricing_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 15
+      targetCPU: 70
+
+  cart-service:
+    replicas: 2
+    image: cart-service
+    port: 8088
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8088"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///cart_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 15
+      targetCPU: 70
+
+  checkout-orchestrator-service:
+    replicas: 2
+    image: checkout-orchestrator-service
+    port: 8089
+    resources:
+      requests: { cpu: 500m, memory: 768Mi }
+      limits: { cpu: 1000m, memory: 1536Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8089"
+      TEMPORAL_SERVICE_ADDRESS: temporal:7233
+    hpa:
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPU: 70
+
+  warehouse-service:
+    replicas: 2
+    image: warehouse-service
+    port: 8090
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8090"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///warehouse_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 4
+      targetCPU: 70
+
+  rider-fleet-service:
+    replicas: 2
+    image: rider-fleet-service
+    port: 8091
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8091"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///rider_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 8
+      targetCPU: 70
+
+  routing-eta-service:
+    replicas: 2
+    image: routing-eta-service
+    port: 8092
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8092"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///routing_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPU: 70
+
+  wallet-loyalty-service:
+    replicas: 2
+    image: wallet-loyalty-service
+    port: 8093
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8093"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///wallet_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
+  audit-trail-service:
+    replicas: 2
+    image: audit-trail-service
+    port: 8094
+    resources:
+      requests: { cpu: 200m, memory: 256Mi }
+      limits: { cpu: 400m, memory: 512Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8094"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///audit_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPU: 70
+
+  fraud-detection-service:
+    replicas: 2
+    image: fraud-detection-service
+    port: 8095
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8095"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///fraud_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 8
+      targetCPU: 70
+
+  config-feature-flag-service:
+    replicas: 2
+    image: config-feature-flag-service
+    port: 8096
+    resources:
+      requests: { cpu: 200m, memory: 256Mi }
+      limits: { cpu: 400m, memory: 512Mi }
+    env:
+      SPRING_PROFILES_ACTIVE: gcp
+      SERVER_PORT: "8096"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///config_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+    hpa:
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPU: 70
+
+networkPolicy:
+  enabled: true
+
+resourceQuota:
+  enabled: true
+  cpu: "64"
+  memory: "84Gi"
+  cpuLimit: "128"
+  memoryLimit: "164Gi"

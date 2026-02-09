@@ -1,0 +1,21 @@
+{{- if .Values.istio.authorizationPolicies }}
+{{- range .Values.istio.authorizationPolicies }}
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ .name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .selector.app }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              {{- range .principals }}
+              - {{ tpl . $ | quote }}
+              {{- end }}
+---
+{{- end }}
+{{- end }}

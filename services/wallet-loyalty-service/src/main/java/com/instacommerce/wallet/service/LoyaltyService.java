@@ -1,0 +1,123 @@
+package com.instacommerce.wallet.service;
+
+import com.instacommerce.wallet.config.WalletProperties;
+import com.instacommerce.wallet.domain.model.LoyaltyAccount;
+import com.instacommerce.wallet.domain.model.LoyaltyTier;
+import com.instacommerce.wallet.domain.model.LoyaltyTransaction;
+import com.instacommerce.wallet.dto.response.LoyaltyResponse;
+import com.instacommerce.wallet.exception.ApiException;
+import com.instacommerce.wallet.repository.LoyaltyAccountRepository;
+import com.instacommerce.wallet.repository.LoyaltyTransactionRepository;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class LoyaltyService {
+    private static final Logger log = LoggerFactory.getLogger(LoyaltyService.class);
+
+    private final LoyaltyAccountRepository accountRepository;
+    private final LoyaltyTransactionRepository transactionRepository;
+    private final WalletProperties walletProperties;
+    private final OutboxService outboxService;
+
+    public LoyaltyService(LoyaltyAccountRepository accountRepository,
+                          LoyaltyTransactionRepository transactionRepository,
+                          WalletProperties walletProperties,
+                          OutboxService outboxService) {
+        this.accountRepository = accountRepository;
+        this.transactionRepository = transactionRepository;
+        this.walletProperties = walletProperties;
+        this.outboxService = outboxService;
+    }
+
+    @Transactional(readOnly = true)
+    public LoyaltyResponse getBalance(UUID userId) {
+        LoyaltyAccount account = accountRepository.findByUserId(userId)
+            .orElseGet(() -> createAccount(userId));
+        return toResponse(account);
+    }
+
+    @Transactional
+    public LoyaltyResponse earnPoints(UUID userId, String orderId, long orderTotalCents) {
+        LoyaltyAccount account = accountRepository.findByUserId(userId)
+            .orElseGet(() -> createAccount(userId));
+
+        int pointsEarned = (int) (orderTotalCents / 100) * walletProperties.getLoyalty().getPointsPerRupee();
+        if (pointsEarned <= 0) {
+            return toResponse(account);
+        }
+
+        account.setPointsBalance(account.getPointsBalance() + pointsEarned);
+        account.setLifetimePoints(account.getLifetimePoints() + pointsEarned);
+        accountRepository.save(account);
+
+        LoyaltyTransaction txn = new LoyaltyTransaction();
+        txn.setAccount(account);
+        txn.setType(LoyaltyTransaction.Type.EARN);
+        txn.setPoints(pointsEarned);
+        txn.setReferenceType("ORDER");
+        txn.setReferenceId(orderId);
+        transactionRepository.save(txn);
+
+        checkTierUpgrade(account);
+        log.info("Earned {} points for user={} order={}", pointsEarned, userId, orderId);
+
+        outboxService.publish("Loyalty", account.getId().toString(), "PointsEarned", txn.getId());
+        return toResponse(account);
+    }
+
+    @Transactional
+    public LoyaltyResponse redeemPoints(UUID userId, int points) {
+        LoyaltyAccount account = accountRepository.findByUserId(userId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "LOYALTY_ACCOUNT_NOT_FOUND",
+                "Loyalty account not found for user: " + userId));
+
+        if (account.getPointsBalance() < points) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INSUFFICIENT_POINTS",
+                String.format("Insufficient points: available=%d, requested=%d", account.getPointsBalance(), points));
+        }
+
+        account.setPointsBalance(account.getPointsBalance() - points);
+        accountRepository.save(account);
+
+        LoyaltyTransaction txn = new LoyaltyTransaction();
+        txn.setAccount(account);
+        txn.setType(LoyaltyTransaction.Type.REDEEM);
+        txn.setPoints(points);
+        txn.setReferenceType("REDEMPTION");
+        txn.setReferenceId(UUID.randomUUID().toString());
+        transactionRepository.save(txn);
+
+        log.info("Redeemed {} points for user={}", points, userId);
+        outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed", txn.getId());
+        return toResponse(account);
+    }
+
+    void checkTierUpgrade(LoyaltyAccount account) {
+        LoyaltyTier newTier = LoyaltyTier.fromLifetimePoints(account.getLifetimePoints());
+        if (newTier.ordinal() > account.getTier().ordinal()) {
+            log.info("Tier upgrade for user={}: {} -> {}", account.getUserId(), account.getTier(), newTier);
+            account.setTier(newTier);
+            accountRepository.save(account);
+            outboxService.publish("Loyalty", account.getId().toString(), "TierUpgraded", newTier.name());
+        }
+    }
+
+    private LoyaltyAccount createAccount(UUID userId) {
+        LoyaltyAccount account = new LoyaltyAccount();
+        account.setUserId(userId);
+        return accountRepository.save(account);
+    }
+
+    private LoyaltyResponse toResponse(LoyaltyAccount account) {
+        return new LoyaltyResponse(
+            account.getPointsBalance(),
+            account.getTier().name(),
+            account.getLifetimePoints()
+        );
+    }
+}

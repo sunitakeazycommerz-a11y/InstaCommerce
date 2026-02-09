@@ -1,0 +1,75 @@
+server:
+  port: ${SERVER_PORT:8096}
+  shutdown: graceful
+
+spring:
+  application:
+    name: config-feature-flag-service
+  config:
+    import: optional:sm://
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: ${FEATURE_FLAG_DB_URL:jdbc:postgresql://localhost:5432/feature_flags_db}
+    username: ${FEATURE_FLAG_DB_USER:postgres}
+    password: ${sm://db-password-feature-flag:${FEATURE_FLAG_DB_PASSWORD}}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 5000
+      max-lifetime: 1800000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=5000,expireAfterWrite=30s
+
+feature-flag:
+  jwt:
+    issuer: ${FEATURE_FLAG_JWT_ISSUER:instacommerce-identity}
+    public-key: ${sm://jwt-rsa-public-key:${FEATURE_FLAG_JWT_PUBLIC_KEY}}
+  cache:
+    flags-ttl-seconds: ${FLAG_CACHE_TTL:30}
+    max-size: ${FLAG_CACHE_MAX_SIZE:5000}
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://otel-collector.monitoring:4318/v1/traces}
+    metrics:
+      endpoint: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://otel-collector.monitoring:4318/v1/metrics}
+  metrics:
+    tags:
+      service: ${spring.application.name}
+      environment: ${ENVIRONMENT:dev}
+    export:
+      prometheus:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include: readinessState,db
+        liveness:
+          include: livenessState
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true

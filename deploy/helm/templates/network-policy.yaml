@@ -1,0 +1,35 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- range $name, $svc := .Values.services }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-netpol
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ $name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ $svc.port | default 8080 }}
+  egress:
+    - to:
+        - podSelector: {}
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+{{- end }}
+{{- end }}

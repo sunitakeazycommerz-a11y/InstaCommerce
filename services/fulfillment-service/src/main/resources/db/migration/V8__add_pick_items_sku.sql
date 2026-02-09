@@ -1,0 +1,1 @@
+ALTER TABLE pick_items ADD COLUMN sku VARCHAR(255);

@@ -1,0 +1,12 @@
+{{- if .Values.resourceQuota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ .Release.Namespace }}-quota
+spec:
+  hard:
+    requests.cpu: "{{ .Values.resourceQuota.cpu }}"
+    requests.memory: "{{ .Values.resourceQuota.memory }}"
+    limits.cpu: "{{ .Values.resourceQuota.cpuLimit }}"
+    limits.memory: "{{ .Values.resourceQuota.memoryLimit }}"
+{{- end }}

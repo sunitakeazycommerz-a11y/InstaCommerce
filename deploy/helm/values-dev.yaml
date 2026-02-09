@@ -1,0 +1,19 @@
+global:
+  image:
+    registry: asia-south1-docker.pkg.dev/instacommerce/dev-images
+
+services:
+  identity-service:
+    tag: dev
+  catalog-service:
+    tag: dev
+  inventory-service:
+    tag: dev
+  order-service:
+    tag: dev
+  payment-service:
+    tag: dev
+  fulfillment-service:
+    tag: dev
+  notification-service:
+    tag: dev

@@ -1,0 +1,14 @@
+{{- if .Values.pdb.enabled }}
+{{- range $name, $svc := .Values.services }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+spec:
+  maxUnavailable: {{ $.Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      app: {{ $name }}
+---
+{{- end }}
+{{- end }}

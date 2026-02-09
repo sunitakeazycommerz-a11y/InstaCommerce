@@ -1,0 +1,93 @@
+server:
+  port: ${SERVER_PORT:8088}
+  shutdown: graceful
+
+spring:
+  application:
+    name: notification-service
+  config:
+    import: optional:sm://
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: ${NOTIFICATION_DB_URL:jdbc:postgresql://localhost:5432/notification}
+    username: ${NOTIFICATION_DB_USER:postgres}
+    password: ${sm://db-password-notification:${NOTIFICATION_DB_PASSWORD}}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${NOTIFICATION_KAFKA_GROUP:notification-service}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        max.poll.interval.ms: 600000
+        max.poll.records: 50
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+notification:
+  providers:
+    sendgrid:
+      api-key: ${sm://sendgrid-api-key:${SENDGRID_API_KEY}}
+      from-email: ${SENDGRID_FROM_EMAIL:no-reply@instacommerce.com}
+    twilio:
+      account-sid: ${TWILIO_ACCOUNT_SID:}
+      auth-token: ${sm://twilio-auth-token:${TWILIO_AUTH_TOKEN}}
+      from-number: ${TWILIO_FROM_NUMBER:}
+  identity:
+    base-url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+  order:
+    base-url: ${ORDER_SERVICE_URL:http://localhost:8085}
+  delivery:
+    default-eta-minutes: ${NOTIFICATION_DEFAULT_ETA_MINUTES:15}
+  dlq-topic: ${NOTIFICATION_DLQ_TOPIC:notifications.dlq}
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://otel-collector.monitoring:4318/v1/traces}
+    metrics:
+      endpoint: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://otel-collector.monitoring:4318/v1/metrics}
+  metrics:
+    tags:
+      service: ${spring.application.name}
+      environment: ${ENVIRONMENT:dev}
+    export:
+      prometheus:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include: readinessState,db
+        liveness:
+          include: livenessState
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}

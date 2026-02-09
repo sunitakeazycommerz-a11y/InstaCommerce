@@ -1,0 +1,26 @@
+global:
+  image:
+    registry: asia-south1-docker.pkg.dev/instacommerce/prod-images
+
+services:
+  identity-service:
+    replicas: 3
+    tag: prod
+  catalog-service:
+    replicas: 3
+    tag: prod
+  inventory-service:
+    replicas: 3
+    tag: prod
+  order-service:
+    replicas: 3
+    tag: prod
+  payment-service:
+    replicas: 3
+    tag: prod
+  fulfillment-service:
+    replicas: 3
+    tag: prod
+  notification-service:
+    replicas: 2
+    tag: prod
