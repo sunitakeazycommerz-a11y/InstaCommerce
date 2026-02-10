@@ -629,6 +629,95 @@ User query → search-service (BM25 top 200)
 - **Availability:** multi-zone endpoints with autoscaling; circuit breakers in calling services.
 - **Feature health:** alert if feature store missing-rate >1% or freshness exceeds SLA.
 
+### 6.5 Production Roadmap Implementation Guide (Practical)
+
+Below is a **one-model-to-production** checklist. Each stage lists **concrete steps** and the **artifacts to add**.
+
+#### 6.5.1 Data Pipelines (Batch + Streaming)
+**Steps**
+1. Define event/table contracts and register schemas for `<domain>.events`.
+2. Land raw CDC + events into BigQuery (raw/staging datasets) with partitioning + clustering.
+3. Build streaming aggregations in Dataflow (late data handling + DLT).
+4. Create dbt staging + marts models for feature-ready tables.
+5. Add data quality checks + SLA alerts; backfill last 90 days and validate row counts.
+
+**Artifacts to add**
+- `schemas/<domain>.avsc` or `proto/<domain>.proto` + registry subject config
+- `dataflow/pipelines/<domain>_events_pipeline.java`
+- `dbt/models/staging/stg_<domain>.sql`
+- `dbt/models/marts/mart_<domain>_features.sql`
+- `airflow/dags/dbt_<domain>_pipeline.py`
+- `great_expectations/expectations/<domain>_suite.yml`
+
+#### 6.5.2 Feature Store
+**Steps**
+1. Define entities and features (names, types, TTL, freshness SLA).
+2. Create offline feature views from BigQuery with point-in-time correctness.
+3. Configure online serving (feature groups + ingestion schedule).
+4. Backfill features for training; verify parity between offline and online.
+5. Add feature ownership, access policies, and deprecation rules.
+
+**Artifacts to add**
+- `feature_store/entities/<entity>.yaml`
+- `feature_store/feature_groups/<group>.yaml`
+- `feature_store/feature_views/<view>.yaml`
+- `feature_store/sql/<feature_view>.sql`
+- `feature_store/ingestion/<group>_job.yaml`
+
+#### 6.5.3 Training
+**Steps**
+1. Assemble training dataset (label definition + feature snapshot) in BigQuery.
+2. Create reproducible training pipeline (Vertex AI Pipeline) with versioned configs.
+3. Track experiments, log metrics, and push model artifact to registry.
+4. Run hyperparameter tuning (optional) and store best params.
+
+**Artifacts to add**
+- `ml/train/<model>/train.py`
+- `ml/train/<model>/config.yaml`
+- `ml/pipelines/train_<model>.py`
+- `ml/registry/<model>.yaml` (metadata, owner, dataset refs)
+- `ml/containers/<model>/Dockerfile`
+
+#### 6.5.4 Evaluation
+**Steps**
+1. Define offline metrics + acceptance thresholds (AUC, NDCG@10, RMSE).
+2. Run evaluation on holdout + recent production data.
+3. Perform bias/fairness checks and calibration analysis.
+4. Gate promotion based on thresholds and generate approval report.
+
+**Artifacts to add**
+- `ml/eval/<model>/eval.py`
+- `ml/eval/<model>/gates.yaml`
+- `ml/eval/<model>/metrics.json`
+- `ml/eval/<model>/bias_report.json`
+
+#### 6.5.5 Deployment
+**Steps**
+1. Package model for online serving (Vertex AI Endpoint) with schema + signature.
+2. Deploy shadow endpoint and log predictions for 1 week.
+3. Canary rollout (5% traffic) via feature flags; compare primary + guardrail metrics.
+4. Promote to 100% or auto-rollback on regression.
+
+**Artifacts to add**
+- `ml/serving/<model>/predictor.py`
+- `ml/serving/<model>/signature.json`
+- `k8s/serving/<model>-deployment.yaml` (if self-hosted)
+- `feature_flags/<model>.yaml` (shadow/canary/prod rollout)
+- `mlops/runbooks/<model>_rollback.yaml`
+
+#### 6.5.6 Monitoring
+**Steps**
+1. Log every prediction with model version + feature snapshot.
+2. Monitor latency, errors, feature freshness, and drift (PSI).
+3. Track online performance metrics (conversion, SLA, fraud catch rate).
+4. Trigger retraining on drift or KPI regression; publish alerts to on-call.
+
+**Artifacts to add**
+- `logging/predictions/schema.json`
+- `monitoring/dashboards/<model>.json`
+- `monitoring/alerts/<model>_alerts.yaml`
+- `mlops/retrain/<model>_trigger.yaml`
+
 ---
 
 ## 7. Dashboards & Analytics

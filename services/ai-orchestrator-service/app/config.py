@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import List, Optional
 
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,9 +12,33 @@ class Settings(BaseSettings):
     server_host: str = "0.0.0.0"
     server_port: int = 8100
     request_timeout_seconds: float = 3.0
+    tool_call_timeout_seconds: float = 2.5
+    tool_total_timeout_seconds: float = 6.0
+    tool_call_max: int = 8
+    tool_circuit_breaker_failures: int = 3
+    tool_circuit_breaker_reset_seconds: float = 30.0
+    tool_allowlist: List[str] = Field(
+        default_factory=lambda: [
+            "catalog.search",
+            "catalog.get_product",
+            "catalog.list_products",
+            "pricing.calculate",
+            "pricing.get_product",
+            "inventory.check",
+            "cart.get",
+            "order.get",
+        ]
+    )
+    pii_redaction_enabled: bool = True
+    rag_cache_ttl_seconds: float = 300.0
+    rag_cache_max_entries: int = 256
+    rag_max_results: int = 5
+    otel_enabled: bool = True
+    otel_service_name: str = "ai-orchestrator-service"
+    otel_exporter_otlp_endpoint: Optional[AnyHttpUrl] = None
 
     internal_service_name: str = "ai-orchestrator-service"
-    internal_service_token: Optional[str] = "dev-internal-token-change-in-prod"
+    internal_service_token: Optional[str] = None
     user_id_header_name: str = "X-User-Id"
 
     catalog_service_url: AnyHttpUrl = "http://catalog-service:8080"

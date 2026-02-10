@@ -1,2 +1,5 @@
 fastapi==0.110.0
+google-cloud-bigquery==3.25.0
+prometheus-client==0.20.0
+redis==5.0.4
 uvicorn[standard]==0.29.0

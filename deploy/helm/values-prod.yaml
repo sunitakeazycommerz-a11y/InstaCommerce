@@ -54,6 +54,21 @@ services:
   dispatch-optimizer-service:
     replicas: 2
     tag: prod
+  outbox-relay:
+    replicas: 2
+    tag: prod
+  cdc-consumer:
+    replicas: 2
+    tag: prod
+  location-ingestion:
+    replicas: 2
+    tag: prod
+  payment-webhook:
+    replicas: 2
+    tag: prod
+  reconciliation-engine:
+    replicas: 2
+    tag: prod
   warehouse-service:
     replicas: 2
     tag: prod

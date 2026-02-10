@@ -73,19 +73,19 @@ spec:
             {{- end }}
           readinessProbe:
             httpGet:
-              path: /actuator/health/readiness
+              path: {{ $svc.readinessPath | default "/actuator/health/readiness" }}
               port: http
             initialDelaySeconds: 15
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /actuator/health/liveness
+              path: {{ $svc.livenessPath | default "/actuator/health/liveness" }}
               port: http
             initialDelaySeconds: 30
             periodSeconds: 15
           startupProbe:
             httpGet:
-              path: /actuator/health/liveness
+              path: {{ $svc.livenessPath | default "/actuator/health/liveness" }}
               port: http
             initialDelaySeconds: 10
             periodSeconds: 5

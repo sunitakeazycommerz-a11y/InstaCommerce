@@ -288,6 +288,8 @@ services:
     replicas: 2
     image: ai-orchestrator-service
     port: 8100
+    readinessPath: /health/ready
+    livenessPath: /health/live
     resources:
       requests: { cpu: 500m, memory: 768Mi }
       limits: { cpu: 1000m, memory: 1536Mi }
@@ -303,6 +305,8 @@ services:
     replicas: 2
     image: ai-inference-service
     port: 8101
+    readinessPath: /health/ready
+    livenessPath: /health/live
     resources:
       requests: { cpu: 750m, memory: 1024Mi }
       limits: { cpu: 1500m, memory: 2048Mi }
@@ -318,12 +322,94 @@ services:
     replicas: 2
     image: dispatch-optimizer-service
     port: 8102
+    readinessPath: /health/ready
+    livenessPath: /health/live
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8102"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
+  outbox-relay:
+    replicas: 2
+    image: outbox-relay
+    port: 8103
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
+  cdc-consumer:
+    replicas: 2
+    image: cdc-consumer
+    port: 8104
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8104"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
+  location-ingestion:
+    replicas: 2
+    image: location-ingestion
+    port: 8105
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8105"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
+  payment-webhook:
+    replicas: 2
+    image: payment-webhook
+    port: 8106
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8106"
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
+  reconciliation-engine:
+    replicas: 2
+    image: reconciliation-engine
+    port: 8107
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8107"
     hpa:
       minReplicas: 2
       maxReplicas: 6

@@ -2,8 +2,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
+import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Literal, Optional
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Set, Tuple
 from uuid import UUID
 
 import httpx
@@ -16,9 +20,99 @@ settings = Settings()
 logger = logging.getLogger("ai_orchestrator")
 
 
+STANDARD_LOG_RECORD_ATTRS = {
+    "args",
+    "asctime",
+    "created",
+    "exc_info",
+    "exc_text",
+    "filename",
+    "funcName",
+    "levelname",
+    "levelno",
+    "lineno",
+    "message",
+    "module",
+    "msecs",
+    "msg",
+    "name",
+    "pathname",
+    "process",
+    "processName",
+    "relativeCreated",
+    "stack_info",
+    "thread",
+    "threadName",
+}
+
+
+class PiiRedactor:
+    def __init__(self, enabled: bool = True) -> None:
+        self._enabled = enabled
+        self._patterns: Tuple[Tuple[re.Pattern[str], str], ...] = (
+            (re.compile(r"[\w\.-]+@[\w\.-]+\.\w+"), "[REDACTED_EMAIL]"),
+            (re.compile(r"\b\d{3}-?\d{2}-?\d{4}\b"), "[REDACTED_SSN]"),
+            (re.compile(r"\b(?:\d[ -]*?){13,16}\b"), "[REDACTED_CARD]"),
+            (
+                re.compile(r"\b(?:\+?\d{1,3}[ -]?)?(?:\(?\d{3}\)?[ -]?)\d{3}[ -]?\d{4}\b"),
+                "[REDACTED_PHONE]",
+            ),
+        )
+
+    def redact_text(self, value: str) -> str:
+        if not self._enabled:
+            return value
+        redacted = value
+        for pattern, replacement in self._patterns:
+            redacted = pattern.sub(replacement, redacted)
+        return redacted
+
+    def redact(self, value: Any) -> Any:
+        if not self._enabled:
+            return value
+        if isinstance(value, str):
+            return self.redact_text(value)
+        if isinstance(value, dict):
+            return {key: self.redact(val) for key, val in value.items()}
+        if isinstance(value, list):
+            return [self.redact(item) for item in value]
+        return value
+
+
+class JsonLogFormatter(logging.Formatter):
+    def __init__(self, redactor: PiiRedactor) -> None:
+        super().__init__()
+        self._redactor = redactor
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: Dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        for key, value in record.__dict__.items():
+            if key in STANDARD_LOG_RECORD_ATTRS:
+                continue
+            payload[key] = value
+        payload = self._redactor.redact(payload)
+        return json.dumps(payload, default=str)
+
+
+redactor = PiiRedactor(enabled=settings.pii_redaction_enabled)
+
+
+def log_event(message: str, level: int = logging.INFO, **fields: Any) -> None:
+    logger.log(level, message, extra=redactor.redact(fields))
+
+
 def configure_logging() -> None:
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonLogFormatter(redactor))
+    logging.basicConfig(level=level, handlers=[handler])
 
 
 configure_logging()
@@ -101,6 +195,223 @@ class RecommendResponse(AgentResponse):
     recommended_product_ids: List[UUID] = Field(default_factory=list)
 
 
+END = "__end__"
+State = Dict[str, Any]
+StateHandler = Callable[[State], Awaitable[Optional[Dict[str, Any]]]] | Callable[[State], Optional[Dict[str, Any]]]
+ConditionHandler = Callable[[State], str]
+
+
+class StateGraph:
+    def __init__(self) -> None:
+        self._nodes: Dict[str, StateHandler] = {}
+        self._edges: Dict[str, List[str]] = {}
+        self._conditional_edges: Dict[str, Tuple[ConditionHandler, Dict[str, str]]] = {}
+        self._entrypoint: Optional[str] = None
+
+    def add_node(self, name: str, handler: StateHandler) -> "StateGraph":
+        self._nodes[name] = handler
+        return self
+
+    def add_edge(self, source: str, destination: str) -> "StateGraph":
+        self._edges.setdefault(source, []).append(destination)
+        return self
+
+    def add_conditional_edges(
+        self, source: str, condition: ConditionHandler, edges: Dict[str, str]
+    ) -> "StateGraph":
+        self._conditional_edges[source] = (condition, edges)
+        return self
+
+    def set_entrypoint(self, name: str) -> "StateGraph":
+        self._entrypoint = name
+        return self
+
+    async def ainvoke(self, state: State, max_steps: int = 30) -> State:
+        current = self._entrypoint
+        steps = 0
+        while current and current != END:
+            steps += 1
+            if steps > max_steps:
+                raise RuntimeError("StateGraph exceeded max_steps")
+            handler = self._nodes[current]
+            result = handler(state)
+            if asyncio.iscoroutine(result):
+                result = await result
+            if isinstance(result, dict):
+                state.update(result)
+            if current in self._conditional_edges:
+                condition, edges = self._conditional_edges[current]
+                branch = condition(state)
+                current = edges.get(branch) or edges.get("default") or END
+            else:
+                next_nodes = self._edges.get(current, [])
+                current = next_nodes[0] if next_nodes else END
+        return state
+
+
+@dataclass(frozen=True)
+class ToolGuardrails:
+    allowlist: Set[str]
+    max_calls: int
+    max_total_seconds: float
+    timeout_seconds: float
+
+
+class ToolBudget:
+    def __init__(self, max_calls: int, max_total_seconds: float) -> None:
+        self._max_calls = max_calls
+        self._max_total_seconds = max_total_seconds
+        self._start = time.monotonic()
+        self._calls = 0
+
+    def reserve(self) -> bool:
+        if not self.can_reserve():
+            return False
+        self._calls += 1
+        return True
+
+    def can_reserve(self) -> bool:
+        if self._calls >= self._max_calls:
+            return False
+        if self.elapsed_seconds() > self._max_total_seconds:
+            return False
+        return True
+
+    def elapsed_seconds(self) -> float:
+        return time.monotonic() - self._start
+
+
+class CircuitBreaker:
+    def __init__(self, failure_threshold: int, reset_timeout: float) -> None:
+        self._failure_threshold = failure_threshold
+        self._reset_timeout = reset_timeout
+        self._failure_count = 0
+        self._opened_until: Optional[float] = None
+
+    def allow_request(self) -> bool:
+        if self._opened_until is None:
+            return True
+        if time.monotonic() >= self._opened_until:
+            self._opened_until = None
+            self._failure_count = 0
+            return True
+        return False
+
+    def record_success(self) -> None:
+        self._failure_count = 0
+        self._opened_until = None
+
+    def record_failure(self) -> None:
+        self._failure_count += 1
+        if self._failure_count >= self._failure_threshold:
+            self._opened_until = time.monotonic() + self._reset_timeout
+
+
+class CircuitBreakerRegistry:
+    def __init__(self, failure_threshold: int, reset_timeout: float) -> None:
+        self._failure_threshold = failure_threshold
+        self._reset_timeout = reset_timeout
+        self._breakers: Dict[str, CircuitBreaker] = {}
+
+    def _key(self, tool_name: str) -> str:
+        return tool_name.split(".", maxsplit=1)[0]
+
+    def get(self, tool_name: str) -> CircuitBreaker:
+        key = self._key(tool_name)
+        if key not in self._breakers:
+            self._breakers[key] = CircuitBreaker(self._failure_threshold, self._reset_timeout)
+        return self._breakers[key]
+
+
+@dataclass
+class ToolExecutionContext:
+    guardrails: ToolGuardrails
+    budget: ToolBudget
+    breakers: CircuitBreakerRegistry
+    request_id: str
+    tracer: Any
+
+
+@dataclass(frozen=True)
+class ExecutionResources:
+    clients: "ToolClients"
+    llm: "LlmClient"
+    retriever: "RetrievalProvider"
+    guardrails: ToolGuardrails
+    breakers: CircuitBreakerRegistry
+    tracer: Any
+
+
+class RetrievalProvider:
+    async def retrieve(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return []
+
+
+class CachedRetrievalProvider(RetrievalProvider):
+    def __init__(self, ttl_seconds: float, max_entries: int, max_results: int) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._max_entries = max_entries
+        self._max_results = max_results
+        self._cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+
+    async def retrieve(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not query:
+            return []
+        key = self._cache_key(query, context)
+        now = time.monotonic()
+        cached = self._cache.get(key)
+        if cached and now - cached[0] <= self._ttl_seconds:
+            return cached[1]
+        data = await self._fetch(query, context)
+        if self._max_results:
+            data = data[: self._max_results]
+        self._cache[key] = (now, data)
+        self._prune(now)
+        return data
+
+    async def _fetch(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return []
+
+    def _cache_key(self, query: str, context: Dict[str, Any]) -> str:
+        digest = hashlib.sha256(json.dumps({"query": query, "context": context}, sort_keys=True).encode("utf-8"))
+        return digest.hexdigest()
+
+    def _prune(self, now: float) -> None:
+        expired = [key for key, (timestamp, _) in self._cache.items() if now - timestamp > self._ttl_seconds]
+        for key in expired:
+            self._cache.pop(key, None)
+        if len(self._cache) <= self._max_entries:
+            return
+        oldest = sorted(self._cache.items(), key=lambda item: item[1][0])
+        for key, _ in oldest[: max(len(self._cache) - self._max_entries, 0)]:
+            self._cache.pop(key, None)
+
+
+def init_telemetry(app_instance: FastAPI) -> Optional[Any]:
+    if not settings.otel_enabled:
+        return None
+    try:
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except ImportError:
+        logger.warning("OpenTelemetry instrumentation unavailable")
+        return None
+
+    resource = Resource.create({"service.name": settings.otel_service_name or settings.app_name})
+    provider = TracerProvider(resource=resource)
+    endpoint = str(settings.otel_exporter_otlp_endpoint) if settings.otel_exporter_otlp_endpoint else None
+    exporter = OTLPSpanExporter(endpoint=endpoint) if endpoint else OTLPSpanExporter()
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    FastAPIInstrumentor.instrument_app(app_instance)
+    HTTPXClientInstrumentor().instrument()
+    return trace.get_tracer(settings.app_name)
+
 class ToolClients:
     def __init__(self, config: Settings) -> None:
         headers: Dict[str, str] = {
@@ -109,7 +420,8 @@ class ToolClients:
         if config.internal_service_token:
             headers["X-Internal-Token"] = config.internal_service_token
         self._headers = headers
-        self._timeout = httpx.Timeout(config.request_timeout_seconds)
+        timeout_seconds = min(config.request_timeout_seconds, config.tool_call_timeout_seconds)
+        self._timeout = httpx.Timeout(timeout_seconds)
         self.catalog = httpx.AsyncClient(
             base_url=str(config.catalog_service_url), timeout=self._timeout, headers=self._headers
         )
@@ -309,7 +621,15 @@ def normalize_candidates(product_id: UUID, candidates: List[UUID], limit: int) -
     return normalized
 
 
-async def execute_tool_call(tool_call: ToolCall, clients: ToolClients) -> ToolResult:
+def sanitize_llm_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return redactor.redact(payload)
+
+
+def should_trip_breaker(result: ToolResult) -> bool:
+    return not result.success and result.error in {"service_error", "request_error", "timeout", "unexpected_error"}
+
+
+async def _execute_tool_call(tool_call: ToolCall, clients: ToolClients) -> ToolResult:
     name = tool_call.name
     args = tool_call.arguments or {}
     try:
@@ -372,11 +692,68 @@ async def execute_tool_call(tool_call: ToolCall, clients: ToolClients) -> ToolRe
         return ToolResult(name=name, success=False, error="unexpected_error")
 
 
-async def execute_tools(tool_calls: List[ToolCall], clients: ToolClients) -> List[ToolResult]:
+async def execute_tool_call(
+    tool_call: ToolCall, clients: ToolClients, context: ToolExecutionContext
+) -> ToolResult:
+    name = tool_call.name
+    if name not in context.guardrails.allowlist:
+        return ToolResult(name=name, success=False, error="tool_not_allowed")
+    breaker = context.breakers.get(name)
+    if not breaker.allow_request():
+        return ToolResult(name=name, success=False, error="circuit_open")
+    start_time = time.monotonic()
+    try:
+        if context.tracer:
+            with context.tracer.start_as_current_span("tool.call") as span:
+                span.set_attribute("tool.name", name)
+                result = await asyncio.wait_for(
+                    _execute_tool_call(tool_call, clients),
+                    timeout=context.guardrails.timeout_seconds,
+                )
+        else:
+            result = await asyncio.wait_for(
+                _execute_tool_call(tool_call, clients),
+                timeout=context.guardrails.timeout_seconds,
+            )
+    except asyncio.TimeoutError:
+        breaker.record_failure()
+        result = ToolResult(name=name, success=False, error="timeout")
+    if result.success:
+        breaker.record_success()
+    elif should_trip_breaker(result):
+        breaker.record_failure()
+    duration_ms = int((time.monotonic() - start_time) * 1000)
+    log_event(
+        "tool.call",
+        request_id=context.request_id,
+        tool=name,
+        success=result.success,
+        error=result.error,
+        status_code=result.status_code,
+        duration_ms=duration_ms,
+    )
+    return result
+
+
+async def execute_tools(
+    tool_calls: List[ToolCall], clients: ToolClients, context: ToolExecutionContext
+) -> List[ToolResult]:
     if not tool_calls:
         return []
-    tasks = [execute_tool_call(call, clients) for call in tool_calls]
-    return list(await asyncio.gather(*tasks))
+    results: List[Optional[ToolResult]] = [None] * len(tool_calls)
+    tasks: List[Tuple[int, asyncio.Task[ToolResult]]] = []
+    for index, call in enumerate(tool_calls):
+        if call.name not in context.guardrails.allowlist:
+            results[index] = ToolResult(name=call.name, success=False, error="tool_not_allowed")
+            continue
+        if not context.budget.reserve():
+            results[index] = ToolResult(name=call.name, success=False, error="tool_budget_exceeded")
+            continue
+        tasks.append((index, asyncio.create_task(execute_tool_call(call, clients, context))))
+    if tasks:
+        for index, task in tasks:
+            results[index] = await task
+    return [result for result in results if result is not None]
 
 
 def extract_product_ids(data: Dict[str, Any]) -> List[UUID]:
@@ -391,46 +768,72 @@ def extract_product_ids(data: Dict[str, Any]) -> List[UUID]:
     return results
 
 
-@asynccontextmanager
-async def lifespan(app_instance: FastAPI):
-    clients = ToolClients(settings)
-    llm_client = LlmClient(settings)
-    app_instance.state.clients = clients
-    app_instance.state.llm = llm_client
-    try:
-        yield
-    finally:
-        await clients.close()
-        await llm_client.close()
+def build_resources(app_instance: FastAPI) -> ExecutionResources:
+    return ExecutionResources(
+        clients=app_instance.state.clients,
+        llm=app_instance.state.llm,
+        retriever=app_instance.state.retriever,
+        guardrails=app_instance.state.guardrails,
+        breakers=app_instance.state.breakers,
+        tracer=app_instance.state.tracer,
+    )
 
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+def build_tool_context(resources: ExecutionResources, budget: ToolBudget, request_id: str) -> ToolExecutionContext:
+    return ToolExecutionContext(
+        guardrails=resources.guardrails,
+        budget=budget,
+        breakers=resources.breakers,
+        request_id=request_id,
+        tracer=resources.tracer,
+    )
 
 
-@app.get("/health")
-async def health() -> Dict[str, str]:
-    return {"status": "ok"}
+def route_by_mode(state: State) -> str:
+    return "llm" if state.get("mode") == "llm" else "fallback"
 
 
-@app.post("/agent/assist", response_model=AssistResponse)
-async def assist(request: AssistRequest) -> AssistResponse:
+async def assist_prepare(state: State) -> Dict[str, Any]:
+    request: AssistRequest = state["request"]
+    resources: ExecutionResources = state["resources"]
     payload = request.model_dump(mode="json")
     request_id = derive_request_id(request.request_id, payload, "assist")
-    llm_response = await app.state.llm.generate("assist", payload)
-    if llm_response:
-        message = llm_response.get("message")
-        if isinstance(message, str) and message.strip():
-            tool_calls = parse_tool_calls(llm_response.get("tool_calls"))
-            tool_results = await execute_tools(tool_calls, app.state.clients) if request.execute_tools else []
-            intent = llm_response.get("intent") or "assist"
-            return AssistResponse(
-                request_id=request_id,
-                mode="llm",
-                intent=str(intent),
-                message=message,
-                tool_calls=tool_calls,
-                tool_results=tool_results,
-            )
+    retrieval_context = await resources.retriever.retrieve(request.query, payload)
+    payload["retrieval_context"] = retrieval_context
+    log_event(
+        "assist.request",
+        request_id=request_id,
+        user_id=request.user_id,
+        session_id=request.session_id,
+        query=request.query,
+    )
+    return {"request_id": request_id, "payload": payload, "retrieval_context": retrieval_context}
+
+
+async def assist_call_llm(state: State) -> Dict[str, Any]:
+    resources: ExecutionResources = state["resources"]
+    payload = state["payload"]
+    llm_response = await resources.llm.generate("assist", sanitize_llm_payload(payload))
+    message = llm_response.get("message") if isinstance(llm_response, dict) else None
+    mode = "llm" if isinstance(message, str) and message.strip() else "fallback"
+    return {"llm_response": llm_response, "mode": mode}
+
+
+def assist_from_llm(state: State) -> Dict[str, Any]:
+    llm_response = state.get("llm_response") or {}
+    tool_calls = parse_tool_calls(llm_response.get("tool_calls"))
+    intent = llm_response.get("intent") or "assist"
+    message = llm_response.get("message") or "Ready to assist."
+    log_event(
+        "assist.llm",
+        request_id=state.get("request_id"),
+        tool_calls=len(tool_calls),
+    )
+    return {"tool_calls": tool_calls, "intent": str(intent), "message": str(message), "mode": "llm"}
+
+
+def assist_fallback(state: State) -> Dict[str, Any]:
+    request: AssistRequest = state["request"]
     intent = determine_intent(request.query)
     tool_calls: List[ToolCall] = []
     message = "Ready to assist."
@@ -489,39 +892,90 @@ async def assist(request: AssistRequest) -> AssistResponse:
             )
         )
         message = "Searching the catalog."
-    tool_results = await execute_tools(tool_calls, app.state.clients) if request.execute_tools else []
-    return AssistResponse(
-        request_id=request_id,
-        mode="fallback",
-        intent=intent,
-        message=message,
-        tool_calls=tool_calls,
-        tool_results=tool_results,
+    return {"intent": intent, "tool_calls": tool_calls, "message": message, "mode": "fallback"}
+
+
+async def execute_tools_node(state: State) -> Dict[str, Any]:
+    request = state["request"]
+    resources: ExecutionResources = state["resources"]
+    tool_calls = state.get("tool_calls", [])
+    tool_results: List[ToolResult] = []
+    if request.execute_tools:
+        tool_context = build_tool_context(resources, state["budget"], state["request_id"])
+        tool_results = await execute_tools(tool_calls, resources.clients, tool_context)
+    return {"tool_results": tool_results}
+
+
+def assist_build_response(state: State) -> Dict[str, Any]:
+    response = AssistResponse(
+        request_id=state["request_id"],
+        mode=state["mode"],
+        intent=state["intent"],
+        message=state["message"],
+        tool_calls=state.get("tool_calls", []),
+        tool_results=state.get("tool_results", []),
     )
+    log_event(
+        "assist.response",
+        request_id=state["request_id"],
+        mode=state["mode"],
+        intent=state["intent"],
+        tool_calls=len(state.get("tool_calls", [])),
+        tool_results=len(state.get("tool_results", [])),
+    )
+    return {"response": response}
 
 
-@app.post("/agent/substitute", response_model=SubstituteResponse)
-async def substitute(request: SubstituteRequest) -> SubstituteResponse:
+async def substitute_prepare(state: State) -> Dict[str, Any]:
+    request: SubstituteRequest = state["request"]
+    resources: ExecutionResources = state["resources"]
     payload = request.model_dump(mode="json")
     request_id = derive_request_id(request.request_id, payload, "substitute")
-    llm_response = await app.state.llm.generate("substitute", payload)
-    if llm_response:
-        message = llm_response.get("message")
-        if isinstance(message, str) and message.strip():
-            tool_calls = parse_tool_calls(llm_response.get("tool_calls"))
-            tool_results = await execute_tools(tool_calls, app.state.clients) if request.execute_tools else []
-            substitute_id = parse_uuid(llm_response.get("substitute_product_id"))
-            candidate_ids = [cid for cid in (parse_uuid(cid) for cid in llm_response.get("candidate_ids", [])) if cid]
-            return SubstituteResponse(
-                request_id=request_id,
-                mode="llm",
-                intent=llm_response.get("intent") or "substitute",
-                message=message,
-                tool_calls=tool_calls,
-                tool_results=tool_results,
-                substitute_product_id=substitute_id,
-                candidate_ids=candidate_ids,
-            )
+    retrieval_query = f"substitute {request.product_id}"
+    retrieval_context = await resources.retriever.retrieve(retrieval_query, payload)
+    payload["retrieval_context"] = retrieval_context
+    log_event(
+        "substitute.request",
+        request_id=request_id,
+        product_id=request.product_id,
+        store_id=request.store_id,
+    )
+    return {"request_id": request_id, "payload": payload, "retrieval_context": retrieval_context}
+
+
+async def substitute_call_llm(state: State) -> Dict[str, Any]:
+    resources: ExecutionResources = state["resources"]
+    payload = state["payload"]
+    llm_response = await resources.llm.generate("substitute", sanitize_llm_payload(payload))
+    message = llm_response.get("message") if isinstance(llm_response, dict) else None
+    mode = "llm" if isinstance(message, str) and message.strip() else "fallback"
+    return {"llm_response": llm_response, "mode": mode}
+
+
+def substitute_from_llm(state: State) -> Dict[str, Any]:
+    llm_response = state.get("llm_response") or {}
+    tool_calls = parse_tool_calls(llm_response.get("tool_calls"))
+    substitute_id = parse_uuid(llm_response.get("substitute_product_id"))
+    candidate_ids = [cid for cid in (parse_uuid(cid) for cid in llm_response.get("candidate_ids", [])) if cid]
+    intent = llm_response.get("intent") or "substitute"
+    message = llm_response.get("message") or "Processing substitute request."
+    log_event(
+        "substitute.llm",
+        request_id=state.get("request_id"),
+        tool_calls=len(tool_calls),
+    )
+    return {
+        "tool_calls": tool_calls,
+        "intent": str(intent),
+        "message": str(message),
+        "candidate_ids": candidate_ids,
+        "substitute_product_id": substitute_id,
+        "mode": "llm",
+    }
+
+
+def substitute_fallback(state: State) -> Dict[str, Any]:
+    request: SubstituteRequest = state["request"]
     candidate_ids = normalize_candidates(request.product_id, request.candidate_ids, request.limit)
     substitute_id = candidate_ids[0] if candidate_ids else None
     tool_calls: List[ToolCall] = []
@@ -534,62 +988,115 @@ async def substitute(request: SubstituteRequest) -> SubstituteResponse:
                 name="inventory.check",
                 arguments={
                     "store_id": request.store_id,
-                    "items": [
-                        {"product_id": str(candidate_id), "quantity": 1} for candidate_id in candidate_ids
-                    ],
+                    "items": [{"product_id": str(candidate_id), "quantity": 1} for candidate_id in candidate_ids],
                 },
             )
         )
-    tool_results = await execute_tools(tool_calls, app.state.clients) if request.execute_tools else []
-    if request.execute_tools and tool_results:
-        first_result = tool_results[0]
-        if first_result.success and first_result.data:
-            available_ids = []
-            for item in first_result.data.get("items", []):
-                if isinstance(item, dict) and item.get("sufficient"):
-                    available_id = parse_uuid(item.get("productId") or item.get("product_id"))
-                    if available_id:
-                        available_ids.append(available_id)
-            for candidate in candidate_ids:
-                if candidate in available_ids:
-                    substitute_id = candidate
-                    break
-    return SubstituteResponse(
-        request_id=request_id,
-        mode="fallback",
-        intent="substitute",
-        message=message,
-        tool_calls=tool_calls,
-        tool_results=tool_results,
-        substitute_product_id=substitute_id,
-        candidate_ids=candidate_ids,
+    return {
+        "tool_calls": tool_calls,
+        "message": message,
+        "intent": "substitute",
+        "candidate_ids": candidate_ids,
+        "substitute_product_id": substitute_id,
+        "mode": "fallback",
+    }
+
+
+def substitute_post_process(state: State) -> Dict[str, Any]:
+    if state.get("mode") != "fallback":
+        return {}
+    if not state.get("tool_results"):
+        return {}
+    tool_results: List[ToolResult] = state["tool_results"]
+    candidate_ids: List[UUID] = state.get("candidate_ids", [])
+    substitute_id: Optional[UUID] = state.get("substitute_product_id")
+    first_result = tool_results[0]
+    if first_result.success and first_result.data:
+        available_ids = []
+        for item in first_result.data.get("items", []):
+            if isinstance(item, dict) and item.get("sufficient"):
+                available_id = parse_uuid(item.get("productId") or item.get("product_id"))
+                if available_id:
+                    available_ids.append(available_id)
+        for candidate in candidate_ids:
+            if candidate in available_ids:
+                substitute_id = candidate
+                break
+    return {"substitute_product_id": substitute_id}
+
+
+def substitute_build_response(state: State) -> Dict[str, Any]:
+    response = SubstituteResponse(
+        request_id=state["request_id"],
+        mode=state["mode"],
+        intent=state["intent"],
+        message=state["message"],
+        tool_calls=state.get("tool_calls", []),
+        tool_results=state.get("tool_results", []),
+        substitute_product_id=state.get("substitute_product_id"),
+        candidate_ids=state.get("candidate_ids", []),
     )
+    log_event(
+        "substitute.response",
+        request_id=state["request_id"],
+        mode=state["mode"],
+        intent=state["intent"],
+        tool_calls=len(state.get("tool_calls", [])),
+        tool_results=len(state.get("tool_results", [])),
+    )
+    return {"response": response}
 
 
-@app.post("/agent/recommend", response_model=RecommendResponse)
-async def recommend(request: RecommendRequest) -> RecommendResponse:
+async def recommend_prepare(state: State) -> Dict[str, Any]:
+    request: RecommendRequest = state["request"]
+    resources: ExecutionResources = state["resources"]
     payload = request.model_dump(mode="json")
     request_id = derive_request_id(request.request_id, payload, "recommend")
-    llm_response = await app.state.llm.generate("recommend", payload)
-    if llm_response:
-        message = llm_response.get("message")
-        if isinstance(message, str) and message.strip():
-            tool_calls = parse_tool_calls(llm_response.get("tool_calls"))
-            tool_results = await execute_tools(tool_calls, app.state.clients) if request.execute_tools else []
-            recommended_ids = [
-                parsed_id
-                for parsed_id in (parse_uuid(pid) for pid in llm_response.get("recommended_product_ids", []))
-                if parsed_id
-            ]
-            return RecommendResponse(
-                request_id=request_id,
-                mode="llm",
-                intent=llm_response.get("intent") or "recommend",
-                message=message,
-                tool_calls=tool_calls,
-                tool_results=tool_results,
-                recommended_product_ids=recommended_ids,
-            )
+    retrieval_query = request.category or "recommendations"
+    retrieval_context = await resources.retriever.retrieve(retrieval_query, payload)
+    payload["retrieval_context"] = retrieval_context
+    log_event(
+        "recommend.request",
+        request_id=request_id,
+        user_id=request.user_id,
+        category=request.category,
+    )
+    return {"request_id": request_id, "payload": payload, "retrieval_context": retrieval_context}
+
+
+async def recommend_call_llm(state: State) -> Dict[str, Any]:
+    resources: ExecutionResources = state["resources"]
+    payload = state["payload"]
+    llm_response = await resources.llm.generate("recommend", sanitize_llm_payload(payload))
+    message = llm_response.get("message") if isinstance(llm_response, dict) else None
+    mode = "llm" if isinstance(message, str) and message.strip() else "fallback"
+    return {"llm_response": llm_response, "mode": mode}
+
+
+def recommend_from_llm(state: State) -> Dict[str, Any]:
+    llm_response = state.get("llm_response") or {}
+    tool_calls = parse_tool_calls(llm_response.get("tool_calls"))
+    recommended_ids = [
+        parsed_id for parsed_id in (parse_uuid(pid) for pid in llm_response.get("recommended_product_ids", [])) if parsed_id
+    ]
+    intent = llm_response.get("intent") or "recommend"
+    message = llm_response.get("message") or "Generating recommendations."
+    log_event(
+        "recommend.llm",
+        request_id=state.get("request_id"),
+        tool_calls=len(tool_calls),
+    )
+    return {
+        "tool_calls": tool_calls,
+        "intent": str(intent),
+        "message": str(message),
+        "recommended_product_ids": recommended_ids,
+        "mode": "llm",
+    }
+
+
+def recommend_fallback(state: State) -> Dict[str, Any]:
+    request: RecommendRequest = state["request"]
     seen = set()
     recommended_ids: List[UUID] = []
     if request.seed_product_id:
@@ -611,21 +1118,189 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
             )
         )
         message = "Querying catalog recommendations."
-    tool_results = await execute_tools(tool_calls, app.state.clients) if request.execute_tools else []
-    if request.execute_tools and tool_results:
-        first_result = tool_results[0]
-        if first_result.success and first_result.data:
-            for product_id in extract_product_ids(first_result.data):
-                if product_id not in seen:
-                    recommended_ids.append(product_id)
-                if len(recommended_ids) >= request.limit:
-                    break
-    return RecommendResponse(
-        request_id=request_id,
-        mode="fallback",
-        intent="recommend",
-        message=message,
-        tool_calls=tool_calls,
-        tool_results=tool_results,
-        recommended_product_ids=recommended_ids,
+    return {
+        "tool_calls": tool_calls,
+        "intent": "recommend",
+        "message": message,
+        "recommended_product_ids": recommended_ids,
+        "mode": "fallback",
+    }
+
+
+def recommend_post_process(state: State) -> Dict[str, Any]:
+    if state.get("mode") != "fallback":
+        return {}
+    if not state.get("tool_results"):
+        return {}
+    tool_results: List[ToolResult] = state["tool_results"]
+    recommended_ids: List[UUID] = state.get("recommended_product_ids", [])
+    seen = set(recommended_ids)
+    first_result = tool_results[0]
+    if first_result.success and first_result.data:
+        for product_id in extract_product_ids(first_result.data):
+            if product_id not in seen:
+                recommended_ids.append(product_id)
+            if len(recommended_ids) >= state["request"].limit:
+                break
+    return {"recommended_product_ids": recommended_ids}
+
+
+def recommend_build_response(state: State) -> Dict[str, Any]:
+    response = RecommendResponse(
+        request_id=state["request_id"],
+        mode=state["mode"],
+        intent=state["intent"],
+        message=state["message"],
+        tool_calls=state.get("tool_calls", []),
+        tool_results=state.get("tool_results", []),
+        recommended_product_ids=state.get("recommended_product_ids", []),
     )
+    log_event(
+        "recommend.response",
+        request_id=state["request_id"],
+        mode=state["mode"],
+        intent=state["intent"],
+        tool_calls=len(state.get("tool_calls", [])),
+        tool_results=len(state.get("tool_results", [])),
+    )
+    return {"response": response}
+
+
+def build_assist_graph() -> StateGraph:
+    graph = StateGraph()
+    graph.add_node("prepare", assist_prepare)
+    graph.add_node("call_llm", assist_call_llm)
+    graph.add_node("llm", assist_from_llm)
+    graph.add_node("fallback", assist_fallback)
+    graph.add_node("tools", execute_tools_node)
+    graph.add_node("response", assist_build_response)
+    graph.set_entrypoint("prepare")
+    graph.add_edge("prepare", "call_llm")
+    graph.add_conditional_edges("call_llm", route_by_mode, {"llm": "llm", "fallback": "fallback"})
+    graph.add_edge("llm", "tools")
+    graph.add_edge("fallback", "tools")
+    graph.add_edge("tools", "response")
+    graph.add_edge("response", END)
+    return graph
+
+
+def build_substitute_graph() -> StateGraph:
+    graph = StateGraph()
+    graph.add_node("prepare", substitute_prepare)
+    graph.add_node("call_llm", substitute_call_llm)
+    graph.add_node("llm", substitute_from_llm)
+    graph.add_node("fallback", substitute_fallback)
+    graph.add_node("tools", execute_tools_node)
+    graph.add_node("post", substitute_post_process)
+    graph.add_node("response", substitute_build_response)
+    graph.set_entrypoint("prepare")
+    graph.add_edge("prepare", "call_llm")
+    graph.add_conditional_edges("call_llm", route_by_mode, {"llm": "llm", "fallback": "fallback"})
+    graph.add_edge("llm", "tools")
+    graph.add_edge("fallback", "tools")
+    graph.add_edge("tools", "post")
+    graph.add_edge("post", "response")
+    graph.add_edge("response", END)
+    return graph
+
+
+def build_recommend_graph() -> StateGraph:
+    graph = StateGraph()
+    graph.add_node("prepare", recommend_prepare)
+    graph.add_node("call_llm", recommend_call_llm)
+    graph.add_node("llm", recommend_from_llm)
+    graph.add_node("fallback", recommend_fallback)
+    graph.add_node("tools", execute_tools_node)
+    graph.add_node("post", recommend_post_process)
+    graph.add_node("response", recommend_build_response)
+    graph.set_entrypoint("prepare")
+    graph.add_edge("prepare", "call_llm")
+    graph.add_conditional_edges("call_llm", route_by_mode, {"llm": "llm", "fallback": "fallback"})
+    graph.add_edge("llm", "tools")
+    graph.add_edge("fallback", "tools")
+    graph.add_edge("tools", "post")
+    graph.add_edge("post", "response")
+    graph.add_edge("response", END)
+    return graph
+
+
+ASSIST_GRAPH = build_assist_graph()
+SUBSTITUTE_GRAPH = build_substitute_graph()
+RECOMMEND_GRAPH = build_recommend_graph()
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    clients = ToolClients(settings)
+    llm_client = LlmClient(settings)
+    retriever = CachedRetrievalProvider(
+        ttl_seconds=settings.rag_cache_ttl_seconds,
+        max_entries=settings.rag_cache_max_entries,
+        max_results=settings.rag_max_results,
+    )
+    guardrails = ToolGuardrails(
+        allowlist=set(settings.tool_allowlist),
+        max_calls=settings.tool_call_max,
+        max_total_seconds=settings.tool_total_timeout_seconds,
+        timeout_seconds=settings.tool_call_timeout_seconds,
+    )
+    breakers = CircuitBreakerRegistry(
+        failure_threshold=settings.tool_circuit_breaker_failures,
+        reset_timeout=settings.tool_circuit_breaker_reset_seconds,
+    )
+    app_instance.state.clients = clients
+    app_instance.state.llm = llm_client
+    app_instance.state.retriever = retriever
+    app_instance.state.guardrails = guardrails
+    app_instance.state.breakers = breakers
+    try:
+        yield
+    finally:
+        await clients.close()
+        await llm_client.close()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.state.tracer = init_telemetry(app)
+
+
+@app.get("/health")
+async def health() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def readiness() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/live")
+async def liveness() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/agent/assist", response_model=AssistResponse)
+async def assist(request: AssistRequest) -> AssistResponse:
+    resources = build_resources(app)
+    budget = ToolBudget(resources.guardrails.max_calls, resources.guardrails.max_total_seconds)
+    state = {"request": request, "resources": resources, "budget": budget}
+    result = await ASSIST_GRAPH.ainvoke(state)
+    return result["response"]
+
+
+@app.post("/agent/substitute", response_model=SubstituteResponse)
+async def substitute(request: SubstituteRequest) -> SubstituteResponse:
+    resources = build_resources(app)
+    budget = ToolBudget(resources.guardrails.max_calls, resources.guardrails.max_total_seconds)
+    state = {"request": request, "resources": resources, "budget": budget}
+    result = await SUBSTITUTE_GRAPH.ainvoke(state)
+    return result["response"]
+
+
+@app.post("/agent/recommend", response_model=RecommendResponse)
+async def recommend(request: RecommendRequest) -> RecommendResponse:
+    resources = build_resources(app)
+    budget = ToolBudget(resources.guardrails.max_calls, resources.guardrails.max_total_seconds)
+    state = {"request": request, "resources": resources, "budget": budget}
+    result = await RECOMMEND_GRAPH.ainvoke(state)
+    return result["response"]

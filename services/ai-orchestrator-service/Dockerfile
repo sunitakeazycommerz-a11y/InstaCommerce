@@ -16,5 +16,6 @@ USER app
 
 ENV SERVER_PORT=8100
 EXPOSE 8100
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import os,urllib.request; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"SERVER_PORT\",\"8100\")}/health')"
 
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${SERVER_PORT}"]

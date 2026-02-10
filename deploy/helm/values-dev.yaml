@@ -31,6 +31,16 @@ services:
     tag: dev
   dispatch-optimizer-service:
     tag: dev
+  outbox-relay:
+    tag: dev
+  cdc-consumer:
+    tag: dev
+  location-ingestion:
+    tag: dev
+  payment-webhook:
+    tag: dev
+  reconciliation-engine:
+    tag: dev
   warehouse-service:
     tag: dev
   rider-fleet-service:

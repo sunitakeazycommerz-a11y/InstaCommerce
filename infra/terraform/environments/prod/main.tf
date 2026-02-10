@@ -61,6 +61,15 @@ module "bigquery" {
   location   = var.region
 }
 
+module "feature_store" {
+  source     = "../../modules/feature-store"
+  project_id = var.project_id
+  env        = var.env
+  location   = var.region
+  region     = var.region
+  network_id = module.vpc.network_id
+}
+
 module "data_lake" {
   source     = "../../modules/data-lake"
   project_id = var.project_id

@@ -1,0 +1,2 @@
+google-cloud-bigquery==3.25.0
+kafka-python==2.0.2
