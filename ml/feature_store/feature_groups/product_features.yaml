@@ -1,0 +1,49 @@
+feature_group:
+  name: product_features
+  entity: product
+  description: "Product features for search ranking, demand forecasting, and pricing"
+  owner: catalog-team
+  ttl_days: 7
+  online_serving: true
+  update_frequency: hourly
+  source:
+    type: bigquery
+    query_ref: sql/product_features.sql
+  features:
+    - name: sales_velocity_7d
+      dtype: float64
+      description: "Units sold per day (7d avg)"
+    - name: conversion_rate_30d
+      dtype: float64
+      description: "Ratio of purchases to product page views (30d)"
+    - name: avg_rating
+      dtype: float64
+      description: "Average customer rating (1-5 scale)"
+    - name: review_count
+      dtype: int64
+      description: "Total number of customer reviews"
+    - name: price_cents
+      dtype: int64
+      description: "Current listed price in cents"
+    - name: price_competitiveness
+      dtype: float64
+      description: "Ratio of our price to category average"
+    - name: stockout_frequency_30d
+      dtype: float64
+      description: "Fraction of days with zero stock in last 30 days"
+    - name: return_rate
+      dtype: float64
+      description: "Fraction of units returned (90d)"
+    - name: margin_percent
+      dtype: float64
+      description: "Gross margin as a percentage of selling price"
+    - name: substitution_acceptance_rate
+      dtype: float64
+      description: "Rate at which this product is accepted as a substitution"
+    - name: co_purchase_top5
+      dtype: string_list
+      description: "Top 5 frequently bought together product IDs"
+    - name: embedding_vector
+      dtype: float_vector
+      dimensions: 128
+      description: "Item2vec product embedding"

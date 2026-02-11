@@ -1,0 +1,54 @@
+version: 2
+sources:
+  - name: cdc
+    database: "{{ var('project_id', 'instacommerce') }}"
+    schema: raw_cdc
+    tables:
+      - name: orders
+        description: "CDC from order-service PostgreSQL"
+        loaded_at_field: _cdc_updated_at
+        freshness:
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 2, period: hour}
+      - name: payments
+        description: "CDC from payment-service PostgreSQL"
+        loaded_at_field: _cdc_updated_at
+        freshness:
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 2, period: hour}
+      - name: users
+        description: "CDC from user-service PostgreSQL"
+        loaded_at_field: _cdc_updated_at
+        freshness:
+          warn_after: {count: 1, period: hour}
+          error_after: {count: 6, period: hour}
+      - name: products
+        description: "CDC from catalog-service PostgreSQL"
+        loaded_at_field: _cdc_updated_at
+        freshness:
+          warn_after: {count: 1, period: hour}
+          error_after: {count: 6, period: hour}
+      - name: deliveries
+        description: "CDC from delivery-service PostgreSQL"
+        loaded_at_field: _cdc_updated_at
+        freshness:
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 2, period: hour}
+      - name: inventory_movements
+        description: "CDC from inventory-service PostgreSQL"
+        loaded_at_field: _cdc_updated_at
+        freshness:
+          warn_after: {count: 1, period: hour}
+          error_after: {count: 6, period: hour}
+      - name: searches
+        description: "CDC from search-service event log"
+        loaded_at_field: _cdc_updated_at
+        freshness:
+          warn_after: {count: 1, period: hour}
+          error_after: {count: 6, period: hour}
+      - name: cart_events
+        description: "CDC from cart-service event log"
+        loaded_at_field: _cdc_updated_at
+        freshness:
+          warn_after: {count: 1, period: hour}
+          error_after: {count: 6, period: hour}

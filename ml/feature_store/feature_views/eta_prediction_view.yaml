@@ -1,0 +1,56 @@
+feature_view:
+  name: eta_prediction_features
+  description: "Features for three-stage ETA prediction (LightGBM). Pre-order, post-order, and in-transit."
+  owner: routing-team
+  entities: [store, rider]
+  feature_groups:
+    - store_features:
+        - avg_prep_time_1h
+        - current_hour_orders
+        - utilization_pct
+        - queue_depth
+        - picker_count_active
+        - avg_delivery_time_1h
+        - sla_compliance_1h
+    - rider_features:
+        - avg_delivery_time_7d
+        - current_deliveries
+        - zone_familiarity_score
+        - vehicle_type
+        - consecutive_deliveries_count
+  request_features:
+    - name: haversine_distance_meters
+      dtype: float64
+      description: "Straight-line distance from store to delivery address"
+    - name: traffic_multiplier
+      dtype: float64
+      description: "Real-time traffic factor from Google Maps Directions API"
+    - name: order_item_count
+      dtype: int64
+      description: "Number of items in the order"
+    - name: hour_of_day
+      dtype: int64
+      description: "Hour of day (0-23) for time-of-day adjustments"
+    - name: is_raining
+      dtype: bool
+      description: "Whether it is currently raining (rain adds ~20% to ETA)"
+    - name: day_of_week
+      dtype: int64
+      description: "Day of week (0=Monday, 6=Sunday)"
+  serving_config:
+    online_ttl_minutes: 5
+    batch_schedule: "*/5 * * * *"  # Every 5 minutes
+    max_latency_ms: 30
+    fallback: zone_historical_avg
+  model_refs:
+    - eta_lightgbm_v1
+  stages:
+    - name: pre_order
+      description: "Conservative zone-level estimate shown on home screen"
+      update_interval: 5min
+    - name: post_order
+      description: "Committed ETA with granular store + rider data"
+      update_interval: per_event
+    - name: in_transit
+      description: "Live countdown updated per GPS ping"
+      update_interval: per_location_ping

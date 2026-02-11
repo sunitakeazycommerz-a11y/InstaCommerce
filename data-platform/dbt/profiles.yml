@@ -1,0 +1,18 @@
+instacommerce:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT_ID', 'instacommerce-dev') }}"
+      dataset: analytics
+      location: asia-south1
+      threads: 4
+    prod:
+      type: bigquery
+      method: service-account
+      project: "{{ env_var('GCP_PROJECT_ID', 'instacommerce-prod') }}"
+      dataset: analytics
+      location: asia-south1
+      threads: 8
+      keyfile: "{{ env_var('GCP_SA_KEY_FILE') }}"

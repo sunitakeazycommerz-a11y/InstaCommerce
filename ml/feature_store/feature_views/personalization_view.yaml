@@ -1,0 +1,61 @@
+feature_view:
+  name: personalization_features
+  description: "Features for personalization and recommendations (Two-Tower NCF + Content-Based Hybrid)"
+  owner: ml-platform
+  entities: [user, product]
+  feature_groups:
+    - user_features:
+        - order_count_30d
+        - avg_basket_cents
+        - preferred_categories
+        - days_since_last_order
+        - clv_segment
+        - preferred_delivery_slot
+        - avg_order_frequency_days
+    - product_features:
+        - sales_velocity_7d
+        - avg_rating
+        - review_count
+        - price_cents
+        - co_purchase_top5
+        - embedding_vector
+  request_features:
+    - name: user_order_count
+      dtype: int64
+      description: "Total lifetime order count for cold-start strategy selection"
+    - name: hour_of_day
+      dtype: int64
+      description: "Hour of day for time-aware recommendations"
+    - name: user_zone
+      dtype: string
+      description: "User's delivery zone for zone-level popularity fallback"
+  serving_config:
+    online_ttl_minutes: 30
+    batch_schedule: "0 */6 * * *"  # Every 6 hours
+    max_latency_ms: 50
+    fallback: zone_popularity
+  model_refs:
+    - personalization_two_tower_v1
+  recommendation_surfaces:
+    - name: homepage_for_you
+      description: "Personalized product ranking (top 50 products)"
+      strategy: collaborative_filtering
+    - name: buy_again
+      description: "Repeat purchase prediction (recency × frequency model)"
+      strategy: recency_frequency
+    - name: frequently_bought_together
+      description: "Association rules using item2vec embeddings"
+      strategy: item2vec_cosine
+    - name: similar_items
+      description: "Content-based by category, brand, price range, attributes"
+      strategy: content_based
+    - name: personalized_categories
+      description: "Reorder category carousel by user affinity"
+      strategy: category_affinity
+  cold_start:
+    - condition: "0 orders (new user)"
+      strategy: "Popularity-based by zone (trending in your area)"
+    - condition: "1-3 orders"
+      strategy: "Content-based (similar items to purchased)"
+    - condition: "4+ orders"
+      strategy: "Full collaborative filtering with user embedding"

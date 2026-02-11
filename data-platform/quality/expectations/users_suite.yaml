@@ -1,0 +1,39 @@
+# Great Expectations validation suite for users
+#
+# Validates the users dataset landing in BigQuery.
+# Run via: python run_quality_checks.py --suite users
+
+expectation_suite:
+  name: users_validation
+  expectations:
+    - expectation_type: expect_column_values_to_not_be_null
+      kwargs:
+        column: user_id
+    - expectation_type: expect_column_values_to_be_unique
+      kwargs:
+        column: user_id
+    - expectation_type: expect_column_values_to_not_be_null
+      kwargs:
+        column: email
+    - expectation_type: expect_column_values_to_match_regex
+      kwargs:
+        column: email
+        regex: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+    - expectation_type: expect_column_values_to_not_be_null
+      kwargs:
+        column: phone_number
+    - expectation_type: expect_column_values_to_match_regex
+      kwargs:
+        column: phone_number
+        regex: "^\\+?[1-9]\\d{6,14}$"
+    - expectation_type: expect_column_values_to_be_in_set
+      kwargs:
+        column: account_status
+        value_set: [ACTIVE, INACTIVE, SUSPENDED, DELETED]
+    - expectation_type: expect_column_values_to_not_be_null
+      kwargs:
+        column: created_at
+    - expectation_type: expect_table_row_count_to_be_between
+      kwargs:
+        min_value: 10000
+        max_value: 50000000

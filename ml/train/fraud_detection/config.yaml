@@ -1,0 +1,121 @@
+model_name: fraud-detection
+version: v1
+objective: binary_classification
+metric: auc
+
+features:
+  # Device & session signals
+  - device_fingerprint_score
+  - ip_risk_score
+  - is_vpn
+  - is_emulator
+  - session_duration_sec
+  - pages_viewed
+  - app_install_age_days
+  # Behavioral signals
+  - time_since_last_order_hr
+  - order_frequency_7d
+  - order_frequency_30d
+  - avg_order_value_30d
+  - max_order_value_30d
+  - distinct_addresses_30d
+  - distinct_payment_methods_30d
+  - address_change_count_24h
+  - payment_change_count_24h
+  # Transaction signals
+  - order_value
+  - item_count
+  - high_value_item_count
+  - order_value_zscore
+  - is_first_order
+  - is_new_address
+  - is_new_payment
+  - shipping_billing_distance_km
+  # Velocity signals
+  - orders_last_1h
+  - orders_last_24h
+  - distinct_devices_24h
+  - distinct_ips_24h
+  - failed_payments_24h
+  # Payment signals
+  - payment_method_risk_score
+  - card_bin_risk_score
+  - card_country_mismatch
+  - billing_address_mismatch
+  - cvv_attempts
+  # Account signals
+  - account_age_days
+  - email_domain_risk
+  - phone_verified
+  - email_verified
+  - kyc_level
+  - previous_fraud_count
+  - previous_chargeback_count
+  # Network signals
+  - shared_device_users
+  - shared_ip_users
+  - shared_address_orders_24h
+  - referral_chain_fraud_rate
+  # Time-based signals
+  - hour_of_day
+  - day_of_week
+  - is_weekend
+  - is_late_night
+  # Derived features
+  - order_value_to_avg_ratio
+  - item_count_to_avg_ratio
+  - address_recency_score
+  - payment_recency_score
+  - behavioral_anomaly_score
+  - velocity_anomaly_score
+  # Aggregate risk scores
+  - rule_engine_score
+  - historical_risk_score
+  - network_risk_score
+  - device_trust_score
+  - location_risk_score
+  # Category-level signals
+  - category_fraud_rate
+  - merchant_fraud_rate
+  - promo_code_risk_score
+  - coupon_abuse_score
+  # Additional features
+  - delivery_urgency_score
+  - gift_order_flag
+  - basket_diversity_score
+  - price_sensitivity_score
+  - return_rate_user
+  - refund_rate_user
+  - complaint_count_30d
+  - support_ticket_count_30d
+  - social_login_flag
+  - biometric_verified
+  - two_factor_enabled
+  - notification_enabled
+  - wishlist_age_days
+  - cart_abandonment_rate
+
+hyperparameters:
+  max_depth: 8
+  learning_rate: 0.05
+  n_estimators: 1000
+  min_child_weight: 5
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.1
+  reg_lambda: 1.0
+
+training:
+  data_source: bigquery
+  query: >
+    SELECT * FROM analytics.training_fraud_labels
+    WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 180 DAY)
+  validation_split: 0.2
+  label_column: is_fraud
+  class_weight: auto
+
+promotion_gates:
+  min_auc_roc: 0.98
+  min_precision_at_95_recall: 0.70
+  max_false_positive_rate: 0.05
+  min_improvement_pct: 1.0

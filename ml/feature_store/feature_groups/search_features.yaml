@@ -1,0 +1,42 @@
+feature_group:
+  name: search_features
+  entity: search_query
+  description: "Search query features for ranking, autocomplete, and query understanding"
+  owner: search-team
+  ttl_days: 7
+  online_serving: true
+  update_frequency: hourly
+  source:
+    type: bigquery
+    query_ref: sql/search_features.sql
+  features:
+    - name: query_popularity_7d
+      dtype: float64
+      description: "Number of times this query was issued in last 7 days"
+    - name: avg_results_count
+      dtype: float64
+      description: "Average number of results returned for this query"
+    - name: click_through_rate
+      dtype: float64
+      description: "Fraction of searches resulting in at least one click"
+    - name: conversion_rate
+      dtype: float64
+      description: "Fraction of searches resulting in a purchase"
+    - name: avg_click_position
+      dtype: float64
+      description: "Average position of clicked results"
+    - name: category_intent
+      dtype: string
+      description: "Primary product category associated with this query"
+    - name: zero_result_rate
+      dtype: float64
+      description: "Fraction of times this query returned zero results"
+    - name: add_to_cart_rate
+      dtype: float64
+      description: "Fraction of searches where a result was added to cart"
+    - name: reformulation_rate
+      dtype: float64
+      description: "Fraction of times users refined this query within the same session"
+    - name: avg_latency_ms
+      dtype: float64
+      description: "Average search response latency in milliseconds"

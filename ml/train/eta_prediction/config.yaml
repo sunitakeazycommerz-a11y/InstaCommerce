@@ -1,0 +1,82 @@
+model_name: eta-prediction
+version: v1
+objective: regression
+metric: mae
+stage: pre_order
+
+features:
+  pre_order:
+    - store_id_encoded
+    - hour_of_day
+    - day_of_week
+    - is_weekend
+    - is_holiday
+    - active_orders_at_store
+    - store_avg_prep_time_7d
+    - store_prep_time_p90_7d
+    - item_count
+    - complex_item_count
+    - estimated_prep_complexity
+    - store_distance_km
+    - zone_avg_delivery_time_1h
+    - zone_avg_delivery_time_24h
+    - available_riders_in_zone
+    - weather_condition_encoded
+    - temperature
+    - is_raining
+    - is_peak_hour
+    - surge_multiplier
+    - traffic_index
+    - city_encoded
+    - zone_encoded
+  post_assign:
+    - rider_id_encoded
+    - rider_avg_delivery_time_7d
+    - rider_delivery_time_p90_7d
+    - rider_current_batch_size
+    - rider_distance_to_store_km
+    - rider_estimated_arrival_min
+    - store_prep_remaining_min
+    - store_queue_position
+    - route_distance_km
+    - route_estimated_time_min
+    - num_traffic_signals
+    - road_type_encoded
+    - elevation_change_m
+    - rider_vehicle_type_encoded
+    - rider_experience_days
+    - rider_rating
+  in_transit:
+    - elapsed_time_min
+    - remaining_distance_km
+    - current_speed_kmh
+    - avg_speed_so_far_kmh
+    - stops_remaining
+    - current_traffic_index
+    - gps_accuracy_m
+    - is_on_expected_route
+    - deviation_distance_m
+    - time_at_current_stop_min
+
+hyperparameters:
+  num_leaves: 63
+  learning_rate: 0.05
+  n_estimators: 500
+  min_child_samples: 20
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.1
+  reg_lambda: 1.0
+
+training:
+  data_source: bigquery
+  query: >
+    SELECT * FROM analytics.training_delivery_times
+    WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+  validation_split: 0.2
+  label_column: actual_eta_min
+
+promotion_gates:
+  max_mae_min: 1.5
+  min_within_2min_pct: 0.85
+  min_improvement_pct: 5.0

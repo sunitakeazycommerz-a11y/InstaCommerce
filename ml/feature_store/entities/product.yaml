@@ -1,0 +1,6 @@
+entity:
+  name: product
+  join_key: product_id
+  description: "Product/SKU entity"
+  owner: catalog-team
+  tags: [product, core]

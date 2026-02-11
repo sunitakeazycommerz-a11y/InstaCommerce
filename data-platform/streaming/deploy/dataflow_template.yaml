@@ -1,0 +1,83 @@
+# Dataflow template for deploying streaming pipelines
+#
+# Each pipeline entry defines the Flex Template location, runtime parameters,
+# machine configuration, and autoscaling policy.
+#
+# Usage:
+#   gcloud dataflow flex-template run <job-name> \
+#     --template-file-gcs-location=<template> \
+#     --parameters=<key>=<value>
+
+order_events:
+  template: gs://instacommerce-dataflow/templates/order-events
+  parameters:
+    kafka_bootstrap: kafka-bootstrap:9092
+    kafka_topic: order.events
+    output_table_volume: analytics.realtime_order_volume
+    output_table_sla: analytics.sla_compliance
+    temp_location: gs://instacommerce-dataflow/temp
+  machine_type: n1-standard-4
+  max_workers: 10
+  autoscaling_algorithm: THROUGHPUT_BASED
+  network: dataflow-vpc
+  subnetwork: regions/asia-south1/subnetworks/dataflow-subnet
+  service_account: dataflow-sa@instacommerce-prod.iam.gserviceaccount.com
+
+payment_events:
+  template: gs://instacommerce-dataflow/templates/payment-events
+  parameters:
+    kafka_bootstrap: kafka-bootstrap:9092
+    kafka_topic: payment.events
+    output_table: analytics.payment_metrics
+    temp_location: gs://instacommerce-dataflow/temp
+  machine_type: n1-standard-4
+  max_workers: 8
+  autoscaling_algorithm: THROUGHPUT_BASED
+  network: dataflow-vpc
+  subnetwork: regions/asia-south1/subnetworks/dataflow-subnet
+  service_account: dataflow-sa@instacommerce-prod.iam.gserviceaccount.com
+
+rider_location:
+  template: gs://instacommerce-dataflow/templates/rider-location
+  parameters:
+    kafka_bootstrap: kafka-bootstrap:9092
+    kafka_topic: rider.location
+    output_table: analytics.rider_utilization
+    temp_location: gs://instacommerce-dataflow/temp
+  machine_type: n1-standard-4
+  max_workers: 10
+  autoscaling_algorithm: THROUGHPUT_BASED
+  network: dataflow-vpc
+  subnetwork: regions/asia-south1/subnetworks/dataflow-subnet
+  service_account: dataflow-sa@instacommerce-prod.iam.gserviceaccount.com
+
+inventory_events:
+  template: gs://instacommerce-dataflow/templates/inventory-events
+  parameters:
+    kafka_bootstrap: kafka-bootstrap:9092
+    kafka_topic: inventory.events
+    output_table_velocity: analytics.inventory_velocity
+    output_table_stockout: analytics.stockout_alerts
+    stockout_threshold: 5
+    temp_location: gs://instacommerce-dataflow/temp
+  machine_type: n1-standard-2
+  max_workers: 6
+  autoscaling_algorithm: THROUGHPUT_BASED
+  network: dataflow-vpc
+  subnetwork: regions/asia-south1/subnetworks/dataflow-subnet
+  service_account: dataflow-sa@instacommerce-prod.iam.gserviceaccount.com
+
+cart_events:
+  template: gs://instacommerce-dataflow/templates/cart-events
+  parameters:
+    kafka_bootstrap: kafka-bootstrap:9092
+    kafka_topic: cart.events
+    output_table: analytics.cart_abandonment
+    session_gap_seconds: 900
+    temp_location: gs://instacommerce-dataflow/temp
+  machine_type: n1-standard-4
+  max_workers: 8
+  autoscaling_algorithm: THROUGHPUT_BASED
+  network: dataflow-vpc
+  subnetwork: regions/asia-south1/subnetworks/dataflow-subnet
+  service_account: dataflow-sa@instacommerce-prod.iam.gserviceaccount.com

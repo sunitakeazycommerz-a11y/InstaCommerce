@@ -1,0 +1,58 @@
+model_name: search-ranking
+version: v1
+objective: lambdarank
+metric: ndcg@10
+
+features:
+  - bm25_score
+  - query_title_similarity
+  - query_description_similarity
+  - user_category_affinity
+  - user_brand_affinity
+  - user_price_sensitivity
+  - popularity_7d
+  - popularity_30d
+  - trending_score
+  - price_competitiveness
+  - price_percentile
+  - discount_pct
+  - stock_availability
+  - stock_velocity
+  - avg_rating
+  - review_count
+  - review_recency_score
+  - photo_count
+  - title_length
+  - description_completeness
+  - brand_tier
+  - category_depth
+  - click_through_rate_7d
+  - add_to_cart_rate_7d
+  - conversion_rate_30d
+  - return_rate
+  - delivery_speed_score
+  - store_rating
+  - store_distance_km
+  - time_of_day_relevance
+  - day_of_week_relevance
+  - seasonal_relevance
+
+hyperparameters:
+  num_leaves: 127
+  learning_rate: 0.05
+  n_estimators: 500
+  min_child_samples: 20
+  subsample: 0.8
+
+training:
+  data_source: bigquery
+  query: >
+    SELECT * FROM analytics.training_search_clicks
+    WHERE search_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+  validation_split: 0.2
+  group_column: query_id
+  label_column: relevance_label
+
+promotion_gates:
+  min_ndcg_at_10: 0.65
+  min_improvement_pct: 2.0

@@ -1,0 +1,6 @@
+entity:
+  name: store
+  join_key: store_id
+  description: "Dark store / micro-warehouse entity"
+  owner: operations-team
+  tags: [store, core]

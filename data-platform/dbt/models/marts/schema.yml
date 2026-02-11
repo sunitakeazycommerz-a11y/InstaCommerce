@@ -1,0 +1,152 @@
+version: 2
+
+models:
+  - name: mart_daily_revenue
+    description: "Daily revenue aggregation by store with delivery SLA metrics"
+    columns:
+      - name: order_date
+        description: "Date of orders (partition key)"
+        tests:
+          - not_null
+      - name: store_id
+        description: "Store identifier"
+        tests:
+          - not_null
+      - name: total_orders
+        description: "Count of distinct orders for the day"
+        tests:
+          - not_null
+      - name: unique_customers
+        description: "Count of distinct customers who ordered"
+      - name: net_revenue_usd
+        description: "Total revenue in USD"
+      - name: avg_order_value_usd
+        description: "Average order value in USD"
+      - name: sla_10min_pct
+        description: "Percentage of orders delivered within 10 minutes"
+      - name: avg_delivery_minutes
+        description: "Average delivery time in minutes"
+
+  - name: mart_user_cohort_retention
+    description: "Weekly cohort retention analysis showing user retention over time"
+    columns:
+      - name: cohort_week
+        description: "Week the user cohort was formed (first order)"
+        tests:
+          - not_null
+      - name: weeks_since_signup
+        description: "Number of weeks since cohort formation"
+        tests:
+          - not_null
+      - name: active_users
+        description: "Number of active users in the cohort for this week"
+        tests:
+          - not_null
+      - name: cohort_size
+        description: "Total users in the cohort"
+      - name: retention_pct
+        description: "Retention percentage (active_users / cohort_size * 100)"
+
+  - name: mart_store_performance
+    description: "Per-store P&L and operational metrics including revenue, delivery, and payment data"
+    columns:
+      - name: store_id
+        description: "Store identifier"
+        tests:
+          - not_null
+      - name: order_date
+        description: "Date of the metrics"
+        tests:
+          - not_null
+      - name: total_orders
+        description: "Total orders for the store on this date"
+        tests:
+          - not_null
+      - name: gross_revenue_usd
+        description: "Gross revenue in USD"
+      - name: sla_10min_pct
+        description: "Percentage of deliveries meeting 10-min SLA"
+      - name: collected_revenue_usd
+        description: "Revenue actually collected via payments"
+      - name: failed_payments
+        description: "Number of failed payment attempts"
+
+  - name: mart_rider_performance
+    description: "Rider-level daily performance metrics including delivery times, distances, and SLA compliance"
+    columns:
+      - name: rider_id
+        description: "Rider identifier"
+        tests:
+          - not_null
+      - name: order_date
+        description: "Date of the metrics"
+        tests:
+          - not_null
+      - name: total_deliveries
+        description: "Total delivery assignments"
+        tests:
+          - not_null
+      - name: completed_deliveries
+        description: "Number of completed deliveries"
+      - name: sla_10min_pct
+        description: "SLA compliance percentage for 10-minute delivery target"
+      - name: avg_total_delivery_minutes
+        description: "Average end-to-end delivery time in minutes"
+      - name: total_distance_km
+        description: "Total distance covered in kilometers"
+
+  - name: mart_search_funnel
+    description: "Search-to-purchase funnel analysis by store, platform, and date"
+    columns:
+      - name: funnel_date
+        description: "Date of funnel metrics"
+        tests:
+          - not_null
+      - name: store_id
+        description: "Store identifier"
+        tests:
+          - not_null
+      - name: platform
+        description: "User platform (iOS, Android, Web)"
+        tests:
+          - not_null
+      - name: total_searches
+        description: "Total number of searches"
+      - name: search_to_click_pct
+        description: "Search to click conversion rate"
+      - name: search_to_cart_pct
+        description: "Search to add-to-cart conversion rate"
+      - name: search_to_purchase_pct
+        description: "Search to purchase conversion rate"
+      - name: zero_result_rate_pct
+        description: "Percentage of searches with zero results"
+
+  - name: mart_product_analytics
+    description: "Product-level analytics including sales velocity, conversion rates, and return metrics"
+    columns:
+      - name: product_id
+        description: "Product identifier"
+        tests:
+          - not_null
+      - name: product_name
+        description: "Product display name"
+        tests:
+          - not_null
+      - name: store_id
+        description: "Store identifier"
+        tests:
+          - not_null
+      - name: price_usd
+        description: "Selling price in USD"
+      - name: margin_usd
+        description: "Profit margin in USD (price - cost)"
+      - name: total_units_sold
+        description: "Total units sold"
+      - name: daily_sales_velocity
+        description: "Average units sold per day"
+      - name: cart_to_purchase_pct
+        description: "Cart to purchase conversion rate"
+      - name: return_rate_pct
+        description: "Return rate as percentage of units sold"
+      - name: estimated_stock
+        description: "Estimated current stock level"

@@ -1,0 +1,35 @@
+# Great Expectations validation suite for inventory
+#
+# Validates the inventory dataset landing in BigQuery.
+# Run via: python run_quality_checks.py --suite inventory
+
+expectation_suite:
+  name: inventory_validation
+  expectations:
+    - expectation_type: expect_column_values_to_not_be_null
+      kwargs:
+        column: sku_id
+    - expectation_type: expect_column_values_to_not_be_null
+      kwargs:
+        column: store_id
+    - expectation_type: expect_column_values_to_be_in_set
+      kwargs:
+        column: event_type
+        value_set: [STOCK_RECEIVED, STOCK_SOLD, STOCK_ADJUSTED, STOCK_EXPIRED, STOCK_RETURNED]
+    - expectation_type: expect_column_values_to_be_between
+      kwargs:
+        column: quantity_on_hand
+        min_value: 0
+        max_value: 100000
+    - expectation_type: expect_column_values_to_not_be_null
+      kwargs:
+        column: category
+    - expectation_type: expect_column_values_to_be_between
+      kwargs:
+        column: quantity_change
+        min_value: -10000
+        max_value: 10000
+    - expectation_type: expect_table_row_count_to_be_between
+      kwargs:
+        min_value: 50000
+        max_value: 5000000

@@ -1,0 +1,35 @@
+model_name: clv-prediction
+version: v1
+objective: customer_lifetime_value
+metric: mae
+
+segments:
+  platinum:
+    min: 500
+    max: .inf
+  gold:
+    min: 200
+    max: 500
+  silver:
+    min: 50
+    max: 200
+  bronze:
+    min: 0
+    max: 50
+
+hyperparameters:
+  # BG/NBD and Gamma-Gamma are fit via MLE; no manual hyperparameters
+  clv_horizon_days: 365
+
+training:
+  data_source: bigquery
+  query: >
+    SELECT customer_id, order_date, order_value
+    FROM analytics.training_customer_transactions
+    WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 730 DAY)
+  holdout_days: 90
+
+promotion_gates:
+  max_mae: 50.0
+  min_correlation: 0.60
+  min_improvement_pct: 3.0

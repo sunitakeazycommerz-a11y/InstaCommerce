@@ -1,0 +1,146 @@
+# User Features Ingestion Job Configuration
+# Ingests computed user features into Vertex AI Feature Store
+# Triggered by: Cloud Composer DAG (ml_feature_refresh) + Dataflow streaming for per-event updates
+
+ingestion_job:
+  name: user_features_ingestion
+  description: "Ingest user behavioral features from BigQuery into Vertex AI Feature Store"
+  owner: ml-platform
+  feature_group: user_features
+  entity: user
+  entity_id_column: user_id
+  timestamp_column: feature_timestamp
+
+  # Batch ingestion (primary)
+  batch:
+    enabled: true
+    schedule: "0 */4 * * *"  # Every 4 hours, aligned with ml_feature_refresh DAG
+    source:
+      type: bigquery
+      query_file: sql/user_features.sql
+      project: instacommerce-prod
+      dataset: analytics
+    destination:
+      type: vertex_ai_feature_store
+      project: instacommerce-prod
+      region: asia-south1
+      featurestore_id: instacommerce_features
+      entity_type_id: user
+    dataflow_config:
+      runner: DataflowRunner
+      project: instacommerce-prod
+      region: asia-south1
+      temp_location: gs://instacommerce-data-lake/tmp/feature_ingestion/
+      max_num_workers: 10
+      machine_type: n1-standard-4
+      service_account: ml-feature-ingestion@instacommerce-prod.iam.gserviceaccount.com
+    backfill:
+      enabled: true
+      lookback_days: 90
+      partition_by: order_date
+
+  # Streaming ingestion (per-event updates)
+  streaming:
+    enabled: true
+    source:
+      type: kafka
+      topic: order.events
+      bootstrap_servers: kafka-bootstrap:9092
+      consumer_group: feature-store-user-ingestion
+      schema_registry: http://schema-registry:8081
+    transform:
+      type: dataflow_streaming
+      pipeline: dataflow/pipelines/user_features_streaming.java
+      window_duration: 60s  # Micro-batch every 60 seconds
+      late_data_handling: allow_late_5min
+    features_updated_per_event:
+      - order_count_30d
+      - avg_basket_cents
+      - days_since_last_order
+      - lifetime_gmv_cents
+      - cancellation_rate_90d
+
+  # Data quality checks
+  quality:
+    pre_ingestion:
+      - check: row_count
+        min: 1000
+        description: "At least 1000 users should have features"
+      - check: null_rate
+        column: user_id
+        max: 0.0
+        description: "user_id must never be null"
+      - check: null_rate
+        column: order_count_30d
+        max: 0.01
+        description: "order_count_30d null rate < 1%"
+      - check: value_range
+        column: churn_risk_score
+        min: 0.0
+        max: 1.0
+        description: "churn_risk_score must be between 0 and 1"
+      - check: value_range
+        column: cancellation_rate_90d
+        min: 0.0
+        max: 1.0
+        description: "cancellation_rate_90d must be between 0 and 1"
+      - check: value_in_set
+        column: clv_segment
+        values: [platinum, gold, silver, bronze]
+        allow_null: true
+        description: "clv_segment must be a valid tier"
+    post_ingestion:
+      - check: online_offline_parity
+        sample_size: 1000
+        max_divergence_pct: 1.0
+        description: "Online and offline feature values must match within 1%"
+      - check: freshness
+        max_staleness_minutes: 240  # 4 hours for batch
+        description: "Features must not be older than 4 hours"
+
+  # Monitoring and alerting
+  monitoring:
+    metrics:
+      - name: ingestion_latency_seconds
+        type: histogram
+        description: "Time to ingest all user features"
+      - name: rows_ingested
+        type: counter
+        description: "Number of user feature rows ingested"
+      - name: ingestion_errors
+        type: counter
+        description: "Number of ingestion errors"
+    alerts:
+      - name: ingestion_failure
+        condition: "ingestion_errors > 0"
+        severity: P1
+        channel: "#ml-platform-alerts"
+        description: "User features ingestion job failed"
+      - name: stale_features
+        condition: "feature_freshness > 6h"
+        severity: P2
+        channel: "#ml-platform-alerts"
+        description: "User features are stale (>6 hours old)"
+      - name: row_count_drop
+        condition: "rows_ingested < 0.8 * previous_run"
+        severity: P2
+        channel: "#ml-platform-alerts"
+        description: "Significant drop in ingested row count"
+
+  # Retry and error handling
+  retry:
+    max_attempts: 3
+    backoff_seconds: 300
+    dead_letter:
+      topic: feature-ingestion.DLT
+      alert_on_dlq: true
+
+  # Access control
+  access:
+    readers:
+      - ml-platform
+      - fraud-team
+      - search-team
+      - personalization-team
+    writers:
+      - ml-platform

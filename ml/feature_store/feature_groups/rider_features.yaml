@@ -1,0 +1,39 @@
+feature_group:
+  name: rider_features
+  entity: rider
+  description: "Rider performance and availability features for assignment optimization and ETA"
+  owner: fleet-team
+  ttl_days: 7
+  online_serving: true
+  update_frequency: per_location_ping
+  source:
+    type: bigquery
+    query_ref: sql/rider_features.sql
+  features:
+    - name: avg_delivery_time_7d
+      dtype: float64
+      description: "Average delivery time in minutes over last 7 days"
+    - name: acceptance_rate
+      dtype: float64
+      description: "Fraction of delivery requests accepted (30d)"
+    - name: current_deliveries
+      dtype: int64
+      description: "Number of in-progress deliveries (max 2)"
+    - name: avg_rating
+      dtype: float64
+      description: "Average customer rating (1-5 scale, 30d rolling)"
+    - name: zone_familiarity_score
+      dtype: float64
+      description: "0-1 score indicating how well the rider knows their current zone"
+    - name: consecutive_deliveries_count
+      dtype: int64
+      description: "Number of consecutive deliveries without a break"
+    - name: earnings_today_cents
+      dtype: int64
+      description: "Total earnings today in cents (base + tips)"
+    - name: vehicle_type
+      dtype: string
+      description: "Rider vehicle type: bicycle, scooter, motorcycle"
+    - name: last_break_minutes_ago
+      dtype: int64
+      description: "Minutes since the rider's last break (mandatory break after 8 consecutive deliveries)"

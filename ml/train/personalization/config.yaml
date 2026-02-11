@@ -1,0 +1,41 @@
+model_name: personalization
+version: v1
+objective: recommendation
+metric: ndcg@10
+
+surfaces:
+  - homepage
+  - buy_again
+  - frequently_bought_together
+
+interaction_weights:
+  view: 1.0
+  click: 2.0
+  add_to_cart: 5.0
+  purchase: 10.0
+
+cold_start_thresholds:
+  popularity: 0
+  content_based: 1
+  collaborative: 4
+
+eval_k_values: [5, 10, 20]
+
+hyperparameters:
+  embedding_dim: 64
+  learning_rate: 0.01
+  regularization: 0.01
+  n_epochs: 20
+
+training:
+  data_source: bigquery
+  query: >
+    SELECT * FROM analytics.training_user_interactions
+    WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
+  test_days: 7
+  min_interactions_per_user: 3
+
+promotion_gates:
+  min_hit_at_10: 0.30
+  min_ndcg_at_10: 0.20
+  min_improvement_pct: 2.0

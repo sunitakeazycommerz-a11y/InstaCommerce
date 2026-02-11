@@ -1,0 +1,6 @@
+entity:
+  name: search_query
+  join_key: query_hash
+  description: "Search query entity keyed by normalized query hash"
+  owner: search-team
+  tags: [search, query]

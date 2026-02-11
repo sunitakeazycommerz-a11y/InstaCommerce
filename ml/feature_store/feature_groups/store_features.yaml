@@ -1,0 +1,36 @@
+feature_group:
+  name: store_features
+  entity: store
+  description: "Real-time store operational features for ETA prediction and demand management"
+  owner: operations-team
+  ttl_days: 1
+  online_serving: true
+  update_frequency: 5min
+  source:
+    type: bigquery
+    query_ref: sql/store_features.sql
+  features:
+    - name: avg_prep_time_1h
+      dtype: float64
+      description: "Average order preparation time in minutes (rolling 1-hour window)"
+    - name: current_hour_orders
+      dtype: int64
+      description: "Number of orders received in the current hour"
+    - name: utilization_pct
+      dtype: float64
+      description: "Store capacity utilization as a percentage (0-100)"
+    - name: stockout_count_today
+      dtype: int64
+      description: "Number of SKUs currently out of stock today"
+    - name: picker_count_active
+      dtype: int64
+      description: "Number of pickers currently active in the store"
+    - name: queue_depth
+      dtype: int64
+      description: "Number of orders in the preparation queue"
+    - name: avg_delivery_time_1h
+      dtype: float64
+      description: "Average end-to-end delivery time in minutes (rolling 1-hour window)"
+    - name: sla_compliance_1h
+      dtype: float64
+      description: "Fraction of orders delivered within 10-min SLA (rolling 1-hour window)"

@@ -1,0 +1,24 @@
+feature_view:
+  name: search_ranking_features
+  description: "Features for search ranking model (LambdaMART Phase 1, Two-Tower Phase 2)"
+  owner: search-team
+  entities: [user, product]
+  feature_groups:
+    - user_features:
+        - order_count_30d
+        - preferred_categories
+        - avg_basket_cents
+    - product_features:
+        - sales_velocity_7d
+        - conversion_rate_30d
+        - avg_rating
+        - price_competitiveness
+        - embedding_vector
+  serving_config:
+    online_ttl_minutes: 15
+    batch_schedule: "0 */4 * * *"  # Every 4 hours
+    max_latency_ms: 50
+    fallback: popularity_based
+  model_refs:
+    - search_ranking_lambdamart_v1
+    - search_ranking_two_tower_v2

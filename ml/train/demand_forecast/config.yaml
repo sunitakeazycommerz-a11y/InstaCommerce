@@ -1,0 +1,50 @@
+model_name: demand-forecast
+version: v1
+objective: time_series_forecast
+metric: mape
+
+regressors:
+  - temperature
+  - is_raining
+  - humidity
+  - is_promotion
+  - promotion_discount_pct
+  - competitor_price_index
+  - is_weekend
+  - is_payday_week
+
+hyperparameters:
+  changepoint_prior_scale: 0.05
+  seasonality_prior_scale: 10.0
+  holidays_prior_scale: 10.0
+  seasonality_mode: multiplicative
+
+training:
+  data_source: bigquery
+  query: >
+    SELECT * FROM analytics.training_demand_history
+    WHERE ds >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY)
+  test_days: 7
+  min_history_rows: 168
+  granularity: hourly
+
+holidays:
+  - republic_day
+  - holi
+  - eid_ul_fitr
+  - independence_day
+  - janmashtami
+  - ganesh_chaturthi
+  - navratri
+  - dussehra
+  - diwali
+  - bhai_dooj
+  - guru_nanak_jayanti
+  - christmas
+  - new_years_eve
+  - ipl_season
+
+promotion_gates:
+  max_mape: 0.08
+  min_accuracy_pct: 92.0
+  min_improvement_pct: 3.0

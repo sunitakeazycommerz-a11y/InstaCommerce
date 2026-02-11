@@ -1,0 +1,54 @@
+feature_group:
+  name: user_features
+  entity: user
+  description: "User behavioral features for personalization, fraud, CLV"
+  owner: ml-platform
+  ttl_days: 30
+  online_serving: true
+  update_frequency: per_event  # Updated on each order event
+  source:
+    type: bigquery
+    query_ref: sql/user_features.sql
+  features:
+    - name: order_count_30d
+      dtype: int64
+      description: "Number of orders in last 30 days"
+    - name: avg_basket_cents
+      dtype: float64
+      description: "Average basket size in cents (30d)"
+    - name: preferred_categories
+      dtype: string_list
+      description: "Top 5 categories by purchase frequency"
+    - name: days_since_last_order
+      dtype: int64
+      description: "Calendar days since last completed order"
+    - name: lifetime_gmv_cents
+      dtype: int64
+      description: "Total gross merchandise value in cents across all orders"
+    - name: avg_order_frequency_days
+      dtype: float64
+      description: "Average days between consecutive orders (90d window)"
+    - name: preferred_payment_method
+      dtype: string
+      description: "Most frequently used payment method"
+    - name: churn_risk_score
+      dtype: float64
+      description: "0-1 probability of 30d inactivity"
+    - name: clv_segment
+      dtype: string
+      description: "platinum, gold, silver, bronze"
+    - name: preferred_delivery_slot
+      dtype: string
+      description: "Most frequently chosen delivery time slot"
+    - name: cancellation_rate_90d
+      dtype: float64
+      description: "Fraction of orders cancelled in last 90 days"
+    - name: refund_rate_90d
+      dtype: float64
+      description: "Fraction of orders refunded in last 90 days"
+    - name: avg_rating_given
+      dtype: float64
+      description: "Average rating given to riders on deliveries"
+    - name: support_tickets_30d
+      dtype: int64
+      description: "Number of support tickets opened in last 30 days"

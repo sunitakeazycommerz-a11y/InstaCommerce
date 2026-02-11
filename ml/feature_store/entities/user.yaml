@@ -1,0 +1,6 @@
+entity:
+  name: user
+  join_key: user_id
+  description: "InstaCommerce user entity"
+  owner: ml-platform
+  tags: [user, core]

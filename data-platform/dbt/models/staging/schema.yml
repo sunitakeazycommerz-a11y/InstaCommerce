@@ -1,0 +1,246 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: "Staged orders with renamed columns and proper types from CDC"
+    columns:
+      - name: order_id
+        description: "Primary key - unique order identifier"
+        tests:
+          - unique
+          - not_null
+      - name: user_id
+        description: "Foreign key to users"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_users')
+              field: user_id
+      - name: store_id
+        description: "Foreign key to the store"
+        tests:
+          - not_null
+      - name: status
+        description: "Current order status"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['PENDING', 'CONFIRMED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'REFUNDED']
+      - name: total_cents
+        description: "Order total in cents"
+        tests:
+          - not_null
+      - name: delivery_fee_cents
+        description: "Delivery fee in cents"
+      - name: discount_cents
+        description: "Discount applied in cents"
+      - name: placed_at
+        description: "Timestamp when order was placed"
+        tests:
+          - not_null
+      - name: order_date
+        description: "Date the order was placed (partition key)"
+        tests:
+          - not_null
+
+  - name: stg_payments
+    description: "Staged payments with renamed columns and proper types from CDC"
+    columns:
+      - name: payment_id
+        description: "Primary key - unique payment identifier"
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: "Foreign key to orders"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_orders')
+              field: order_id
+      - name: user_id
+        description: "Foreign key to users"
+        tests:
+          - not_null
+      - name: payment_method
+        description: "Payment method used"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['UPI', 'CARD', 'WALLET', 'COD', 'NET_BANKING']
+      - name: status
+        description: "Payment status"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['INITIATED', 'COMPLETED', 'FAILED', 'REFUNDED']
+      - name: amount_cents
+        description: "Payment amount in cents"
+        tests:
+          - not_null
+
+  - name: stg_users
+    description: "Staged users with renamed columns and proper types from CDC"
+    columns:
+      - name: user_id
+        description: "Primary key - unique user identifier"
+        tests:
+          - unique
+          - not_null
+      - name: phone_number
+        description: "User phone number"
+        tests:
+          - not_null
+          - unique
+      - name: city
+        description: "User city"
+      - name: zone
+        description: "Delivery zone"
+      - name: created_at
+        description: "User registration timestamp"
+        tests:
+          - not_null
+
+  - name: stg_products
+    description: "Staged products with renamed columns and proper types from CDC"
+    columns:
+      - name: product_id
+        description: "Primary key - unique product identifier"
+        tests:
+          - unique
+          - not_null
+      - name: product_name
+        description: "Product display name"
+        tests:
+          - not_null
+      - name: category
+        description: "Product category"
+        tests:
+          - not_null
+      - name: sku
+        description: "Stock keeping unit"
+        tests:
+          - unique
+          - not_null
+      - name: price_cents
+        description: "Selling price in cents"
+        tests:
+          - not_null
+      - name: cost_cents
+        description: "Cost price in cents"
+
+  - name: stg_deliveries
+    description: "Staged deliveries with renamed columns and proper types from CDC"
+    columns:
+      - name: delivery_id
+        description: "Primary key - unique delivery identifier"
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: "Foreign key to orders"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_orders')
+              field: order_id
+      - name: rider_id
+        description: "Foreign key to the rider"
+        tests:
+          - not_null
+      - name: status
+        description: "Delivery status"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['ASSIGNED', 'EN_ROUTE_PICKUP', 'AT_STORE', 'PICKED_UP', 'EN_ROUTE_DROP', 'DELIVERED', 'CANCELLED']
+      - name: distance_meters
+        description: "Delivery distance in meters"
+      - name: assigned_at
+        description: "Timestamp when rider was assigned"
+        tests:
+          - not_null
+
+  - name: stg_inventory_movements
+    description: "Staged inventory movements with renamed columns and proper types from CDC"
+    columns:
+      - name: movement_id
+        description: "Primary key - unique movement identifier"
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        description: "Foreign key to products"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_products')
+              field: product_id
+      - name: store_id
+        description: "Store where movement occurred"
+        tests:
+          - not_null
+      - name: movement_type
+        description: "Type of inventory movement"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['INBOUND', 'OUTBOUND', 'ADJUSTMENT', 'RETURN', 'WRITE_OFF']
+      - name: quantity
+        description: "Movement quantity"
+        tests:
+          - not_null
+
+  - name: stg_searches
+    description: "Staged search events with renamed columns and proper types from CDC"
+    columns:
+      - name: search_id
+        description: "Primary key - unique search identifier"
+        tests:
+          - unique
+          - not_null
+      - name: user_id
+        description: "Foreign key to users"
+        tests:
+          - not_null
+      - name: search_query
+        description: "Search query string"
+        tests:
+          - not_null
+      - name: results_count
+        description: "Number of results returned"
+      - name: searched_at
+        description: "Timestamp of search"
+        tests:
+          - not_null
+
+  - name: stg_cart_events
+    description: "Staged cart events with renamed columns and proper types from CDC"
+    columns:
+      - name: cart_event_id
+        description: "Primary key - unique cart event identifier"
+        tests:
+          - unique
+          - not_null
+      - name: user_id
+        description: "Foreign key to users"
+        tests:
+          - not_null
+      - name: product_id
+        description: "Foreign key to products"
+        tests:
+          - not_null
+      - name: event_type
+        description: "Type of cart event"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['ADD', 'REMOVE', 'UPDATE_QUANTITY']
+      - name: quantity
+        description: "Quantity of the product"
+        tests:
+          - not_null
+      - name: event_at
+        description: "Timestamp of cart event"
+        tests:
+          - not_null

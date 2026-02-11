@@ -1,0 +1,6 @@
+entity:
+  name: rider
+  join_key: rider_id
+  description: "Delivery rider entity"
+  owner: fleet-team
+  tags: [rider, core]

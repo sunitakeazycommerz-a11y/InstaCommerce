@@ -1,0 +1,46 @@
+feature_view:
+  name: fraud_detection_features
+  description: "Features for real-time fraud detection at checkout (XGBoost Phase 1, DNN Phase 2)"
+  owner: fraud-team
+  entities: [user]
+  feature_groups:
+    - user_features:
+        - order_count_30d
+        - avg_basket_cents
+        - days_since_last_order
+        - lifetime_gmv_cents
+        - cancellation_rate_90d
+        - refund_rate_90d
+        - preferred_payment_method
+        - support_tickets_30d
+  request_features:
+    - name: basket_total_cents
+      dtype: int64
+      description: "Current basket total at checkout"
+    - name: new_address_flag
+      dtype: bool
+      description: "Whether delivery address was added in last 7 days"
+    - name: payment_method_age_days
+      dtype: int64
+      description: "Days since the payment method was added"
+    - name: high_resale_item_ratio
+      dtype: float64
+      description: "Fraction of basket items that are high-resale-value"
+    - name: device_fingerprint_age_days
+      dtype: int64
+      description: "Days since this device fingerprint was first seen"
+    - name: vpn_detected
+      dtype: bool
+      description: "Whether VPN or proxy is detected"
+  serving_config:
+    online_ttl_minutes: 5
+    batch_schedule: "0 */1 * * *"  # Every hour
+    max_latency_ms: 100
+    fallback: rules_based
+  model_refs:
+    - fraud_xgboost_v1
+  scoring:
+    thresholds:
+      auto_approve: 30
+      soft_review: 70
+      block: 100

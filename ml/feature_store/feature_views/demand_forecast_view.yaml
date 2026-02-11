@@ -1,0 +1,64 @@
+feature_view:
+  name: demand_forecast_features
+  description: "Features for demand forecasting (Prophet Phase 1, Temporal Fusion Transformer Phase 2). Per-product × per-store × per-hour granularity."
+  owner: ml-platform
+  entities: [product, store]
+  feature_groups:
+    - product_features:
+        - sales_velocity_7d
+        - price_cents
+        - stockout_frequency_30d
+        - margin_percent
+    - store_features:
+        - current_hour_orders
+        - utilization_pct
+        - stockout_count_today
+  request_features:
+    - name: same_day_last_year_sales
+      dtype: float64
+      description: "Sales for this product-store on the same day last year"
+    - name: day_of_week
+      dtype: int64
+      description: "Day of week (0=Monday, 6=Sunday)"
+    - name: hour_of_day
+      dtype: int64
+      description: "Hour of day (0-23)"
+    - name: is_weekend
+      dtype: bool
+      description: "Whether the day is Saturday or Sunday"
+    - name: is_holiday
+      dtype: bool
+      description: "Whether the day is a public holiday"
+    - name: is_festival
+      dtype: bool
+      description: "Whether a major festival is active (Diwali, Holi, Navratri, etc.)"
+    - name: is_ipl_match
+      dtype: bool
+      description: "Whether an IPL cricket match is scheduled today"
+    - name: temperature_celsius
+      dtype: float64
+      description: "Current temperature in the store's city"
+    - name: is_raining
+      dtype: bool
+      description: "Whether it is currently raining in the store's zone"
+    - name: active_promotion_flag
+      dtype: bool
+      description: "Whether this product currently has an active promotion"
+    - name: price_change_pct_7d
+      dtype: float64
+      description: "Percentage price change in the last 7 days"
+  serving_config:
+    online_ttl_minutes: 60
+    batch_schedule: "0 */4 * * *"  # Every 4 hours
+    max_latency_ms: 50
+    fallback: 52_week_moving_avg
+  model_refs:
+    - demand_prophet_v1
+    - demand_tft_v2
+  integration_points:
+    - service: inventory-service
+      action: "Trigger reorder when predicted demand > current stock + pipeline"
+    - service: warehouse-service
+      action: "Schedule staff based on predicted order volume per hour"
+    - service: pricing-service
+      action: "Markdown perishable items approaching expiry if demand is low"
