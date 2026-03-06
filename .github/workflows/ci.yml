@@ -103,8 +103,8 @@ jobs:
           else
             services=("${changed_services[@]}")
           fi
-          services_json=$(jq -cn --args "${services[@]}" '$ARGS.positional')
-          changed_services_json=$(jq -cn --args "${changed_services[@]}" '$ARGS.positional')
+          services_json=$(jq -cn '$ARGS.positional' --args "${services[@]}")
+          changed_services_json=$(jq -cn '$ARGS.positional' --args "${changed_services[@]}")
           echo "services=$services_json" >> "$GITHUB_OUTPUT"
           echo "changed_services=$changed_services_json" >> "$GITHUB_OUTPUT"
       - id: set-go-matrix
@@ -132,8 +132,8 @@ jobs:
             go_services=("${changed_go_services[@]}")
           fi
 
-          go_services_json=$(jq -cn --args "${go_services[@]}" '$ARGS.positional')
-          changed_go_services_json=$(jq -cn --args "${changed_go_services[@]}" '$ARGS.positional')
+          go_services_json=$(jq -cn '$ARGS.positional' --args "${go_services[@]}")
+          changed_go_services_json=$(jq -cn '$ARGS.positional' --args "${changed_go_services[@]}")
           echo "go_services=$go_services_json" >> "$GITHUB_OUTPUT"
           echo "changed_go_services=$changed_go_services_json" >> "$GITHUB_OUTPUT"
 
