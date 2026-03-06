@@ -11,41 +11,47 @@ flowchart TD
     A[Push / PR to main, master, or develop; or manual dispatch] --> B[detect-changes]
     A --> C[security-scan]
 
-    B -->|dynamic matrix| D[build-test matrix (Java)]
-    B -->|dynamic matrix| G[go-build-test matrix (Go)]
+    B -->|dynamic matrix| D[build-test matrix: Java]
+    B -->|dynamic matrix| G[build-test matrix: Go]
     
-    subgraph "Security Scan"
-        C --> C1[Gitleaks - Secret Detection]
-        C --> C2[Trivy - Vulnerability Scan]
+    subgraph Security[" Security Scan"]
+        C --> C1[Gitleaks: Secret Detection]
+        C --> C2[Trivy: Vulnerability Scan]
     end
 
-    subgraph "Change Detection"
+    subgraph Detection["Change Detection"]
         B --> B1[dorny/paths-filter]
         B1 --> B2{Which services changed?}
-        B2 -->|main/master push| B3[Build ALL Java/Go services]
-        B2 -->|PR/develop with no service changes| B5[Skip Java/Go matrices]
-        B2 -->|specific services| B4[Build only changed services]
+        B2 -->|main/master push| B3[Build ALL services]
+        B2 -->|PR/develop: no changes| B5[ Skip matrices]
+        B2 -->|specific services| B4[Build changed only]
     end
 
-    subgraph "Build & Test Matrix (per service)"
-        D --> D1[Setup JDK 21 + Gradle 8.7]
+    subgraph BuildJava["Java Services: Build & Test"]
+        D --> D1[JDK 21 + Gradle 8.7]
         D1 --> D2[gradle test]
         D2 --> D3[gradle bootJar]
-        D3 -->|main/master only| D4[Docker build]
-        D4 --> D5[Push to Artifact Registry]
+        D3 -->|main/master only| D4[Docker build & push]
+        D4 --> D5[→ asia-south1-docker.pkg.dev/instacommerce/images]
+    end
+
+    subgraph BuildGo["Go Services: Validate"]
+        G --> G1[go test ./...]
+        G1 --> G2[go build ./...]
     end
 
     D -->|main/master only| E[deploy-dev]
     G -->|main/master only| E
     
-    subgraph "Deploy to Dev"
-        E --> E1[Update values-dev.yaml image tags for changed services]
-        E1 --> E2[Commit & push to main/master]
-        E2 --> E3[ArgoCD auto-sync]
+    subgraph Deploy[" Deploy to Dev"]
+        E --> E1[Update Helm values-dev.yaml tags]
+        E1 --> E2[Commit & push]
+        E2 --> E3[ArgoCD syncs manifests]
     end
 
     style A fill:#0d1117,color:#fff
     style D fill:#2ea44f,color:#fff
+    style G fill:#2ea44f,color:#fff
     style C fill:#da3633,color:#fff
     style E fill:#326ce5,color:#fff
 ```
