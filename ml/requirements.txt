@@ -9,5 +9,5 @@ optuna==3.5.0
 mlflow==2.10.0
 google-cloud-bigquery==3.25.0
 google-cloud-storage==2.14.0
-google-cloud-aiplatform==1.42.0
+google-cloud-aiplatform==1.133.0
 pyarrow==15.0.0
