@@ -23,8 +23,8 @@ dependencies {
     implementation("com.google.cloud:spring-cloud-gcp-starter-secretmanager")
     implementation("com.google.cloud.sql:postgres-socket-factory:1.15.0")
     implementation("io.github.resilience4j:resilience4j-spring-boot3:2.2.0")
-    implementation("net.javacrumbs.shedlock:shedlock-spring:5.10.0")
-    implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.0")
+    implementation("net.javacrumbs.shedlock:shedlock-spring:7.6.0")
+    implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:7.6.0")
 
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.5")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.5")
