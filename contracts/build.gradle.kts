@@ -1,6 +1,6 @@
 plugins {
     java
-    id("com.google.protobuf") version "0.9.4"
+    id("com.google.protobuf") version "0.9.6"
 }
 
 dependencies {
