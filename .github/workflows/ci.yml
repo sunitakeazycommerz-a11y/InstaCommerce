@@ -252,7 +252,7 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: 8.14.3
       - name: Run tests
