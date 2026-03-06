@@ -65,5 +65,3 @@ public class RestOrderLookupClient implements OrderLookupClient {
     ) {
     }
 }
-
-

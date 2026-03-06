@@ -81,5 +81,3 @@ public class TwilioSmsProvider implements NotificationProvider {
         return "Basic " + encoded;
     }
 }
-
-

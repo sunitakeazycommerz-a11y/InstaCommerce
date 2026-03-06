@@ -34,5 +34,3 @@ public class RestCartClient implements CartClient {
         restTemplate.exchange(baseUrl + "/cart", HttpMethod.DELETE, new HttpEntity<>(headers), Void.class);
     }
 }
-
-

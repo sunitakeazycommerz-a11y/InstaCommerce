@@ -64,5 +64,3 @@ public class RestInventoryClient implements InventoryClient {
         restTemplate.postForLocation(baseUrl + "/inventory/cancel", request);
     }
 }
-
-

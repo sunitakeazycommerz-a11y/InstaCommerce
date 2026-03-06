@@ -78,5 +78,3 @@ public class RestUserDirectoryClient implements UserDirectoryClient {
     ) {
     }
 }
-
-

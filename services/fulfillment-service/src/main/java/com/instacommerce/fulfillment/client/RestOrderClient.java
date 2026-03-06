@@ -45,5 +45,3 @@ public class RestOrderClient implements OrderClient {
         }
     }
 }
-
-

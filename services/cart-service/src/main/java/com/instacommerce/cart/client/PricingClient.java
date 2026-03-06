@@ -62,5 +62,3 @@ public class PricingClient {
     public record PriceResponse(UUID productId, long unitPriceCents, String currency) {
     }
 }
-
-

@@ -57,5 +57,3 @@ public class RestPaymentClient implements PaymentClient {
         restTemplate.postForLocation(baseUrl + "/payments/" + paymentId + "/void", null);
     }
 }
-
-
