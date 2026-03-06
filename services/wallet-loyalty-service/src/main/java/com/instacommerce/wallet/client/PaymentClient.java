@@ -3,7 +3,7 @@ package com.instacommerce.wallet.client;
 import com.instacommerce.wallet.exception.ApiException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.boot.restclient.RestTemplateBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
@@ -61,3 +61,4 @@ public class PaymentClient {
         }
     }
 }
+

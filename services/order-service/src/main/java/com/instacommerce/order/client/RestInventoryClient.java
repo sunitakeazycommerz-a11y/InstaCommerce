@@ -8,7 +8,7 @@ import com.instacommerce.order.workflow.model.ReserveResult;
 import java.util.List;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.boot.restclient.RestTemplateBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
@@ -64,3 +64,4 @@ public class RestInventoryClient implements InventoryClient {
         restTemplate.postForLocation(baseUrl + "/inventory/cancel", request);
     }
 }
+

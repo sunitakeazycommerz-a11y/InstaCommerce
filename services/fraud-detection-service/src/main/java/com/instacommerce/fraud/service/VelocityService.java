@@ -1,5 +1,6 @@
 package com.instacommerce.fraud.service;
 
+import com.instacommerce.fraud.domain.model.VelocityCounter;
 import com.instacommerce.fraud.repository.VelocityCounterRepository;
 import java.time.Duration;
 import java.time.Instant;

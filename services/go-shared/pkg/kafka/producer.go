@@ -147,13 +147,13 @@ func resolveCompression(name string) (kafkago.Compression, error) {
 	case "", "none":
 		return 0, nil
 	case "gzip":
-		return compress.Gzip.Codec().Code(), nil
+		return kafkago.Compression(compress.Gzip.Codec().Code()), nil
 	case "snappy":
-		return compress.Snappy.Codec().Code(), nil
+		return kafkago.Compression(compress.Snappy.Codec().Code()), nil
 	case "lz4":
-		return compress.Lz4.Codec().Code(), nil
+		return kafkago.Compression(compress.Lz4.Codec().Code()), nil
 	case "zstd":
-		return compress.Zstd.Codec().Code(), nil
+		return kafkago.Compression(compress.Zstd.Codec().Code()), nil
 	default:
 		return 0, fmt.Errorf("unsupported compression codec: %q", name)
 	}

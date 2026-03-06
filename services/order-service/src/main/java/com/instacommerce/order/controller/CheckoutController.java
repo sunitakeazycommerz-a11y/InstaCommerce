@@ -10,7 +10,7 @@ import com.instacommerce.order.workflow.model.CheckoutResult;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowExecutionAlreadyStarted;
 import io.temporal.client.WorkflowOptions;
-import io.temporal.common.WorkflowIdReusePolicy;
+import io.temporal.api.enums.v1.WorkflowIdReusePolicy;
 import jakarta.validation.Valid;
 import java.time.Duration;
 import java.util.UUID;
@@ -69,12 +69,13 @@ public class CheckoutController {
         try {
             CheckoutResult result = workflow.execute(resolved);
             if (result.isSuccess()) {
-                return ResponseEntity.ok(new CheckoutResponse(result.getOrderId(), workflowId));
+                return ResponseEntity.ok(new CheckoutResponse(result.orderId(), workflowId));
             }
             return ResponseEntity.unprocessableEntity()
-                .body(new CheckoutResponse(null, null, result.getErrorMessage()));
+                .body(new CheckoutResponse(null, null, result.errorMessage()));
         } catch (WorkflowExecutionAlreadyStarted ex) {
             throw new DuplicateCheckoutException(resolved.idempotencyKey());
         }
     }
 }
+

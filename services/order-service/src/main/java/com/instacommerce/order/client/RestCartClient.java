@@ -3,7 +3,7 @@ package com.instacommerce.order.client;
 import com.instacommerce.order.config.OrderProperties;
 import com.instacommerce.order.security.InternalServiceAuthInterceptor;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.boot.restclient.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -34,3 +34,4 @@ public class RestCartClient implements CartClient {
         restTemplate.exchange(baseUrl + "/cart", HttpMethod.DELETE, new HttpEntity<>(headers), Void.class);
     }
 }
+
