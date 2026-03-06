@@ -4,7 +4,7 @@ public record GatewayCaptureResult(
     boolean success,
     String failureReason
 ) {
-    public static GatewayCaptureResult success() {
+    public static GatewayCaptureResult ok() {
         return new GatewayCaptureResult(true, null);
     }
 
