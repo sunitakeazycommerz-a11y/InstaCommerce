@@ -79,7 +79,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@0.34.2
         with:
           scan-type: fs
           scan-ref: .
@@ -129,7 +129,7 @@ jobs:
             services/${{ matrix.service }}
       - name: Scan image vulnerabilities
         if: github.ref == 'refs/heads/main'
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@0.34.2
         with:
           image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
           vuln-type: os,library
