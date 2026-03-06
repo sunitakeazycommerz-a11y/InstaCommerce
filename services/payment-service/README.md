@@ -385,7 +385,7 @@ Webhooks act as the reconciliation mechanism — if the service's own capture/vo
 {
   "amountCents": 3000,
   "reason": "Customer requested",
-  "idempotencyKey": "refund-key-123"
+  "idempotencyKey": "<idempotency-key>"
 }
 ```
 
