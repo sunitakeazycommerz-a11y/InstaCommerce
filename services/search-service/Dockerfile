@@ -1,9 +1,9 @@
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /app
 COPY . .
 RUN ./gradlew clean build -x test --no-daemon
 
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:25-jre-alpine AS runtime
 RUN addgroup -g 1001 appuser && adduser -u 1001 -G appuser -D appuser
 WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
