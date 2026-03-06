@@ -65,7 +65,7 @@ public class StripePaymentGateway implements PaymentGateway {
                 .setAmountToCapture(amountCents)
                 .build();
             intent.capture(params, options);
-            return GatewayCaptureResult.success();
+            return GatewayCaptureResult.ok();
         } catch (CardException ex) {
             String declineCode = ex.getDeclineCode();
             return GatewayCaptureResult.failure(declineCode != null ? declineCode : "capture_failed");
@@ -81,7 +81,7 @@ public class StripePaymentGateway implements PaymentGateway {
         try {
             PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
             intent.cancel(java.util.Collections.emptyMap(), options);
-            return GatewayVoidResult.success();
+            return GatewayVoidResult.ok();
         } catch (StripeException ex) {
             throw toGatewayException(ex);
         }
@@ -134,3 +134,4 @@ public class StripePaymentGateway implements PaymentGateway {
         return new PaymentGatewayException(message, ex);
     }
 }
+
