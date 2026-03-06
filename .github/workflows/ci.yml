@@ -74,6 +74,7 @@ jobs:
             stream-processor-service: 'services/stream-processor-service/**'
       - id: set-matrix
         run: |
+          all_services=(identity-service catalog-service inventory-service order-service payment-service fulfillment-service notification-service search-service pricing-service cart-service checkout-orchestrator-service warehouse-service rider-fleet-service routing-eta-service wallet-loyalty-service audit-trail-service fraud-detection-service config-feature-flag-service mobile-bff-service admin-gateway-service)
           changed_services=()
           [[ "${{ steps.filter.outputs.identity-service }}" == "true" ]] && changed_services+=("identity-service")
           [[ "${{ steps.filter.outputs.catalog-service }}" == "true" ]] && changed_services+=("catalog-service")
@@ -95,13 +96,15 @@ jobs:
           [[ "${{ steps.filter.outputs.config-feature-flag-service }}" == "true" ]] && changed_services+=("config-feature-flag-service")
           [[ "${{ steps.filter.outputs.mobile-bff-service }}" == "true" ]] && changed_services+=("mobile-bff-service")
           [[ "${{ steps.filter.outputs.admin-gateway-service }}" == "true" ]] && changed_services+=("admin-gateway-service")
-          if [ ${#changed_services[@]} -eq 0 ]; then
-            services=(identity-service catalog-service inventory-service order-service payment-service fulfillment-service notification-service search-service pricing-service cart-service checkout-orchestrator-service warehouse-service rider-fleet-service routing-eta-service wallet-loyalty-service audit-trail-service fraud-detection-service config-feature-flag-service mobile-bff-service admin-gateway-service)
+          if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then
+            services=("${all_services[@]}")
+          elif [ ${#changed_services[@]} -eq 0 ]; then
+            services=()
           else
             services=("${changed_services[@]}")
           fi
-          services_json=$(printf '%s\n' "${services[@]}" | jq -R -s -c 'split("\n")[:-1]')
-          changed_services_json=$(printf '%s\n' "${changed_services[@]}" | jq -R -s -c 'split("\n")[:-1]')
+          services_json=$(jq -cn --args "${services[@]}" '$ARGS.positional')
+          changed_services_json=$(jq -cn --args "${changed_services[@]}" '$ARGS.positional')
           echo "services=$services_json" >> "$GITHUB_OUTPUT"
           echo "changed_services=$changed_services_json" >> "$GITHUB_OUTPUT"
       - id: set-go-matrix
@@ -121,14 +124,16 @@ jobs:
             [[ "${{ steps.filter.outputs.stream-processor-service }}" == "true" ]] && changed_go_services+=("stream-processor-service")
           fi
 
-          if [ ${#changed_go_services[@]} -eq 0 ]; then
+          if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then
             go_services=("${all_go_services[@]}")
+          elif [ ${#changed_go_services[@]} -eq 0 ]; then
+            go_services=()
           else
             go_services=("${changed_go_services[@]}")
           fi
 
-          go_services_json=$(printf '%s\n' "${go_services[@]}" | jq -R -s -c 'split("\n")[:-1]')
-          changed_go_services_json=$(printf '%s\n' "${changed_go_services[@]}" | jq -R -s -c 'split("\n")[:-1]')
+          go_services_json=$(jq -cn --args "${go_services[@]}" '$ARGS.positional')
+          changed_go_services_json=$(jq -cn --args "${changed_go_services[@]}" '$ARGS.positional')
           echo "go_services=$go_services_json" >> "$GITHUB_OUTPUT"
           echo "changed_go_services=$changed_go_services_json" >> "$GITHUB_OUTPUT"
 
@@ -147,7 +152,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.34.2
         with:
           scan-type: fs
           scan-ref: .
@@ -165,13 +170,39 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Check dependency graph availability
+        id: dependency-graph
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.request('GET /repos/{owner}/{repo}/dependency-graph/sbom', {
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              core.info('Dependency graph is available.');
+              core.setOutput('available', 'true');
+            } catch (error) {
+              const status = error.status || 0;
+              if (status === 403 || status === 404) {
+                core.notice(`Dependency review skipped: dependency graph unavailable or disabled (${status}).`);
+                core.setOutput('available', 'false');
+              } else {
+                throw error;
+              }
+            }
       - name: Run dependency review
+        if: steps.dependency-graph.outputs.available == 'true'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
+      - name: Dependency review skipped
+        if: steps.dependency-graph.outputs.available != 'true'
+        run: echo "Skipping dependency review because dependency graph is unavailable or disabled for this repository."
 
   build-test:
     needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -208,7 +239,7 @@ jobs:
             services/${{ matrix.service }}
       - name: Scan image vulnerabilities
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.34.2
         with:
           image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
           vuln-type: os,library
@@ -229,6 +260,7 @@ jobs:
 
   go-build-test:
     needs: detect-changes
+    if: needs.detect-changes.outputs.go_services != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

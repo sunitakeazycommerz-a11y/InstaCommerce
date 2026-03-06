@@ -4,7 +4,7 @@ CI/CD workflows, Dependabot configuration, and automation for the InstaCommerce 
 
 ## CI Pipeline
 
-The CI pipeline (`.github/workflows/ci.yml`) uses **multi-service Java + Go build matrices** with change detection, security gates, and controlled deploy automation.
+The CI pipeline (`.github/workflows/ci.yml`) uses **multi-service Java + Go build matrices** with change detection, security gates, and controlled deploy automation. PRs and `develop` pushes run only affected services, while `main`/`master` pushes keep full-matrix validation.
 
 ```mermaid
 flowchart TD
@@ -22,7 +22,8 @@ flowchart TD
     subgraph "Change Detection"
         B --> B1[dorny/paths-filter]
         B1 --> B2{Which services changed?}
-        B2 -->|none detected| B3[Build ALL Java/Go services]
+        B2 -->|main/master push| B3[Build ALL Java/Go services]
+        B2 -->|PR/develop with no service changes| B5[Skip Java/Go matrices]
         B2 -->|specific services| B4[Build only changed services]
     end
 
@@ -49,9 +50,11 @@ flowchart TD
     style E fill:#326ce5,color:#fff
 ```
 
+Dependency review runs for PRs only when the repository dependency graph API is available; otherwise CI emits an explicit skip notice instead of failing the workflow setup.
+
 ### Java Services in the Build Matrix
 
-The following 20 services are independently detected and built:
+The following 20 services are independently detected and built. On `main`/`master` pushes, all services are validated; on PRs and `develop` pushes, only changed services are selected and the matrix is skipped when no matching paths changed.
 
 | Service | Path Filter |
 |---------|-------------|
@@ -112,7 +115,7 @@ asia-south1-docker.pkg.dev/instacommerce/images/<service-name>:<git-sha>
    [[ "${{ steps.filter.outputs.my-new-service }}" == "true" ]] && changed_services+=("my-new-service")
    ```
 
-3. **Add to the fallback list** (builds all when no changes detected):
+3. **Add to the full validation list** (used for `main`/`master` push full-matrix checks):
    ```bash
    services=(... my-new-service)
    ```
