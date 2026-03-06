@@ -265,8 +265,8 @@ Request:
 
 Response 200:
   Body:
-    accessToken: "eyJhbGciOiJSUzI1NiIsInR5cCI..."
-    refreshToken: "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4..."
+    accessToken: "<access-token-placeholder>"
+    refreshToken: "<refresh-token-placeholder>"
     expiresIn: 900            # seconds (15 min)
     tokenType: "Bearer"
 
@@ -290,8 +290,8 @@ Request:
 
 Response 200:
   Body:
-    accessToken: "eyJhbGciOiJSUzI1NiIsInR5cCI..."
-    refreshToken: "bmV3LXJlZnJlc2gtdG9rZW4..."   # NEW token (rotation)
+    accessToken: "<access-token-placeholder>"
+    refreshToken: "<refresh-token-placeholder>"   # NEW token (rotation)
     expiresIn: 900
 
 Response 401:
