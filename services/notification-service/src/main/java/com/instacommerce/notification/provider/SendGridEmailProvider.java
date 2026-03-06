@@ -14,7 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.boot.restclient.RestTemplateBuilder;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 
 @Component
 @Profile("prod")
@@ -80,4 +80,5 @@ public class SendGridEmailProvider implements NotificationProvider {
         }
     }
 }
+
 

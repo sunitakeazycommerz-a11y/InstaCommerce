@@ -6,7 +6,7 @@ import com.instacommerce.order.security.InternalServiceAuthInterceptor;
 import com.instacommerce.order.workflow.model.PaymentResult;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.restclient.RestTemplateBuilder;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
@@ -57,4 +57,5 @@ public class RestPaymentClient implements PaymentClient {
         restTemplate.postForLocation(baseUrl + "/payments/" + paymentId + "/void", null);
     }
 }
+
 
