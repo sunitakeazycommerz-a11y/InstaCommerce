@@ -5,11 +5,193 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-  - package-ecosystem: "docker"
-    directory: "/services/identity-service"
-    schedule:
-      interval: "weekly"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 10
+  - package-ecosystem: "gomod"
+    directory: "/services/cdc-consumer-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "gomod"
+    directory: "/services/dispatch-optimizer-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "gomod"
+    directory: "/services/go-shared"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "gomod"
+    directory: "/services/location-ingestion-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "gomod"
+    directory: "/services/outbox-relay-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "gomod"
+    directory: "/services/payment-webhook-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "gomod"
+    directory: "/services/reconciliation-engine"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "gomod"
+    directory: "/services/stream-processor-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/admin-gateway-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/ai-inference-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/ai-orchestrator-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/audit-trail-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/cart-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/catalog-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/cdc-consumer-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/checkout-orchestrator-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/config-feature-flag-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/dispatch-optimizer-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/fraud-detection-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/fulfillment-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/identity-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/inventory-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/location-ingestion-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/mobile-bff-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/notification-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/order-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/outbox-relay-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/payment-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/payment-webhook-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/pricing-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/reconciliation-engine"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/rider-fleet-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/routing-eta-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/search-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/stream-processor-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/wallet-loyalty-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+  - package-ecosystem: "docker"
+    directory: "/services/warehouse-service"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3

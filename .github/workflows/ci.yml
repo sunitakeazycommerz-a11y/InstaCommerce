@@ -1,10 +1,24 @@
 name: CI Pipeline
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main, develop]
+    branches:
+      - main
+      - master
+      - develop
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - master
+      - develop
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: asia-south1-docker.pkg.dev/instacommerce/images
@@ -13,10 +27,19 @@ env:
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       services: ${{ steps.set-matrix.outputs.services }}
+      changed_services: ${{ steps.set-matrix.outputs.changed_services }}
+      go_services: ${{ steps.set-go-matrix.outputs.go_services }}
+      changed_go_services: ${{ steps.set-go-matrix.outputs.changed_go_services }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - id: filter
         uses: dorny/paths-filter@v2
         with:
@@ -39,73 +62,189 @@ jobs:
             audit-trail-service: 'services/audit-trail-service/**'
             fraud-detection-service: 'services/fraud-detection-service/**'
             config-feature-flag-service: 'services/config-feature-flag-service/**'
+            mobile-bff-service: 'services/mobile-bff-service/**'
+            admin-gateway-service: 'services/admin-gateway-service/**'
+            go-shared: 'services/go-shared/**'
+            cdc-consumer-service: 'services/cdc-consumer-service/**'
+            dispatch-optimizer-service: 'services/dispatch-optimizer-service/**'
+            location-ingestion-service: 'services/location-ingestion-service/**'
+            outbox-relay-service: 'services/outbox-relay-service/**'
+            payment-webhook-service: 'services/payment-webhook-service/**'
+            reconciliation-engine: 'services/reconciliation-engine/**'
+            stream-processor-service: 'services/stream-processor-service/**'
       - id: set-matrix
         run: |
-          services=()
-          [[ "${{ steps.filter.outputs.identity-service }}" == "true" ]] && services+=("identity-service")
-          [[ "${{ steps.filter.outputs.catalog-service }}" == "true" ]] && services+=("catalog-service")
-          [[ "${{ steps.filter.outputs.inventory-service }}" == "true" ]] && services+=("inventory-service")
-          [[ "${{ steps.filter.outputs.order-service }}" == "true" ]] && services+=("order-service")
-          [[ "${{ steps.filter.outputs.payment-service }}" == "true" ]] && services+=("payment-service")
-          [[ "${{ steps.filter.outputs.fulfillment-service }}" == "true" ]] && services+=("fulfillment-service")
-          [[ "${{ steps.filter.outputs.notification-service }}" == "true" ]] && services+=("notification-service")
-          [[ "${{ steps.filter.outputs.search-service }}" == "true" ]] && services+=("search-service")
-          [[ "${{ steps.filter.outputs.pricing-service }}" == "true" ]] && services+=("pricing-service")
-          [[ "${{ steps.filter.outputs.cart-service }}" == "true" ]] && services+=("cart-service")
-          [[ "${{ steps.filter.outputs.checkout-orchestrator-service }}" == "true" ]] && services+=("checkout-orchestrator-service")
-          [[ "${{ steps.filter.outputs.warehouse-service }}" == "true" ]] && services+=("warehouse-service")
-          [[ "${{ steps.filter.outputs.rider-fleet-service }}" == "true" ]] && services+=("rider-fleet-service")
-          [[ "${{ steps.filter.outputs.routing-eta-service }}" == "true" ]] && services+=("routing-eta-service")
-          [[ "${{ steps.filter.outputs.wallet-loyalty-service }}" == "true" ]] && services+=("wallet-loyalty-service")
-          [[ "${{ steps.filter.outputs.audit-trail-service }}" == "true" ]] && services+=("audit-trail-service")
-          [[ "${{ steps.filter.outputs.fraud-detection-service }}" == "true" ]] && services+=("fraud-detection-service")
-          [[ "${{ steps.filter.outputs.config-feature-flag-service }}" == "true" ]] && services+=("config-feature-flag-service")
-          if [ ${#services[@]} -eq 0 ]; then
-            services=(identity-service catalog-service inventory-service order-service payment-service fulfillment-service notification-service search-service pricing-service cart-service checkout-orchestrator-service warehouse-service rider-fleet-service routing-eta-service wallet-loyalty-service audit-trail-service fraud-detection-service config-feature-flag-service)
+          all_services=(identity-service catalog-service inventory-service order-service payment-service fulfillment-service notification-service search-service pricing-service cart-service checkout-orchestrator-service warehouse-service rider-fleet-service routing-eta-service wallet-loyalty-service audit-trail-service fraud-detection-service config-feature-flag-service mobile-bff-service admin-gateway-service)
+          changed_services=()
+          [[ "${{ steps.filter.outputs.identity-service }}" == "true" ]] && changed_services+=("identity-service")
+          [[ "${{ steps.filter.outputs.catalog-service }}" == "true" ]] && changed_services+=("catalog-service")
+          [[ "${{ steps.filter.outputs.inventory-service }}" == "true" ]] && changed_services+=("inventory-service")
+          [[ "${{ steps.filter.outputs.order-service }}" == "true" ]] && changed_services+=("order-service")
+          [[ "${{ steps.filter.outputs.payment-service }}" == "true" ]] && changed_services+=("payment-service")
+          [[ "${{ steps.filter.outputs.fulfillment-service }}" == "true" ]] && changed_services+=("fulfillment-service")
+          [[ "${{ steps.filter.outputs.notification-service }}" == "true" ]] && changed_services+=("notification-service")
+          [[ "${{ steps.filter.outputs.search-service }}" == "true" ]] && changed_services+=("search-service")
+          [[ "${{ steps.filter.outputs.pricing-service }}" == "true" ]] && changed_services+=("pricing-service")
+          [[ "${{ steps.filter.outputs.cart-service }}" == "true" ]] && changed_services+=("cart-service")
+          [[ "${{ steps.filter.outputs.checkout-orchestrator-service }}" == "true" ]] && changed_services+=("checkout-orchestrator-service")
+          [[ "${{ steps.filter.outputs.warehouse-service }}" == "true" ]] && changed_services+=("warehouse-service")
+          [[ "${{ steps.filter.outputs.rider-fleet-service }}" == "true" ]] && changed_services+=("rider-fleet-service")
+          [[ "${{ steps.filter.outputs.routing-eta-service }}" == "true" ]] && changed_services+=("routing-eta-service")
+          [[ "${{ steps.filter.outputs.wallet-loyalty-service }}" == "true" ]] && changed_services+=("wallet-loyalty-service")
+          [[ "${{ steps.filter.outputs.audit-trail-service }}" == "true" ]] && changed_services+=("audit-trail-service")
+          [[ "${{ steps.filter.outputs.fraud-detection-service }}" == "true" ]] && changed_services+=("fraud-detection-service")
+          [[ "${{ steps.filter.outputs.config-feature-flag-service }}" == "true" ]] && changed_services+=("config-feature-flag-service")
+          [[ "${{ steps.filter.outputs.mobile-bff-service }}" == "true" ]] && changed_services+=("mobile-bff-service")
+          [[ "${{ steps.filter.outputs.admin-gateway-service }}" == "true" ]] && changed_services+=("admin-gateway-service")
+          if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then
+            services=("${all_services[@]}")
+          elif [ ${#changed_services[@]} -eq 0 ]; then
+            services=()
+          else
+            services=("${changed_services[@]}")
           fi
-          json=$(printf '%s\n' "${services[@]}" | jq -R -s -c 'split("\n")[:-1]')
-          echo "services=$json" >> "$GITHUB_OUTPUT"
+          services_json=$(jq -cn --args "${services[@]}" '$ARGS.positional')
+          changed_services_json=$(jq -cn --args "${changed_services[@]}" '$ARGS.positional')
+          echo "services=$services_json" >> "$GITHUB_OUTPUT"
+          echo "changed_services=$changed_services_json" >> "$GITHUB_OUTPUT"
+      - id: set-go-matrix
+        run: |
+          all_go_services=(go-shared cdc-consumer-service dispatch-optimizer-service location-ingestion-service outbox-relay-service payment-webhook-service reconciliation-engine stream-processor-service)
+          changed_go_services=()
+
+          if [[ "${{ steps.filter.outputs.go-shared }}" == "true" ]]; then
+            changed_go_services=("${all_go_services[@]}")
+          else
+            [[ "${{ steps.filter.outputs.cdc-consumer-service }}" == "true" ]] && changed_go_services+=("cdc-consumer-service")
+            [[ "${{ steps.filter.outputs.dispatch-optimizer-service }}" == "true" ]] && changed_go_services+=("dispatch-optimizer-service")
+            [[ "${{ steps.filter.outputs.location-ingestion-service }}" == "true" ]] && changed_go_services+=("location-ingestion-service")
+            [[ "${{ steps.filter.outputs.outbox-relay-service }}" == "true" ]] && changed_go_services+=("outbox-relay-service")
+            [[ "${{ steps.filter.outputs.payment-webhook-service }}" == "true" ]] && changed_go_services+=("payment-webhook-service")
+            [[ "${{ steps.filter.outputs.reconciliation-engine }}" == "true" ]] && changed_go_services+=("reconciliation-engine")
+            [[ "${{ steps.filter.outputs.stream-processor-service }}" == "true" ]] && changed_go_services+=("stream-processor-service")
+          fi
+
+          if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then
+            go_services=("${all_go_services[@]}")
+          elif [ ${#changed_go_services[@]} -eq 0 ]; then
+            go_services=()
+          else
+            go_services=("${changed_go_services[@]}")
+          fi
+
+          go_services_json=$(jq -cn --args "${go_services[@]}" '$ARGS.positional')
+          changed_go_services_json=$(jq -cn --args "${changed_go_services[@]}" '$ARGS.positional')
+          echo "go_services=$go_services_json" >> "$GITHUB_OUTPUT"
+          echo "changed_go_services=$changed_go_services_json" >> "$GITHUB_OUTPUT"
 
   security-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@0.34.2
         with:
           scan-type: fs
           scan-ref: .
           severity: CRITICAL,HIGH
-          exit-code: '1'
+          exit-code: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check dependency graph availability
+        id: dependency-graph
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let dependencyGraphAvailable = false;
+            try {
+              await github.request('GET /repos/{owner}/{repo}/dependency-graph/sbom', {
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              core.info('Dependency graph is available.');
+              dependencyGraphAvailable = true;
+            } catch (error) {
+              const status = error.status || 0;
+              if (status === 403 || status === 404) {
+                core.notice(`Dependency review skipped: dependency graph unavailable or disabled (${status}).`);
+              } else {
+                throw error;
+              }
+            }
+
+            let dependencyReviewSupported = true;
+            try {
+              const repoResponse = await github.request('GET /repos/{owner}/{repo}', {
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              const isPrivateRepo = Boolean(repoResponse.data.private);
+              const advancedSecurityStatus = repoResponse.data.security_and_analysis?.advanced_security?.status;
+              dependencyReviewSupported = !isPrivateRepo || advancedSecurityStatus === 'enabled';
+              if (!dependencyReviewSupported) {
+                core.notice('Dependency review skipped: repository is private and GitHub Advanced Security is not enabled.');
+              }
+            } catch (error) {
+              const status = error.status || 0;
+              if (status === 403 || status === 404) {
+                const isPrivateRepo = Boolean(context.payload.repository?.private);
+                dependencyReviewSupported = !isPrivateRepo;
+                if (!dependencyReviewSupported) {
+                  core.notice(`Dependency review skipped: unable to verify GitHub Advanced Security support (${status}).`);
+                }
+              } else {
+                throw error;
+              }
+            }
+
+            const shouldRunDependencyReview = dependencyGraphAvailable && dependencyReviewSupported;
+            core.setOutput('available', shouldRunDependencyReview ? 'true' : 'false');
       - name: Run dependency review
+        if: steps.dependency-graph.outputs.available == 'true'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
+      - name: Dependency review skipped
+        if: steps.dependency-graph.outputs.available != 'true'
+        run: echo "Skipping dependency review because dependency graph is unavailable or disabled for this repository."
 
   build-test:
     needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     strategy:
+      fail-fast: false
       matrix:
         service: ${{ fromJson(needs.detect-changes.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -123,48 +262,121 @@ jobs:
         working-directory: services/${{ matrix.service }}
         run: gradle bootJar --no-daemon
       - name: Build Image
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
             services/${{ matrix.service }}
       - name: Scan image vulnerabilities
-        if: github.ref == 'refs/heads/main'
-        uses: aquasecurity/trivy-action@v0.28.0
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: aquasecurity/trivy-action@0.34.2
         with:
           image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
           vuln-type: os,library
           severity: CRITICAL,HIGH
           exit-code: '1'
       - name: Authenticate to Google Cloud
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - name: Configure Docker auth
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
       - name: Push to Artifact Registry
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: docker push ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
 
-  deploy-dev:
-    needs: [detect-changes, security-scan, build-test]
-    if: github.ref == 'refs/heads/main'
+  go-build-test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_services != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.go_services) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: services/${{ matrix.service }}/go.mod
+          cache: true
+          cache-dependency-path: |
+            services/${{ matrix.service }}/go.sum
+            services/go-shared/go.sum
+      - name: Download dependencies
+        working-directory: services/${{ matrix.service }}
+        run: go mod download
+      - name: Run tests
+        working-directory: services/${{ matrix.service }}
+        run: go test ./...
+      - name: Build
+        working-directory: services/${{ matrix.service }}
+        run: go build ./...
+
+  deploy-dev:
+    needs: [detect-changes, security-scan, build-test, go-build-test]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Install yq
         uses: mikefarah/yq@v4
       - name: Update Helm values
         run: |
-          for svc in $(echo '${{ needs.detect-changes.outputs.services }}' | jq -r '.[]'); do
-            yq -i ".services.${svc}.tag = \"${{ github.sha }}\"" deploy/helm/values-dev.yaml
+          declare -a deploy_services=()
+          declare -A seen_services=()
+          declare -A go_service_to_helm=(
+            ["cdc-consumer-service"]="cdc-consumer"
+            ["dispatch-optimizer-service"]="dispatch-optimizer-service"
+            ["location-ingestion-service"]="location-ingestion"
+            ["outbox-relay-service"]="outbox-relay"
+            ["payment-webhook-service"]="payment-webhook"
+            ["reconciliation-engine"]="reconciliation-engine"
+            ["stream-processor-service"]="stream-processor-service"
+          )
+
+          while IFS= read -r svc; do
+            [[ -z "$svc" ]] && continue
+            deploy_services+=("$svc")
+          done < <(echo '${{ needs.detect-changes.outputs.changed_services }}' | jq -r '.[]')
+
+          while IFS= read -r svc; do
+            [[ -z "$svc" || "$svc" == "go-shared" ]] && continue
+            deploy_services+=("${go_service_to_helm[$svc]:-$svc}")
+          done < <(echo '${{ needs.detect-changes.outputs.changed_go_services }}' | jq -r '.[]')
+
+          for svc in "${deploy_services[@]}"; do
+            [[ -n "${seen_services[$svc]}" ]] && continue
+            seen_services[$svc]=1
+
+            if [[ "$(yq e ".services[\"${svc}\"]" deploy/helm/values-dev.yaml)" == "null" ]]; then
+              echo "Skipping ${svc}; not present in deploy/helm/values-dev.yaml"
+              continue
+            fi
+
+            yq -i ".services[\"${svc}\"].tag = \"${{ github.sha }}\"" deploy/helm/values-dev.yaml
           done
       - name: Commit and push
+        env:
+          BRANCH_NAME: ${{ github.ref_name }}
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add deploy/helm/values-dev.yaml
-          git commit -m "chore: deploy ${GITHUB_SHA::8} to dev" || exit 0
-          git push
+          if git diff --cached --quiet; then
+            echo "No deployment manifest changes detected."
+            exit 0
+          fi
+          git commit -m "chore: deploy ${GITHUB_SHA::8} to dev [skip ci]"
+          git pull --rebase origin "$BRANCH_NAME"
+          git push origin "HEAD:$BRANCH_NAME"
