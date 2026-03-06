@@ -37,7 +37,7 @@ jobs:
       go_services: ${{ steps.set-go-matrix.outputs.go_services }}
       changed_go_services: ${{ steps.set-go-matrix.outputs.changed_go_services }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - id: filter
@@ -144,7 +144,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -168,7 +168,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Check dependency graph availability
@@ -242,7 +242,7 @@ jobs:
       matrix:
         service: ${{ fromJson(needs.detect-changes.outputs.services) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Set up JDK
@@ -299,7 +299,7 @@ jobs:
       matrix:
         service: ${{ fromJson(needs.detect-changes.outputs.go_services) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Set up Go
@@ -328,7 +328,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install yq
         uses: mikefarah/yq@v4
       - name: Update Helm values
