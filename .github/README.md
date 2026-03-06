@@ -4,14 +4,15 @@ CI/CD workflows, Dependabot configuration, and automation for the InstaCommerce 
 
 ## CI Pipeline
 
-The CI pipeline (`.github/workflows/ci.yml`) uses a **multi-service build matrix** with change detection to only build and deploy services that have been modified.
+The CI pipeline (`.github/workflows/ci.yml`) uses **multi-service Java + Go build matrices** with change detection, security gates, and controlled deploy automation.
 
 ```mermaid
 flowchart TD
-    A[Push / PR to main] --> B[detect-changes]
+    A[Push / PR to main, master, or develop; or manual dispatch] --> B[detect-changes]
     A --> C[security-scan]
 
-    B -->|dynamic matrix| D[build-test matrix]
+    B -->|dynamic matrix| D[build-test matrix (Java)]
+    B -->|dynamic matrix| G[go-build-test matrix (Go)]
     
     subgraph "Security Scan"
         C --> C1[Gitleaks - Secret Detection]
@@ -21,7 +22,7 @@ flowchart TD
     subgraph "Change Detection"
         B --> B1[dorny/paths-filter]
         B1 --> B2{Which services changed?}
-        B2 -->|none detected| B3[Build ALL 18 services]
+        B2 -->|none detected| B3[Build ALL Java/Go services]
         B2 -->|specific services| B4[Build only changed services]
     end
 
@@ -29,15 +30,16 @@ flowchart TD
         D --> D1[Setup JDK 21 + Gradle 8.7]
         D1 --> D2[gradle test]
         D2 --> D3[gradle bootJar]
-        D3 -->|main branch only| D4[Docker build]
+        D3 -->|main/master only| D4[Docker build]
         D4 --> D5[Push to Artifact Registry]
     end
 
-    D -->|main branch only| E[deploy-dev]
+    D -->|main/master only| E[deploy-dev]
+    G -->|main/master only| E
     
     subgraph "Deploy to Dev"
-        E --> E1[Update values-dev.yaml image tags]
-        E1 --> E2[Commit & push to main]
+        E --> E1[Update values-dev.yaml image tags for changed services]
+        E1 --> E2[Commit & push to main/master]
         E2 --> E3[ArgoCD auto-sync]
     end
 
@@ -47,9 +49,9 @@ flowchart TD
     style E fill:#326ce5,color:#fff
 ```
 
-### Services in the Build Matrix
+### Java Services in the Build Matrix
 
-The following 18 services are independently detected and built:
+The following 20 services are independently detected and built:
 
 | Service | Path Filter |
 |---------|-------------|
@@ -71,6 +73,25 @@ The following 18 services are independently detected and built:
 | audit-trail-service | `services/audit-trail-service/**` |
 | fraud-detection-service | `services/fraud-detection-service/**` |
 | config-feature-flag-service | `services/config-feature-flag-service/**` |
+| mobile-bff-service | `services/mobile-bff-service/**` |
+| admin-gateway-service | `services/admin-gateway-service/**` |
+
+### Go Services in the Validation Matrix
+
+The following 8 Go modules are validated with `go test ./...` and `go build ./...`:
+
+| Service | Path Filter |
+|---------|-------------|
+| go-shared | `services/go-shared/**` |
+| cdc-consumer-service | `services/cdc-consumer-service/**` |
+| dispatch-optimizer-service | `services/dispatch-optimizer-service/**` |
+| location-ingestion-service | `services/location-ingestion-service/**` |
+| outbox-relay-service | `services/outbox-relay-service/**` |
+| payment-webhook-service | `services/payment-webhook-service/**` |
+| reconciliation-engine | `services/reconciliation-engine/**` |
+| stream-processor-service | `services/stream-processor-service/**` |
+
+Deploy tag updates in `values-dev.yaml` include changed Java services plus deployed Go services (`cdc-consumer`, `dispatch-optimizer-service`, `location-ingestion`, `outbox-relay`, `payment-webhook`, and `reconciliation-engine`) when their source modules change.
 
 ### Container Registry
 
@@ -88,7 +109,7 @@ asia-south1-docker.pkg.dev/instacommerce/images/<service-name>:<git-sha>
 
 2. **Add the matrix entry** in the `set-matrix` step:
    ```bash
-   [[ "${{ steps.filter.outputs.my-new-service }}" == "true" ]] && services+=("my-new-service")
+   [[ "${{ steps.filter.outputs.my-new-service }}" == "true" ]] && changed_services+=("my-new-service")
    ```
 
 3. **Add to the fallback list** (builds all when no changes detected):
@@ -103,13 +124,14 @@ asia-south1-docker.pkg.dev/instacommerce/images/<service-name>:<git-sha>
 
 ## Dependabot Configuration
 
-Dependabot (`.github/dependabot.yml`) is configured to automatically create PRs for dependency updates:
+Dependabot (`.github/dependabot.yml`) is configured to automatically create PRs for dependency updates across the monorepo:
 
-| Ecosystem | Directory | Schedule | PR Limit |
-|-----------|-----------|----------|----------|
+| Ecosystem | Directory Scope | Schedule | PR Limit |
+|-----------|------------------|----------|----------|
 | Gradle | `/` (root) | Weekly | 10 |
-| Docker | `/services/identity-service` | Weekly | 5 (default) |
-| GitHub Actions | `/` (root) | Weekly | 5 (default) |
+| GitHub Actions | `/` (root) | Weekly | 10 |
+| Go modules | 8 module directories under `/services/*` | Weekly | 3 per directory |
+| Docker | All service directories containing `Dockerfile` | Weekly | 3 per directory |
 
 ## Files
 
