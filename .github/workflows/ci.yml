@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
       - id: filter
-        uses: dorny/paths-filter@v2
+        uses: dorny/paths-filter@v3
         with:
           filters: |
             identity-service: 'services/identity-service/**'
