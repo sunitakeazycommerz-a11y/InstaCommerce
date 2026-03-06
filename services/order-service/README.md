@@ -277,7 +277,7 @@ flowchart LR
   "totalCents": 3000,
   "currency": "INR",
   "couponCode": "SAVE10",
-  "idempotencyKey": "unique-key-64-chars-max",
+  "idempotencyKey": "<idempotency-key>",
   "deliveryAddress": "123 Main St"
 }
 ```

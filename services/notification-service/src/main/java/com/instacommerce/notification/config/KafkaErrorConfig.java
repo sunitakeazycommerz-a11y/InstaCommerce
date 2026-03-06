@@ -20,8 +20,7 @@ public class KafkaErrorConfig {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
             (record, ex) -> new TopicPartition(record.topic() + ".dlq", record.partition()));
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3L));
-        errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+        errorHandler.setLogLevel(org.springframework.kafka.listener.KafkaException.Level.WARN);
         return errorHandler;
     }
 }
-
