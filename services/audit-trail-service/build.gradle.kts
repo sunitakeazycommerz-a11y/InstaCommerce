@@ -16,7 +16,7 @@ dependencies {
     implementation("io.micrometer:micrometer-registry-otlp")
     implementation("net.logstash.logback:logstash-logback-encoder:7.4")
     implementation("com.google.cloud:spring-cloud-gcp-starter-secretmanager")
-    implementation("com.google.cloud.sql:postgres-socket-factory:1.15.0")
+    implementation("com.google.cloud.sql:postgres-socket-factory:1.28.1")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("net.javacrumbs.shedlock:shedlock-spring:5.10.2")

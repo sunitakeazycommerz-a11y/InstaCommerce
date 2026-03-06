@@ -22,7 +22,7 @@ dependencies {
     implementation("org.mapstruct:mapstruct:1.5.5.Final")
     annotationProcessor("org.mapstruct:mapstruct-processor:1.5.5.Final")
     implementation("com.google.cloud:spring-cloud-gcp-starter-secretmanager")
-    implementation("com.google.cloud.sql:postgres-socket-factory:1.15.0")
+    implementation("com.google.cloud.sql:postgres-socket-factory:1.28.1")
     implementation("io.github.resilience4j:resilience4j-spring-boot3:2.2.0")
     implementation("com.github.ben-manes.caffeine:caffeine")
 
