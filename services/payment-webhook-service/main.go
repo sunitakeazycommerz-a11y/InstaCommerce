@@ -185,7 +185,7 @@ func main() {
 			Brokers:      cfg.KafkaBrokers,
 			Topic:        cfg.KafkaTopic,
 			Balancer:     &kafka.LeastBytes{},
-			RequiredAcks: kafka.RequireOne,
+			RequiredAcks: int(kafka.RequireOne),
 			Async:        true,
 			BatchTimeout: 5 * time.Millisecond,
 		})
@@ -857,3 +857,4 @@ func (c kafkaHeaderCarrier) Keys() []string {
 	}
 	return keys
 }
+
