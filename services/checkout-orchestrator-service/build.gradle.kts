@@ -16,7 +16,7 @@ dependencies {
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.12.0")
     implementation("io.micrometer:micrometer-tracing-bridge-otel")
     implementation("io.micrometer:micrometer-registry-otlp")
-    implementation("net.logstash.logback:logstash-logback-encoder:7.4")
+    implementation("net.logstash.logback:logstash-logback-encoder:9.0")
     implementation("io.temporal:temporal-sdk:1.22.3")
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
     runtimeOnly("org.postgresql:postgresql")
