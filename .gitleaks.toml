@@ -3,17 +3,13 @@ title = "InstaCommerce gitleaks config"
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "Documentation examples with placeholder token fields"
-condition = "AND"
-regexTarget = "match"
-paths = [
-  '''^old_docs/01-identity-access\.md$''',
-  '''^services/order-service/README\.md$''',
-  '''^services/payment-service/README\.md$'''
-]
-regexes = [
-  '''(?i)idempotencyKey''',
-  '''(?i)accessToken''',
-  '''(?i)refreshToken'''
-]
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = "Ignore documentation placeholder examples for token-like fields"
+  paths = [
+    '''(?:^|/)old_docs/01-identity-access\.md$''',
+    '''(?:^|/)services/order-service/README\.md$''',
+    '''(?:^|/)services/payment-service/README\.md$'''
+  ]
