@@ -4,7 +4,7 @@ public record GatewayVoidResult(
     boolean success,
     String failureReason
 ) {
-    public static GatewayVoidResult success() {
+    public static GatewayVoidResult ok() {
         return new GatewayVoidResult(true, null);
     }
 

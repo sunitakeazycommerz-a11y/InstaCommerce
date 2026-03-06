@@ -7,7 +7,7 @@ public record EarningsSummaryResponse(
     long totalDeliveryFeeCents,
     long totalTipCents,
     long totalIncentiveCents,
-    int deliveryCount,
+    long deliveryCount,
     Instant fromDate,
     Instant toDate
 ) {
