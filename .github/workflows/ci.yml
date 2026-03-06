@@ -173,7 +173,7 @@ jobs:
           persist-credentials: false
       - name: Check dependency graph availability
         id: dependency-graph
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             let dependencyGraphAvailable = false;
