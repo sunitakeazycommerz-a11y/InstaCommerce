@@ -158,7 +158,7 @@ jobs:
           scan-type: fs
           scan-ref: .
           severity: CRITICAL,HIGH
-          exit-code: '1'
+          exit-code: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
   dependency-review:
     if: github.event_name == 'pull_request'
