@@ -1,9 +1,9 @@
-FROM gradle:8.7-jdk21 AS build
+FROM gradle:9.4-jdk21 AS build
 WORKDIR /app
 COPY . .
 RUN gradle clean build -x test --no-daemon
 
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:25-jre-alpine AS runtime
 RUN addgroup -g 1001 app && adduser -u 1001 -G app -D app
 WORKDIR /app
 COPY --from=build /app/build/libs/*.jar app.jar
