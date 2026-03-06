@@ -5,6 +5,8 @@ useDefault = true
 
 [[allowlists]]
 description = "Documentation examples with placeholder token fields"
+condition = "AND"
+regexTarget = "match"
 paths = [
   '''^old_docs/01-identity-access\.md$''',
   '''^services/order-service/README\.md$''',
