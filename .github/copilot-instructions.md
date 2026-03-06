@@ -50,3 +50,9 @@
 - PR and `develop` CI runs only the services matched by path filters; `main` and `master` pushes run the full matrices. If you add or rename a service, update the filter list, the service matrix, and any deploy-name mapping in `.github/workflows/ci.yml`.
 - Some Go module names differ from their Helm/deploy keys. Current mappings in `.github/workflows/ci.yml` include `cdc-consumer-service -> cdc-consumer`, `location-ingestion-service -> location-ingestion`, and `payment-webhook-service -> payment-webhook`.
 - For deeper domain behavior, start with `docs/README.md` and the matching `docs/reviews/*-review.md` file before inferring system behavior from a single service in isolation.
+
+## Additional Copilot customizations in this repo
+
+- Repo-wide cross-cutting guidance lives here; path-specific rules live under `.github/instructions/`.
+- Specialized guide agents live under `.github/agents/` for architecture, review, coding best practices, and efficient tool use.
+- Reusable task skills live under `.github/skills/` for the same areas when you want a deeper workflow than a one-line instruction file can provide.

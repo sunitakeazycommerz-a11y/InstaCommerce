@@ -1,0 +1,18 @@
+{
+  "recommendations": [
+    "github.copilot-chat",
+    "sehejjain.lsp-mcp-bridge",
+    "golang.go",
+    "redhat.java",
+    "vscjava.vscode-java-pack",
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "redhat.vscode-yaml",
+    "hashicorp.terraform",
+    "github.vscode-github-actions",
+    "googlecloudtools.cloudcode",
+    "ms-kubernetes-tools.vscode-kubernetes-tools",
+    "ms-azuretools.vscode-containers",
+    "plex.vscode-protolint"
+  ]
+}
