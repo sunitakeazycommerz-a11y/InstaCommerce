@@ -34,7 +34,7 @@ class PaymentPipelineOptions(PipelineOptions):
         )
         parser.add_argument(
             "--kafka_topic",
-            default="payment.events",
+            default="payments.events",
             help="Kafka topic to consume payment events from",
         )
         parser.add_argument(

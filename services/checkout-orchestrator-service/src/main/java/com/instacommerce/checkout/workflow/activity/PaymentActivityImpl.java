@@ -29,30 +29,30 @@ public class PaymentActivityImpl implements PaymentActivity {
     }
 
     @Override
-    public void capturePayment(String paymentId) {
-        String idempotencyKey = resolveIdempotencyKey(null);
-        log.info("Capturing payment={} idempotencyKey={}", paymentId, idempotencyKey);
+    public void capturePayment(String paymentId, String idempotencyKey) {
+        String resolvedKey = resolveIdempotencyKey(idempotencyKey);
+        log.info("Capturing payment={} idempotencyKey={}", paymentId, resolvedKey);
         restTemplate.postForObject("/payments/{paymentId}/capture",
-            Map.of("idempotencyKey", idempotencyKey), Void.class, paymentId);
+            Map.of("idempotencyKey", resolvedKey), Void.class, paymentId);
     }
 
     @Override
-    public void voidPayment(String paymentId) {
-        String idempotencyKey = resolveIdempotencyKey(null);
-        log.info("Voiding payment={} idempotencyKey={}", paymentId, idempotencyKey);
+    public void voidPayment(String paymentId, String idempotencyKey) {
+        String resolvedKey = resolveIdempotencyKey(idempotencyKey);
+        log.info("Voiding payment={} idempotencyKey={}", paymentId, resolvedKey);
         restTemplate.postForObject("/payments/{paymentId}/void",
-            Map.of("idempotencyKey", idempotencyKey), Void.class, paymentId);
+            Map.of("idempotencyKey", resolvedKey), Void.class, paymentId);
     }
 
     @Override
-    public void refundPayment(String paymentId, long amountCents) {
-        String idempotencyKey = resolveIdempotencyKey(null);
-        log.info("Refunding payment={} amountCents={} idempotencyKey={}", paymentId, amountCents, idempotencyKey);
+    public void refundPayment(String paymentId, long amountCents, String idempotencyKey) {
+        String resolvedKey = resolveIdempotencyKey(idempotencyKey);
+        log.info("Refunding payment={} amountCents={} idempotencyKey={}", paymentId, amountCents, resolvedKey);
         restTemplate.postForObject("/payments/{paymentId}/refund",
             Map.of(
                 "amountCents", amountCents,
                 "reason", "CHECKOUT_COMPENSATION",
-                "idempotencyKey", idempotencyKey
+                "idempotencyKey", resolvedKey
             ), Void.class, paymentId);
     }
 

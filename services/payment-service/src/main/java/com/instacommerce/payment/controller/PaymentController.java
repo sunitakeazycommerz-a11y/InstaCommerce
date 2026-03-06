@@ -2,6 +2,7 @@ package com.instacommerce.payment.controller;
 
 import com.instacommerce.payment.dto.request.AuthorizeRequest;
 import com.instacommerce.payment.dto.request.CaptureRequest;
+import com.instacommerce.payment.dto.request.VoidRequest;
 import com.instacommerce.payment.dto.response.PaymentResponse;
 import com.instacommerce.payment.service.PaymentService;
 import jakarta.validation.Valid;
@@ -31,12 +32,15 @@ public class PaymentController {
     public PaymentResponse capture(@PathVariable UUID id,
                                    @Valid @RequestBody(required = false) CaptureRequest request) {
         Long amountCents = request == null ? null : request.amountCents();
-        return paymentService.capture(id, amountCents);
+        String idempotencyKey = request == null ? null : request.idempotencyKey();
+        return paymentService.capture(id, amountCents, idempotencyKey);
     }
 
     @PostMapping("/{id}/void")
-    public PaymentResponse voidAuth(@PathVariable UUID id) {
-        return paymentService.voidAuth(id);
+    public PaymentResponse voidAuth(@PathVariable UUID id,
+                                    @Valid @RequestBody(required = false) VoidRequest request) {
+        String idempotencyKey = request == null ? null : request.idempotencyKey();
+        return paymentService.voidAuth(id, idempotencyKey);
     }
 
     @GetMapping("/{id}")

@@ -28,7 +28,7 @@ class OrderPipelineOptions(PipelineOptions):
         )
         parser.add_argument(
             "--kafka_topic",
-            default="order.events",
+            default="orders.events",
             help="Kafka topic to consume order events from",
         )
         parser.add_argument(

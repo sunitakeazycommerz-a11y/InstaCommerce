@@ -95,6 +95,7 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
         Saga saga = new Saga(sagaOptions);
         PaymentAuthResult paymentResult = null;
         Long paymentAmountCents = null;
+        String paymentOperationKeyPrefix = null;
         boolean paymentAuthorized = false;
         boolean paymentCaptured = false;
         boolean paymentCaptureAttempted = false;
@@ -130,7 +131,16 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             String paymentIdempotencyKey = Workflow.getInfo().getWorkflowId() + "-payment";
             paymentResult = paymentActivity.authorizePayment(
                 paymentAmountCents, request.paymentMethodId(), paymentIdempotencyKey);
+            if (paymentResult == null) {
+                throw new IllegalStateException("Payment authorization returned no result");
+            }
             paymentAuthorized = paymentResult.authorized();
+            if (paymentAuthorized && (paymentResult.paymentId() == null || paymentResult.paymentId().isBlank())) {
+                throw new IllegalStateException("Payment authorization succeeded without a paymentId");
+            }
+            if (paymentResult.paymentId() != null && !paymentResult.paymentId().isBlank()) {
+                paymentOperationKeyPrefix = paymentIdempotencyKey + "-" + paymentResult.paymentId();
+            }
 
             if (!paymentAuthorized) {
                 currentStatus = "COMPENSATING";
@@ -164,7 +174,9 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             currentStatus = "CONFIRMING";
             inventoryActivity.confirmStock(reservationResult.reservationId());
             paymentCaptureAttempted = true;
-            paymentActivity.capturePayment(paymentResult.paymentId());
+            paymentActivity.capturePayment(
+                paymentResult.paymentId(),
+                paymentOperationKeyPrefix + "-capture");
             paymentCaptured = true;
 
             // Step 7: Clear cart (best effort — don't fail checkout if this fails)
@@ -184,7 +196,13 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
 
         } catch (Exception e) {
             currentStatus = "COMPENSATING";
-            compensatePayment(paymentResult, paymentAuthorized, paymentCaptured, paymentCaptureAttempted, paymentAmountCents);
+            compensatePayment(
+                paymentResult,
+                paymentAuthorized,
+                paymentCaptured,
+                paymentCaptureAttempted,
+                paymentAmountCents,
+                paymentOperationKeyPrefix);
             saga.compensate();
             currentStatus = "FAILED";
             return CheckoutResponse.failed(e.getMessage());
@@ -200,7 +218,8 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                                    boolean paymentAuthorized,
                                    boolean paymentCaptured,
                                    boolean paymentCaptureAttempted,
-                                   Long paymentAmountCents) {
+                                   Long paymentAmountCents,
+                                   String paymentOperationKeyPrefix) {
         if (!paymentAuthorized || paymentResult == null) {
             return;
         }
@@ -210,20 +229,26 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             return;
         }
         try {
+            String keyPrefix = paymentOperationKeyPrefix;
+            if (keyPrefix == null || keyPrefix.isBlank()) {
+                keyPrefix = Workflow.getInfo().getWorkflowId() + "-payment-" + paymentResult.paymentId();
+            }
+            String refundIdempotencyKey = keyPrefix + "-refund";
+            String voidIdempotencyKey = keyPrefix + "-void";
             if (paymentCaptured) {
-                paymentActivity.refundPayment(paymentResult.paymentId(), paymentAmountCents);
+                paymentActivity.refundPayment(paymentResult.paymentId(), paymentAmountCents, refundIdempotencyKey);
                 return;
             }
             if (paymentCaptureAttempted) {
                 try {
-                    paymentActivity.refundPayment(paymentResult.paymentId(), paymentAmountCents);
+                    paymentActivity.refundPayment(paymentResult.paymentId(), paymentAmountCents, refundIdempotencyKey);
                     return;
                 } catch (Exception refundFailure) {
                     Workflow.getLogger(CheckoutWorkflowImpl.class)
                         .warn("Refund failed for payment {}, attempting void", paymentResult.paymentId(), refundFailure);
                 }
             }
-            paymentActivity.voidPayment(paymentResult.paymentId());
+            paymentActivity.voidPayment(paymentResult.paymentId(), voidIdempotencyKey);
         } catch (Exception compensationFailure) {
             Workflow.getLogger(CheckoutWorkflowImpl.class)
                 .warn("Failed to compensate payment {}", paymentResult.paymentId(), compensationFailure);

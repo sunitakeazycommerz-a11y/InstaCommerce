@@ -150,3 +150,33 @@ models:
         description: "Return rate as percentage of units sold"
       - name: estimated_stock
         description: "Estimated current stock level"
+
+  - name: mart_sponsored_opportunities
+    description: "Daily sponsored monetization opportunity scoring by store and category"
+    columns:
+      - name: opportunity_date
+        description: "Date for monetization opportunity evaluation"
+        tests:
+          - not_null
+      - name: store_id
+        description: "Store identifier"
+        tests:
+          - not_null
+      - name: category
+        description: "Product category used for sponsored opportunity segmentation"
+        tests:
+          - not_null
+      - name: total_searches
+        description: "Total searches linked to the category in the store"
+      - name: clicked_searches
+        description: "Searches with a product click signal"
+      - name: add_to_cart_events
+        description: "Add-to-cart events associated with category demand"
+      - name: delivered_orders
+        description: "Delivered orders attributable to same-day category add-to-cart behavior"
+      - name: attributable_gmv_usd
+        description: "Estimated GMV attributable to category purchase intent"
+      - name: monetization_readiness_score
+        description: "Composite score used to prioritize ad/sponsored activation"
+      - name: opportunity_tier
+        description: "Prioritization tier for monetization rollout (HIGH, MEDIUM, LOW)"

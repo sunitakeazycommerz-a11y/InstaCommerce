@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "EventEnvelope",
+  "type": "object",
+  "required": [
+    "id",
+    "eventType",
+    "aggregateType",
+    "aggregateId",
+    "eventTime",
+    "schemaVersion",
+    "payload"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "eventId": { "type": "string" },
+    "eventType": { "type": "string" },
+    "aggregateType": { "type": "string" },
+    "aggregateId": { "type": "string" },
+    "eventTime": { "type": "string", "format": "date-time" },
+    "schemaVersion": { "type": "string", "const": "v1" },
+    "payload": {
+      "type": [
+        "object",
+        "array",
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

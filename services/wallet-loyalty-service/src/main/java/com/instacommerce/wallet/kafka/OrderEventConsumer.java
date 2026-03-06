@@ -25,7 +25,7 @@ public class OrderEventConsumer {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = "order.events", groupId = "wallet-loyalty-service")
+    @KafkaListener(topics = {"order.events", "orders.events"}, groupId = "wallet-loyalty-service")
     public void consume(String message) {
         try {
             JsonNode event = objectMapper.readTree(message);

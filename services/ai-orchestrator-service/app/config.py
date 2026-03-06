@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     server_host: str = "0.0.0.0"
     server_port: int = 8100
     request_timeout_seconds: float = 3.0
+    agent_ip_rate_limit_per_minute: int = 120
+    agent_ip_rate_limit_burst: int = 180
+    agent_user_rate_limit_per_minute: int = 30
+    agent_user_rate_limit_burst: int = 45
+    agent_max_inflight_requests: int = 200
+    agent_queue_acquire_timeout_ms: int = 150
+    agent_trust_forwarded_for: bool = True
     tool_call_timeout_seconds: float = 2.5
     tool_total_timeout_seconds: float = 6.0
     tool_call_max: int = 8

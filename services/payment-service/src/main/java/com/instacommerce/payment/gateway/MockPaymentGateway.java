@@ -13,12 +13,12 @@ public class MockPaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public GatewayCaptureResult capture(String pspReference, long amountCents) {
+    public GatewayCaptureResult capture(String pspReference, long amountCents, String idempotencyKey) {
         return GatewayCaptureResult.success();
     }
 
     @Override
-    public GatewayVoidResult voidAuth(String pspReference) {
+    public GatewayVoidResult voidAuth(String pspReference, String idempotencyKey) {
         return GatewayVoidResult.success();
     }
 

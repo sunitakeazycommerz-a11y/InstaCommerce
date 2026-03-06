@@ -10,6 +10,8 @@ Central index for all InstaCommerce architecture documentation, review reports, 
 |----------|------|-------------|
 | API Gateway & BFF Design | [`reviews/api-gateway-bff-design.md`](reviews/api-gateway-bff-design.md) | API gateway architecture, mobile BFF pattern, and routing strategy |
 | Data Platform & ML Design | [`reviews/data-platform-ml-design.md`](reviews/data-platform-ml-design.md) | Data lake, streaming pipeline, feature store, and ML platform architecture |
+| Fleet Architecture Review (2026-02-13) | [`reviews/FLEET-ARCHITECTURE-REVIEW-2026-02-13.md`](reviews/FLEET-ARCHITECTURE-REVIEW-2026-02-13.md) | Consolidated 20-agent codebase review with roadmap, LLD, and mermaid architecture/flow diagrams |
+| AI Agent Fleet Plan (2026-02-13) | [`reviews/AI-AGENT-FLEET-PLAN-2026-02-13.md`](reviews/AI-AGENT-FLEET-PLAN-2026-02-13.md) | 24-agent production rollout plan with revenue opportunities and competitor-aligned architecture |
 | Wave 2 Data/ML Roadmap B | [`architecture/WAVE2-DATA-ML-ROADMAP-B.md`](architecture/WAVE2-DATA-ML-ROADMAP-B.md) | DataOps, data mesh, reverse ETL, and activation roadmap for growth/retention/revenue |
 | Master Review & Refactor Plan | [`reviews/MASTER-REVIEW-AND-REFACTOR-PLAN.md`](reviews/MASTER-REVIEW-AND-REFACTOR-PLAN.md) | Comprehensive review summary and prioritized refactoring roadmap |
 | AI & Golang Opportunities | [`reviews/AI-GOLANG-OPPORTUNITIES-REVIEW.md`](reviews/AI-GOLANG-OPPORTUNITIES-REVIEW.md) | Analysis of AI integration and Go migration opportunities |

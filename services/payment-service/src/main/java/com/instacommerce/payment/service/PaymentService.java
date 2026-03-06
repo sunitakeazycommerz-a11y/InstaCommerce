@@ -74,19 +74,24 @@ public class PaymentService {
      * Step 3: Update to CAPTURED in a new TX.
      */
     public PaymentResponse capture(UUID paymentId) {
-        return capture(paymentId, null);
+        return capture(paymentId, null, null);
     }
 
     public PaymentResponse capture(UUID paymentId, Long amountCents) {
+        return capture(paymentId, amountCents, null);
+    }
+
+    public PaymentResponse capture(UUID paymentId, Long amountCents, String idempotencyKey) {
         Payment payment = txHelper.saveCapturePending(paymentId);
         if (payment.getStatus() == PaymentStatus.CAPTURED) {
             return PaymentMapper.toResponse(payment);
         }
 
         long captureAmount = resolveCaptureAmount(payment, amountCents);
+        String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
         GatewayCaptureResult result;
         try {
-            result = paymentGateway.capture(payment.getPspReference(), captureAmount);
+            result = paymentGateway.capture(payment.getPspReference(), captureAmount, normalizedKey);
         } catch (Exception ex) {
             txHelper.revertToAuthorized(paymentId);
             throw ex;
@@ -107,14 +112,19 @@ public class PaymentService {
      * Step 3: Update to VOIDED in a new TX.
      */
     public PaymentResponse voidAuth(UUID paymentId) {
+        return voidAuth(paymentId, null);
+    }
+
+    public PaymentResponse voidAuth(UUID paymentId, String idempotencyKey) {
         Payment payment = txHelper.saveVoidPending(paymentId);
         if (payment.getStatus() == PaymentStatus.VOIDED) {
             return PaymentMapper.toResponse(payment);
         }
 
+        String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
         GatewayVoidResult result;
         try {
-            result = paymentGateway.voidAuth(payment.getPspReference());
+            result = paymentGateway.voidAuth(payment.getPspReference(), normalizedKey);
         } catch (Exception ex) {
             txHelper.revertVoidToAuthorized(paymentId);
             throw ex;
@@ -145,5 +155,12 @@ public class PaymentService {
             throw new InvalidCaptureAmountException(payment.getId(), amountCents, maxAmount);
         }
         return amountCents;
+    }
+
+    private String normalizeIdempotencyKey(String key) {
+        if (key == null || key.isBlank()) {
+            return null;
+        }
+        return key.trim();
     }
 }

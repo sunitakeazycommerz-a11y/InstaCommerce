@@ -81,6 +81,18 @@ istio:
       jwtRules:
         - issuer: instacommerce-identity
           jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json
+    - name: order-service-jwt
+      selector:
+        app: order-service
+      jwtRules:
+        - issuer: instacommerce-identity
+          jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json
+    - name: checkout-orchestrator-service-jwt
+      selector:
+        app: checkout-orchestrator-service
+      jwtRules:
+        - issuer: instacommerce-identity
+          jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json
     - name: inventory-service-jwt
       selector:
         app: inventory-service

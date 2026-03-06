@@ -86,6 +86,18 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '1'
 
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
   build-test:
     needs: detect-changes
     runs-on: ubuntu-latest
@@ -115,6 +127,14 @@ jobs:
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
             services/${{ matrix.service }}
+      - name: Scan image vulnerabilities
+        if: github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@v0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          exit-code: '1'
       - name: Authenticate to Google Cloud
         if: github.ref == 'refs/heads/main'
         uses: google-github-actions/auth@v2
@@ -129,7 +149,7 @@ jobs:
         run: docker push ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
 
   deploy-dev:
-    needs: [detect-changes, build-test]
+    needs: [detect-changes, security-scan, build-test]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

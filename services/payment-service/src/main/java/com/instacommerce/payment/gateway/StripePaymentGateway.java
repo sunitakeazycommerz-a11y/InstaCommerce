@@ -56,9 +56,9 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public GatewayCaptureResult capture(String pspReference, long amountCents) {
+    public GatewayCaptureResult capture(String pspReference, long amountCents, String idempotencyKey) {
         ensureApiKey();
-        RequestOptions options = buildOptions(null);
+        RequestOptions options = buildOptions(idempotencyKey);
         try {
             PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
             PaymentIntentCaptureParams params = PaymentIntentCaptureParams.builder()
@@ -75,9 +75,9 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public GatewayVoidResult voidAuth(String pspReference) {
+    public GatewayVoidResult voidAuth(String pspReference, String idempotencyKey) {
         ensureApiKey();
-        RequestOptions options = buildOptions(null);
+        RequestOptions options = buildOptions(idempotencyKey);
         try {
             PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
             intent.cancel(java.util.Collections.emptyMap(), options);

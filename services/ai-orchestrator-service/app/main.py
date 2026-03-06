@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from contextlib import asynccontextmanager
@@ -11,10 +12,12 @@ from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Set,
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings
+from app.guardrails.rate_limiter import TokenBucketRateLimiter
 
 settings = Settings()
 logger = logging.getLogger("ai_orchestrator")
@@ -1253,6 +1256,15 @@ async def lifespan(app_instance: FastAPI):
     app_instance.state.retriever = retriever
     app_instance.state.guardrails = guardrails
     app_instance.state.breakers = breakers
+    app_instance.state.agent_ip_rate_limiter = TokenBucketRateLimiter(
+        rate_per_minute=settings.agent_ip_rate_limit_per_minute,
+        burst=settings.agent_ip_rate_limit_burst,
+    )
+    app_instance.state.agent_user_rate_limiter = TokenBucketRateLimiter(
+        rate_per_minute=settings.agent_user_rate_limit_per_minute,
+        burst=settings.agent_user_rate_limit_burst,
+    )
+    app_instance.state.agent_request_semaphore = asyncio.Semaphore(settings.agent_max_inflight_requests)
     try:
         yield
     finally:
@@ -1262,6 +1274,104 @@ async def lifespan(app_instance: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.state.tracer = init_telemetry(app)
+
+
+def _extract_client_ip(request: Request) -> str:
+    if settings.agent_trust_forwarded_for:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            return forwarded_for.split(",", maxsplit=1)[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+async def _extract_user_subject(request: Request) -> Optional[str]:
+    explicit_user = request.headers.get(settings.user_id_header_name)
+    if explicit_user:
+        return explicit_user.strip()
+    content_type = request.headers.get("content-type", "")
+    if "application/json" not in content_type.lower():
+        return None
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw_user_id = payload.get("user_id")
+    if raw_user_id is None:
+        return None
+    return str(raw_user_id).strip() or None
+
+
+def _rate_limited_response(scope: str, principal: str, meta: Dict[str, Any]) -> JSONResponse:
+    retry_after_seconds = max(1, math.ceil(float(meta.get("retry_after_seconds", 1.0))))
+    principal_hash = hashlib.sha256(principal.encode("utf-8")).hexdigest()[:12]
+    log_event(
+        "agent_rate_limited",
+        level=logging.WARNING,
+        scope=scope,
+        principal_hash=principal_hash,
+        retry_after_seconds=retry_after_seconds,
+    )
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Rate limit exceeded"},
+        headers={
+            "Retry-After": str(retry_after_seconds),
+            "X-Agent-RateLimit-Scope": scope,
+            "X-Agent-RateLimit-Limit": str(meta.get("limit", 0)),
+            "X-Agent-RateLimit-Remaining": str(int(meta.get("remaining_tokens", 0))),
+        },
+    )
+
+
+@app.middleware("http")
+async def enforce_agent_guardrails(request: Request, call_next):
+    if not request.url.path.startswith("/agent/"):
+        return await call_next(request)
+
+    client_ip = _extract_client_ip(request)
+    ip_allowed, ip_meta = request.app.state.agent_ip_rate_limiter.allow(client_ip)
+    if not ip_allowed:
+        return _rate_limited_response("ip", client_ip, ip_meta)
+
+    user_subject = await _extract_user_subject(request)
+    user_meta: Optional[Dict[str, Any]] = None
+    if user_subject:
+        user_allowed, user_meta = request.app.state.agent_user_rate_limiter.allow(user_subject)
+        if not user_allowed:
+            return _rate_limited_response("user", user_subject, user_meta)
+
+    semaphore = request.app.state.agent_request_semaphore
+    acquired = False
+    try:
+        await asyncio.wait_for(
+            semaphore.acquire(),
+            timeout=max(settings.agent_queue_acquire_timeout_ms, 1) / 1000.0,
+        )
+        acquired = True
+    except asyncio.TimeoutError:
+        log_event("agent_backpressure_rejected", level=logging.WARNING, path=request.url.path)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Agent service is saturated; retry shortly"},
+            headers={"Retry-After": "1"},
+        )
+
+    try:
+        response = await call_next(request)
+    finally:
+        if acquired:
+            semaphore.release()
+
+    response.headers["X-Agent-IP-Limit"] = str(ip_meta.get("limit", 0))
+    response.headers["X-Agent-IP-Remaining"] = str(int(ip_meta.get("remaining_tokens", 0)))
+    if user_meta:
+        response.headers["X-Agent-User-Limit"] = str(user_meta.get("limit", 0))
+        response.headers["X-Agent-User-Remaining"] = str(int(user_meta.get("remaining_tokens", 0)))
+    return response
 
 
 @app.get("/health")

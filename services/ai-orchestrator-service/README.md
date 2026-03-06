@@ -475,6 +475,13 @@ All settings use the `AI_ORCHESTRATOR_` env prefix (case-insensitive).
 | `AI_ORCHESTRATOR_SERVER_PORT` | `8100` | Server port |
 | `AI_ORCHESTRATOR_LOG_LEVEL` | `INFO` | Log level |
 | `AI_ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS` | `3.0` | Request timeout |
+| `AI_ORCHESTRATOR_AGENT_IP_RATE_LIMIT_PER_MINUTE` | `120` | Sustained per-IP request rate for `/agent/*` endpoints |
+| `AI_ORCHESTRATOR_AGENT_IP_RATE_LIMIT_BURST` | `180` | Burst bucket size for per-IP rate limiting |
+| `AI_ORCHESTRATOR_AGENT_USER_RATE_LIMIT_PER_MINUTE` | `30` | Sustained per-user request rate for `/agent/*` endpoints |
+| `AI_ORCHESTRATOR_AGENT_USER_RATE_LIMIT_BURST` | `45` | Burst bucket size for per-user rate limiting |
+| `AI_ORCHESTRATOR_AGENT_MAX_INFLIGHT_REQUESTS` | `200` | Max concurrent in-flight `/agent/*` requests |
+| `AI_ORCHESTRATOR_AGENT_QUEUE_ACQUIRE_TIMEOUT_MS` | `150` | Backpressure wait timeout before returning 503 |
+| `AI_ORCHESTRATOR_AGENT_TRUST_FORWARDED_FOR` | `true` | Trust first `X-Forwarded-For` value for client IP identity |
 | `AI_ORCHESTRATOR_TOOL_CALL_TIMEOUT_SECONDS` | `2.5` | Per-tool call timeout |
 | `AI_ORCHESTRATOR_TOOL_TOTAL_TIMEOUT_SECONDS` | `6.0` | Total tool timeout |
 | `AI_ORCHESTRATOR_TOOL_CALL_MAX` | `8` | Max tool calls per request |
@@ -506,8 +513,8 @@ All settings use the `AI_ORCHESTRATOR_` env prefix (case-insensitive).
 | `ESCALATION_HIGH_VALUE_CENTS` | `50000` | Escalate refunds above $500 |
 | `ESCALATION_LOW_CONFIDENCE` | `0.5` | Escalate below this intent confidence |
 | `ESCALATION_MAX_ERRORS` | `3` | Escalate after N errors |
-| `RATE_LIMIT_PER_MINUTE` | `10` | Sustained request rate per user |
-| `RATE_LIMIT_BURST` | `15` | Burst token bucket size |
+| `RATE_LIMIT_PER_MINUTE` | `10` | Library fallback sustained rate when rate limiter is instantiated standalone |
+| `RATE_LIMIT_BURST` | `15` | Library fallback burst size when rate limiter is instantiated standalone |
 
 ---
 

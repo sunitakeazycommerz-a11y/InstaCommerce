@@ -1,7 +1,7 @@
 package main
 
 // Stream processor consumes Kafka events and computes real-time metrics.
-// Topics: order.events, payment.events, rider.events, fulfillment.events, inventory.events
+// Topics: order.events/orders.events, payment.events/payments.events, rider.events, fulfillment.events, inventory.events
 // Outputs: Redis counters + Prometheus metrics + optional BigQuery sink
 
 import (
@@ -80,13 +80,16 @@ func main() {
 	brokers := strings.Split(cfg.KafkaBrokers, ",")
 
 	// Start Kafka consumers
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "order.events", func(ctx context.Context, msg kafka.Message) error {
+	handleOrderEvent := func(ctx context.Context, msg kafka.Message) error {
 		var event processor.OrderEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			return fmt.Errorf("unmarshal order event: %w", err)
 		}
 		return orderProc.Process(ctx, event)
-	})
+	}
+
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "order.events", handleOrderEvent)
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "orders.events", handleOrderEvent)
 
 	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "rider.events", func(ctx context.Context, msg kafka.Message) error {
 		var event processor.RiderEvent
@@ -104,13 +107,16 @@ func main() {
 		return riderProc.ProcessLocationUpdate(ctx, update)
 	})
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payment.events", func(ctx context.Context, msg kafka.Message) error {
+	handlePaymentEvent := func(ctx context.Context, msg kafka.Message) error {
 		var event processor.PaymentEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			return fmt.Errorf("unmarshal payment event: %w", err)
 		}
 		return paymentProc.Process(ctx, event)
-	})
+	}
+
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payment.events", handlePaymentEvent)
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payments.events", handlePaymentEvent)
 
 	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "inventory.events", func(ctx context.Context, msg kafka.Message) error {
 		var event processor.InventoryEvent

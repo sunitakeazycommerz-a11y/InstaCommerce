@@ -503,10 +503,8 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 			break
 		}
 
-		topic := s.cfg.KafkaTopic
-		if topic == "" {
-			topic = evt.AggregateType
-		}
+		topic := resolveKafkaTopic(s.cfg.KafkaTopic, evt.AggregateType)
+		value := buildEventMessage(evt)
 
 		msgCtx, msgSpan := s.tracer.Start(ctx, "outbox.relay.publish",
 			trace.WithAttributes(
@@ -521,11 +519,12 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 		message := &sarama.ProducerMessage{
 			Topic: topic,
 			Key:   sarama.StringEncoder(evt.AggregateID),
-			Value: sarama.ByteEncoder(evt.Payload),
+			Value: sarama.ByteEncoder(value),
 			Headers: []sarama.RecordHeader{
 				{Key: []byte("event_id"), Value: []byte(evt.ID)},
 				{Key: []byte("event_type"), Value: []byte(evt.EventType)},
 				{Key: []byte("aggregate_type"), Value: []byte(evt.AggregateType)},
+				{Key: []byte("schema_version"), Value: []byte("v1")},
 			},
 		}
 
@@ -705,6 +704,107 @@ func splitAndTrim(raw string) []string {
 		}
 	}
 	return out
+}
+
+func resolveKafkaTopic(overrideTopic, aggregateType string) string {
+	if trimmed := strings.TrimSpace(overrideTopic); trimmed != "" {
+		return trimmed
+	}
+
+	switch normalizeAggregateType(aggregateType) {
+	case "order", "orders":
+		return "orders.events"
+	case "payment", "payments":
+		return "payments.events"
+	case "inventory":
+		return "inventory.events"
+	case "fulfillment":
+		return "fulfillment.events"
+	case "catalog", "product", "products":
+		return "catalog.events"
+	case "identity", "user", "users":
+		return "identity.events"
+	case "rider", "riders", "riderfleet", "rider_fleet":
+		return "rider.events"
+	case "warehouse", "store", "stores":
+		return "warehouse.events"
+	case "pricing", "price":
+		return "pricing.events"
+	case "wallet", "loyalty":
+		return "wallet.events"
+	case "fraud":
+		return "fraud.events"
+	case "notification", "notifications":
+		return "notification.events"
+	default:
+		normalized := normalizeAggregateType(aggregateType)
+		if normalized == "" {
+			return "unknown.events"
+		}
+		return normalized + ".events"
+	}
+}
+
+func normalizeAggregateType(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(raw))
+	lastWasUnderscore := false
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			lastWasUnderscore = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastWasUnderscore = false
+		default:
+			// delimit words with underscore once
+			if b.Len() == 0 {
+				continue
+			}
+			if !lastWasUnderscore {
+				b.WriteByte('_')
+				lastWasUnderscore = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func buildEventMessage(evt outboxEvent) []byte {
+	var payload any
+	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
+		return evt.Payload
+	}
+
+	envelope := map[string]any{
+		"id":            evt.ID,
+		"eventId":       evt.ID,
+		"aggregateType": evt.AggregateType,
+		"aggregateId":   evt.AggregateID,
+		"eventType":     evt.EventType,
+		"eventTime":     evt.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"schemaVersion": "v1",
+		"payload":       payload,
+	}
+	if payloadMap, ok := payload.(map[string]any); ok {
+		for key, value := range payloadMap {
+			if _, exists := envelope[key]; !exists {
+				envelope[key] = value
+			}
+		}
+	}
+
+	bytes, err := json.Marshal(envelope)
+	if err != nil {
+		return evt.Payload
+	}
+	return bytes
 }
 
 func isSafeIdentifier(value string) bool {

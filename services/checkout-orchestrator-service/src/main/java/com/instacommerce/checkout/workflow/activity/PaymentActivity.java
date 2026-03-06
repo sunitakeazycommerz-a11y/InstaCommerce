@@ -11,11 +11,11 @@ public interface PaymentActivity {
     PaymentAuthResult authorizePayment(long amountCents, String paymentMethodId, String idempotencyKey);
 
     @ActivityMethod
-    void capturePayment(String paymentId);
+    void capturePayment(String paymentId, String idempotencyKey);
 
     @ActivityMethod
-    void voidPayment(String paymentId);
+    void voidPayment(String paymentId, String idempotencyKey);
 
     @ActivityMethod
-    void refundPayment(String paymentId, long amountCents);
+    void refundPayment(String paymentId, long amountCents, String idempotencyKey);
 }

@@ -23,8 +23,8 @@ flowchart TD
     C --> D{Events found?}
     D -->|No| E[COMMIT + sleep]
     D -->|Yes| F[For each event]
-    F --> G[Determine Kafka topic<br/>OUTBOX_TOPIC or aggregate_type]
-    G --> H[Produce message with headers<br/>event_id, event_type, aggregate_type]
+    F --> G[Determine Kafka topic<br/>OUTBOX_TOPIC override or canonical aggregate mapping]
+    G --> H[Produce canonical envelope value + headers<br/>event_id, event_type, aggregate_type, schema_version]
     H --> I{Produce OK?}
     I -->|Yes| J["UPDATE SET sent = true"]
     I -->|No| K[Log error + break loop]
@@ -76,7 +76,7 @@ Checks PostgreSQL connectivity and Kafka broker availability. Returns `503` if s
 | `OUTBOX_POLL_INTERVAL` | `1s` | Polling interval (Go duration) |
 | `OUTBOX_BATCH_SIZE` | `100` | Max events per poll cycle |
 | `OUTBOX_TABLE` | `outbox_events` | Table name (alphanumeric + underscore only) |
-| `OUTBOX_TOPIC` | *(empty)* | Override Kafka topic; if empty, uses `aggregate_type` |
+| `OUTBOX_TOPIC` | *(empty)* | Override Kafka topic; if empty, uses canonical aggregate mapping (e.g., `Order` -> `orders.events`) |
 | `KAFKA_BROKERS` | **(required)** | Comma-separated broker list |
 | `KAFKA_CLIENT_ID` | `outbox-relay-service` | Kafka client identifier |
 | `SHUTDOWN_TIMEOUT` | `20s` | Graceful shutdown timeout |
@@ -111,6 +111,12 @@ CREATE INDEX idx_outbox_unsent ON outbox_events (created_at) WHERE sent = FALSE;
 | `Idempotent` | `true` | Exactly-once semantics |
 | `MaxOpenRequests` | `1` | Required for idempotence |
 | `Retry.Max` | `10` | Resilience to transient failures |
+
+## Published Message Shape
+
+- Value: canonical envelope (`common/EventEnvelope.v1.json`) with
+  `id`, `eventType`, `aggregateType`, `aggregateId`, `eventTime`, `schemaVersion`, and nested `payload`.
+- Headers: `event_id`, `event_type`, `aggregate_type`, `schema_version`.
 
 ## Key Metrics
 

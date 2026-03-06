@@ -197,29 +197,34 @@ Every mutation is recorded in the `FlagAuditLog` with action type (`CREATED`, `U
 
 ```mermaid
 flowchart TD
-    subgraph Cache Layer
+    subgraph CL["Cache Layer"]
         CC[Caffeine Cache<br>maximumSize=5000<br>expireAfterWrite=30s]
     end
 
-    subgraph Read Path
-        EVAL[FlagEvaluationService.loadFlag] -->|@Cacheable 'flags'| CC
-        CC -->|Cache Miss| DB[(PostgreSQL)]
+    subgraph RP["Read Path"]
+        EVAL[FlagEvaluationService.loadFlag]
+        DB[(PostgreSQL)]
+        EVAL -->|@Cacheable 'flags'| CC
+        CC -->|Cache Miss| DB
         DB --> CC
         CC -->|Cache Hit| EVAL
     end
 
-    subgraph Write Path
-        MGMT[FlagManagementService] -->|@CacheEvict 'flags'| CC
+    subgraph WP["Write Path"]
+        MGMT[FlagManagementService]
+        MGMT -->|@CacheEvict 'flags'| CC
         MGMT --> DB
     end
 
-    subgraph Warm-up
-        JOB[FlagCacheRefreshJob<br>Every 30s<br>ShedLock protected] -->|Refresh| CC
+    subgraph WU["Warm-up"]
+        JOB[FlagCacheRefreshJob<br>Every 30s<br>ShedLock protected]
+        JOB -->|Refresh| CC
     end
 
-    subgraph Override Cache
-        OC[flag-overrides cache<br>key: flagKey:userId]
-        FOS[FlagOverrideService] --> OC
+    subgraph OC["Override Cache"]
+        OC_NODE[flag-overrides cache<br>key: flagKey:userId]
+        FOS[FlagOverrideService]
+        FOS --> OC_NODE
     end
 
     style CC fill:#ffd700,stroke:#333

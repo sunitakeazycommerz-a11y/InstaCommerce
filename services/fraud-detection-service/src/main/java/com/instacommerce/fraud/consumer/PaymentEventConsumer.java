@@ -22,7 +22,7 @@ public class PaymentEventConsumer {
         this.velocityService = velocityService;
     }
 
-    @KafkaListener(topics = "payment.events", groupId = "fraud-detection-payments")
+    @KafkaListener(topics = {"payment.events", "payments.events"}, groupId = "fraud-detection-payments")
     public void onPaymentEvent(ConsumerRecord<String, String> record) {
         try {
             EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);

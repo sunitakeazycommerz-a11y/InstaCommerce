@@ -38,7 +38,9 @@ public class DomainEventConsumer {
                     "identity.events",
                     "catalog.events",
                     "order.events",
+                    "orders.events",
                     "payment.events",
+                    "payments.events",
                     "inventory.events",
                     "fulfillment.events",
                     "rider.events",
@@ -105,7 +107,16 @@ public class DomainEventConsumer {
     private String deriveSourceService(String topic) {
         // topic format: "service.events" -> extract service name
         int dotIndex = topic.indexOf('.');
-        return dotIndex > 0 ? topic.substring(0, dotIndex) + "-service" : topic;
+        if (dotIndex <= 0) {
+            return topic;
+        }
+        String service = topic.substring(0, dotIndex);
+        if ("orders".equals(service)) {
+            service = "order";
+        } else if ("payments".equals(service)) {
+            service = "payment";
+        }
+        return service + "-service";
     }
 
     private void sendToDlq(ConsumerRecord<String, String> record) {
