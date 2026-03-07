@@ -4,6 +4,12 @@ Central index for all InstaCommerce architecture documentation, review reports, 
 
 ## Document Inventory
 
+### Iteration 3 — Platform Guides
+
+| Document | Path | Description |
+|----------|------|-------------|
+| Repo Truth, Ownership & Governance (2026-03-07) | [`reviews/iter3/platform/repo-truth-ownership.md`](reviews/iter3/platform/repo-truth-ownership.md) | Concrete migration guide for source-of-truth cleanup, CODEOWNERS/ADR setup, CI path coverage, service naming consistency, docs governance, artifact discoverability, and anti-drift guardrails |
+
 ### Architecture & Design Documents
 
 | Document | Path | Description |
@@ -16,6 +22,7 @@ Central index for all InstaCommerce architecture documentation, review reports, 
 | Principal Engineering Implementation Guide - Service Wise (2026-03-06) | [`reviews/PRINCIPAL-ENGINEERING-IMPLEMENTATION-GUIDE-SERVICE-WISE-2026-03-06.md`](reviews/PRINCIPAL-ENGINEERING-IMPLEMENTATION-GUIDE-SERVICE-WISE-2026-03-06.md) | Nine-cluster implementation guide covering current reality, options, migration, validation, and rollback for each service group |
 | Principal Engineering Implementation Guide - Platform Wise (2026-03-06) | [`reviews/PRINCIPAL-ENGINEERING-IMPLEMENTATION-GUIDE-PLATFORM-WISE-2026-03-06.md`](reviews/PRINCIPAL-ENGINEERING-IMPLEMENTATION-GUIDE-PLATFORM-WISE-2026-03-06.md) | Cross-cutting platform guide for contracts, security, SRE, CI/CD, data, ML, AI, and governance |
 | Principal Engineering Review - Iteration 3 (2026-03-06) | [`reviews/PRINCIPAL-ENGINEERING-REVIEW-ITERATION-3-2026-03-06.md`](reviews/PRINCIPAL-ENGINEERING-REVIEW-ITERATION-3-2026-03-06.md) | Third-pass principal review focused on implementation detail, issue register, competitor benchmarking, and delivery sequencing |
+| Iteration 3 Folder Index (2026-03-07) | [`reviews/iter3/README.md`](reviews/iter3/README.md) | Discoverable index for the regenerated iteration-3 folder tree containing benchmarks, diagrams, service guides, platform guides, appendices, and top-level synthesis docs |
 | Fleet Architecture Review (2026-02-13) | [`reviews/FLEET-ARCHITECTURE-REVIEW-2026-02-13.md`](reviews/FLEET-ARCHITECTURE-REVIEW-2026-02-13.md) | Consolidated 20-agent codebase review with roadmap, LLD, and mermaid architecture/flow diagrams |
 | Principal Engineering Review - Iteration 3 Service Guide Outline (2026-03-07) | [`reviews/PRINCIPAL-ENGINEERING-REVIEW-ITERATION-3-SERVICE-GUIDE-OUTLINE.md`](reviews/PRINCIPAL-ENGINEERING-REVIEW-ITERATION-3-SERVICE-GUIDE-OUTLINE.md) | Canonical section structure, depth contract, blank template, and pre-filled issue summaries for all nine service cluster implementation guide chapters |
 | Principal Engineering Review - Iteration 2 (2026-03-06) | [`reviews/PRINCIPAL-ENGINEERING-REVIEW-ITERATION-2-2026-03-06.md`](reviews/PRINCIPAL-ENGINEERING-REVIEW-ITERATION-2-2026-03-06.md) | Much deeper second-pass review covering code-level findings, competitor comparisons, best-practice references, implementation waves, and governance |
