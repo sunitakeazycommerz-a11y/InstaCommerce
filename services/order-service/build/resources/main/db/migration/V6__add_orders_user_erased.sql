@@ -1,2 +1,0 @@
-ALTER TABLE orders
-    ADD COLUMN user_erased BOOLEAN NOT NULL DEFAULT false;
