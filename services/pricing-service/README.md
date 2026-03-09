@@ -521,6 +521,13 @@ curl http://localhost:8087/admin/promotions \
 | Minimum idle | 10 |
 | Connection timeout | 3s |
 
+## Testing
+
+```bash
+# Run tests
+./gradlew :services:pricing-service:test
+```
+
 ### Build & Test
 
 ```bash

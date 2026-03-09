@@ -521,6 +521,13 @@ curl -X POST http://localhost:8088/cart/validate \
 | Connection timeout | 5s |
 | Max lifetime | 30 min |
 
+## Testing
+
+```bash
+# Run tests
+./gradlew :services:cart-service:test
+```
+
 ### Build & Test
 
 ```bash
