@@ -8,9 +8,15 @@ import com.instacommerce.payment.domain.model.ProcessedWebhookEvent;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import com.instacommerce.payment.service.LedgerService;
+import com.instacommerce.payment.service.OutboxService;
 import java.io.IOException;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
@@ -22,19 +28,30 @@ public class WebhookEventHandler {
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final long RETRY_BACKOFF_MS = 100;
 
+    static final Set<PaymentStatus> REFUNDABLE_STATES = Set.of(
+        PaymentStatus.CAPTURED,
+        PaymentStatus.PARTIALLY_REFUNDED
+    );
+
     private final ObjectMapper objectMapper;
     private final PaymentRepository paymentRepository;
     private final ProcessedWebhookEventRepository processedWebhookEventRepository;
     private final LedgerService ledgerService;
+    private final OutboxService outboxService;
+    private final boolean refundOutboxEnabled;
 
     public WebhookEventHandler(ObjectMapper objectMapper,
                                PaymentRepository paymentRepository,
                                ProcessedWebhookEventRepository processedWebhookEventRepository,
-                               LedgerService ledgerService) {
+                               LedgerService ledgerService,
+                               OutboxService outboxService,
+                               @Value("${payment.webhook.refund-outbox-enabled:false}") boolean refundOutboxEnabled) {
         this.objectMapper = objectMapper;
         this.paymentRepository = paymentRepository;
         this.processedWebhookEventRepository = processedWebhookEventRepository;
         this.ledgerService = ledgerService;
+        this.outboxService = outboxService;
+        this.refundOutboxEnabled = refundOutboxEnabled;
     }
 
     public void handle(String payload) {
@@ -155,6 +172,12 @@ public class WebhookEventHandler {
     }
 
     private void handleRefunded(Payment payment, JsonNode objectNode, String eventId) {
+        if (!REFUNDABLE_STATES.contains(payment.getStatus())) {
+            log.warn("Webhook refund rejected: payment {} in non-refundable state {}",
+                payment.getId(), payment.getStatus());
+            return;
+        }
+
         long refunded = longValue(objectNode, "amount_refunded");
         if (refunded <= 0) {
             return;
@@ -173,7 +196,22 @@ public class WebhookEventHandler {
             ledgerService.recordDoubleEntry(saved.getId(), delta,
                 "merchant_payable", "customer_receivable", "REFUND",
                 referenceId(eventId, saved), "Refund (webhook)");
+
+            if (refundOutboxEnabled) {
+                publishRefundOutbox(saved, delta, eventId);
+            }
         }
+    }
+
+    private void publishRefundOutbox(Payment payment, long refundDelta, String eventId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("amountCents", refundDelta);
+        payload.put("currency", payment.getCurrency());
+        payload.put("refundedAt", Instant.now());
+        payload.put("reason", "webhook");
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentRefunded", payload);
     }
 
     private String extractPspReference(JsonNode objectNode) {
