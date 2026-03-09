@@ -92,6 +92,8 @@ sequenceDiagram
 
 **Idempotency:** If a request arrives with an `idempotencyKey` that already exists, the service returns the existing payment without calling Stripe again. A mismatch on `orderId` or `amountCents` raises `DuplicatePaymentException`.
 
+**Key normalization:** Idempotency keys are trimmed and, if longer than 64 characters (the `VARCHAR(64)` column limit), deterministically compressed to a 64-character lowercase hex SHA-256 digest. This is transparent to callers — they submit raw keys and the service normalizes internally. See `IdempotencyKeys.normalize()` for the implementation.
+
 ---
 
 ## 3. Refund Flow

@@ -57,10 +57,11 @@ public class PaymentActivityImpl implements PaymentActivity {
     }
 
     private String resolveIdempotencyKey(String providedKey) {
-        String activityId = Activity.getExecutionContext().getInfo().getActivityId();
-        if (providedKey == null || providedKey.isBlank()) {
-            return activityId;
+        if (providedKey != null && !providedKey.isBlank()) {
+            return providedKey;
         }
-        return providedKey + "-" + activityId;
+        // Fallback: use Temporal activityId which is stable across retries of the
+        // same activity schedule, but callers should prefer workflow-stable keys.
+        return Activity.getExecutionContext().getInfo().getActivityId();
     }
 }

@@ -35,8 +35,8 @@ public class PaymentTransactionHelper {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Payment savePendingAuthorization(AuthorizeRequest request) {
-        Optional<Payment> existing = paymentRepository.findByIdempotencyKey(request.idempotencyKey());
+    public Payment savePendingAuthorization(AuthorizeRequest request, String normalizedKey) {
+        Optional<Payment> existing = paymentRepository.findByIdempotencyKey(normalizedKey);
         if (existing.isPresent()) {
             Payment payment = existing.get();
             if (!payment.getOrderId().equals(request.orderId())
@@ -54,7 +54,7 @@ public class PaymentTransactionHelper {
         payment.setRefundedCents(0);
         payment.setCurrency(currency);
         payment.setStatus(PaymentStatus.AUTHORIZE_PENDING);
-        payment.setIdempotencyKey(request.idempotencyKey());
+        payment.setIdempotencyKey(normalizedKey);
         payment.setPaymentMethod(request.paymentMethod());
         return paymentRepository.save(payment);
     }

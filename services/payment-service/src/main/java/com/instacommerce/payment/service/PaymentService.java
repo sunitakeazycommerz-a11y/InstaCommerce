@@ -39,10 +39,11 @@ public class PaymentService {
      * Step 3: Update to AUTHORIZED (or FAILED) in a new TX.
      */
     public PaymentResponse authorize(AuthorizeRequest request) {
-        Payment pending = txHelper.savePendingAuthorization(request);
+        String normalizedKey = IdempotencyKeys.normalize(request.idempotencyKey());
+        Payment pending = txHelper.savePendingAuthorization(request, normalizedKey);
         if (pending == null) {
             // idempotent hit — already exists
-            Payment existing = paymentRepository.findByIdempotencyKey(request.idempotencyKey()).orElseThrow();
+            Payment existing = paymentRepository.findByIdempotencyKey(normalizedKey).orElseThrow();
             return PaymentMapper.toResponse(existing);
         }
 
@@ -51,7 +52,7 @@ public class PaymentService {
             result = paymentGateway.authorize(new GatewayAuthRequest(
                 request.amountCents(),
                 pending.getCurrency(),
-                request.idempotencyKey(),
+                normalizedKey,
                 request.paymentMethod()
             ));
         } catch (Exception ex) {
@@ -88,7 +89,7 @@ public class PaymentService {
         }
 
         long captureAmount = resolveCaptureAmount(payment, amountCents);
-        String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
+        String normalizedKey = IdempotencyKeys.normalize(idempotencyKey);
         GatewayCaptureResult result;
         try {
             result = paymentGateway.capture(payment.getPspReference(), captureAmount, normalizedKey);
@@ -121,7 +122,7 @@ public class PaymentService {
             return PaymentMapper.toResponse(payment);
         }
 
-        String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
+        String normalizedKey = IdempotencyKeys.normalize(idempotencyKey);
         GatewayVoidResult result;
         try {
             result = paymentGateway.voidAuth(payment.getPspReference(), normalizedKey);
@@ -157,10 +158,4 @@ public class PaymentService {
         return amountCents;
     }
 
-    private String normalizeIdempotencyKey(String key) {
-        if (key == null || key.isBlank()) {
-            return null;
-        }
-        return key.trim();
-    }
 }

@@ -368,13 +368,17 @@ sequenceDiagram
 ```
 Client Idempotency-Key: "ik-abc123"
   └─ workflowId: "checkout-{userId}-ik-abc123"
-       ├─ authKey:        workflowId + "-payment"
-       │    └─ resolvedKey: authKey + "-" + activityId     (stable across Temporal retries)
-       ├─ captureKeyPrefix: authKey + "-" + paymentId
-       │    └─ captureKey: captureKeyPrefix + "-capture" + "-" + activityId
-       ├─ voidKey:        captureKeyPrefix + "-void" + "-" + activityId
-       └─ refundKey:      captureKeyPrefix + "-refund" + "-" + activityId
+       ├─ authorize:  workflowId + ":pay:auth"
+       ├─ capture:    workflowId + ":pay:" + paymentId + ":capture"
+       ├─ void:       workflowId + ":pay:" + paymentId + ":void"
+       └─ refund:     workflowId + ":pay:" + paymentId + ":refund"
 ```
+
+> **Stability guarantee:** Payment operation keys are derived exclusively from
+> the Temporal `workflowId` (and, post-auth, the `paymentId` returned by
+> payment-service). They never incorporate the Temporal `activityId`, so they
+> remain stable across activity retries, workflow replays, and workflow resets.
+> `PaymentOperationKeys` is the single source of truth for key construction.
 
 ---
 
@@ -447,7 +451,7 @@ flowchart TD
 
 ### Layer 2 — Temporal activity execution
 
-`PaymentActivityImpl.resolveIdempotencyKey()` appends the Temporal `activityId` to every provided key. Since `activityId` is stable across retries of the same activity schedule, this prevents double-charges on transient PSP failures.
+`PaymentActivityImpl.resolveIdempotencyKey()` passes provided keys through unchanged. When no key is provided, the Temporal `activityId` is used as a fallback (stable across retries of the same activity schedule). The workflow layer constructs all payment keys via `PaymentOperationKeys`, which derives them deterministically from the `workflowId` — never from `activityId`.
 
 ### Layer 3 — Downstream service database
 
