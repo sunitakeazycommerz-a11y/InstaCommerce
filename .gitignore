@@ -1,0 +1,264 @@
+# ============================================================================
+# BUILD & DEPENDENCY DIRECTORIES
+# ============================================================================
+
+# Gradle (Java/Kotlin build system)
+.gradle/
+build/
+out/
+dist/
+*.jar
+*.war
+*.ear
+*.zip
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+release.properties
+
+# Go build artifacts
+bin/
+*.o
+*.a
+*.so
+*.dll
+*.exe
+*.out
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+*.egg-info/
+dist/
+.tox/
+.coverage
+htmlcov/
+.pytest_cache/
+*.egg
+.venv/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ============================================================================
+# IDE & EDITOR SPECIFIC FILES
+# ============================================================================
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Eclipse
+.project
+.classpath
+.settings/
+*.launch
+
+# Vim
+*.swp
+*.swo
+*~
+.vim/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+.sublimeLiterally/
+
+# ============================================================================
+# LOCAL DEVELOPMENT & CONFIGURATION
+# ============================================================================
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Local configuration overrides
+application-local.yml
+application-dev.yml
+config.local.tf
+*.local.tf
+docker-compose.override.yml
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+*.sql.bak
+
+# ============================================================================
+# TERRAFORM & INFRASTRUCTURE
+# ============================================================================
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvar
+*.tfvars
+terraform.tfvars
+terraform.tfvars.json
+.terraform/
+.terraform.lock.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# ============================================================================
+# DATA PLATFORM (dbt, Airflow, etc.)
+# ============================================================================
+
+# dbt
+data-platform/dbt/target/
+data-platform/dbt/dbt_packages/
+data-platform/dbt/logs/
+data-platform/dbt/.dbt/
+
+# Airflow
+data-platform/airflow/logs/
+data-platform/airflow/dags/__pycache__/
+data-platform/airflow/plugins/__pycache__/
+airflow_home/
+
+# ============================================================================
+# ML & MODELS
+# ============================================================================
+
+# Large model files
+ml/models/
+ml/model_artifacts/
+ml/.mlflow/
+ml/runs/
+ml/*.pkl
+ml/*.h5
+ml/*.joblib
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# ============================================================================
+# LOGS & TEMPORARY FILES
+# ============================================================================
+
+# Logs
+*.log
+*.log.*
+logs/
+**/logs/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*.orig
+.tmp*/
+
+# OS temp files
+.DS_Store
+Thumbs.db
+*.orig
+
+# ============================================================================
+# GRADLE-SPECIFIC TEMP FILES
+# ============================================================================
+
+.tasks.db
+.todos.db
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+
+# ============================================================================
+# SERVICE-SPECIFIC BUILD ARTIFACTS
+# ============================================================================
+
+# Generated proto-buf files (in contracts)
+contracts/build/
+contracts/**/*.pb.go
+contracts/**/*_pb2.py
+
+# Spring Boot run artifacts
+services/*/build/
+services/*/.gradle/
+services/*/out/
+
+# Go vendor directories (if using vendor)
+services/*/vendor/
+services/go-shared/vendor/
+
+# ============================================================================
+# DATABASE & VOLUME MOUNTS
+# ============================================================================
+
+# Docker volumes
+volumes/
+data/
+postgres_data/
+mysql_data/
+mongodb_data/
+redis_data/
+
+# Database backups
+*.sql
+!scripts/init-dbs.sql
+*.dump
+
+# ============================================================================
+# CI/CD & DEPLOYMENT
+# ============================================================================
+
+# ArgoCD
+argocd/.cache/
+argocd/cache/
+
+# Deployment artifacts
+deploy/helm/charts/*/Chart.lock
+deploy/helm/charts/*/.helmignore
+
+# ============================================================================
+# MISC
+# ============================================================================
+
+# IntelliJ local database
+.idea_modules/
+
+# Gradle properties (can be local)
+gradle.properties
+
+# Local task runners
+.gradle.kts.bak
