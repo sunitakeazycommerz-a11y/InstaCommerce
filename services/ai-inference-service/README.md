@@ -1,168 +1,308 @@
 # AI Inference Service
 
-**Python / FastAPI** — ML model serving for ETA prediction, fraud detection, search ranking, demand forecasting, personalization, customer lifetime value (CLV), and dynamic pricing.
+**Python / FastAPI** — Online model-serving gateway for the InstaCommerce q-commerce platform. Hosts seven prediction models behind a unified versioned registry with per-request caching, feature-store integration, shadow/A-B routing, and deterministic rule-based fallbacks.
 
 | Attribute | Value |
 |---|---|
-| **Framework** | FastAPI 0.110 |
-| **Models** | LightGBM, XGBoost, Prophet/TFT, Two-Tower NCF, BG/NBD, Contextual Bandit |
-| **Feature Store** | Redis (online) / BigQuery (offline) |
-| **Caching** | In-memory LRU with TTL |
-| **Metrics** | Prometheus (`/metrics`) |
-| **Shadow Mode** | A/B routing + shadow inference per model |
+| **Runtime** | Python 3.14 / FastAPI 0.110 / uvicorn |
+| **Port** | `8101` (configurable via `SERVER_PORT`) |
+| **Models** | ETA (LightGBM), Fraud (XGBoost), Ranking (LambdaMART), Demand (Prophet+TFT), Personalization (Two-Tower NCF), CLV (BG/NBD+Gamma-Gamma), Dynamic Pricing (Contextual Bandit) |
+| **Feature store** | Redis (online, <5 ms) / BigQuery (offline batch) / None (request-only) |
+| **Caching** | In-memory LRU with TTL (default 1 000 entries, 300 s) |
+| **Metrics** | Prometheus (`/metrics`) — per-model counters, latency histograms, cache events, feature-store latency |
+| **Health probes** | `/health`, `/health/ready`, `/health/live` |
+| **Shadow mode** | Per-model A/B routing + configurable shadow inference (log-only, never served) |
 
 ---
 
 ## Table of Contents
 
-- [Architecture Overview](#architecture-overview)
-- [Model Serving Architecture](#model-serving-architecture)
-- [Model Registry & Versioning](#model-registry--versioning)
-- [Inference Pipeline](#inference-pipeline)
-- [Model Decision Flows](#model-decision-flows)
-- [Feature Store Integration](#feature-store-integration)
-- [Shadow Mode](#shadow-mode)
-- [API Reference](#api-reference)
-- [Project Structure](#project-structure)
-- [Configuration](#configuration)
-- [Running Locally](#running-locally)
+1. [Service Role and Boundaries](#service-role-and-boundaries)
+2. [High-Level Design (HLD)](#high-level-design-hld)
+3. [Low-Level Design (LLD)](#low-level-design-lld)
+4. [Model Serving and Request Path](#model-serving-and-request-path)
+5. [Model Registry and Versioning](#model-registry-and-versioning)
+6. [Per-Model Decision Flows](#per-model-decision-flows)
+7. [Feature Store Integration](#feature-store-integration)
+8. [Shadow Mode](#shadow-mode)
+9. [API Reference](#api-reference)
+10. [Project Structure](#project-structure)
+11. [Runtime and Configuration](#runtime-and-configuration)
+12. [Dependencies](#dependencies)
+13. [Observability](#observability)
+14. [Testing](#testing)
+15. [Failure Modes and Fallbacks](#failure-modes-and-fallbacks)
+16. [Rollout and Rollback](#rollout-and-rollback)
+17. [Security and Trust Boundaries](#security-and-trust-boundaries)
+18. [Known Limitations](#known-limitations)
+19. [Industry Comparison Notes](#industry-comparison-notes)
 
 ---
 
-## Architecture Overview
+## Service Role and Boundaries
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                      AI Inference Service                         │
-│                                                                   │
-│  ┌──────────┐   ┌───────────────┐   ┌────────────────────────┐   │
-│  │ FastAPI   │──▶│ Model Registry│──▶│ Inference Engine        │   │
-│  │ Endpoints │   │ (Versioned)   │   │ linear_score / sigmoid  │   │
-│  └──────────┘   └───────────────┘   └────────┬───────────────┘   │
-│       │                                       │                   │
-│  ┌────┴─────┐   ┌───────────────┐   ┌────────▼───────────────┐   │
-│  │ Inference │   │ Feature Store │   │ Per-Model Modules       │   │
-│  │ Cache     │   │ Redis / BQ    │   │ ETA, Fraud, Ranking,    │   │
-│  │ (LRU+TTL)│   └───────────────┘   │ Demand, Personalization,│   │
-│  └──────────┘                       │ CLV, Dynamic Pricing     │   │
-│       │                             └──────────────────────────┘   │
-│  ┌────┴─────┐                                                     │
-│  │Prometheus │                                                     │
-│  │ /metrics  │                                                     │
-│  └──────────┘                                                     │
-└───────────────────────────────────────────────────────────────────┘
-```
+The AI Inference Service is the **online prediction plane** for InstaCommerce. It does not own training, feature computation, domain state, or transactional writes. Its sole responsibility is to accept a prediction request, resolve the correct model version, fetch any needed features, run inference (ML or rule-based fallback), and return a scored result.
+
+**What this service owns:**
+
+- Online model inference for seven model families
+- In-process model registry with file-based weight loading and version resolution
+- Deterministic rule-based fallbacks when ML artefacts are unavailable
+- Response caching (in-memory LRU+TTL)
+- Shadow/A-B inference execution and metric emission
+- Feature store client integration (Redis online, BigQuery offline)
+
+**What this service does NOT own:**
+
+| Responsibility | Owner |
+|---|---|
+| Model training / evaluation gates | `ml/train/`, `ml/eval/evaluate.py` |
+| Feature computation / refresh | `ml/feature_store/sql/`, Airflow `ml_feature_refresh` DAG |
+| LangGraph agent orchestration | `ai-orchestrator-service` |
+| Domain state mutations (orders, payments, inventory) | Respective Java domain services |
+| Event / contract schemas | `contracts/` |
+| Deployment manifests / HPA / PDB | `deploy/helm/`, `argocd/` |
+
+**Advisory-only principle:** All outputs of this service are advisory scores. The consuming service (checkout-orchestrator, BFF, catalog-service) decides how to act on the score. The inference service never writes to domain databases, never captures payments, and never dispatches riders. This boundary is architecturally enforced: no outbox table, no Kafka producer, no domain-service write client exists in the codebase.
 
 ---
 
-## Model Serving Architecture
+## High-Level Design (HLD)
 
 ```mermaid
-graph TD
-    REQ[Incoming Request] --> ROUTER{Route by<br/>Endpoint}
-    ROUTER -->|/inference/eta| ETA[ETA Model<br/>LightGBM]
-    ROUTER -->|/inference/fraud| FRAUD[Fraud Model<br/>XGBoost]
-    ROUTER -->|/inference/ranking| RANK[Ranking Model<br/>LambdaMART]
-    ROUTER -->|/inference/batch| BATCH[Batch Router]
-
-    BATCH --> ETA
-    BATCH --> FRAUD
-    BATCH --> RANK
-
-    subgraph Per-Model Modules
-        ETA_M[eta_model.py<br/>3-stage prediction]
-        FRAUD_M[fraud_model.py<br/>Score → Threshold → Decision]
-        RANK_M[ranking_model.py<br/>LambdaMART LTR]
-        DEMAND_M[demand_model.py<br/>Prophet + TFT]
-        PERS_M[personalization_model.py<br/>Two-Tower NCF]
-        CLV_M[clv_model.py<br/>BG/NBD + Gamma-Gamma]
-        PRICE_M[dynamic_pricing_model.py<br/>Contextual Bandit]
+flowchart TD
+    subgraph Callers
+        BFF["mobile-bff-service"]
+        CHECKOUT["checkout-orchestrator-service"]
+        CATALOG["catalog-service"]
+        ORCH["ai-orchestrator-service"]
     end
 
-    ETA --> ETA_M
-    FRAUD --> FRAUD_M
-    RANK --> RANK_M
-```
-
-### All Models
-
-| Model | Algorithm | Default Version | Target Metric |
-|---|---|---|---|
-| **ETA** | LightGBM gradient boosted regression | `eta-lgbm-v1` | ±1.5 min accuracy (from ±5 min baseline) |
-| **Fraud** | XGBoost ensemble (80+ features) | `fraud-xgb-v1` | 2% → 0.3% fraud rate |
-| **Ranking** | LambdaMART (LightGBM ranker, 30+ features) | `ranking-lambdamart-v1` | +15% search conversion |
-| **Demand** | Prophet + Temporal Fusion Transformer | `demand-tft-v1` | 92% accuracy (per store × SKU × hour) |
-| **Personalization** | Two-Tower Neural Collaborative Filtering | `pers-ncf-v1` | Homepage, buy-again, FBT surfaces |
-| **CLV** | BG/NBD + Gamma-Gamma | `clv-bgnbd-v1` | Platinum/Gold/Silver/Bronze segmentation |
-| **Dynamic Pricing** | Contextual Bandit (Thompson Sampling) | `pricing-bandit-v1` | 15-20% revenue improvement |
-
-All models fall back to **rule-based heuristics** when ML artefacts are not loaded, keeping the service fully functional without trained models.
-
----
-
-## Model Registry & Versioning
-
-```mermaid
-graph TD
-    REQ[Request<br/>model_version?] --> RESOLVE{Resolve Version}
-    RESOLVE -->|"default" / "latest" / null| DV[Default Version<br/>from ModelEntry]
-    RESOLVE -->|Specific version| SV[Lookup in<br/>versions dict]
-    DV --> MC[ModelConfig<br/>version, bias, weights]
-    SV --> MC
-
-    subgraph Registry Sources
-        DEFAULTS[DEFAULT_WEIGHTS<br/>hardcoded in main.py]
-        FILE[weights.json<br/>file on disk]
+    subgraph AIINF["ai-inference-service :8101"]
+        direction TB
+        API["FastAPI Endpoints"]
+        REG["ModelRegistry"]
+        CACHE["InferenceCache LRU+TTL"]
+        ENGINE["Inference Engine"]
+        SHADOW["Shadow Runner"]
+        FS_CLIENT["FeatureStoreClient"]
     end
 
-    DEFAULTS --> MERGE[Merge: file overrides defaults]
-    FILE --> MERGE
-    MERGE --> REGISTRY[ModelRegistry]
-    REGISTRY --> RESOLVE
+    subgraph External
+        REDIS["Redis Online Feature Store"]
+        BQ["BigQuery Offline Feature Store"]
+        PROM["Prometheus"]
+    end
+
+    BFF -->|"HTTP POST"| API
+    CHECKOUT -->|"HTTP POST"| API
+    CATALOG -->|"HTTP POST"| API
+    ORCH -->|"HTTP POST"| API
+
+    API --> REG
+    API --> CACHE
+    REG --> ENGINE
+    CACHE -->|"miss"| ENGINE
+    ENGINE --> SHADOW
+    FS_CLIENT --> REDIS
+    FS_CLIENT --> BQ
+    API --> FS_CLIENT
+    API --> PROM
 ```
-
-### Version Resolution
-
-```python
-registry.get("eta")               # → default version (eta-linear-v1)
-registry.get("eta", "default")    # → default version
-registry.get("eta", "latest")     # → default version
-registry.get("eta", "eta-v2")     # → specific version (if registered)
-```
-
-### A/B Routing
-
-The `model_version` query parameter or request field routes to any registered version. Multiple versions coexist in the registry, enabling A/B testing by directing traffic percentages to different versions upstream.
-
-### Default Weights (Hardcoded)
-
-| Model | Version | Bias | Weights |
-|---|---|---|---|
-| `eta` | `eta-linear-v1` | 4.5 | distance_km: 2.3, item_count: 0.6, traffic_factor: 3.1 |
-| `ranking` | `ranking-linear-v1` | 0.15 | relevance: 0.55, price: 0.2, availability: 0.35, affinity: 0.4 |
-| `fraud` | `fraud-logit-v1` | -1.4 | order_amount: 0.012, chargeback: 4.8, device_risk: 2.1, account_age: -0.015 |
 
 ---
 
-## Inference Pipeline
+## Low-Level Design (LLD)
+
+### Component Diagram
 
 ```mermaid
-graph LR
-    A[Request] --> B{Feature Store<br/>Requested?}
-    B -->|Yes| C[Fetch Features<br/>Redis / BigQuery]
-    B -->|No| D[Extract Features<br/>from Request]
+classDiagram
+    class FastAPI {
+        +lifespan(app)
+        +eta_inference(request)
+        +fraud_inference(request)
+        +ranking_inference(request)
+        +batch_inference(request)
+        +health()
+        +readiness()
+        +liveness()
+        +metrics()
+        +list_models()
+    }
+
+    class Settings {
+        +log_level: str
+        +cache_enabled: bool
+        +cache_ttl_seconds: float
+        +cache_max_items: int
+        +shadow_models: Dict
+        +shadow_sample_rate: float
+        +feature_store_backend: str
+        +redis_url: str
+        +bigquery_project: str
+    }
+
+    class ModelRegistry {
+        -_models: Dict
+        +from_sources(defaults, overrides)$ ModelRegistry
+        +get(name, version) ModelConfig
+        +summary() Dict
+    }
+
+    class ModelEntry {
+        +default_version: str
+        +versions: Dict
+    }
+
+    class ModelConfig {
+        +version: str
+        +bias: float
+        +weights: Dict
+    }
+
+    class InferenceCache {
+        -_store: OrderedDict
+        -_max_items: int
+        -_ttl_seconds: float
+        +get(key) Optional
+        +set(key, value)
+    }
+
+    class FeatureStoreClient {
+        +backend: str
+        +get_features(entity_id, feature_names) Dict
+        +health() Dict
+        +close()
+    }
+
+    class RedisFeatureStoreClient {
+        +get_features() Dict
+        +health() Dict
+    }
+
+    class BigQueryFeatureStoreClient {
+        +get_features() Dict
+        +health() Dict
+    }
+
+    class ETAModel {
+        +predict(features) ETAResponse
+        +load_model(path)
+        +is_ml_loaded: bool
+    }
+
+    class FraudModel {
+        +predict(features) FraudResponse
+        +load_model(path)
+        +is_ml_loaded: bool
+    }
+
+    class RankingModel {
+        +predict(items) RankingResponse
+        +load_model(path)
+        +is_ml_loaded: bool
+    }
+
+    FastAPI --> ModelRegistry
+    FastAPI --> InferenceCache
+    FastAPI --> FeatureStoreClient
+    ModelRegistry --> ModelEntry
+    ModelEntry --> ModelConfig
+    FeatureStoreClient <|-- RedisFeatureStoreClient
+    FeatureStoreClient <|-- BigQueryFeatureStoreClient
+    FastAPI ..> ETAModel : per-model modules
+    FastAPI ..> FraudModel : per-model modules
+    FastAPI ..> RankingModel : per-model modules
+```
+
+### Key Data Structures
+
+| Structure | Location | Purpose |
+|---|---|---|
+| `Settings` (frozen dataclass) | `main.py:44` | All `AI_INFERENCE_*` env vars, parsed at module load |
+| `ModelRegistry` | `main.py:164` | Merged from `DEFAULT_WEIGHTS` + optional `weights.json` file |
+| `ModelConfig` | `main.py:124` | `(version, bias, weights)` for a single model version |
+| `ModelEntry` | `main.py:131` | `(default_version, versions)` for all versions of one model |
+| `InferenceCache` | `main.py:193` | `OrderedDict[key -> (expires_at, result)]`, LRU eviction, TTL expiry |
+| `FeatureStoreClient` hierarchy | `main.py:222-348` | Strategy pattern: Redis, BigQuery, None, Unavailable variants |
+
+---
+
+## Model Serving and Request Path
+
+### End-to-End Inference Sequence
+
+```mermaid
+sequenceDiagram
+    participant Caller as Caller
+    participant API as FastAPI Endpoint
+    participant Registry as ModelRegistry
+    participant FS as FeatureStoreClient
+    participant Cache as InferenceCache
+    participant Engine as Inference Engine
+    participant Shadow as Shadow Runner
+    participant Prom as Prometheus
+
+    Caller->>API: POST /inference/{model}
+    API->>Registry: get(model_name, requested_version)
+    Registry-->>API: ModelConfig (version, bias, weights)
+
+    opt use_feature_store = true
+        API->>FS: get_features(entity_id, feature_names)
+        FS-->>API: Dict of feature values
+        Note over API: Merge store + request features (request wins)
+    end
+
+    API->>Cache: get(sha256_key)
+    alt Cache HIT
+        Cache-->>API: cached result
+        API->>Prom: cache_hit counter++
+    else Cache MISS
+        API->>Prom: cache_miss counter++
+        API->>Engine: perform_inference(model, features, config)
+        Note over Engine: linear_score + sigmoid or max(0, raw)
+        Engine-->>API: result Dict
+        API->>Cache: set(sha256_key, result)
+    end
+
+    API->>Shadow: maybe_run_shadow(model, features, primary_version)
+    Note over Shadow: If shadow config exists and sample passes: run, log, discard
+    Shadow->>Prom: shadow_requests counter++
+
+    API->>Prom: request_count++, latency histogram
+    API-->>Caller: JSON response
+```
+
+### Request Flow (Flowchart)
+
+```mermaid
+flowchart LR
+    A[Request] --> B{Feature Store Requested?}
+    B -->|Yes| C[Fetch Features from Redis or BigQuery]
+    B -->|No| D[Extract Features from Request]
     C --> E[Merge: store + request]
     D --> E
     E --> F{Cache Lookup}
     F -->|Hit| G[Return Cached Result]
-    F -->|Miss| H[Model Inference<br/>linear_score / sigmoid]
+    F -->|Miss| H[Model Inference via linear_score / sigmoid]
     H --> I[Cache Result]
-    I --> J[Shadow Inference?]
-    J -->|Yes| K[Run Shadow Model<br/>log only, no response]
+    I --> J{Shadow Config?}
+    J -->|Yes| K[Run Shadow Model - log only]
     J -->|No| L[Return Response]
     K --> L
     G --> L
 ```
+
+### Core Inference Functions
+
+The registry-based endpoints (`/inference/eta`, `/inference/fraud`, `/inference/ranking`) share a common execution path in `main.py`:
+
+1. **`resolve_model_config()`** — Looks up `ModelConfig` from the registry. Returns 404 if the model or version is not found.
+2. **`build_features_for_model()`** — Extracts the feature dict from the Pydantic request.
+3. **`execute_inference()`** — Checks cache, runs `perform_inference()`, caches result, triggers shadow.
+4. **`perform_inference()`** — Calls `linear_score(features, weights, bias)`. For fraud and ranking, applies `safe_sigmoid()` to map the raw score to `[0, 1]`. For ETA, clamps at `max(0, raw_score)`.
+5. **`maybe_run_shadow()`** — If a shadow version is configured for this model and the random sample passes, runs inference on the shadow version. Failures are logged and swallowed.
 
 ### Cache Key Generation
 
@@ -174,273 +314,189 @@ SHA256(json.dumps({
 }, sort_keys=True))
 ```
 
-Cache is an in-memory **LRU with TTL** (default: 1,000 entries, 300 s TTL). Eviction is oldest-first when capacity is exceeded.
+Default: 1 000 entries, 300 s TTL. Eviction is LRU (oldest-first when capacity exceeded).
 
 ---
 
-## Model Decision Flows
+## Model Registry and Versioning
+
+```mermaid
+flowchart TD
+    REQ["Request with model_version?"] --> RESOLVE{Resolve Version}
+    RESOLVE -->|"default / latest / null"| DV[Default Version from ModelEntry]
+    RESOLVE -->|Specific version| SV[Lookup in versions dict]
+    DV --> MC[ModelConfig: version, bias, weights]
+    SV --> MC
+
+    subgraph Sources
+        DEFAULTS["DEFAULT_WEIGHTS hardcoded in main.py"]
+        FILE["weights.json file on disk"]
+    end
+
+    DEFAULTS --> MERGE[Merge: file overrides defaults]
+    FILE --> MERGE
+    MERGE --> REGISTRY[ModelRegistry]
+    REGISTRY --> RESOLVE
+```
+
+### Version Resolution
+
+```python
+registry.get("eta")               # default version (eta-linear-v1)
+registry.get("eta", "default")    # default version
+registry.get("eta", "latest")     # default version
+registry.get("eta", "eta-v2")     # specific version (if registered)
+```
+
+### Default Weights (Hardcoded in `main.py`)
+
+| Model | Version | Bias | Weights |
+|---|---|---|---|
+| `eta` | `eta-linear-v1` | 4.5 | `distance_km: 2.3, item_count: 0.6, traffic_factor: 3.1` |
+| `ranking` | `ranking-linear-v1` | 0.15 | `relevance_score: 0.55, price_score: 0.2, availability_score: 0.35, user_affinity: 0.4` |
+| `fraud` | `fraud-logit-v1` | -1.4 | `order_amount: 0.012, chargeback_rate: 4.8, device_risk: 2.1, account_age_days: -0.015` |
+
+The `weights.json` file (path configurable via `AI_INFERENCE_WEIGHTS_PATH`) can override or extend these defaults. The file supports multi-version entries with `versions` dicts and `default_version` / `defaultVersion` keys.
+
+### A/B Routing
+
+The `model_version` query parameter or request field routes to any registered version. Multiple versions coexist in the registry. Upstream callers (BFF, orchestrator) direct traffic percentages to different versions for A/B testing.
+
+---
+
+## Per-Model Decision Flows
+
+### All Models Summary
+
+| Model | Module | Algorithm | Default Version | Decision Surface |
+|---|---|---|---|---|
+| **ETA** | `eta_model.py` | LightGBM (9 features, 3 stages) | `eta-lgbm-v1` | Customer-facing delivery promise |
+| **Fraud** | `fraud_model.py` | XGBoost (15 features) | `fraud-xgb-v1` | Checkout gate: auto-approve / soft-review / block |
+| **Ranking** | `ranking_model.py` | LambdaMART LightGBM (13 features) | `ranking-lambdamart-v1` | Search result ordering |
+| **Demand** | `demand_model.py` | Prophet + TFT (14 features) | `demand-tft-v1` | Inventory replenishment, rider planning |
+| **Personalization** | `personalization_model.py` | Two-Tower NCF (64-dim embeddings) | `pers-ncf-v1` | Homepage, buy-again, FBT surfaces |
+| **CLV** | `clv_model.py` | BG/NBD + Gamma-Gamma (14 features) | `clv-bgnbd-v1` | Platinum/Gold/Silver/Bronze segmentation |
+| **Dynamic Pricing** | `dynamic_pricing_model.py` | Contextual Bandit (15 features) | `pricing-bandit-v1` | Delivery fee optimization with guardrails |
+
+All models implement a **rule-based fallback** that activates when ML artefacts are not loaded. The `method` field in every response distinguishes `"ml"` from `"rule_based"`.
 
 ### ETA Model — Three-Stage Prediction
 
 ```mermaid
-graph TD
+flowchart TD
     REQ[ETA Request] --> STAGE{Prediction Stage}
-    STAGE -->|pre_order| PRE[Pre-Order<br/>Full uncertainty]
-    STAGE -->|post_assign| POST[Post-Assignment<br/>Rider assigned]
-    STAGE -->|in_transit| TRANSIT[In-Transit<br/>GPS available]
+    STAGE -->|pre_order| PRE[Pre-Order with full uncertainty]
+    STAGE -->|post_assign| POST[Post-Assignment with rider assigned]
+    STAGE -->|in_transit| TRANSIT[In-Transit with GPS available]
 
-    PRE --> FEAT[Feature Extraction<br/>distance, items, traffic,<br/>prep, rider speed, weather,<br/>queue, time, weekend]
+    PRE --> FEAT[Feature Extraction: distance, items, traffic, prep, rider speed, weather, queue, time, weekend]
     POST --> FEAT
     TRANSIT --> FEAT
 
-    FEAT --> ML{ML Model<br/>Loaded?}
-    ML -->|Yes| LGB[LightGBM Predict<br/>+ SHAP contributions]
-    ML -->|No| RULE[Rule-Based<br/>travel + prep + queue + items]
+    FEAT --> ML{ML Model Loaded?}
+    ML -->|Yes| LGB[LightGBM Predict + SHAP contributions]
+    ML -->|No| RULE[Rule-Based Fallback]
 
-    LGB --> INTERVAL[Prediction Interval<br/>±15% margin]
-    RULE --> INTERVAL2[Prediction Interval<br/>±10-25% by stage]
+    LGB --> INTERVAL["Prediction Interval: +/- 15% margin"]
+    RULE --> INTERVAL2["Prediction Interval: +/- 10-25% by stage"]
 
-    INTERVAL --> RESP[ETAResponse<br/>eta_minutes, confidence bounds]
+    INTERVAL --> RESP[ETAResponse with eta_minutes and confidence bounds]
     INTERVAL2 --> RESP
 ```
 
-**Rule-based fallback formula:**
+**Rule-based fallback formula** (from `eta_model.py:198-239`):
+
 ```
-ETA = (distance_km / rider_speed_kmh × 60 × traffic × weather)
-    + store_prep_time × (1.1 if weekend)
-    + queue_depth × 2.0 min
-    + max(0, items - 1) × 0.5 min
-```
-
-### Fraud Model — Score → Threshold → Decision
-
-```mermaid
-graph TD
-    REQ[Fraud Request] --> FEAT[Feature Extraction<br/>15 features]
-    FEAT --> ML{ML Model<br/>Loaded?}
-    ML -->|Yes| XGB[XGBoost Predict<br/>probability 0-1]
-    ML -->|No| RULES[Rule-Based Scoring]
-
-    XGB --> SCORE[Score = prob × 100]
-    RULES --> SCORE2[Score 0-100]
-
-    SCORE --> DEC{Score Thresholds}
-    SCORE2 --> DEC
-
-    DEC -->|"< 30"| APPROVE[✅ Auto-Approve]
-    DEC -->|"30–70"| REVIEW[⚠️ Soft Review]
-    DEC -->|"> 70"| BLOCK[🚫 Block]
-
-    APPROVE --> RESP[FraudResponse<br/>+ top 5 risk factors]
-    REVIEW --> RESP
-    BLOCK --> RESP
+ETA = (distance_km / rider_speed_kmh * 60 * traffic * weather)
+    + store_prep_time * (1.1 if weekend)
+    + queue_depth * 2.0 min
+    + max(0, items - 1) * 0.5 min
 ```
 
-**Rule-based scoring breakdown:**
+Margin by stage: in-transit +/-10%, post-assign +/-15%, pre-order +/-25%.
 
-| Signal Category | Indicators | Max Points |
+### Fraud Model — Score, Threshold, Decision
+
+Score thresholds (from `fraud_model.py:87-96`): `< 30` auto-approve, `30-70` soft-review, `> 70` block.
+
+**Rule-based scoring categories:**
+
+| Category | Indicators | Max Points |
 |---|---|---|
-| **Velocity** | Orders/hour ≥ 3 (+20), orders/24h ≥ 8 (+15), new addresses/7d ≥ 3 (+12), payment methods/30d ≥ 3 (+10) | ~57 |
-| **Basket Risk** | Amount > $500 (+15), basket/avg ratio > 3x (+10), high resale > 50% (+12) | ~37 |
-| **Payment Risk** | Prepaid card (+8), country mismatch (+15) | 23 |
-| **Device Risk** | VPN (+10), emulator (+15), new fingerprint (+10) | 35 |
-| **Account Trust** | Age > 365d (-10), profile > 80% (-3), chargeback_rate × 40 | Discount |
+| **Velocity** | orders/hour >= 3, orders/24h >= 8, new addresses/7d >= 3, payment methods/30d >= 3 | ~57 |
+| **Basket Risk** | amount > $500, basket/avg ratio > 3x, high resale > 50% | ~37 |
+| **Payment Risk** | prepaid card, country mismatch | 23 |
+| **Device Risk** | VPN, emulator, new fingerprint | 35 |
+| **Account Trust** | age > 365d (discount), profile completeness (discount), chargeback_rate * 40 | Discount |
 
-### Ranking Model — LambdaMART
+### Dynamic Pricing — Guardrails
 
-```mermaid
-graph LR
-    ITEMS[Product List<br/>N items] --> FEAT[Feature Extraction<br/>13 features each]
-    FEAT --> ML{ML Loaded?}
-    ML -->|Yes| LTR[LambdaMART<br/>Predict Scores]
-    ML -->|No| WLC[Weighted Linear<br/>Combination]
-    LTR --> SORT[Sort Descending]
-    WLC --> SORT
-    SORT --> OOS{Stock < 10%?}
-    OOS -->|Yes| PENALTY[Score × 0.1]
-    OOS -->|No| KEEP[Keep Score]
-    PENALTY --> RANK[Assign Ranks 1..N]
-    KEEP --> RANK
-```
+The pricing model (`dynamic_pricing_model.py:83-97`) enforces hard guardrails:
 
-**Heuristic weights:** BM25 (0.25), query-title similarity (0.20), stock (0.10), category affinity (0.10), popularity (0.10), rating (0.08), price competitiveness (0.05), brand affinity (0.05), freshness (0.05), promoted (0.02).
-
-### Demand Model — Forecasting
-
-```mermaid
-graph TD
-    REQ[Demand Request<br/>store_id × product_id × hour] --> ML{ML Loaded?}
-    ML -->|Yes| TFT[TFT Predict<br/>+ confidence interval]
-    ML -->|No| RULE[Weighted Historical Avg]
-    RULE --> ADJ[Contextual Adjustments]
-    ADJ --> E1{Peak Hour?}
-    E1 -->|12-14, 19-21| PEAK[×1.2]
-    E1 -->|0-5| OFF[×0.3]
-    E1 -->|Other| NORM[×1.0]
-    PEAK --> E2{Weekend?}
-    OFF --> E2
-    NORM --> E2
-    E2 -->|Yes| WK[×1.15]
-    E2 -->|No| WD[×1.0]
-    WK --> E3{Holiday/IPL/Rain?}
-    WD --> E3
-    E3 --> E4{Promotion?}
-    E4 -->|Yes| PROMO["×(1 + discount% × 1.5)"]
-    E4 -->|No| FINAL[Final Prediction<br/>+ 80% CI]
-    PROMO --> FINAL
-```
-
-### Personalization Model — Two-Tower NCF
-
-```mermaid
-graph LR
-    USER[User Tower<br/>64-dim embedding] --> DOT[Dot Product<br/>Scoring]
-    ITEMS[Item Tower<br/>64-dim embeddings] --> DOT
-    DOT --> SORT[Sort by Score]
-    SORT --> SURFACE{Surface}
-    SURFACE -->|homepage| TOP[Top-K Results]
-    SURFACE -->|buy_again| BOOST[Boost Purchase History]
-    SURFACE -->|FBT| ANCHOR[Anchor on Context Product]
-    BOOST --> TOP
-    ANCHOR --> TOP
-```
-
-### CLV Model — BG/NBD + Gamma-Gamma
-
-```mermaid
-graph TD
-    REQ[CLV Request] --> ML{ML Loaded?}
-    ML -->|Yes| BGNBD[BG/NBD + Gamma-Gamma<br/>Predict]
-    ML -->|No| RFM[RFM Heuristic]
-    RFM --> CALC["annual = orders/day × 365 × avg_order"]
-    CALC --> CHURN["× survival_prob<br/>(1 - churn_risk)"]
-    CHURN --> RECENCY{Recency > 90d?}
-    RECENCY -->|Yes| DECAY["× max(0.3, 1-(days-90)/365)"]
-    RECENCY -->|No| KEEP[Keep]
-    DECAY --> BONUS{Subscription?}
-    KEEP --> BONUS
-    BONUS -->|Yes| SUB[×1.3]
-    BONUS -->|No| ENG{High Engagement?<br/>app_opens > 15/30d}
-    SUB --> ENG
-    ENG -->|Yes| ENGB[×1.1]
-    ENG -->|No| SEG[Segment]
-    ENGB --> SEG
-    SEG --> S1["> $500/yr → Platinum"]
-    SEG --> S2["$200-500 → Gold"]
-    SEG --> S3["$50-200 → Silver"]
-    SEG --> S4["< $50 → Bronze"]
-```
-
-### Dynamic Pricing — Contextual Bandit
-
-```mermaid
-graph TD
-    REQ[Pricing Request] --> ML{ML Loaded?}
-    ML -->|Yes| BANDIT[Thompson Sampling<br/>Predict Fee]
-    ML -->|No| RULE[Rule-Based Surge]
-    RULE --> DIST["Base + distance × 30¢/km"]
-    DIST --> SURGE{Demand/Supply > 2?}
-    SURGE -->|Yes| SFEE["×(1 + (ratio-2) × 0.25)<br/>max 2.0"]
-    SURGE -->|No| NFEE[×1.0]
-    SFEE --> PEAK{Peak Hour?}
-    NFEE --> PEAK
-    PEAK -->|Yes| PK[×1.15]
-    PEAK -->|No| NPK[×1.0]
-    PK --> RAIN{Raining?}
-    NPK --> RAIN
-    RAIN -->|Yes| WET[×1.20]
-    RAIN -->|No| DRY[×1.0]
-    WET --> DISC{Subscriber?}
-    DRY --> DISC
-    DISC -->|Yes| SUB["-15% discount"]
-    DISC -->|No| LOY{50+ orders?}
-    SUB --> LOY
-    LOY -->|Yes| LOYAL["-5% loyalty"]
-    LOY -->|No| GUARD[Guardrails]
-    LOYAL --> GUARD
-
-    GUARD --> FLOOR{"Fee < cost + margin?"}
-    FLOOR -->|Yes| FFIX["Set to floor<br/>(cost + min_margin)"]
-    FLOOR -->|No| CEIL{"Fee > 2× base?"}
-    CEIL -->|Yes| CFIX["Cap at ceiling<br/>(2× base_fee)"]
-    CEIL -->|No| FINAL[Final Fee]
-    FFIX --> FINAL
-    CFIX --> FINAL
-```
+- **Price floor:** `cost_per_delivery_cents + min_margin_cents`
+- **Price ceiling:** `2 * base_delivery_fee_cents`
+- Response includes `guardrail_hit` field (`"price_floor"` / `"price_ceiling"` / `null`)
 
 ---
 
 ## Feature Store Integration
 
 ```mermaid
-graph TD
-    REQ[Inference Request] --> FS{Feature Store<br/>Backend}
-    FS -->|redis| REDIS[Redis Online Store<br/>HMGET by entity_id]
-    FS -->|bigquery| BQ[BigQuery Offline Store<br/>SQL query by entity_id]
+flowchart TD
+    REQ[Inference Request] --> FS{Feature Store Backend}
+    FS -->|redis| REDIS["Redis Online Store via HMGET by entity_id"]
+    FS -->|bigquery| BQ["BigQuery Offline Store via SQL query"]
     FS -->|none| SKIP[Use Request Features Only]
 
-    REDIS --> MERGE[Merge: store features + request features<br/>Request wins on conflict]
+    REDIS --> MERGE["Merge: store features + request features - request wins on conflict"]
     BQ --> MERGE
     SKIP --> INF[Model Inference]
     MERGE --> INF
-
-    subgraph Redis Online Store
-        RK["Key: {prefix}:{entity_id}"]
-        RV[Hash: feature_name → value]
-    end
-
-    subgraph BigQuery Offline Store
-        BQT["Table: project.dataset.table"]
-        BQQ["SELECT feature_name, feature_value<br/>WHERE entity_id = @id<br/>AND feature_name IN UNNEST(@names)"]
-    end
 ```
 
-| Backend | Use Case | Latency | Config |
+| Backend | Use Case | Latency | Config Env Vars |
 |---|---|---|---|
 | **Redis** | Online serving (real-time features) | < 5 ms | `AI_INFERENCE_REDIS_URL`, `AI_INFERENCE_REDIS_PREFIX` |
 | **BigQuery** | Offline features, batch enrichment | ~100 ms | `AI_INFERENCE_BIGQUERY_PROJECT`, `_DATASET`, `_TABLE` |
 | **None** | Features provided in request payload | 0 ms | Default |
 
-### Health Checks
+**Health semantics:** Redis pings the server (`ok` / `degraded`). BigQuery returns `configured` (no active probe). Unavailable backends return `unavailable` with reason (e.g., `missing_redis_url`, `redis_dependency_missing`).
 
-Each backend exposes status via `/health`:
-- **Redis:** pings the server, returns `ok` or `degraded`
-- **BigQuery:** returns `configured` (no active health probe)
-- **Unavailable:** returns `unavailable` with reason (e.g., `missing_redis_url`, `redis_dependency_missing`)
+**Graceful degradation:** If the backend is configured but the dependency is missing at import time, an `UnavailableFeatureStoreClient` is returned. This does not crash the service; it returns a clear error on `get_features()` calls while all other endpoints remain healthy.
 
 ---
 
 ## Shadow Mode
 
 ```mermaid
-graph TD
-    REQ[Inference Request] --> PRIMARY[Primary Model<br/>version: v1]
-    PRIMARY --> RESP[Return Response<br/>to Caller]
+flowchart TD
+    REQ[Inference Request] --> PRIMARY[Primary Model version v1]
+    PRIMARY --> RESP[Return Response to Caller]
 
     PRIMARY --> CHECK{Shadow Config?}
-    CHECK -->|"shadow_models[model] exists<br/>& ≠ primary version"| SAMPLE{Sample Rate<br/>Check}
+    CHECK -->|"shadow_models entry exists and differs from primary"| SAMPLE{Sample Rate Check}
     CHECK -->|No shadow| DONE[Done]
 
-    SAMPLE -->|"random() ≤ rate"| SHADOW[Shadow Model<br/>version: v2]
-    SAMPLE -->|"random() > rate"| DONE
+    SAMPLE -->|"random <= rate"| SHADOW[Shadow Model version v2]
+    SAMPLE -->|"random > rate"| DONE
 
-    SHADOW --> LOG[Log Shadow Result<br/>Prometheus counter]
-    SHADOW -.->|"Result discarded<br/>(no client impact)"| DONE
+    SHADOW --> LOG["Log Shadow Result via Prometheus counter"]
+    SHADOW -.->|"Result discarded, no client impact"| DONE
 ```
 
-### Configuration
+**Configuration:**
 
 ```bash
-# Run shadow model "fraud-v2" alongside primary for 50% of fraud requests
 AI_INFERENCE_SHADOW_MODELS='{"fraud": "fraud-v2"}'
 AI_INFERENCE_SHADOW_SAMPLE_RATE=0.5
 ```
 
-Shadow inference:
-- Runs **after** the primary response is computed
+**Operational properties:**
+
+- Shadow runs **after** the primary response is computed — no latency impact on the caller
 - Results are **never returned** to the caller
-- Failures are logged but silently swallowed
-- Tracked via `ai_inference_shadow_requests_total` Prometheus counter
+- Failures are logged at `WARNING` level and silently swallowed (`main.py:564-565`)
+- Tracked via `ai_inference_shadow_requests_total` counter
 
 ---
 
@@ -450,230 +506,122 @@ Shadow inference:
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/inference/eta` | ETA prediction |
-| `POST` | `/inference/fraud` | Fraud detection |
-| `POST` | `/inference/ranking` | Search ranking |
-| `POST` | `/inference/batch` | Batch inference (multi-model) |
+| `POST` | `/inference/eta` | ETA prediction (linear score, clamped >= 0) |
+| `POST` | `/inference/fraud` | Fraud detection (sigmoid to probability) |
+| `POST` | `/inference/ranking` | Search ranking (sigmoid to 0-1 score) |
+| `POST` | `/inference/batch` | Batch inference (up to 100 items, multi-model) |
 | `GET` | `/models` | List all registered models and versions |
-| `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/health` | Full health (models + feature store) |
-| `GET` | `/health/ready` | Readiness probe |
-| `GET` | `/health/live` | Liveness probe |
+| `GET` | `/metrics` | Prometheus metrics (text exposition) |
+| `GET` | `/health` | Full health (models + feature store status) |
+| `GET` | `/health/ready` | Readiness probe (always `{"status": "ok"}`) |
+| `GET` | `/health/live` | Liveness probe (always `{"status": "ok"}`) |
 
 ### `POST /inference/eta`
 
-**Request:**
-
-```json
-{
-  "distance_km": 5.2,
-  "item_count": 8,
-  "traffic_factor": 1.5,
-  "model_version": "eta-linear-v1"
-}
-```
-
 | Field | Type | Required | Constraints |
 |---|---|---|---|
-| `distance_km` | float | ✅ | 0–200 |
-| `item_count` | int | ✅ | 0–200 |
-| `traffic_factor` | float | ✅ | 0.5–3.0 |
+| `distance_km` | float | Yes | 0-200 |
+| `item_count` | int | Yes | 0-200 |
+| `traffic_factor` | float | Yes | 0.5-3.0 |
 | `model_version` | string | | Optional version override |
-
-**Response:**
-
-```json
-{
-  "eta_minutes": 18.41,
-  "feature_contributions": { "distance_km": 11.96, "item_count": 4.8, "traffic_factor": 4.65 },
-  "bias": 4.5,
-  "model_version": "eta-linear-v1"
-}
-```
 
 ### `POST /inference/fraud`
 
-**Request:**
-
-```json
-{
-  "order_amount": 250.0,
-  "chargeback_rate": 0.02,
-  "device_risk": 0.3,
-  "account_age_days": 180,
-  "model_version": "fraud-logit-v1"
-}
-```
-
 | Field | Type | Required | Constraints |
 |---|---|---|---|
-| `order_amount` | float | ✅ | 0–10,000 |
-| `chargeback_rate` | float | ✅ | 0–1 |
-| `device_risk` | float | ✅ | 0–1 |
-| `account_age_days` | int | ✅ | 0–36,500 |
+| `order_amount` | float | Yes | 0-10000 |
+| `chargeback_rate` | float | Yes | 0-1 |
+| `device_risk` | float | Yes | 0-1 |
+| `account_age_days` | int | Yes | 0-36500 |
 | `model_version` | string | | Optional version override |
-
-**Response:**
-
-```json
-{
-  "fraud_probability": 0.23,
-  "raw_score": -0.98,
-  "feature_contributions": { "order_amount": 3.0, "chargeback_rate": 0.096, "device_risk": 0.63, "account_age_days": -2.7 },
-  "bias": -1.4,
-  "model_version": "fraud-logit-v1"
-}
-```
 
 ### `POST /inference/ranking`
 
-**Request:**
-
-```json
-{
-  "relevance_score": 0.8,
-  "price_score": 0.6,
-  "availability_score": 1.0,
-  "user_affinity": 0.7,
-  "model_version": "ranking-linear-v1"
-}
-```
-
-**Response:**
-
-```json
-{
-  "ranking_score": 0.73,
-  "raw_score": 0.99,
-  "feature_contributions": { "relevance_score": 0.44, "price_score": 0.12, "availability_score": 0.35, "user_affinity": 0.28 },
-  "bias": 0.15,
-  "model_version": "ranking-linear-v1"
-}
-```
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `relevance_score` | float | Yes | 0-1 |
+| `price_score` | float | Yes | 0-1 |
+| `availability_score` | float | Yes | 0-1 |
+| `user_affinity` | float | Yes | 0-1 |
+| `model_version` | string | | Optional version override |
 
 ### `POST /inference/batch`
 
-**Request:**
-
-```json
-{
-  "items": [
-    {
-      "model_name": "eta",
-      "payload": { "distance_km": 3.0, "item_count": 5, "traffic_factor": 1.2 }
-    },
-    {
-      "model_name": "fraud",
-      "payload": { "order_amount": 100.0, "chargeback_rate": 0.0, "device_risk": 0.1, "account_age_days": 365 },
-      "entity_id": "user-123",
-      "use_feature_store": true
-    }
-  ]
-}
-```
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `items[].model_name` | `"eta"` \| `"ranking"` \| `"fraud"` | ✅ | Model to invoke |
-| `items[].payload` | object | ✅ | Model-specific features |
+| `items[].model_name` | `"eta"` / `"ranking"` / `"fraud"` | Yes | Model to invoke |
+| `items[].payload` | object | Yes | Model-specific features |
 | `items[].model_version` | string | | Version override |
 | `items[].entity_id` | string | | Entity ID for feature store lookup |
-| `items[].use_feature_store` | bool | | Fetch features from store (requires `entity_id`) |
+| `items[].use_feature_store` | bool | | Fetch features from store |
 
-**Response:**
+Batch endpoint: 1-100 items per request. Items are processed sequentially (not parallelized). Each item gets its own `BatchInferenceResult` with either `output` or `error`.
 
-```json
-{
-  "results": [
-    { "model_name": "eta", "model_version": "eta-linear-v1", "output": { "eta_minutes": 12.9, "..." : "..." } },
-    { "model_name": "fraud", "model_version": "fraud-logit-v1", "output": { "fraud_probability": 0.05, "..." : "..." } }
-  ]
-}
-```
+### Per-Model Module Schemas (Extended)
 
-### Per-Model Module Endpoints (Extended Models)
+The `app/models/` modules define richer Pydantic schemas for production use with ML-loaded models:
 
-The `app/models/` modules define richer schemas for production use. These can be wired into FastAPI routes:
-
-| Model | Request Schema | Response Schema | Key Output Fields |
-|---|---|---|---|
-| **ETA** | `ETAFeatures` (9 features + stage) | `ETAResponse` | `eta_minutes`, `confidence_lower/upper`, `stage`, `method` |
-| **Fraud** | `FraudFeatures` (15 features) | `FraudResponse` | `fraud_score` (0-100), `decision` (auto_approve/soft_review/block), `top_risk_factors` |
-| **Ranking** | `List[RankingFeatures]` (13 features each) | `RankingResponse` | `ranked_items` [{product_id, score, rank}] |
-| **Demand** | `DemandFeatures` (14 features) | `DemandResponse` | `predicted_units`, `confidence_lower/upper`, `store_id`, `product_id`, `hour` |
-| **Personalization** | `PersonalizationFeatures` (embeddings + context) | `PersonalizationResponse` | `recommendations` [{product_id, score, rank}], `surface` |
-| **CLV** | `CLVFeatures` (14 RFM/engagement features) | `CLVResponse` | `predicted_annual_value_cents`, `segment` (platinum/gold/silver/bronze), `survival_probability_12m` |
-| **Dynamic Pricing** | `PricingFeatures` (15 features) | `PricingResponse` | `delivery_fee_cents`, `discount_applied_cents`, `surge_applied`, `guardrail_hit` |
+| Model | Request Schema | Key Response Fields |
+|---|---|---|
+| **ETA** | `ETAFeatures` (9 features + stage) | `eta_minutes`, `confidence_lower/upper`, `stage`, `method`, `feature_contributions` |
+| **Fraud** | `FraudFeatures` (15 features) | `fraud_score` (0-100), `decision` (auto_approve/soft_review/block), `top_risk_factors` |
+| **Ranking** | `List[RankingFeatures]` (13 features each) | `ranked_items` with product_id, score, rank |
+| **Demand** | `DemandFeatures` (14 features) | `predicted_units`, `confidence_lower/upper`, `store_id`, `product_id`, `hour` |
+| **Personalization** | `PersonalizationFeatures` (embeddings + surface) | `recommendations` with product_id, score, rank; `surface` |
+| **CLV** | `CLVFeatures` (14 RFM/engagement features) | `predicted_annual_value_cents`, `segment`, `survival_probability_12m` |
+| **Dynamic Pricing** | `PricingFeatures` (15 features) | `delivery_fee_cents`, `discount_applied_cents`, `surge_applied`, `guardrail_hit` |
 
 ---
 
 ## Project Structure
 
 ```
-app/
-├── main.py                        # FastAPI app, model registry, inference cache, feature store,
-│                                  # batch endpoint, Prometheus metrics, ETA/fraud/ranking endpoints
-├── __init__.py
-├── models/
-│   ├── eta_model.py               # LightGBM 3-stage ETA (pre-order, post-assign, in-transit)
-│   ├── fraud_model.py             # XGBoost fraud detection (score 0-100, 3 decisions)
-│   ├── ranking_model.py           # LambdaMART search ranking (batch product scoring)
-│   ├── demand_model.py            # Prophet + TFT demand forecasting (store × SKU × hour)
-│   ├── personalization_model.py   # Two-Tower NCF recommendations (3 surfaces)
-│   ├── clv_model.py               # BG/NBD + Gamma-Gamma CLV (4 segments)
-│   ├── dynamic_pricing_model.py   # Contextual Bandit delivery fee optimization
-│   └── __init__.py
-├── Dockerfile
-└── requirements.txt
+services/ai-inference-service/
++-- Dockerfile                         # Python 3.14-slim, non-root user, healthcheck
++-- requirements.txt                   # FastAPI, uvicorn, lightgbm, xgboost, scikit-learn, etc.
++-- README.md
++-- app/
+    +-- __init__.py
+    +-- main.py                        # FastAPI app, Settings, ModelRegistry, InferenceCache,
+    |                                  # FeatureStoreClient hierarchy, inference endpoints,
+    |                                  # batch endpoint, Prometheus metrics, health probes
+    +-- models/
+        +-- __init__.py
+        +-- eta_model.py               # LightGBM 3-stage ETA (pre_order, post_assign, in_transit)
+        +-- fraud_model.py             # XGBoost fraud (score 0-100, 3 decision thresholds)
+        +-- ranking_model.py           # LambdaMART LTR (batch product scoring)
+        +-- demand_model.py            # Prophet + TFT demand forecasting (store x SKU x hour)
+        +-- personalization_model.py   # Two-Tower NCF (homepage, buy_again, FBT)
+        +-- clv_model.py               # BG/NBD + Gamma-Gamma CLV (4 segments)
+        +-- dynamic_pricing_model.py   # Contextual Bandit delivery fee + guardrails
 ```
 
 ---
 
-## Configuration
+## Runtime and Configuration
 
-All settings use the `AI_INFERENCE_` env prefix.
+### Environment Variables
+
+All settings use the `AI_INFERENCE_` prefix, parsed once at module load via the frozen `Settings` dataclass (`main.py:44-57`).
 
 | Variable | Default | Description |
 |---|---|---|
-| `AI_INFERENCE_LOG_LEVEL` | `INFO` | Log level |
-| `AI_INFERENCE_CACHE_ENABLED` | `true` | Enable inference cache |
-| `AI_INFERENCE_CACHE_TTL_SECONDS` | `300` | Cache TTL |
-| `AI_INFERENCE_CACHE_MAX_ITEMS` | `1000` | Max cached entries (LRU) |
+| `SERVER_PORT` | `8101` | uvicorn listen port (Dockerfile) |
+| `AI_INFERENCE_LOG_LEVEL` | `INFO` | Python log level |
+| `AI_INFERENCE_CACHE_ENABLED` | `true` | Enable in-memory inference cache |
+| `AI_INFERENCE_CACHE_TTL_SECONDS` | `300` | Cache entry TTL |
+| `AI_INFERENCE_CACHE_MAX_ITEMS` | `1000` | Max cached entries (LRU eviction) |
 | `AI_INFERENCE_SHADOW_MODELS` | `{}` | JSON map: `{"model": "shadow_version"}` |
-| `AI_INFERENCE_SHADOW_SAMPLE_RATE` | `1.0` | Fraction of requests to shadow (0.0–1.0) |
+| `AI_INFERENCE_SHADOW_SAMPLE_RATE` | `1.0` | Fraction of requests to shadow (0.0-1.0) |
 | `AI_INFERENCE_FEATURE_STORE_BACKEND` | `none` | `none` / `redis` / `bigquery` |
-| `AI_INFERENCE_REDIS_URL` | — | Redis connection URL |
-| `AI_INFERENCE_REDIS_PREFIX` | `features` | Redis key prefix |
-| `AI_INFERENCE_BIGQUERY_PROJECT` | — | GCP project ID |
-| `AI_INFERENCE_BIGQUERY_DATASET` | — | BigQuery dataset |
-| `AI_INFERENCE_BIGQUERY_TABLE` | — | BigQuery table |
-| `AI_INFERENCE_WEIGHTS_PATH` | `app/weights.json` | Path to model weights JSON |
+| `AI_INFERENCE_REDIS_URL` | | Redis connection URL |
+| `AI_INFERENCE_REDIS_PREFIX` | `features` | Redis key prefix for feature hashes |
+| `AI_INFERENCE_BIGQUERY_PROJECT` | | GCP project ID |
+| `AI_INFERENCE_BIGQUERY_DATASET` | | BigQuery dataset |
+| `AI_INFERENCE_BIGQUERY_TABLE` | | BigQuery feature table |
+| `AI_INFERENCE_WEIGHTS_PATH` | `app/weights.json` | Path to model weights JSON override |
 
----
-
-## Prometheus Metrics
-
-| Metric | Type | Labels | Description |
-|---|---|---|---|
-| `ai_inference_requests_total` | Counter | endpoint, model, version, status | Total inference requests |
-| `ai_inference_request_latency_seconds` | Histogram | endpoint, model, version | Request latency |
-| `ai_inference_cache_events_total` | Counter | model, version, result (hit/miss) | Cache hit/miss events |
-| `ai_inference_shadow_requests_total` | Counter | model, version | Shadow inference count |
-| `ai_inference_feature_store_latency_seconds` | Histogram | backend | Feature store latency |
-| `ai_inference_feature_store_errors_total` | Counter | backend | Feature store errors |
-| `ml_eta_predictions_total` | Counter | stage, model_version, method | ETA predictions |
-| `ml_fraud_predictions_total` | Counter | decision, model_version, method | Fraud predictions |
-| `ml_fraud_score` | Histogram | — | Fraud score distribution (0-100) |
-| `ml_ranking_predictions_total` | Counter | model_version, method | Ranking predictions |
-| `ml_ranking_batch_size` | Histogram | — | Items per ranking request |
-| `ml_demand_predictions_total` | Counter | model_version, method | Demand predictions |
-| `ml_personalization_predictions_total` | Counter | surface, model_version, method | Personalization predictions |
-| `ml_clv_predictions_total` | Counter | segment, model_version, method | CLV predictions |
-| `ml_pricing_predictions_total` | Counter | model_version, method | Dynamic pricing predictions |
-
----
-
-## Running Locally
+### Running Locally
 
 ```bash
 cd services/ai-inference-service
@@ -681,4 +629,262 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Models start in **rule-based fallback mode** by default. To load ML artefacts, configure the model paths in the individual model constructors or via the weights registry (`weights.json`).
+Models start in **rule-based fallback mode** by default. To load ML artefacts, place model files on disk and configure paths in the per-model module constructors or via `weights.json`.
+
+### Docker
+
+```bash
+docker build -t ai-inference-service .
+docker run -p 8101:8101 ai-inference-service
+```
+
+The Dockerfile runs as a non-root `app` user, includes a `HEALTHCHECK` against `/health`, and uses `python:3.14-slim` as the base.
+
+### Deployment Shape (from review docs)
+
+| Attribute | Value |
+|---|---|
+| Replicas (dev) | 2 |
+| HPA range | 2-6 @ 70% CPU |
+| CPU request / limit | 750m / 1500m |
+| Memory request / limit | 1024Mi / 2048Mi |
+| PDB | maxUnavailable: 1 |
+| Readiness probe | `/health/ready` (initial delay 15s, period 10s) |
+| Liveness probe | `/health/live` (initial delay 30s, period 15s) |
+| Startup probe | `/health/live` (initial delay 10s, period 5s, failure threshold 20) |
+
+---
+
+## Dependencies
+
+### Python Dependencies (`requirements.txt`)
+
+| Package | Version | Purpose |
+|---|---|---|
+| `fastapi` | 0.110.0 | HTTP framework |
+| `uvicorn[standard]` | 0.29.0 | ASGI server |
+| `lightgbm` | 4.6.0 | ETA model (LightGBM Booster) |
+| `xgboost` | 2.0.3 | Fraud model (XGBoost Booster) |
+| `scikit-learn` | 1.5.0 | Preprocessing utilities |
+| `numpy` | 1.26.4 | Numerical operations |
+| `shap` | 0.45.0 | Feature contribution explanations |
+| `prometheus-client` | 0.20.0 | Metrics exposition |
+| `redis` | 5.0.4 | Online feature store client |
+| `google-cloud-bigquery` | 3.25.0 | Offline feature store client |
+
+### Service Dependencies
+
+| Dependency | Type | Required? | Failure Mode |
+|---|---|---|---|
+| Redis (feature store) | Optional runtime | No | Falls back to request-only features |
+| BigQuery (feature store) | Optional runtime | No | Falls back to request-only features |
+| `weights.json` file | Optional startup | No | Uses hardcoded `DEFAULT_WEIGHTS` |
+| Prometheus scrape | Operational | No | Metrics not collected; service runs fine |
+
+No hard external dependency is required for the service to start and serve predictions.
+
+---
+
+## Observability
+
+### Prometheus Metrics
+
+All metrics are exposed at `GET /metrics` in Prometheus text exposition format.
+
+**Service-level metrics (defined in `main.py`):**
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `ai_inference_requests_total` | Counter | `endpoint, model, version, status` | Total inference requests |
+| `ai_inference_request_latency_seconds` | Histogram | `endpoint, model, version` | Request latency |
+| `ai_inference_cache_events_total` | Counter | `model, version, result` | Cache hit/miss events |
+| `ai_inference_shadow_requests_total` | Counter | `model, version` | Shadow inference count |
+| `ai_inference_feature_store_latency_seconds` | Histogram | `backend` | Feature store round-trip |
+| `ai_inference_feature_store_errors_total` | Counter | `backend` | Feature store errors |
+
+**Per-model metrics (defined in `app/models/*.py`):**
+
+| Metric | Type | Labels |
+|---|---|---|
+| `ml_eta_predictions_total` | Counter | `stage, model_version, method` |
+| `ml_eta_latency_seconds` | Histogram | `stage, model_version` |
+| `ml_eta_prediction_minutes` | Histogram | `stage` (buckets: 5-120 min) |
+| `ml_fraud_predictions_total` | Counter | `decision, model_version, method` |
+| `ml_fraud_latency_seconds` | Histogram | `model_version` |
+| `ml_fraud_score` | Histogram | (buckets: 10-100) |
+| `ml_ranking_predictions_total` | Counter | `model_version, method` |
+| `ml_ranking_latency_seconds` | Histogram | `model_version` |
+| `ml_ranking_batch_size` | Histogram | (buckets: 1-200) |
+| `ml_demand_predictions_total` | Counter | `model_version, method` |
+| `ml_demand_latency_seconds` | Histogram | `model_version` |
+| `ml_personalization_predictions_total` | Counter | `surface, model_version, method` |
+| `ml_personalization_latency_seconds` | Histogram | `surface, model_version` |
+| `ml_clv_predictions_total` | Counter | `segment, model_version, method` |
+| `ml_clv_latency_seconds` | Histogram | `model_version` |
+| `ml_pricing_predictions_total` | Counter | `model_version, method` |
+| `ml_pricing_latency_seconds` | Histogram | `model_version` |
+
+### SLO Targets (from `docs/reviews/iter3/services/ai-ml-platform.md`)
+
+| Model | p95 Latency Target | Key Quality Metric |
+|---|---|---|
+| Fraud | < 15 ms | False-positive rate < 5% |
+| ETA | < 10 ms | Within-2-min accuracy > 85% |
+| Ranking | < 20 ms | NDCG@10 >= 0.75 |
+| Personalization | < 25 ms | |
+| CLV | < 30 ms | |
+| Demand | < 50 ms | MAPE <= 8%, accuracy >= 92% |
+
+### Logging
+
+Structured Python logging via `logging.basicConfig()`, level configurable via `AI_INFERENCE_LOG_LEVEL`. Module loggers: `ai_inference` (main), `ai_inference.models.eta`, `ai_inference.models.fraud`, etc.
+
+---
+
+## Testing
+
+### Running Tests
+
+```bash
+cd services/ai-inference-service
+pytest -v
+```
+
+### Test Strategy
+
+The per-model modules (`app/models/*.py`) are unit-testable in isolation. Each model class accepts an optional `model_path` for ML loading and falls back to rule-based predictions by default. Key test scenarios:
+
+1. **Rule-based fallback correctness** — Verify deterministic output for known inputs when no ML model is loaded
+2. **Pydantic validation** — Confirm field constraints (`ge`, `le`, `min_length`, `max_length`) reject invalid payloads
+3. **Cache behavior** — Verify hit/miss/eviction/TTL semantics of `InferenceCache`
+4. **Feature store client** — Mock Redis/BigQuery clients; verify merge semantics (request features override store features)
+5. **Shadow mode** — Verify shadow execution does not affect primary response; failures are swallowed
+6. **Batch endpoint** — Verify multi-model fan-out, per-item error isolation, feature-store integration
+7. **Version resolution** — Verify `"default"`, `"latest"`, `null`, and specific version paths through `ModelRegistry`
+
+---
+
+## Failure Modes and Fallbacks
+
+| Failure | Detection | Impact | Fallback |
+|---|---|---|---|
+| **ML model artefact missing** | `model_path` not set or load fails | Per-model module serves rule-based predictions | `method: "rule_based"` in response |
+| **`weights.json` missing / corrupt** | `load_registry_data()` catches `OSError`/`JSONDecodeError` | Registry uses hardcoded `DEFAULT_WEIGHTS` only | Log warning, proceed with defaults |
+| **Redis feature store down** | Connection timeout on `ping()` | Cannot fetch online features | Health reports `degraded`; batch items return `error: "feature_store_error"` |
+| **BigQuery feature store error** | Query exception | Same as Redis | Health reports `configured`; batch items return error |
+| **Feature store dependency missing** | `ImportError` at `build_feature_store()` | `UnavailableFeatureStoreClient` instantiated | Service starts; feature-store calls return clear error; all other endpoints work |
+| **Cache disabled** | `AI_INFERENCE_CACHE_ENABLED=false` | Every request runs inference | No impact on correctness; increased latency and compute |
+| **Shadow version not found** | `KeyError` in `registry.get()` | Shadow inference skipped | Silent skip; no counter increment |
+| **Shadow inference error** | Any exception in `perform_inference()` | Shadow result discarded | Warning log; primary response unaffected |
+| **Unknown model in batch** | `ValueError("unknown_model")` | Single batch item fails | Per-item error; other items unaffected |
+| **Invalid request payload** | Pydantic `ValidationError` | 422 response or per-item error (batch) | FastAPI returns validation details |
+
+### Fallback Hierarchy
+
+Every model in `app/models/` implements a `_rule_based_fallback()` method:
+
+| Model | Fallback Strategy |
+|---|---|
+| ETA | Linear formula: travel_time + prep + queue + items, adjusted by stage |
+| Fraud | Static threshold scoring across velocity, basket, payment, device, account signals |
+| Ranking | Weighted linear combination of 10 heuristic features |
+| Demand | Weighted historical average with day/hour/weekend/holiday multipliers |
+| Personalization | Popularity-based ranking (no user signal) |
+| CLV | Recency-frequency heuristic with subscription and engagement bonuses |
+| Dynamic Pricing | Rule-based surge with distance, demand/supply ratio, peak-hour, rain, loyalty discounts + guardrails |
+
+
+---
+
+## Rollout and Rollback
+
+### Model Version Rollout
+
+1. **Shadow phase:** Configure `AI_INFERENCE_SHADOW_MODELS={"model": "new-version"}` and `AI_INFERENCE_SHADOW_SAMPLE_RATE=0.5`. Monitor `ai_inference_shadow_requests_total` and compare shadow vs. primary predictions offline.
+2. **Canary:** Change the default version in `weights.json` or the model registry. Monitor `ai_inference_requests_total{version="new-version"}` and per-model quality metrics.
+3. **Full rollout:** Remove shadow config; set new version as default.
+
+### Rollback Mechanisms
+
+| Layer | Mechanism | Time to Effect |
+|---|---|---|
+| **Model version** | Revert `weights.json` to previous version entry, pod restart | Seconds (rolling restart) |
+| **Model safety switch** | Registry override forces rule-based fallback | Seconds (in-process, requires `ml/serving/model_registry.py` integration) |
+| **Full service** | `helm rollback` or ArgoCD revert | Minutes |
+
+### Key Rollout Consideration
+
+The in-process model registry does not persist state across restarts. A pod restart reloads from `DEFAULT_WEIGHTS` + `weights.json`. This means rollback is deterministic (revert the file), but also means there is no hot-reload without restart for weight changes.
+
+
+---
+
+## Security and Trust Boundaries
+
+### Current State
+
+| Control | Status | Detail |
+|---|---|---|
+| Non-root container | Present | Dockerfile creates `app` user and group, runs as `USER app` |
+| No domain write authority | Present | No outbox, no Kafka producer, no domain-service write client |
+| Pydantic input validation | Present | All request fields have `ge`/`le`/`min_length`/`max_length` constraints |
+| No secrets in code | Present | Redis URL, BigQuery credentials via environment variables |
+| Read-only filesystem compatible | Present | No file writes at runtime (cache is in-memory) |
+
+### Known Gaps (from review docs)
+
+| Gap | Severity | Detail |
+|---|---|---|
+| **No inbound authentication** | Medium | Neither JWT validation nor internal service token is enforced. Any in-mesh caller can invoke inference endpoints. |
+| **No Istio AuthorizationPolicy** | Medium | Istio authorization policy does not cover this service; reachable from any pod in the namespace. |
+| **No model weight integrity check** | Medium | `weights.json` is loaded via `json.load()` with no signature or checksum verification. A tampered file produces silently wrong predictions. |
+| **Redis plaintext** | High (infra) | Redis connection uses port 6379 with no TLS; feature data in cleartext within VPC. |
+
+### Trust Boundary
+
+```
+Internet -> Istio Ingress -> BFF (JWT validation) -> ai-orchestrator-service
+                                                          | internal HTTP
+                                                     ai-inference-service (:8101)
+                                                          | optional
+                                                     Redis / BigQuery (feature store)
+```
+
+The service sits inside the mesh, behind the BFF and orchestrator. It does not face the internet directly. All callers are expected to be authenticated at the BFF layer; however, the service itself does not verify caller identity.
+
+
+---
+
+## Known Limitations
+
+1. **Registry is in-process, not persistent.** Model versions and weights are loaded at startup and never persisted. No lineage to training run or MLflow artifact. Pod restart resets state to `DEFAULT_WEIGHTS` + `weights.json`.
+
+2. **Shadow agreement state is pod-local.** Shadow comparison results are emitted as Prometheus counters only, not persisted to a durable store. No automatic promotion trigger exists. Agreement rate must be computed offline from Prometheus queries.
+
+3. **No drift detection at serving time.** PSI computation exists in `ml/serving/monitoring.py` but is not wired into this service. Feature drift goes undetected until offline evaluation.
+
+4. **Batch endpoint processes items sequentially.** `process_batch_item()` is called in a `for` loop, not parallelized with `asyncio.gather()` or a thread pool. For large batches, latency scales linearly.
+
+5. **Health probes are unconditional.** `/health/ready` and `/health/live` always return `{"status": "ok"}` regardless of model load state or feature store health. A pod with a corrupt registry or unreachable Redis still passes readiness.
+
+6. **No rate limiting.** The service has no per-caller or per-IP rate limiting. If exposed beyond the orchestrator, it is vulnerable to traffic spikes.
+
+7. **Per-model modules not wired into main.py endpoints.** The richer schemas (15-feature fraud, 9-feature ETA with stages, batch ranking) exist as standalone classes but the FastAPI routes in `main.py` use simpler request schemas and the `linear_score`/`sigmoid` engine. Wiring the full models requires endpoint changes.
+
+8. **No OTEL/distributed tracing.** Trace propagation is not implemented. Requests from the orchestrator or BFF lose trace context at this service boundary.
+
+
+---
+
+## Industry Comparison Notes
+
+These observations are grounded in the `docs/reviews/iter3/benchmarks/` materials and public engineering signals cited therein.
+
+| Pattern | Industry Reference | InstaCommerce Status |
+|---|---|---|
+| **Separate model serving from training** | Standard across DoorDash, Instacart, Grab ML platforms | Clean boundary: `ai-inference-service` serves; `ml/` trains |
+| **Rule-based fallback per model** | DoorDash ETA falls back to historical median; Instacart uses rule-based substitution scoring | Every model has a deterministic fallback |
+| **Shadow mode before promotion** | Standard ML platform practice (DoorDash, Uber) | Implemented; gap is pod-local state with no durable agreement tracking |
+| **Feature store online/offline split** | Feast at Uber / Tecton at DoorDash; Redis online + warehouse offline | Redis + BigQuery; gap is no offline-online consistency check |
+| **Guardrails on pricing** | DoorDash dynamic pricing uses floor/ceiling/fairness constraints | `_apply_guardrails()` enforces floor and ceiling; no demographic fairness check yet |
+| **Advisory-only AI boundary** | Emerging standard for safety-critical paths (Grab, Swiggy) | Strict advisory-only posture enforced by architecture |

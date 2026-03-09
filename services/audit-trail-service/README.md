@@ -21,7 +21,7 @@ Ingests domain events from **14 Kafka topics** plus a REST ingestion API, stores
 
 ---
 
-## Architecture Overview
+## High-Level Design (HLD)
 
 ```
   Kafka (14 domain topics) ──▶ ┌──────────────────────────────┐   JPA    ┌────────────────────┐
@@ -41,7 +41,9 @@ Ingests domain events from **14 Kafka topics** plus a REST ingestion API, stores
 
 ---
 
-## Component Map
+## Low-Level Design (LLD)
+
+### Component Map
 
 | Layer | Class | Responsibility |
 |-------|-------|----------------|
@@ -434,3 +436,22 @@ curl -X POST http://localhost:8080/audit/events \
 curl "http://localhost:8080/admin/audit/events?sourceService=order-service&size=10" \
   -H "Authorization: Bearer <admin-token>"
 ```
+
+---
+
+## Testing
+
+```bash
+./gradlew :services:audit-trail-service:test
+```
+
+## Rollout and Rollback
+
+- deploy partitioning and retention changes before tightening API or consumer assumptions
+- canary Kafka consumer changes with DLT and lag monitoring enabled
+- roll back by restoring prior application image and keeping the schema additive; avoid dropping partitions or indexes during the same deploy window
+
+## Known Limitations
+
+- audit topic coverage, search ergonomics, and retention posture still need to stay aligned with the iter3 compliance review as the event fleet evolves
+- centralized audit is only as complete as the producing services; gaps in producer emission still surface as missing history rather than local service failure

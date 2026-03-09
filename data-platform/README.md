@@ -11,7 +11,7 @@ streaming pipelines (Apache Beam on Dataflow), and data quality enforcement
 
 ---
 
-## Data Platform Architecture
+## High-Level Design (HLD)
 
 ```mermaid
 flowchart LR
@@ -65,7 +65,9 @@ flowchart LR
 
 ---
 
-## Directory Structure
+## Low-Level Design (LLD)
+
+### Repository Structure
 
 ```
 data-platform/
@@ -353,3 +355,29 @@ flowchart TB
 | `processed/` | `processed/{domain}/` | 1 year | Parquet |
 | `ml/` | `ml/datasets/{model}/{version}/` | Indefinite | Parquet |
 | `exports/` | `exports/{consumer}/` | 30 days | CSV / Parquet |
+
+---
+
+## Testing and Validation
+
+Use the existing dbt and quality commands as the first-line validation loop for any platform change:
+
+```bash
+cd data-platform/dbt && dbt deps
+cd data-platform/dbt && dbt test
+cd data-platform/dbt && dbt run --select marts
+python data-platform/quality/run_quality_checks.py
+```
+
+## Rollout and Rollback
+
+- ship streaming, dbt, and DAG changes independently so ingestion, transformation, and orchestration can be rolled back without a full-platform revert
+- prefer additive BigQuery/dbt changes over destructive schema rewrites
+- canary new Beam/Dataflow jobs with side-by-side output validation before cutting consumers over
+- pause downstream DAGs and alert analytics owners when Great Expectations finds critical contract failures
+
+## Known Limitations
+
+- some platform diagrams still describe target-state storage zones and activation flows that are only partially represented in checked-in code
+- event-time correctness, late-data handling, and contract governance are called out in `docs/reviews/iter3/platform/data-platform-correctness.md` and remain active hardening areas
+- the top-level README is intentionally high-signal; `streaming/README.md`, dbt models, and Airflow DAGs remain the executable source of truth

@@ -191,6 +191,9 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///payment_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED: "false"
+      PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_TOPIC: "orders.events"
+      PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_GROUP: "payment-service-order-cancelled"
     hpa:
       minReplicas: 2
       maxReplicas: 10

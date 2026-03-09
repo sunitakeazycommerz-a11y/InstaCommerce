@@ -13,6 +13,8 @@ services:
     tag: dev
   payment-service:
     tag: dev
+    env:
+      PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED: "true"
   fulfillment-service:
     tag: dev
   notification-service:
