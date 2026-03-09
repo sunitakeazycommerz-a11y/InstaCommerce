@@ -1,256 +1,145 @@
 # Mobile BFF Service
 
-Backend-For-Frontend (BFF) service providing mobile-optimized API aggregation for the InstaCommerce mobile app. Aggregates data from multiple backend microservices into single, efficient responses tailored for mobile consumption using reactive (WebFlux) non-blocking I/O.
+Mobile-facing edge service for InstaCommerce. **Current state:** this service is
+still a scaffold. The only implemented business endpoint is
+`GET /bff/mobile/v1/home` (also aliased as `/m/v1/home`), which returns a stub
+payload. The repository already carries the dependencies for a richer reactive
+aggregation layer, but no downstream clients, cache usage, or resilience rules
+are wired yet.
 
-## Table of Contents
+## Current-State Summary
 
-- [Architecture Overview](#architecture-overview)
-- [Key Components](#key-components)
-- [Aggregation Pattern](#aggregation-pattern)
-- [Supported Mobile Endpoints](#supported-mobile-endpoints)
-- [Caching Strategy](#caching-strategy)
-- [API Reference](#api-reference)
-- [Configuration](#configuration)
+| Area | Current implementation | Target state |
+|------|------------------------|--------------|
+| Endpoints | `GET /bff/mobile/v1/home` + actuator | Aggregated mobile APIs for home, product, cart, search, profile |
+| Backend integration | None | Parallel calls into product, catalog, cart, identity, flags, and search |
+| Caching | Dependency present only (`spring.cache.type: caffeine`) | Screen-aware caching with TTLs and invalidation hooks |
+| Resilience | Dependency present only (`resilience4j-spring-boot3`) | Circuit breakers, fallback payloads, and timeout budgets |
+| Tests | No test classes yet | Controller, aggregation, and contract coverage |
 
----
-
-## Architecture Overview
+## Current Architecture (HLD)
 
 ```mermaid
 graph TB
-    subgraph Mobile Clients
+    subgraph Clients
         IOS[iOS App]
         ANDROID[Android App]
     end
 
     subgraph Mobile BFF Service :8097
-        MBC[MobileBffController<br>/bff/mobile/v1 • /m/v1]
-        CACHE[(Caffeine Cache)]
-        CB[Resilience4j<br>Circuit Breaker]
+        CTRL[MobileBffController]
+        APP[MobileBffServiceApplication]
+        ACT[Actuator + OTEL + Prometheus]
     end
 
-    subgraph Backend Services
-        PRODUCT[Product Service]
-        CATALOG[Catalog Service]
-        ORDER[Order Service]
-        USER[Identity Service]
-        CART[Cart Service]
-        FF[Feature Flag Service]
-        SEARCH[Search Service]
-    end
-
-    subgraph Observability
-        OTEL[OpenTelemetry Collector]
-        PROM[Prometheus]
-    end
-
-    IOS --> MBC
-    ANDROID --> MBC
-
-    MBC --> CACHE
-    MBC --> CB
-    CB --> PRODUCT & CATALOG & ORDER & USER & CART & FF & SEARCH
-
-    MBC --> OTEL
-    OTEL --> PROM
+    IOS --> CTRL
+    ANDROID --> CTRL
+    CTRL -->|Mono.just({"status":"ok"})| IOS
+    CTRL --> ACT
+    APP --> CTRL
 ```
 
----
+## Current UML Snapshot (LLD)
 
-## Key Components
+```mermaid
+classDiagram
+    class MobileBffServiceApplication
+    class MobileBffController {
+        +Mono~Map<String,Object>~ home()
+    }
 
-| Component | Responsibility |
-|---|---|
-| **MobileBffController** | Mobile-facing API layer — exposes aggregated endpoints at `/bff/mobile/v1` and `/m/v1` (short alias) |
-| **Caffeine Cache** | In-memory caching for frequently accessed, slow-changing data (categories, promotions) |
-| **Resilience4j Circuit Breaker** | Protects against backend service failures with fallback responses |
-| **WebFlux Reactive Stack** | Non-blocking I/O for parallel service calls and efficient mobile response times |
+    MobileBffServiceApplication --> MobileBffController
+```
 
----
-
-## Aggregation Pattern
+## Current Request Flow
 
 ```mermaid
 sequenceDiagram
     participant App as Mobile App
-    participant BFF as Mobile BFF
-    participant Product as Product Svc
-    participant Catalog as Catalog Svc
-    participant Cart as Cart Svc
-    participant Flags as Feature Flag Svc
-    participant User as Identity Svc
+    participant BFF as MobileBffController
 
     App->>BFF: GET /bff/mobile/v1/home
-
-    par Parallel Service Calls
-        BFF->>Product: GET /products/featured
-        BFF->>Catalog: GET /categories/top
-        BFF->>Cart: GET /cart/{userId}
-        BFF->>Flags: POST /flags/bulk
-        BFF->>User: GET /users/{userId}/profile
-    end
-
-    Product-->>BFF: Featured products
-    Catalog-->>BFF: Top categories
-    Cart-->>BFF: Cart summary
-    Flags-->>BFF: Feature flags
-    User-->>BFF: User profile
-
-    BFF->>BFF: Aggregate & transform<br>for mobile payload
-
-    BFF-->>App: Single optimized response
+    BFF-->>App: 200 {"status":"ok"}
 ```
 
-### Why BFF?
+## Target Architecture (Planned, not yet implemented)
+
+The following diagrams describe the **intended** BFF role once service
+aggregation is built. They are not a statement of current runtime behavior.
+
+```mermaid
+graph TB
+    subgraph Mobile Clients
+        IOS2[iOS App]
+        ANDROID2[Android App]
+    end
+
+    subgraph Planned Mobile BFF
+        EDGE[Mobile API facade]
+        CACHE[(Caffeine cache)]
+        CB[Resilience4j policies]
+    end
+
+    subgraph Backend Services
+        PRODUCT[Catalog / product data]
+        CART[Cart service]
+        ORDER[Order service]
+        USER[Identity service]
+        FF[Feature flags]
+        SEARCH[Search service]
+    end
+
+    IOS2 --> EDGE
+    ANDROID2 --> EDGE
+    EDGE --> CACHE
+    EDGE --> CB
+    CB --> PRODUCT
+    CB --> CART
+    CB --> ORDER
+    CB --> USER
+    CB --> FF
+    CB --> SEARCH
+```
 
 ```mermaid
 flowchart LR
-    subgraph Without BFF
-        M1[Mobile App] -->|Request 1| S1[Service A]
-        M1 -->|Request 2| S2[Service B]
-        M1 -->|Request 3| S3[Service C]
-        M1 -->|Request 4| S4[Service D]
-        M1 -->|Request 5| S5[Service E]
-    end
-
-    subgraph With BFF
-        M2[Mobile App] -->|1 Request| BFF[Mobile BFF]
-        BFF -->|Parallel| S6[Service A]
-        BFF -->|Parallel| S7[Service B]
-        BFF -->|Parallel| S8[Service C]
-        BFF -->|Parallel| S9[Service D]
-        BFF -->|Parallel| S10[Service E]
-    end
+    APP[Mobile app] --> BFF[Planned BFF aggregation]
+    BFF -->|Parallel fan-out| CAT[Catalog]
+    BFF -->|Parallel fan-out| ID[Identity]
+    BFF -->|Parallel fan-out| CART2[Cart]
+    BFF -->|Parallel fan-out| FLAGS[Flags]
+    CAT --> BFF
+    ID --> BFF
+    CART2 --> BFF
+    FLAGS --> BFF
+    BFF --> RES[Mobile-shaped payload]
 ```
-
-**Benefits:**
-- **Fewer round trips** — One mobile request instead of 5+ separate API calls
-- **Lower latency** — Parallel server-side calls over fast internal network
-- **Battery & data savings** — Reduced connection overhead on mobile
-- **Mobile-shaped payloads** — Only fields the mobile app needs, no over-fetching
-- **Backend isolation** — Mobile app decoupled from service topology changes
-
----
-
-## Supported Mobile Endpoints
-
-```mermaid
-mindmap
-  root((Mobile BFF))
-    Home Screen
-      Featured Products
-      Top Categories
-      Promotions
-      Cart Badge Count
-      Feature Flags
-    Product
-      Product Detail
-      Related Products
-      Reviews Summary
-    Cart
-      Cart Contents
-      Price Summary
-      Shipping Options
-    Search
-      Product Search
-      Search Suggestions
-      Filters
-    Profile
-      User Info
-      Order History
-      Addresses
-```
-
----
-
-## Caching Strategy
-
-```mermaid
-flowchart TD
-    subgraph Mobile BFF Cache
-        CC[Caffeine Cache<br>In-Memory]
-    end
-
-    subgraph Cache Tiers
-        HOT[Hot Data — TTL: short<br>Cart, Prices]
-        WARM[Warm Data — TTL: medium<br>Product Details, Search]
-        COLD[Cold Data — TTL: long<br>Categories, Promotions, Config]
-    end
-
-    REQ[Mobile Request] --> CC
-    CC -->|Cache Hit| RES[Fast Response]
-    CC -->|Cache Miss| SVC[Backend Services]
-    SVC --> CC
-    CC --> RES
-
-    CC --> HOT & WARM & COLD
-
-    subgraph Invalidation
-        EVT[Service Events] -->|Evict| CC
-        TTL_EXP[TTL Expiry] -->|Auto-evict| CC
-    end
-
-    style CC fill:#ffd700,stroke:#333
-```
-
-| Data Category | Cache Strategy | Rationale |
-|---|---|---|
-| Categories & Navigation | Long TTL | Changes infrequently, used on every screen |
-| Product Listings | Medium TTL | Moderate change rate, high read frequency |
-| Cart & Prices | Short TTL / No cache | Must be fresh for checkout accuracy |
-| Feature Flags | Short TTL | Flags cached upstream in Feature Flag Service |
-| User Profile | Per-session | User-specific, cached for session duration |
-
-**Implementation:**
-- Cache type: **Caffeine** (configured via Spring Cache abstraction)
-- Dependency: `com.github.ben-manes.caffeine:caffeine:3.1.8`
-- Circuit breaker: **Resilience4j** — returns cached/fallback data when backend services are degraded
-
----
 
 ## API Reference
 
-### Mobile Endpoints
+### Implemented Endpoints
 
-Both path prefixes are equivalent — `/m/v1` is a short alias for `/bff/mobile/v1`.
+Both path prefixes are equivalent — `/m/v1` is a short alias for
+`/bff/mobile/v1`.
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/bff/mobile/v1/home` | Home screen aggregated data |
-| `GET` | `/m/v1/home` | Home screen (short alias) |
-
-### Home Response
-
-**GET /bff/mobile/v1/home**
-
-```json
-{
-  "status": "ok"
-}
-```
+| Method | Endpoint | Description | Response |
+|--------|----------|-------------|----------|
+| `GET` | `/bff/mobile/v1/home` | Current stub home endpoint | `{"status":"ok"}` |
+| `GET` | `/m/v1/home` | Short alias for the same stub | `{"status":"ok"}` |
 
 ### Actuator Endpoints
 
 | Method | Endpoint | Description |
-|---|---|---|
+|--------|----------|-------------|
 | `GET` | `/actuator/health/liveness` | Kubernetes liveness probe |
 | `GET` | `/actuator/health/readiness` | Kubernetes readiness probe |
-| `GET` | `/actuator/prometheus` | Prometheus metrics scrape endpoint |
-| `GET` | `/actuator/info` | Application info |
-
-### Error Responses
-
-| Status | Description |
-|---|---|
-| `401` | Missing or invalid authentication |
-| `502` | One or more backend services unavailable |
-| `504` | Backend service timeout |
-
----
+| `GET` | `/actuator/prometheus` | Prometheus scrape endpoint |
+| `GET` | `/actuator/info` | Application metadata |
+| `GET` | `/actuator/metrics` | Micrometer metrics catalog |
 
 ## Configuration
 
-### application.yml
+### Runtime configuration
 
 ```yaml
 server:
@@ -260,24 +149,14 @@ server:
 spring:
   application:
     name: mobile-bff-service
-  cache:
-    type: caffeine
+  config:
+    import: optional:sm://
   lifecycle:
     timeout-per-shutdown-phase: 30s
-
-internal:
-  service:
-    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}
+  cache:
+    type: caffeine
 
 management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus
-  endpoint:
-    health:
-      probes:
-        enabled: true
   tracing:
     sampling:
       probability: ${TRACING_PROBABILITY:1.0}
@@ -285,28 +164,86 @@ management:
     tracing:
       endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://otel-collector.monitoring:4318/v1/traces}
     metrics:
-      export:
-        endpoint: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://otel-collector.monitoring:4318/v1/metrics}
+      endpoint: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://otel-collector.monitoring:4318/v1/metrics}
+  metrics:
+    tags:
+      service: ${spring.application.name}
+      environment: ${ENVIRONMENT:dev}
+    export:
+      prometheus:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include: readinessState
+        liveness:
+          include: livenessState
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}
 ```
 
-### Environment Variables
+### Environment variables
 
 | Variable | Default | Description |
-|---|---|---|
+|----------|---------|-------------|
 | `SERVER_PORT` | `8097` | HTTP server port |
-| `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Token for inter-service authentication |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` | OpenTelemetry traces endpoint |
-| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` | OpenTelemetry metrics endpoint |
-| `TRACING_PROBABILITY` | `1.0` | Trace sampling probability (0.0–1.0) |
-| `ENVIRONMENT` | `dev` | Deployment environment tag |
+| `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Shared internal token placeholder for future service-to-service calls |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` | OTLP traces endpoint |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` | OTLP metrics endpoint |
+| `TRACING_PROBABILITY` | `1.0` | Trace sampling probability |
+| `ENVIRONMENT` | `dev` | Metrics/environment tag |
 
-### Tech Stack
+## Local Development
 
-- Java 21, Spring Boot 3.x (WebFlux)
-- Reactive stack (Project Reactor / `Mono<T>`)
-- Caffeine Cache
-- Resilience4j (Circuit Breaker)
-- Micrometer + OpenTelemetry + Prometheus
-- ZGC garbage collector
-- Docker (Alpine, non-root user)
-- Kubernetes health probes (liveness/readiness)
+### Build and run
+
+```bash
+# From the repository root
+./gradlew :services:mobile-bff-service:bootRun
+```
+
+### Docker image
+
+The service ships with a Java 21 / Alpine multi-stage Dockerfile:
+
+- runtime port: `8097`
+- non-root user: `app`
+- healthcheck: `/actuator/health/liveness`
+- JVM posture: `-XX:MaxRAMPercentage=75.0`, `-XX:+UseZGC`
+
+## Deployment Notes
+
+The Helm values currently configure this service as a lightweight edge stub:
+
+| Environment | Replicas | HPA | Resource requests | Resource limits |
+|-------------|----------|-----|-------------------|-----------------|
+| `values.yaml` | 2 | 2-8 pods @ 70% CPU | `250m / 384Mi` | `500m / 768Mi` |
+| `values-dev.yaml` | tag only | inherits base | inherits base | inherits base |
+| `values-prod.yaml` | 2 | inherits base | inherits base | inherits base |
+
+## Testing Status
+
+- `spring-boot-starter-test` and `reactor-test` are present in `build.gradle.kts`
+- no `src/test` classes exist yet
+- before turning this into a real aggregator, add controller tests, downstream
+  contract tests, and timeout/fallback coverage
+
+## Known Gaps
+
+1. No downstream service clients are implemented.
+2. Caffeine and Resilience4j are configured as dependencies but unused.
+3. No authentication or authorization layer is implemented beyond the future
+   internal token placeholder in configuration.
+4. No deployment/runbook-specific troubleshooting guidance exists yet because
+   the service does not own live aggregation logic today.

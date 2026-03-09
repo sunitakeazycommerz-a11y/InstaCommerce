@@ -1,197 +1,143 @@
 # Admin Gateway Service
 
-API gateway for InstaCommerce admin operations. Routes authenticated admin requests to the appropriate backend microservices, providing a single entry point for the admin UI and internal tooling.
+Admin-facing edge service for InstaCommerce. **Current state:** this service is
+still a scaffold. The only implemented business endpoint is
+`GET /admin/v1/dashboard`, which returns a stub payload. No request proxying,
+RBAC enforcement, or downstream service integration exists yet.
 
-## Table of Contents
+## Current-State Summary
 
-- [Architecture Overview](#architecture-overview)
-- [Key Components](#key-components)
-- [Request Routing](#request-routing)
-- [Auth Flow](#auth-flow)
-- [Supported Admin Operations](#supported-admin-operations)
-- [API Reference](#api-reference)
-- [Configuration](#configuration)
+| Area | Current implementation | Target state |
+|------|------------------------|--------------|
+| Endpoints | `GET /admin/v1/dashboard` + actuator | Admin API facade over product, order, identity, flags, inventory, and catalog domains |
+| Routing | None | Path-based proxying and/or aggregation |
+| Authentication | None in code | Admin JWT validation, role checks, internal forwarding headers |
+| Tests | No test classes yet | Controller, routing, and policy coverage |
 
----
-
-## Architecture Overview
+## Current Architecture (HLD)
 
 ```mermaid
 graph TB
     subgraph Clients
-        ADMIN_UI[Admin UI / Dashboard]
-        INTERNAL[Internal Tools]
+        ADMIN[Admin UI]
+        OPS[Internal tools]
     end
 
     subgraph Admin Gateway Service :8099
-        AGC[AdminGatewayController<br>/admin/v1]
+        CTRL[AdminGatewayController]
+        APP[AdminGatewayServiceApplication]
+        ACT[Actuator + OTEL + Prometheus]
     end
 
-    subgraph Backend Services
-        PRODUCT[Product Service]
-        ORDER[Order Service]
-        USER[Identity Service]
-        CATALOG[Catalog Service]
-        FF[Config Feature Flag Service]
-        INV[Inventory Service]
-    end
-
-    subgraph Observability
-        OTEL[OpenTelemetry Collector]
-        PROM[Prometheus]
-    end
-
-    ADMIN_UI --> AGC
-    INTERNAL --> AGC
-
-    AGC --> PRODUCT
-    AGC --> ORDER
-    AGC --> USER
-    AGC --> CATALOG
-    AGC --> FF
-    AGC --> INV
-
-    AGC --> OTEL
-    OTEL --> PROM
+    ADMIN --> CTRL
+    OPS --> CTRL
+    CTRL -->|Map.of("status","ok")| ADMIN
+    CTRL --> ACT
+    APP --> CTRL
 ```
 
----
-
-## Key Components
-
-| Component | Responsibility |
-|---|---|
-| **AdminGatewayController** | Central routing controller — accepts admin requests at `/admin/v1` and dispatches to backend services |
-| **Application Config** | Service port, internal auth token, OpenTelemetry tracing configuration |
-
----
-
-## Request Routing
+## Current UML Snapshot (LLD)
 
 ```mermaid
-flowchart TD
-    A[Admin Client Request] --> B[Admin Gateway :8099]
-    B --> C{Route Path}
+classDiagram
+    class AdminGatewayServiceApplication
+    class AdminGatewayController {
+        +Map~String,Object~ dashboard()
+    }
 
-    C -->|/admin/v1/dashboard| D[Dashboard Status<br>Returns health OK]
-    C -->|/admin/v1/products/**| E[Product Service]
-    C -->|/admin/v1/orders/**| F[Order Service]
-    C -->|/admin/v1/users/**| G[Identity Service]
-    C -->|/admin/v1/catalog/**| H[Catalog Service]
-    C -->|/admin/v1/flags/**| I[Feature Flag Service]
-    C -->|/admin/v1/inventory/**| J[Inventory Service]
-
-    subgraph Response Flow
-        E & F & G & H & I & J --> K[Aggregate / Forward Response]
-        K --> L[Return to Admin Client]
-    end
-
-    D --> L
+    AdminGatewayServiceApplication --> AdminGatewayController
 ```
 
-All admin requests enter through the gateway at `/admin/v1`. The gateway authenticates the request, resolves the target service based on the URL path, forwards the request with the internal service token, and returns the response.
-
----
-
-## Auth Flow
+## Current Request Flow
 
 ```mermaid
 sequenceDiagram
-    participant Client as Admin Client
-    participant GW as Admin Gateway
-    participant Auth as Token Validation
-    participant Svc as Backend Service
+    participant Client as Admin client
+    participant Gateway as AdminGatewayController
 
-    Client->>GW: Request + Authorization header
-    GW->>Auth: Validate token / credentials
-    Auth-->>GW: Authenticated identity + roles
-
-    alt Authorized (admin role)
-        GW->>Svc: Forward request + internal-service-token
-        Svc-->>GW: Service response
-        GW-->>Client: 200 Response
-    else Unauthorized
-        GW-->>Client: 401 Unauthorized
-    end
+    Client->>Gateway: GET /admin/v1/dashboard
+    Gateway-->>Client: 200 {"status":"ok"}
 ```
 
-- **Inbound Auth**: Requests are validated at the gateway layer
-- **Inter-Service Auth**: The gateway attaches the `internal.service.token` header when forwarding to backend services
-- **Token**: Configured via `INTERNAL_SERVICE_TOKEN` environment variable
+## Target Architecture (Planned, not yet implemented)
 
----
-
-## Supported Admin Operations
+The diagrams below describe the intended admin-gateway role once routing,
+authentication, and downstream integrations are built. They are not current
+runtime behavior.
 
 ```mermaid
-mindmap
-  root((Admin Gateway))
-    Dashboard
-      Health Check
-      System Status
-    Product Management
-      CRUD Products
-      Product Variants
-    Order Management
-      View Orders
-      Update Status
-    User Management
-      User Lookup
-      Role Assignment
-    Feature Flags
-      Manage Flags
-      Manage Experiments
-    Catalog
-      Category Management
-      Search Config
-    Inventory
-      Stock Levels
-      Adjustments
+graph TB
+    subgraph Clients2
+        ADMIN_UI[Admin UI / Dashboard]
+        INTERNAL[Internal tools]
+    end
+
+    subgraph Planned Admin Gateway
+        EDGE[Admin API facade]
+        AUTH[Auth / RBAC layer]
+        FWD[Forwarding + aggregation]
+    end
+
+    subgraph Backend Services
+        PRODUCT[Product service]
+        ORDER[Order service]
+        USER[Identity service]
+        CATALOG[Catalog service]
+        FF[Config/feature-flag service]
+        INV[Inventory service]
+    end
+
+    ADMIN_UI --> EDGE
+    INTERNAL --> EDGE
+    EDGE --> AUTH
+    AUTH --> FWD
+    FWD --> PRODUCT
+    FWD --> ORDER
+    FWD --> USER
+    FWD --> CATALOG
+    FWD --> FF
+    FWD --> INV
 ```
 
----
+```mermaid
+flowchart TD
+    A[Admin request] --> B[Planned admin gateway]
+    B --> C{Route + auth policy}
+    C -->|Dashboard| D[Gateway-owned status response]
+    C -->|Products| E[Product service]
+    C -->|Orders| F[Order service]
+    C -->|Users| G[Identity service]
+    C -->|Flags| H[Config/feature-flag service]
+    C -->|Inventory| I[Inventory service]
+    E --> J[Return downstream/admin-shaped payload]
+    F --> J
+    G --> J
+    H --> J
+    I --> J
+    D --> J
+```
 
 ## API Reference
 
-### Gateway Endpoints
+### Implemented endpoint
+
+| Method | Endpoint | Description | Response |
+|--------|----------|-------------|----------|
+| `GET` | `/admin/v1/dashboard` | Current stub admin dashboard endpoint | `{"status":"ok"}` |
+
+### Actuator endpoints
 
 | Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/admin/v1/dashboard` | Gateway health and dashboard status |
-
-### Actuator Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
+|--------|----------|-------------|
 | `GET` | `/actuator/health/liveness` | Kubernetes liveness probe |
 | `GET` | `/actuator/health/readiness` | Kubernetes readiness probe |
-| `GET` | `/actuator/prometheus` | Prometheus metrics scrape endpoint |
-| `GET` | `/actuator/info` | Application info |
-
-### Dashboard Response
-
-**GET /admin/v1/dashboard**
-
-```json
-{
-  "status": "ok"
-}
-```
-
-### Error Responses
-
-| Status | Description |
-|---|---|
-| `401` | Missing or invalid authentication |
-| `403` | Insufficient permissions (non-admin) |
-| `502` | Backend service unavailable |
-| `504` | Backend service timeout |
-
----
+| `GET` | `/actuator/prometheus` | Prometheus scrape endpoint |
+| `GET` | `/actuator/info` | Application metadata |
+| `GET` | `/actuator/metrics` | Micrometer metrics catalog |
 
 ## Configuration
 
-### application.yml
+### Runtime configuration
 
 ```yaml
 server:
@@ -201,22 +147,12 @@ server:
 spring:
   application:
     name: admin-gateway-service
+  config:
+    import: optional:sm://
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
-internal:
-  service:
-    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}
-
 management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus
-  endpoint:
-    health:
-      probes:
-        enabled: true
   tracing:
     sampling:
       probability: ${TRACING_PROBABILITY:1.0}
@@ -224,26 +160,85 @@ management:
     tracing:
       endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://otel-collector.monitoring:4318/v1/traces}
     metrics:
-      export:
-        endpoint: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://otel-collector.monitoring:4318/v1/metrics}
+      endpoint: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://otel-collector.monitoring:4318/v1/metrics}
+  metrics:
+    tags:
+      service: ${spring.application.name}
+      environment: ${ENVIRONMENT:dev}
+    export:
+      prometheus:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include: readinessState
+        liveness:
+          include: livenessState
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}
 ```
 
-### Environment Variables
+### Environment variables
 
 | Variable | Default | Description |
-|---|---|---|
+|----------|---------|-------------|
 | `SERVER_PORT` | `8099` | HTTP server port |
-| `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Token for inter-service authentication |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` | OpenTelemetry traces endpoint |
-| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` | OpenTelemetry metrics endpoint |
-| `TRACING_PROBABILITY` | `1.0` | Trace sampling probability (0.0–1.0) |
-| `ENVIRONMENT` | `dev` | Deployment environment tag |
+| `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Placeholder internal token for future downstream forwarding |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` | OTLP traces endpoint |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` | OTLP metrics endpoint |
+| `TRACING_PROBABILITY` | `1.0` | Trace sampling probability |
+| `ENVIRONMENT` | `dev` | Metrics/environment tag |
 
-### Tech Stack
+## Local Development
 
-- Java 21, Spring Boot 3.x
-- Spring MVC (Web)
-- OpenTelemetry + Prometheus
-- Docker (Alpine, non-root user)
-- Graceful shutdown (30s timeout)
-- Kubernetes health probes (liveness/readiness)
+### Build and run
+
+```bash
+# From the repository root
+./gradlew :services:admin-gateway-service:bootRun
+```
+
+### Docker image
+
+The service ships with a Java 21 / Alpine multi-stage Dockerfile:
+
+- runtime port: `8099`
+- non-root user: `app`
+- healthcheck: `/actuator/health/liveness`
+- JVM posture: `-XX:MaxRAMPercentage=75.0`, `-XX:+UseZGC`
+
+## Deployment Notes
+
+The Helm values currently treat this service as a lightweight edge stub:
+
+| Environment | Replicas | HPA | Resource requests | Resource limits |
+|-------------|----------|-----|-------------------|-----------------|
+| `values.yaml` | 2 | 2-6 pods @ 70% CPU | `250m / 384Mi` | `500m / 768Mi` |
+| `values-dev.yaml` | tag only | inherits base | inherits base | inherits base |
+| `values-prod.yaml` | 2 | inherits base | inherits base | inherits base |
+
+## Testing Status
+
+- `spring-boot-starter-test` is present in `build.gradle.kts`
+- no `src/test` classes exist yet
+- before enabling request forwarding, add controller tests, RBAC tests, and
+  downstream error-propagation coverage
+
+## Known Gaps
+
+1. No downstream routing or aggregation logic is implemented.
+2. No inbound authentication or authorization layer exists in code.
+3. The internal service token is configured but unused until forwarding is added.
+4. No runbook exists yet because the service does not currently own live
+   control-plane behavior beyond the stub endpoint.
