@@ -2,56 +2,40 @@ package com.instacommerce.payment.webhook;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
-import com.instacommerce.payment.domain.model.ProcessedWebhookEvent;
-import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
-import com.instacommerce.payment.service.LedgerService;
-import com.instacommerce.payment.service.OutboxService;
 import java.io.IOException;
-import java.time.Instant;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Set;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Parses Stripe webhook payloads, performs fast-path dedup, and delegates
+ * transactional event processing to {@link WebhookEventProcessor}.
+ * <p>
+ * The processing call goes through a separate Spring bean so that the
+ * {@code @Transactional} proxy is honoured. A previous version called
+ * {@code this.processEvent()} (self-invocation), which silently bypassed the
+ * proxy and broke dedup-marker rollback on transient deferrals.
+ */
 @Component
 public class WebhookEventHandler {
     private static final Logger log = LoggerFactory.getLogger(WebhookEventHandler.class);
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final long RETRY_BACKOFF_MS = 100;
 
-    static final Set<PaymentStatus> REFUNDABLE_STATES = Set.of(
-        PaymentStatus.CAPTURED,
-        PaymentStatus.PARTIALLY_REFUNDED
-    );
-
     private final ObjectMapper objectMapper;
-    private final PaymentRepository paymentRepository;
     private final ProcessedWebhookEventRepository processedWebhookEventRepository;
-    private final LedgerService ledgerService;
-    private final OutboxService outboxService;
-    private final boolean refundOutboxEnabled;
+    private final WebhookEventProcessor processor;
 
     public WebhookEventHandler(ObjectMapper objectMapper,
-                               PaymentRepository paymentRepository,
                                ProcessedWebhookEventRepository processedWebhookEventRepository,
-                               LedgerService ledgerService,
-                               OutboxService outboxService,
-                               @Value("${payment.webhook.refund-outbox-enabled:false}") boolean refundOutboxEnabled) {
+                               WebhookEventProcessor processor) {
         this.objectMapper = objectMapper;
-        this.paymentRepository = paymentRepository;
         this.processedWebhookEventRepository = processedWebhookEventRepository;
-        this.ledgerService = ledgerService;
-        this.outboxService = outboxService;
-        this.refundOutboxEnabled = refundOutboxEnabled;
+        this.processor = processor;
     }
 
     public void handle(String payload) {
@@ -69,7 +53,7 @@ public class WebhookEventHandler {
             return;
         }
 
-        // Deduplication check
+        // Fast-path deduplication before entering a transaction
         if (eventId != null && !eventId.isBlank()
             && processedWebhookEventRepository.existsById(eventId)) {
             log.debug("Webhook event {} already processed, skipping", eventId);
@@ -86,7 +70,7 @@ public class WebhookEventHandler {
         // Retry with backoff on optimistic lock conflicts
         for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
             try {
-                processEvent(eventId, type, pspReference, objectNode);
+                processor.processEvent(eventId, type, pspReference, objectNode);
                 return;
             } catch (ObjectOptimisticLockingFailureException ex) {
                 if (attempt == MAX_RETRY_ATTEMPTS) {
@@ -106,112 +90,14 @@ public class WebhookEventHandler {
         }
     }
 
-    @Transactional
-    public void processEvent(String eventId, String type, String pspReference, JsonNode objectNode) {
-        // Record event as processed (dedup)
-        if (eventId != null && !eventId.isBlank()) {
-            try {
-                ProcessedWebhookEvent processed = new ProcessedWebhookEvent();
-                processed.setEventId(eventId);
-                processedWebhookEventRepository.save(processed);
-            } catch (DataIntegrityViolationException ex) {
-                log.debug("Webhook event {} already processed (concurrent), skipping", eventId);
-                return;
-            }
+    /**
+     * Thrown when a refund webhook arrives for a payment in a transient non-refundable state.
+     * Rolling back the transaction (including the dedup record) allows Stripe to retry.
+     */
+    static class TransientWebhookStateException extends RuntimeException {
+        TransientWebhookStateException(UUID paymentId, PaymentStatus status) {
+            super("Payment %s in transient state %s; deferring for retry".formatted(paymentId, status));
         }
-
-        paymentRepository.findByPspReference(pspReference)
-            .ifPresent(payment -> applyEvent(payment, type, objectNode, eventId));
-    }
-
-    private void applyEvent(Payment payment, String type, JsonNode objectNode, String eventId) {
-        switch (type) {
-            case "payment_intent.succeeded" -> handleCaptured(payment, objectNode, eventId);
-            case "payment_intent.canceled" -> handleVoided(payment, eventId);
-            case "payment_intent.payment_failed" -> handleFailed(payment);
-            case "charge.refunded" -> handleRefunded(payment, objectNode, eventId);
-            default -> log.debug("Ignoring webhook event {}", type);
-        }
-    }
-
-    private void handleCaptured(Payment payment, JsonNode objectNode, String eventId) {
-        if (payment.getStatus() == PaymentStatus.CAPTURED) {
-            return;
-        }
-        long amount = longValue(objectNode, "amount_received", "amount");
-        long capturedAmount = amount > 0 ? amount : payment.getAmountCents();
-        long previousCaptured = payment.getCapturedCents();
-        long delta = Math.max(0L, capturedAmount - previousCaptured);
-        payment.setCapturedCents(Math.max(previousCaptured, capturedAmount));
-        payment.setStatus(PaymentStatus.CAPTURED);
-        Payment saved = paymentRepository.save(payment);
-        if (delta > 0) {
-            ledgerService.recordDoubleEntry(saved.getId(), delta,
-                "authorization_hold", "merchant_payable", "CAPTURE",
-                referenceId(eventId, saved), "Capture (webhook)");
-        }
-    }
-
-    private void handleVoided(Payment payment, String eventId) {
-        if (payment.getStatus() == PaymentStatus.VOIDED) {
-            return;
-        }
-        payment.setStatus(PaymentStatus.VOIDED);
-        Payment saved = paymentRepository.save(payment);
-        ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
-            "authorization_hold", "customer_receivable", "VOID",
-            referenceId(eventId, saved), "Authorization void (webhook)");
-    }
-
-    private void handleFailed(Payment payment) {
-        if (payment.getStatus() == PaymentStatus.FAILED) {
-            return;
-        }
-        payment.setStatus(PaymentStatus.FAILED);
-        paymentRepository.save(payment);
-    }
-
-    private void handleRefunded(Payment payment, JsonNode objectNode, String eventId) {
-        if (!REFUNDABLE_STATES.contains(payment.getStatus())) {
-            log.warn("Webhook refund rejected: payment {} in non-refundable state {}",
-                payment.getId(), payment.getStatus());
-            return;
-        }
-
-        long refunded = longValue(objectNode, "amount_refunded");
-        if (refunded <= 0) {
-            return;
-        }
-        long previousRefunded = payment.getRefundedCents();
-        long updatedRefunded = Math.max(previousRefunded, refunded);
-        payment.setRefundedCents(updatedRefunded);
-        if (updatedRefunded >= payment.getCapturedCents()) {
-            payment.setStatus(PaymentStatus.REFUNDED);
-        } else {
-            payment.setStatus(PaymentStatus.PARTIALLY_REFUNDED);
-        }
-        Payment saved = paymentRepository.save(payment);
-        long delta = updatedRefunded - previousRefunded;
-        if (delta > 0) {
-            ledgerService.recordDoubleEntry(saved.getId(), delta,
-                "merchant_payable", "customer_receivable", "REFUND",
-                referenceId(eventId, saved), "Refund (webhook)");
-
-            if (refundOutboxEnabled) {
-                publishRefundOutbox(saved, delta, eventId);
-            }
-        }
-    }
-
-    private void publishRefundOutbox(Payment payment, long refundDelta, String eventId) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("orderId", payment.getOrderId());
-        payload.put("paymentId", payment.getId());
-        payload.put("amountCents", refundDelta);
-        payload.put("currency", payment.getCurrency());
-        payload.put("refundedAt", Instant.now());
-        payload.put("reason", "webhook");
-        outboxService.publish("Payment", payment.getId().toString(), "PaymentRefunded", payload);
     }
 
     private String extractPspReference(JsonNode objectNode) {
@@ -228,19 +114,5 @@ public class WebhookEventHandler {
             return null;
         }
         return value.asText();
-    }
-
-    private long longValue(JsonNode node, String... fields) {
-        for (String field : fields) {
-            JsonNode value = node.path(field);
-            if (!value.isMissingNode() && value.isNumber()) {
-                return value.asLong();
-            }
-        }
-        return 0;
-    }
-
-    private String referenceId(String eventId, Payment payment) {
-        return (eventId == null || eventId.isBlank()) ? payment.getId().toString() : eventId;
     }
 }

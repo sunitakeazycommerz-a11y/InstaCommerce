@@ -594,7 +594,8 @@ erDiagram
 | `StripePaymentGateway` | `gateway` | Stripe implementation (`@Profile("!test")`) |
 | `MockPaymentGateway` | `gateway` | In-memory stub for tests (`@Profile("test")`) |
 | `WebhookSignatureVerifier` | `webhook` | HMAC-SHA256 signature + timestamp verification |
-| `WebhookEventHandler` | `webhook` | Parses and applies webhook events with dedup + retry |
+| `WebhookEventHandler` | `webhook` | Parses webhooks, dedup pre-check, retry loop; delegates to processor |
+| `WebhookEventProcessor` | `webhook` | `@Transactional` boundary for webhook event application (dedup + state + ledger + outbox) |
 | `OutboxCleanupJob` | `service` | Scheduled purge of sent outbox events (ShedLock) |
 
 ---
@@ -616,6 +617,7 @@ Key environment variables (see `application.yml`):
 | `PAYMENT_JWT_ISSUER` | `instacommerce-identity` | Expected JWT issuer |
 | `PAYMENT_JWT_PUBLIC_KEY` | — | RSA public key for JWT verification |
 | `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Service-to-service auth token |
+| `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` | `false` | Enable outbox event publishing for webhook-driven refund state changes (wave 3) |
 | `PAYMENT_STALE_PENDING_RECOVERY_ENABLED` | `false` | Enable stale pending payment recovery job |
 | `PAYMENT_STALE_PENDING_RECOVERY_CRON` | `0 */5 * * * *` | Cron schedule for recovery job |
 | `PAYMENT_STALE_PENDING_RECOVERY_THRESHOLD_MINUTES` | `30` | Minutes before a pending payment is considered stale |
@@ -732,6 +734,75 @@ Operators should watch the following during and after rollout:
 2. **Enable in prod** — flip `PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED` to `"true"` in `values-prod.yaml` once dev validation is complete and monitoring confirms no anomalies.
 3. **Rollback** — set the flag back to `"false"` and redeploy. The consumer stops processing new events; any in-flight PSP call completes normally via the existing three-phase pattern. Kafka consumer offsets are retained, so re-enabling will resume from the last committed offset.
 4. **Monitoring** — watch for: increased void/refund error rates, ledger imbalance alerts, consumer lag on the `orders.events` topic, growth in `orders.events.DLT`, and Stripe webhook reconciliation mismatches.
+
+---
+
+## Webhook Refund Outbox (Wave 3)
+
+### What It Does
+
+When `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` is `true`, the `WebhookEventProcessor` writes a transactional outbox event whenever a Stripe `charge.refunded` webhook transitions a payment to `REFUNDED` or `PARTIALLY_REFUNDED`. This closes the gap where webhook-driven refund state changes were applied to the local database and ledger but never published to Kafka, leaving downstream consumers (order-service, fulfillment-service, reconciliation-engine, data-platform) unaware of the refund completion.
+
+The outbox row is written inside the same `@Transactional` boundary (in `WebhookEventProcessor`) as the payment status update and ledger entries, so the event is guaranteed to be published if and only if the local state change commits. The outbox-relay service picks up the event and delivers it to the `payment.events` Kafka topic like any other payment domain event.
+
+If a refund webhook arrives while the payment is still in a transient pre-refund state (`AUTHORIZE_PENDING`, `AUTHORIZED`, `CAPTURE_PENDING`, `VOID_PENDING`), the handler throws and rolls back the dedup marker so Stripe retries later instead of silently dropping an out-of-order event.
+
+### Configuration
+
+| Variable | `application.yml` Property | Default | Description |
+|---|---|---|---|
+| `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` | `payment.webhook.refund-outbox-enabled` | `false` | Feature gate — set to `true` to emit outbox events for webhook-driven refunds |
+
+### Rollout
+
+1. **Enable in dev** — `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED: "true"` is already set in `values-dev.yaml`. Trigger test refunds via Stripe and verify that `PaymentRefunded` events appear on the `payment.events` Kafka topic.
+2. **Enable in prod** — flip `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` to `"true"` in `values-prod.yaml` once dev validation is complete and monitoring confirms no anomalies.
+3. **Rollback** — set the flag back to `"false"` and redeploy. The webhook handler continues to apply refund state changes and ledger entries locally; only the outbox write is skipped. No data migration or cleanup is required. Downstream consumers will stop receiving new webhook-driven refund events but will not lose previously delivered events.
+
+### Metrics and Alerts
+
+The handler emits `payment.webhook.refund` counters with an `outcome` tag:
+
+- `processed` - refund state and ledger updates were applied locally
+- `outbox_published` - a `PaymentRefunded` outbox row was written
+- `transient_deferred` - the webhook was deferred so Stripe can retry after upstream state converges
+- `terminal_rejected` - the webhook was rejected because the payment was already in a terminal non-refundable state
+
+Operators should watch the following during and after rollout:
+
+| Metric / Signal | What to Watch | Action |
+|---|---|---|
+| `payment.webhook.refund{outcome="processed"}` | Expected refund webhook volume | Sudden drops can indicate webhook delivery or handler failures |
+| `payment.webhook.refund{outcome="outbox_published"}` | Should track processed refunds when the feature flag is enabled and `amount_refunded` advances | Divergence means the flag is off or the handler is not emitting events as expected |
+| `payment.webhook.refund{outcome="transient_deferred"}` | Spikes after enablement | Investigate out-of-order webhooks, delayed capture settlement, or stuck payment state transitions |
+| `payment.webhook.refund{outcome="terminal_rejected"}` | Unexpected sustained increases | Investigate late/duplicate Stripe events or payment state-machine inconsistencies |
+| Outbox relay lag | Time between outbox row creation and Kafka delivery | High lag means downstream consumers see delayed refund events |
+| `payment.events` consumer lag (downstream) | Consumer group lag on downstream services | Sustained growth after enabling may indicate processing issues |
+| Ledger balance check | `SUM(debits) = SUM(credits)` invariant | Any imbalance after enabling requires immediate investigation |
+| Stripe webhook error rate | 4xx/5xx responses to Stripe webhook delivery | A spike may indicate the outbox write is causing transaction failures |
+
+### Event Payload Shape
+
+The webhook-driven `PaymentRefunded` outbox event carries:
+
+| Field | Type | Notes |
+|---|---|---|
+| `refundId` | UUID | Deterministic synthetic UUID derived from the webhook event ID |
+| `orderId` | UUID | Associated order |
+| `paymentId` | UUID | Payment aggregate ID |
+| `amountCents` | long | **Refund delta** for this webhook — not the cumulative total |
+| `currency` | String | e.g. `USD` |
+| `refundedAt` | Instant | Timestamp of processing |
+| `reason` | String | Always `"webhook"` for webhook-driven events |
+
+The webhook-driven payload now satisfies the `PaymentRefunded` contract. Its `refundId` is stable across retries for the same Stripe event, but it is synthetic: it is not yet mapped to a first-class local refund aggregate or a PSP-native refund object ID.
+
+### Limitations and Follow-ups
+
+- **Downstream closure is incomplete.** No downstream consumers (order-service, fulfillment-service, reconciliation-engine, data-platform) currently handle webhook-originated `PaymentRefunded` events. The wallet-loyalty-service has a `PaymentRefunded` handler but expects field names (`userId`, `refundAmountCents`) that webhook-driven events do not carry. Until consumers are updated, events accumulate on the topic without effect (additive, safe to leave unprocessed).
+- **Synthetic refund identity**: `refundId` is derived from the Stripe webhook event ID to preserve contract compatibility and retry stability. If downstream systems need a canonical internal refund record or PSP refund identifier, add that explicitly in a later wave instead of overloading this synthetic ID.
+- **Backfill**: enabling the flag does not retroactively publish events for refunds that were already processed while the flag was off. If historical reconciliation is needed, use the reconciliation-engine or a one-time backfill job.
+- **`REFUND_PENDING` recovery**: the stale pending recovery job does not yet cover `REFUND_PENDING` states; this remains a separate follow-up item.
 
 ---
 
