@@ -1,443 +1,655 @@
-<h1 align="center">InstaCommerce</h1>
+# InstaCommerce
 
-<p align="center">
-  <strong>Production-grade Q-Commerce backend platform powering 10-minute grocery delivery</strong>
-</p>
+**Q-Commerce backend monorepo — 30 microservices across Java/Spring Boot, Go, and Python/FastAPI on GKE.**
 
-<p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build Status" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/coverage-87%25-green?style=flat-square" alt="Coverage" /></a>
-  <a href="#license"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/services-30-orange?style=flat-square" alt="Services" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/orders%2Fday-500K%2B-purple?style=flat-square" alt="Orders/Day" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/users-20M%2B-blueviolet?style=flat-square" alt="Users" /></a>
-</p>
-
-<p align="center">
-  Serving <strong>20M+ users</strong> and processing <strong>500K+ orders/day</strong> across dark stores nationwide.<br/>
-  Comparable to Zepto · Blinkit · Instacart · DoorDash
-</p>
+> **Honesty note:** This README is grounded in checked-in code, CI configuration
+> (`ci.yml`), `settings.gradle.kts`, `docker-compose.yml`, `contracts/`,
+> architecture docs under `docs/architecture/`, and the iteration-3 principal
+> engineering review under `docs/reviews/iter3/`. Where the codebase has known
+> gaps or scaffold-only services, those are called out explicitly. See
+> [Known Limitations & Current-State Gaps](#known-limitations--current-state-gaps)
+> for the honest delta between target and actual.
 
 ---
 
-## 📑 Table of Contents
+## Table of Contents
 
-- [Architecture Overview](#-architecture-overview)
-- [Tech Stack](#-tech-stack)
-- [Service Inventory](#-service-inventory)
-- [Getting Started](#-getting-started)
-- [Project Structure](#-project-structure)
-- [Architecture Decisions](#-architecture-decisions)
-- [Documentation](#-documentation)
-- [Contributing](#-contributing)
-- [License](#-license)
+- [Repo Role & Boundaries](#repo-role--boundaries)
+- [High-Level Design (HLD)](#high-level-design-hld)
+- [System Interaction View](#system-interaction-view)
+- [Order Lifecycle — Sequence Diagram](#order-lifecycle--sequence-diagram)
+- [Component / Domain Map](#component--domain-map)
+- [Service Inventory](#service-inventory)
+- [Low-Level Design & Navigation](#low-level-design--navigation)
+- [Runtime & Validation Entrypoints](#runtime--validation-entrypoints)
+- [Rollout & Release Posture](#rollout--release-posture)
+- [Observability & Testing Overview](#observability--testing-overview)
+- [Known Limitations & Current-State Gaps](#known-limitations--current-state-gaps)
+- [Comparison Note — Q-Commerce Platform Patterns](#comparison-note--q-commerce-platform-patterns)
+- [Documentation Index](#documentation-index)
+- [License](#license)
 
 ---
 
-## 🏗 Architecture Overview
+## Repo Role & Boundaries
 
-The platform follows a **domain-driven microservices architecture** with event-driven communication via Kafka, orchestrated workflows via Temporal, and a polyglot service mesh managed by Istio on GKE. In the current transactional model, the checkout money path remains orchestrated in `checkout-orchestrator-service`, while downstream order progression from fulfillment through delivery is migrating to Kafka-driven choreography behind explicit rollout controls.
+This monorepo is the single source of truth for the InstaCommerce backend
+platform. It contains:
 
-> **Current-state note:** Some edge-facing services in the repository, notably
-> `mobile-bff-service` and `admin-gateway-service`, are still scaffolds rather
-> than full aggregators. Their service READMEs document both the current
-> implementation and the intended target architecture so the repo entrypoint
-> stays honest about runtime reality.
+| What | Where | Canonical identifier |
+|------|-------|---------------------|
+| 20 Java/Spring Boot services | `services/` + `settings.gradle.kts` | Gradle module paths (e.g. `:services:order-service`) |
+| 7 Go data/event services + 1 shared library | `services/*/go.mod` | Per-module `go.mod` (e.g. `services/outbox-relay-service`) |
+| 2 Python/FastAPI AI services | `services/ai-orchestrator-service`, `services/ai-inference-service` | `uvicorn app.main:app` entrypoint |
+| Cross-service contracts | `contracts/` (Protobuf + JSON Schema) | `./gradlew :contracts:build` |
+| Data platform | `data-platform/` (dbt, Airflow, Beam, Great Expectations) | `dbt run`, Airflow DAGs |
+| ML platform | `ml/` (training, eval, feature store, serving) | Config-driven under `ml/train/*/config.yaml` |
+| Infrastructure as code | `infra/terraform/`, `deploy/helm/`, `argocd/` | Terraform modules, Helm values, ArgoCD app-of-apps |
+| Observability | `monitoring/` | Prometheus rules (`prometheus-rules.yaml`) |
+| CI | `.github/workflows/ci.yml` | Path-filtered per-service builds + security gates |
+
+**What is not in this repo:** client applications (mobile, web, admin portal),
+third-party gateway configurations, and production secrets.
+
+`settings.gradle.kts` and `.github/workflows/ci.yml` are the authoritative
+references for service module identifiers and CI coverage. Human-facing docs may
+use shorter display names, but the real module paths are under `services/`.
+
+---
+
+## High-Level Design (HLD)
+
+The platform is organized into six architectural planes as defined in the
+iteration-3 HLD diagrams (`docs/architecture/ITER3-HLD-DIAGRAMS.md`):
+
+1. **Edge Plane** — Istio ingress, BFF/admin gateway, identity/auth
+2. **Core Domain Plane** — Transactional services (checkout, order, payment, inventory, fulfillment, catalog, cart, pricing, search, warehouse, rider fleet, routing/ETA)
+3. **Async / Event Plane** — Outbox + Debezium CDC → Kafka → Go consumers (relay, CDC, stream processor, payment webhook, reconciliation)
+4. **Data & ML Plane** — Kafka → BigQuery → dbt (staging → intermediate → marts) → feature store → ML training (Vertex AI) → ONNX inference
+5. **AI Plane** — LangGraph agent orchestration (`ai-orchestrator-service`) + model inference (`ai-inference-service`)
+6. **Platform / Governance** — CI/CD, GitOps (ArgoCD + Helm), Terraform, SLO alerting, security
+
+```mermaid
+flowchart TB
+    subgraph Edge["Edge Plane"]
+        direction LR
+        Istio["Istio Ingress\n+ AuthorizationPolicy"]
+        BFF["mobile-bff-service\n🟡 scaffold"]
+        Admin["admin-gateway-service\n🟡 scaffold"]
+        Identity["identity-service"]
+    end
+
+    subgraph Core["Core Domain Plane — Java/Spring Boot"]
+        direction LR
+        Checkout["checkout-orchestrator\n(Temporal saga)"]
+        Order["order-service"]
+        Payment["payment-service"]
+        Inventory["inventory-service"]
+        Fulfillment["fulfillment-service\n(Temporal workflows)"]
+        Catalog["catalog-service"]
+        Search["search-service"]
+        Cart["cart-service\n(Redis-backed)"]
+        Pricing["pricing-service"]
+        Warehouse["warehouse-service"]
+        RiderFleet["rider-fleet-service"]
+        RoutingETA["routing-eta-service"]
+        Notification["notification-service"]
+        WalletLoyalty["wallet-loyalty-service"]
+        Fraud["fraud-detection-service"]
+        Audit["audit-trail-service"]
+        Config["config-feature-flag-service"]
+    end
+
+    subgraph Async["Async / Event Plane"]
+        direction LR
+        Outbox["Outbox tables\n(per service)"]
+        Debezium["Debezium\nKafka Connect"]
+        Kafka["Kafka\n(Confluent / Strimzi)"]
+        OutboxRelay["outbox-relay-service\n(Go)"]
+        CDCConsumer["cdc-consumer-service\n(Go)"]
+        StreamProc["stream-processor-service\n(Go)"]
+        PayWebhook["payment-webhook-service\n(Go)"]
+        ReconEngine["reconciliation-engine\n(Go)"]
+    end
+
+    subgraph DataML["Data & ML Plane"]
+        direction LR
+        BigQuery["BigQuery"]
+        dbt["dbt\nstg → int → mart"]
+        Airflow["Airflow DAGs"]
+        Beam["Beam / Dataflow"]
+        FeatureStore["Feature Store"]
+        MLTrain["Vertex AI\nTraining"]
+        MLServe["ONNX Inference\nai-inference-service"]
+    end
+
+    subgraph AI["AI Plane"]
+        AIOrc["ai-orchestrator-service\n(LangGraph)"]
+    end
+
+    subgraph Platform["Platform / Governance"]
+        direction LR
+        CI["GitHub Actions CI"]
+        ArgoCD["ArgoCD GitOps"]
+        Terraform["Terraform IaC"]
+        Helm["Helm Charts"]
+        Prometheus["Prometheus + Grafana"]
+    end
+
+    Edge --> Core
+    Core --> Outbox --> Debezium --> Kafka
+    Kafka --> CDCConsumer & StreamProc & Notification
+    Kafka --> Beam --> BigQuery --> dbt
+    dbt --> FeatureStore --> MLTrain --> MLServe
+    MLServe --> AIOrc
+    AIOrc --> Core
+    Platform -.governs.-> Edge & Core & Async & DataML & AI
+```
+
+> **Source:** `docs/architecture/HLD.md` §1–§6, `docs/architecture/ITER3-HLD-DIAGRAMS.md` §2,
+> `docs/reviews/iter3/master-review.md` §6.
+
+---
+
+## System Interaction View
+
+This diagram shows the runtime interaction between the platform, external actors,
+and third-party systems. Derived from the C4 Level 1 context in `docs/architecture/HLD.md` §2
+and `docs/architecture/ITER3-HLD-DIAGRAMS.md` §1.
+
+```mermaid
+flowchart LR
+    Customer["👤 Customer\n(Mobile App)"]
+    Rider["🏍️ Delivery Rider\n(Rider App)"]
+    Ops["🛠️ Ops / Admin\n(Admin Portal)"]
+
+    subgraph IC["InstaCommerce Platform"]
+        direction TB
+        CoreSvc["Core Services\n20 Java · 7 Go · 2 Python"]
+        KafkaBus["Kafka Event Bus"]
+        TemporalWF["Temporal\nWorkflow Engine"]
+        DataPlat["Data Platform\nBigQuery + dbt + Airflow"]
+        AIPlane["AI / ML Plane\nLangGraph + ONNX"]
+    end
+
+    PayGW["💳 Payment Gateway\n(Razorpay / Stripe)"]
+    Maps["🗺️ Maps API\n(Google Maps)"]
+    SMS["📲 SMS / Push / Email\n(Twilio, FCM, SendGrid)"]
+    IDP["🔑 Identity Provider\n(Google / Apple OAuth)"]
+    LLM["🤖 LLM Provider\n(OpenAI / Gemini)"]
+    VertexAI["☁️ Vertex AI\n(Training + Serving)"]
+
+    Customer -->|REST / HTTPS| IC
+    Rider -->|REST / HTTPS| IC
+    Ops -->|REST / HTTPS| IC
+
+    CoreSvc -->|auth/capture/refund| PayGW
+    CoreSvc -->|geocoding/ETA| Maps
+    CoreSvc -->|notifications| SMS
+    CoreSvc -->|OAuth| IDP
+    CoreSvc --> KafkaBus --> DataPlat
+    CoreSvc --> TemporalWF
+    AIPlane -->|LLM calls| LLM
+    AIPlane -->|model endpoints| VertexAI
+    DataPlat -->|train/register| VertexAI
+```
+
+---
+
+## Order Lifecycle — Sequence Diagram
+
+Representative happy-path flow from customer checkout through delivery. Derived
+from `docs/architecture/LLD.md` §1 (order state machine), §3 (checkout saga),
+§4 (fulfillment pipeline), and `contracts/README.md` event types.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer
+    participant BFF as mobile-bff-service
+    participant CO as checkout-orchestrator
+    participant Temporal as Temporal Engine
+    participant Cart as cart-service
+    participant Inv as inventory-service
+    participant Pay as payment-service
+    participant Order as order-service
+    participant Kafka as Kafka
+    participant Fulfill as fulfillment-service
+    participant Dispatch as dispatch-optimizer
+    participant Rider as rider-fleet-service
+    participant Notif as notification-service
+
+    Customer->>BFF: POST /checkout
+    BFF->>CO: initiate checkout
+    CO->>Temporal: start CheckoutWorkflow
+
+    rect rgb(230, 245, 255)
+        Note over CO,Order: Temporal Saga — compensations on failure
+        Temporal->>Cart: validate & lock cart
+        Cart-->>Temporal: cart snapshot
+        Temporal->>Inv: reserveStock(items)
+        Inv-->>Temporal: reservation confirmed
+        Temporal->>Pay: authorizePayment(amount)
+        Pay-->>Temporal: AUTHORIZED
+        Temporal->>Order: createOrder(PLACED)
+        Order-->>Temporal: orderId
+    end
+
+    Temporal-->>CO: saga complete
+    CO-->>BFF: orderId + status PLACED
+    BFF-->>Customer: order confirmation
+
+    Order->>Kafka: OrderPlaced event (outbox → Debezium)
+    Kafka->>Fulfill: consume OrderPlaced
+    Fulfill->>Temporal: start FulfillmentWorkflow
+    Temporal->>Fulfill: createPickTask → PACKING
+    Fulfill-->>Kafka: OrderPacked event
+
+    Kafka->>Dispatch: consume OrderPacked
+    Dispatch->>Rider: assignRider(orderId)
+    Rider-->>Dispatch: rider confirmed
+    Dispatch-->>Kafka: RiderAssigned event
+
+    Kafka->>Notif: consume RiderAssigned
+    Notif-->>Customer: push: "Rider on the way"
+
+    Rider->>Order: confirmDelivery → DELIVERED
+    Order->>Kafka: OrderDelivered event
+    Kafka->>Pay: consume OrderDelivered
+    Pay->>Pay: capturePayment (auth → CAPTURED)
+    Kafka->>Notif: consume OrderDelivered
+    Notif-->>Customer: push: "Order delivered"
+```
+
+> **State machine reference:** PENDING → PLACED → PACKING → PACKED →
+> OUT_FOR_DELIVERY → DELIVERED (with CANCELLED/FAILED branches). See
+> `docs/architecture/LLD.md` §1. Each transition emits an event to the
+> `orders.events` Kafka topic via the outbox pattern.
+
+---
+
+## Component / Domain Map
+
+UML-style component diagram showing domain boundaries, ownership, and
+technology per cluster. Aligned with the nine service clusters from
+`docs/reviews/iter3/service-wise-guide.md`.
 
 ```mermaid
 graph TB
-    subgraph Clients
-        MA["📱 Mobile App<br/>(React Native)"]
-        WA["🌐 Web App<br/>(Next.js)"]
-        AO["🛠 Admin Ops<br/>(Internal Portal)"]
+    subgraph C1["Cluster 1 — Edge & Identity"]
+        c1a["identity-service<br/>Java · JWT/OAuth2 · PostgreSQL"]
+        c1b["mobile-bff-service<br/>Java · 🟡 scaffold"]
+        c1c["admin-gateway-service<br/>Java · 🟡 scaffold"]
     end
 
-    subgraph API Layer
-        AG["🚪 API Gateway<br/>(Istio Ingress)"]
-        MB["📲 Mobile BFF"]
-        ADG["🔧 Admin Gateway"]
+    subgraph C2["Cluster 2 — Transactional Core"]
+        c2a["checkout-orchestrator-service<br/>Java · Temporal saga"]
+        c2b["order-service<br/>Java · state machine · outbox"]
+        c2c["payment-service<br/>Java · two-phase capture"]
     end
 
-    subgraph Core["Core Services — Java/Spring Boot"]
-        IS["🔐 Identity Service"]
-        CS["📦 Catalog Service"]
-        SS["🔍 Search Service"]
-        PS["💲 Pricing Service"]
-        CTS["🛒 Cart Service"]
-        CO["🔄 Checkout Orchestrator"]
-        OS["📋 Order Service"]
-        PAY["💳 Payment Service"]
-        INV["📊 Inventory Service"]
-        FS["🚀 Fulfillment Service"]
-        NS["🔔 Notification Service"]
+    subgraph C3["Cluster 3 — Browse & Decision"]
+        c3a["catalog-service<br/>Java · PostgreSQL"]
+        c3b["search-service<br/>Java · Elasticsearch"]
+        c3c["cart-service<br/>Java · Redis"]
+        c3d["pricing-service<br/>Java · promotions engine"]
     end
 
-    subgraph Fleet["Fleet & Logistics"]
-        RFS["🏍 Rider Fleet Service"]
-        RES["🗺 Routing/ETA Service"]
-        WS["🏭 Warehouse Service"]
+    subgraph C4["Cluster 4 — Inventory & Dark Store"]
+        c4a["inventory-service<br/>Java · reservation · PostgreSQL"]
+        c4b["warehouse-service<br/>Java · zone/bin mgmt"]
     end
 
-    subgraph Intelligence["Intelligence — Python"]
-        AIO["🧠 AI Orchestrator<br/>(LangGraph)"]
-        AII["🤖 AI Inference<br/>(ML Models)"]
+    subgraph C5["Cluster 5 — Fulfillment & Logistics"]
+        c5a["fulfillment-service<br/>Java · Temporal workflows"]
+        c5b["rider-fleet-service<br/>Java · allocation"]
+        c5c["routing-eta-service<br/>Java · Google Maps"]
+        c5d["dispatch-optimizer-service<br/>Go · real-time matching"]
+        c5e["location-ingestion-service<br/>Go · GPS stream → Redis"]
     end
 
-    subgraph Platform["Platform Services"]
-        WLS["👛 Wallet/Loyalty"]
-        FDS["🛡 Fraud Detection"]
-        ATS["📝 Audit Trail"]
-        CFS["⚙ Config/Feature Flags"]
+    subgraph C6["Cluster 6 — Engagement & Trust"]
+        c6a["notification-service<br/>Java · push/SMS/email"]
+        c6b["wallet-loyalty-service<br/>Java · points/cashback"]
+        c6c["fraud-detection-service<br/>Java · rule engine + ML"]
     end
 
-    subgraph DataEvents["Data & Events — Go"]
-        ORS["📤 Outbox Relay"]
-        CDC["🔁 CDC Consumer"]
-        LIS["📍 Location Ingestion"]
-        PWS["🪝 Payment Webhook"]
-        DOS["🧮 Dispatch Optimizer"]
-        SP["🌊 Stream Processor"]
-        RE["⚖ Reconciliation Engine"]
+    subgraph C7["Cluster 7 — Platform Foundations"]
+        c7a["config-feature-flag-service<br/>Java · A/B · kill switches"]
+        c7b["audit-trail-service<br/>Java · immutable log"]
     end
 
-    subgraph Infra["Infrastructure"]
-        K["📨 Kafka<br/>(Strimzi)"]
-        PG["🐘 PostgreSQL<br/>(Cloud SQL)"]
-        RD["⚡ Redis<br/>(Memorystore)"]
-        TP["⏱ Temporal"]
-        BQ["📈 BigQuery"]
+    subgraph C8["Cluster 8 — Event & Data Plane"]
+        c8a["outbox-relay-service<br/>Go · outbox → Kafka"]
+        c8b["cdc-consumer-service<br/>Go · Debezium consumer"]
+        c8c["stream-processor-service<br/>Go · enrichment/aggregation"]
+        c8d["payment-webhook-service<br/>Go · idempotent receiver"]
+        c8e["reconciliation-engine<br/>Go · settlement → BigQuery"]
     end
 
-    %% Client → API Layer
-    MA --> AG
-    WA --> AG
-    AO --> AG
-    AG --> MB
-    AG --> ADG
+    subgraph C9["Cluster 9 — AI & ML"]
+        c9a["ai-orchestrator-service<br/>Python · LangGraph agents"]
+        c9b["ai-inference-service<br/>Python · ONNX Runtime"]
+        c9c["ml/ training pipelines<br/>LightGBM · XGBoost · PyTorch"]
+    end
 
-    %% BFF → Core Services
-    MB --> IS
-    MB --> CS
-    MB --> SS
-    MB --> PS
-    MB --> CTS
-    MB --> CO
-    MB --> OS
-    MB --> NS
-
-    %% Admin Gateway → Services
-    ADG --> INV
-    ADG --> WS
-    ADG --> CFS
-    ADG --> ATS
-
-    %% Core Service Interactions
-    CO --> CTS
-    CO --> INV
-    CO --> PAY
-    CO --> OS
-    OS --> FS
-    FS --> RFS
-    RFS --> RES
-    FS --> WS
-
-    %% Intelligence
-    SS --> AII
-    PS --> AII
-    DOS --> AII
-    AIO --> AII
-
-    %% Platform Services
-    PAY --> WLS
-    CO --> FDS
-    OS --> ATS
-
-    %% Event-Driven (via Kafka)
-    OS --> K
-    PAY --> K
-    INV --> K
-    FS --> K
-    K --> ORS
-    K --> CDC
-    K --> SP
-    K --> NS
-
-    %% Go Services
-    LIS --> RD
-    PWS --> PAY
-    RE --> BQ
-
-    %% Infrastructure connections
-    IS --> PG
-    CS --> PG
-    OS --> PG
-    INV --> PG
-    CTS --> RD
-    SS --> RD
-    CO --> TP
-    FS --> TP
-    SP --> BQ
-    CDC --> PG
+    C1 -->|"auth tokens"| C2 & C3
+    C2 -->|"outbox events"| C8
+    C3 -->|"inference calls"| C9
+    C4 -->|"stock events"| C8
+    C5 -->|"fulfillment events"| C8
+    C8 -->|"Kafka"| C6
+    C8 -->|"Kafka → BigQuery"| C9
 ```
 
 ---
 
-## ⚙ Tech Stack
+## Service Inventory
 
-| Layer | Technology | Details |
-|---|---|---|
-| **Core Services** | Java 21, Spring Boot 3.x, Gradle | 20 microservices — order lifecycle, payments, catalog, fulfillment |
-| **AI/ML** | Python 3.11, FastAPI | AI orchestrator (LangGraph) + inference service (ONNX Runtime) |
-| **Data/Event Services** | Go 1.22 | 7 high-throughput services — CDC, streaming, outbox relay, dispatch |
-| **Databases** | PostgreSQL 15, Redis 7 | Transactional storage + caching / session store |
-| **Messaging** | Kafka (Strimzi) | Event backbone — 200+ topics, Avro schemas, exactly-once semantics |
-| **Orchestration** | Temporal | Saga workflows — checkout, fulfillment, reconciliation |
-| **Container Platform** | GKE, Istio, Helm | Service mesh, mTLS, traffic management, canary deployments |
-| **GitOps / IaC** | ArgoCD, Terraform | Declarative infra and app deployment |
-| **Data Platform** | BigQuery, dbt, Airflow | Analytics warehouse, transformations, orchestration |
-| **ML/AI** | LightGBM, XGBoost, LangGraph, ONNX Runtime, Vertex AI | Demand forecasting, ETA prediction, fraud scoring, AI agents |
-| **Observability** | Prometheus, Grafana, OpenTelemetry | Metrics, dashboards, distributed tracing |
+Authoritative module list from `settings.gradle.kts` (Java) and
+`services/*/go.mod` (Go). Port numbers are from service `application.yml` files.
+Status reflects checked-in implementation, not design intent.
 
----
+| # | Service | Language | Module Path | Status |
+|---|---------|----------|-------------|--------|
+| 1 | identity-service | Java | `services/identity-service` | ✅ Active |
+| 2 | catalog-service | Java | `services/catalog-service` | ✅ Active |
+| 3 | search-service | Java | `services/search-service` | ✅ Active |
+| 4 | pricing-service | Java | `services/pricing-service` | ✅ Active |
+| 5 | cart-service | Java | `services/cart-service` | ✅ Active |
+| 6 | checkout-orchestrator-service | Java | `services/checkout-orchestrator-service` | ✅ Active |
+| 7 | order-service | Java | `services/order-service` | ✅ Active |
+| 8 | payment-service | Java | `services/payment-service` | ✅ Active |
+| 9 | inventory-service | Java | `services/inventory-service` | ✅ Active |
+| 10 | fulfillment-service | Java | `services/fulfillment-service` | ✅ Active |
+| 11 | notification-service | Java | `services/notification-service` | ✅ Active |
+| 12 | mobile-bff-service | Java | `services/mobile-bff-service` | 🟡 Scaffold |
+| 13 | admin-gateway-service | Java | `services/admin-gateway-service` | 🟡 Scaffold |
+| 14 | wallet-loyalty-service | Java | `services/wallet-loyalty-service` | ✅ Active |
+| 15 | fraud-detection-service | Java | `services/fraud-detection-service` | ✅ Active |
+| 16 | audit-trail-service | Java | `services/audit-trail-service` | ✅ Active |
+| 17 | config-feature-flag-service | Java | `services/config-feature-flag-service` | ✅ Active |
+| 18 | rider-fleet-service | Java | `services/rider-fleet-service` | ✅ Active |
+| 19 | routing-eta-service | Java | `services/routing-eta-service` | ✅ Active |
+| 20 | warehouse-service | Java | `services/warehouse-service` | ✅ Active |
+| 21 | ai-orchestrator-service | Python | `services/ai-orchestrator-service` | ✅ Active |
+| 22 | ai-inference-service | Python | `services/ai-inference-service` | ✅ Active |
+| 23 | outbox-relay-service | Go | `services/outbox-relay-service` | ✅ Active |
+| 24 | cdc-consumer-service | Go | `services/cdc-consumer-service` | ✅ Active |
+| 25 | location-ingestion-service | Go | `services/location-ingestion-service` | ✅ Active |
+| 26 | payment-webhook-service | Go | `services/payment-webhook-service` | ✅ Active |
+| 27 | dispatch-optimizer-service | Go | `services/dispatch-optimizer-service` | ✅ Active |
+| 28 | stream-processor-service | Go | `services/stream-processor-service` | ✅ Active |
+| 29 | reconciliation-engine | Go | `services/reconciliation-engine` | ✅ Active |
+| 30 | go-shared | Go | `services/go-shared` | Shared library |
 
-## 📋 Service Inventory
-
-| # | Service | Language | Port | Purpose | Status |
-|---|---|---|---|---|---|
-| 1 | `identity-service` | Java | 8081 | Authentication, authorization, JWT/OAuth2 | ✅ Active |
-| 2 | `catalog-service` | Java | 8082 | Product catalog, categories, SKU management | ✅ Active |
-| 3 | `search-service` | Java | 8083 | Full-text product search with Elasticsearch | ✅ Active |
-| 4 | `pricing-service` | Java | 8084 | Dynamic pricing, surge pricing, promotions | ✅ Active |
-| 5 | `cart-service` | Java | 8085 | Cart management, item validation, Redis-backed | ✅ Active |
-| 6 | `checkout-orchestrator` | Java | 8086 | Saga-based checkout workflow via Temporal | ✅ Active |
-| 7 | `order-service` | Java | 8087 | Order lifecycle, state machine, event sourcing | ✅ Active |
-| 8 | `payment-service` | Java | 8088 | Payment gateway integration, refunds, ledger | ✅ Active |
-| 9 | `inventory-service` | Java | 8089 | Real-time stock levels, reservation, replenishment | ✅ Active |
-| 10 | `fulfillment-service` | Java | 8090 | Pick-pack-dispatch orchestration via Temporal | ✅ Active |
-| 11 | `notification-service` | Java | 8091 | Push, SMS, email notifications via templates | ✅ Active |
-| 12 | `mobile-bff-service` | Java | 8092 | Mobile edge facade — currently a scaffold with a stub `/home` endpoint | 🟡 Scaffold |
-| 13 | `admin-gateway-service` | Java | 8093 | Admin edge facade — currently a scaffold with a stub `/dashboard` endpoint | 🟡 Scaffold |
-| 14 | `wallet-loyalty-service` | Java | 8094 | Digital wallet, loyalty points, cashback | ✅ Active |
-| 15 | `fraud-detection-service` | Java | 8095 | Real-time fraud scoring, rule engine | ✅ Active |
-| 16 | `audit-trail-service` | Java | 8096 | Immutable audit log, compliance events | ✅ Active |
-| 17 | `config-service` | Java | 8097 | Feature flags, A/B testing, remote config | ✅ Active |
-| 18 | `rider-fleet-service` | Java | 8098 | Rider onboarding, shift management, allocation | ✅ Active |
-| 19 | `routing-eta-service` | Java | 8099 | Route optimization, ETA prediction, geofencing | ✅ Active |
-| 20 | `warehouse-service` | Java | 8100 | Dark store ops, bin management, pick lists | ✅ Active |
-| 21 | `ai-orchestrator` | Python | 9001 | LangGraph AI agent workflows, prompt management | ✅ Active |
-| 22 | `ai-inference` | Python | 9002 | ML model serving — demand, ETA, fraud (ONNX) | ✅ Active |
-| 23 | `outbox-relay` | Go | 7001 | Transactional outbox → Kafka publisher | ✅ Active |
-| 24 | `cdc-consumer` | Go | 7002 | Change data capture consumer, materialized views | ✅ Active |
-| 25 | `location-ingestion` | Go | 7003 | High-frequency rider GPS ingestion (10K msg/s) | ✅ Active |
-| 26 | `payment-webhook` | Go | 7004 | Payment gateway webhook receiver, idempotent | ✅ Active |
-| 27 | `dispatch-optimizer` | Go | 7005 | Real-time rider-order matching, optimization | ✅ Active |
-| 28 | `stream-processor` | Go | 7006 | Kafka Streams — enrichment, aggregation, sink | ✅ Active |
-| 29 | `reconciliation-engine` | Go | 7007 | Financial reconciliation, settlement, reporting | ✅ Active |
-| 30 | `data-platform-jobs` | Python | — | dbt transforms, Airflow DAGs, data quality | ✅ Active |
+> **Go deploy-name mapping:** Some Go modules have different Helm/deploy keys.
+> Current CI mappings: `cdc-consumer-service` → `cdc-consumer`,
+> `location-ingestion-service` → `location-ingestion`,
+> `payment-webhook-service` → `payment-webhook`.
+> See `.github/workflows/ci.yml` for the authoritative list.
 
 ---
 
-## 🚀 Getting Started
+## Low-Level Design & Navigation
 
-### Prerequisites
+| Area | Document | Key content |
+|------|----------|-------------|
+| Order state machine | [`docs/architecture/LLD.md`](docs/architecture/LLD.md) §1 | PENDING → PLACED → PACKING → PACKED → OUT_FOR_DELIVERY → DELIVERED; outbox-emitted transitions |
+| Payment state machine | [`docs/architecture/LLD.md`](docs/architecture/LLD.md) §2 | Two-phase capture: AUTHORIZE → CAPTURE on delivery, VOID on cancel |
+| Checkout saga | [`docs/architecture/LLD.md`](docs/architecture/LLD.md) §3 | Temporal workflow: cart lock → stock reserve → payment auth → order create (with compensations) |
+| Fulfillment pipeline | [`docs/architecture/LLD.md`](docs/architecture/LLD.md) §4 | Pick-task creation → packing → rider assignment → delivery confirmation |
+| Event flow | [`docs/architecture/DATA-FLOW.md`](docs/architecture/DATA-FLOW.md) | Outbox → Debezium CDC → Kafka topics → consumers (notification, analytics, ML) |
+| Kafka topic topology | [`docs/architecture/DATA-FLOW.md`](docs/architecture/DATA-FLOW.md) §6 | Per-domain topics: `orders.events`, `payments.events`, `inventory.events`, etc. |
+| Event envelope | [`contracts/README.md`](contracts/README.md) | Standard fields: `event_id`, `event_type`, `aggregate_id`, `schema_version`, `source_service`, `correlation_id`, `timestamp`, `payload` |
+| Schema evolution | [`contracts/README.md`](contracts/README.md) | Additive changes stay in-version; breaking changes create new `vN` file with 90-day deprecation window |
+| Database isolation | [`scripts/init-dbs.sql`](scripts/init-dbs.sql) | 17 per-service PostgreSQL databases (database-per-service pattern) |
+| ML model inventory | [`ml/README.md`](ml/README.md) | Search ranking (LightGBM), fraud (XGBoost), ETA (LightGBM), demand forecast (Prophet+TFT), personalization (PyTorch), CLV (BG/NBD) |
+| Data platform layers | [`data-platform/README.md`](data-platform/README.md) | Kafka → Beam/Dataflow → BigQuery raw → dbt staging → intermediate → marts → feature store |
+| Infrastructure | [`docs/architecture/INFRASTRUCTURE.md`](docs/architecture/INFRASTRUCTURE.md) | GKE (regional, private), Cloud SQL (HA), Memorystore Redis, Istio mesh, Cloud Armor WAF |
+| Iteration-3 deep dives | [`docs/reviews/iter3/README.md`](docs/reviews/iter3/README.md) | Master review, 9 service-cluster guides, 9 platform guides, benchmarks, appendices |
 
-| Tool | Version | Purpose |
-|---|---|---|
-| Java (Temurin) | 21+ | Core microservices |
-| Go | 1.22+ | Data/event services |
-| Python | 3.11+ | AI/ML services |
-| Docker & Compose | Latest | Local development |
-| Node.js | 20+ | Contract testing, tooling |
-
-### Quick Start — Local Development
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/InstaCommerce.git
-cd InstaCommerce
-
-# 2. Start infrastructure (Kafka, PostgreSQL, Redis, Temporal)
-docker-compose up -d
-
-# 3. Build all Java services
-./gradlew build -x test
-
-# 4. Run a specific service
-./gradlew :services:order-service:bootRun
-
-# 5. Run a Go service
-cd services/outbox-relay-service && go run .
-
-# 6. Run Python AI services
-cd services/ai-orchestrator-service && pip install -r requirements.txt && uvicorn app.main:app --port 8100
-```
-
-### Running Individual Services
-
-```bash
-# Java service (any of the 20 services)
-./gradlew :services:<service-name>:bootRun
-
-# Go service (any of the Go services)
-cd services/<service-name> && go run .
-
-# Python service
-cd services/<service-name> && uvicorn app.main:app --reload
-```
-
-### Running Tests
-
-```bash
-# All Java unit + integration tests
-./gradlew test
-
-# Go tests with race detection
-cd services/<service-name> && go test -race ./...
-
-# Python tests
-cd services/<service-name> && pytest -v
-```
-
----
-
-## 📁 Project Structure
+### Project Structure
 
 ```
 InstaCommerce/
-├── services/                         # Java, Go, and Python services
-│   ├── admin-gateway-service/
-│   ├── ai-inference-service/
-│   ├── ai-orchestrator-service/
-│   ├── audit-trail-service/
-│   ├── cart-service/
-│   ├── catalog-service/
-│   ├── cdc-consumer-service/
-│   ├── checkout-orchestrator-service/
-│   ├── config-feature-flag-service/
-│   ├── dispatch-optimizer-service/
-│   ├── fraud-detection-service/
-│   ├── fulfillment-service/
-│   ├── go-shared/                    # Shared Go packages for platform services
-│   ├── identity-service/
-│   ├── inventory-service/
-│   ├── location-ingestion-service/
-│   ├── mobile-bff-service/
-│   ├── notification-service/
-│   ├── order-service/
-│   ├── outbox-relay-service/
-│   ├── payment-service/
-│   ├── payment-webhook-service/
-│   ├── pricing-service/
-│   ├── reconciliation-engine/
-│   ├── rider-fleet-service/
-│   ├── routing-eta-service/
-│   ├── search-service/
-│   ├── stream-processor-service/
-│   ├── wallet-loyalty-service/
-│   └── warehouse-service/
-├── contracts/                        # Shared Protobuf + event schemas
-├── data-platform/                    # dbt, Airflow, Beam/Dataflow, quality
-├── data-platform-jobs/               # Batch jobs adjacent to the data platform
-├── deploy/helm/                      # Helm charts and environment values
-├── argocd/                           # GitOps application manifests
-├── infra/terraform/                  # GCP infrastructure as code
-├── ml/                               # ML training, feature store, serving docs
-├── monitoring/                       # Alerting rules and dashboard metadata
+├── services/                         # 29 service modules + 1 Go shared library
+│   ├── <service-name>/               # Each has its own build, config, migrations
+│   └── go-shared/                    # Reusable Go: auth, config, health, Kafka, HTTP, observability
+├── contracts/                        # Protobuf (gRPC) + JSON Schema event definitions
+│   └── src/main/{proto,resources/schemas}/
+├── data-platform/                    # dbt, Airflow DAGs, Beam pipelines, Great Expectations
+├── data-platform-jobs/               # Batch jobs adjacent to data platform
+├── deploy/helm/                      # Helm chart, values-dev.yaml, values-prod.yaml
+├── argocd/                           # ArgoCD app-of-apps manifest
+├── infra/terraform/                  # GCP Terraform modules (GKE, Cloud SQL, Redis, etc.)
+├── ml/                               # Training configs, eval gates, feature store, serving
+├── monitoring/                       # prometheus-rules.yaml, dashboard inventory
 ├── docs/
-│   ├── architecture/                 # HLD, LLD, data-flow, infrastructure
-│   └── reviews/                      # Service reviews and iteration programs
-├── scripts/                          # Utility and bootstrap scripts
-├── docker-compose.yml                # Local development infrastructure
-├── build.gradle.kts                  # Root Gradle build
-├── settings.gradle.kts               # Multi-project settings
-└── README.md                         # ← You are here
+│   ├── architecture/                 # HLD, LLD, DATA-FLOW, INFRASTRUCTURE, ITER3-HLD-DIAGRAMS
+│   └── reviews/                      # Service reviews, iter3/ principal review program
+├── scripts/                          # init-dbs.sql (local DB bootstrap), utilities
+├── docker-compose.yml                # Local infra: PostgreSQL 15, Redis 7, Kafka, Debezium, Temporal
+├── build.gradle.kts                  # Root Gradle: Spring Boot 4.0.0, spring-cloud-gcp 5.1.0
+├── settings.gradle.kts               # 20 Java modules + contracts
+└── .github/workflows/ci.yml          # Path-filtered CI: build, test, security gates
 ```
 
 ---
 
-## 📐 Architecture Decisions
+## Runtime & Validation Entrypoints
 
-| ADR | Decision | Rationale |
-|---|---|---|
-| **ADR-001** | Java for core services, Go for data pipelines, Python for AI/ML | Java ecosystem maturity for business logic; Go for high-throughput, low-latency data paths; Python for ML tooling |
-| **ADR-002** | Event-driven architecture via Kafka | Decoupled services, eventual consistency at scale, replay capability for debugging |
-| **ADR-003** | Saga pattern (Temporal) for checkout & fulfillment | Distributed transactions across payment, inventory, order services without 2PC |
-| **ADR-004** | Transactional outbox pattern | Guarantees at-least-once event publishing without dual-write problems |
-| **ADR-005** | CQRS for order & inventory services | Separate read/write models for high-read catalog queries vs. transactional writes |
-| **ADR-006** | Redis for cart & session state | Sub-millisecond latency for cart operations; TTL-based expiry; no DB pressure |
-| **ADR-007** | PostgreSQL per service (database-per-service) | Strong isolation, independent schema evolution, no cross-service joins |
-| **ADR-008** | Istio service mesh | mTLS, traffic management, canary deployments, observability without app changes |
-| **ADR-009** | CDC via Debezium for materialized views | Real-time data synchronization without polling; feeds search index & analytics |
-| **ADR-010** | ONNX Runtime for ML inference | Framework-agnostic model serving; consistent performance across LightGBM/XGBoost |
-| **ADR-011** | LangGraph for AI orchestration | Stateful, graph-based agent workflows; better than plain LangChain for multi-step |
-| **ADR-012** | BigQuery + dbt for analytics | Serverless warehouse; version-controlled transformations; cost-effective at scale |
-| **ADR-013** | Feature flags via internal config service | Controlled rollouts, A/B testing, kill switches without redeployment |
-| **ADR-014** | Monorepo structure | Unified CI/CD, shared contracts, atomic cross-service changes |
+### Local Infrastructure
+
+```bash
+# Start PostgreSQL, Redis, Kafka, Debezium Connect, Temporal, Temporal UI, Kafka UI
+docker-compose up -d
+# init-dbs.sql auto-creates 17 per-service databases
+```
+
+### Java Services (20 modules via Gradle)
+
+```bash
+./gradlew build -x test                                   # Build all
+./gradlew test                                             # Test all
+./gradlew :services:order-service:test                     # Test one service
+./gradlew :services:order-service:test --tests "com.instacommerce.order.OrderServiceTest"
+./gradlew :services:order-service:bootRun                  # Run one service
+./gradlew :contracts:build                                 # Rebuild Protobuf + JSON Schema stubs
+```
+
+### Go Services (7 modules + go-shared)
+
+```bash
+cd services/outbox-relay-service && go test -race ./... && go build ./...
+cd services/cdc-consumer-service && go test -race ./... && go build ./...
+# If go-shared changes, revalidate every Go module
+```
+
+### Python Services
+
+```bash
+cd services/ai-orchestrator-service && pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload
+
+cd services/ai-inference-service && pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+cd services/<python-service> && pytest -v                  # Run tests
+```
+
+### Data Platform
+
+```bash
+cd data-platform/dbt && dbt deps
+cd data-platform/dbt && dbt run --select staging
+cd data-platform/dbt && dbt run --select intermediate
+cd data-platform/dbt && dbt run --select marts
+cd data-platform/dbt && dbt test
+cd data-platform/dbt && dbt test --select <model-or-selector>
+```
+
+### Health Endpoints
+
+| Stack | Readiness | Liveness | Metrics |
+|-------|-----------|----------|---------|
+| Java (Spring Actuator) | `/actuator/health/readiness` | `/actuator/health/liveness` | `/actuator/prometheus` |
+| Go (go-shared) | `/health/ready` | `/health/live` | `/metrics` |
+| Python (FastAPI) | `/health` | `/health` | Application-level |
 
 ---
 
-## 📚 Documentation
+## Rollout & Release Posture
 
-| Document | Description | Location |
-|---|---|---|
-| 🧭 **Documentation Hub** | Central navigation for architecture docs, reviews, and iter3 deep dives | [`docs/README.md`](docs/README.md) |
-| 🏛 **High-Level Design** | System context, bounded contexts, integration patterns | [`docs/architecture/HLD.md`](docs/architecture/HLD.md) |
-| 🔬 **Low-Level Design** | Service internals, state machines, API/database detail | [`docs/architecture/LLD.md`](docs/architecture/LLD.md) |
-| 🔄 **Data Flow Diagrams** | End-to-end order, eventing, data, and ML flows | [`docs/architecture/DATA-FLOW.md`](docs/architecture/DATA-FLOW.md) |
-| 🧱 **Infrastructure** | GKE, GitOps, networking, data stores, and DR posture | [`docs/architecture/INFRASTRUCTURE.md`](docs/architecture/INFRASTRUCTURE.md) |
-| 🧪 **Iteration 3 Review Hub** | Benchmarks, diagrams, service guides, platform guides, appendices | [`docs/reviews/iter3/README.md`](docs/reviews/iter3/README.md) |
-| 🏗 **Infrastructure** | Terraform modules, GKE setup, networking | [`infra/terraform/`](infra/terraform/) |
-| 📊 **ML Documentation** | Model cards, training pipelines, feature store | [`ml/`](ml/) |
-| 📦 **Contract Schemas** | Avro events, gRPC protos, JSON schemas | [`contracts/`](contracts/) |
-| 🚀 **Deployment Guide** | Helm charts, ArgoCD apps, rollback procedures | [`deploy/`](deploy/) |
-| 📈 **Monitoring & Alerts** | Alert definitions, dashboard inventory, and escalation routing | [`monitoring/README.md`](monitoring/README.md) |
+**CI source of truth:** `.github/workflows/ci.yml`
 
----
+| Aspect | Implementation |
+|--------|---------------|
+| **Trigger** | `push` to `main`/`master`/`develop`; PRs against those branches; `workflow_dispatch` |
+| **Path filtering** | `dorny/paths-filter` per service — PRs only build/test changed services |
+| **Full matrix** | `main`/`master` pushes run all Java and Go service matrices |
+| **Java validation** | `./gradlew :services:<svc>:build` + `./gradlew :services:<svc>:test` per matrix entry |
+| **Go validation** | `go test ./...` + `go build ./...` per module; `go-shared` changes trigger full Go revalidation |
+| **Security gates** | Gitleaks (secret scanning), Trivy (container scanning), dependency review |
+| **Image registry** | `asia-south1-docker.pkg.dev/instacommerce/images` (Artifact Registry) |
+| **Deploy** | GitOps via ArgoCD (`argocd/app-of-apps.yaml`) syncing Helm values per environment |
+| **Helm environments** | `deploy/helm/values-dev.yaml`, `deploy/helm/values-prod.yaml` |
+| **IaC** | `infra/terraform/` — GKE, Cloud SQL, Memorystore, networking, IAM |
 
-## 🤝 Contributing
+**Branch model:** `main` (production) ← `develop` (integration) ← `feature/*` / `fix/*` / `chore/*`. Hotfixes branch from `main`.
 
-### Branch Strategy
-
-```
-main              ← production (protected, deploy on merge)
-├── staging       ← pre-production validation
-├── develop       ← integration branch
-│   ├── feature/* ← new features
-│   ├── fix/*     ← bug fixes
-│   └── chore/*   ← maintenance tasks
-└── hotfix/*      ← emergency production fixes
-```
-
-### Pull Request Requirements
-
-- [ ] Branch from `develop` (or `main` for hotfixes)
-- [ ] All CI checks passing (build, test, lint, security scan)
-- [ ] Unit test coverage ≥ 80% for new code
-- [ ] Integration tests for API changes
-- [ ] Contract schema backward compatibility verified
-- [ ] At least **2 approvals** from code owners
-- [ ] Squash merge with conventional commit message
-
-### CI Pipeline
-
-```
-PR Created → Lint → Build → Unit Tests → Integration Tests → Contract Tests → Security Scan → Review → Merge
-                                                                                                        ↓
-                                                                          Staging Deploy → Smoke Tests → Production Deploy (canary → full)
-```
-
-### Commit Convention
-
-```
-feat(order-service): add retry logic for payment timeouts
-fix(cart-service): resolve race condition in concurrent cart updates
-chore(deps): upgrade Spring Boot to 3.3.1
-docs(hld): add fulfillment flow sequence diagram
-```
+> **Iter-3 note:** The implementation program (`docs/reviews/iter3/implementation-program.md`)
+> identifies that image-registry-to-deploy lineage and CODEOWNERS enforcement
+> are Wave 0 truth-restoration items not yet fully closed. See
+> [Known Limitations](#known-limitations--current-state-gaps).
 
 ---
 
-## 📄 License
+## Observability & Testing Overview
+
+### Alerting
+
+Defined in `monitoring/prometheus-rules.yaml` under the `instacommerce-slos` rule group:
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| `HighErrorRate` | 5xx rate > 1% for 5 min | 🔴 Critical → PagerDuty + Slack |
+| `HighLatency` | p99 > 500 ms for 5 min | 🟡 Warning → Slack |
+| `KafkaConsumerLag` | lag > 1000 for 10 min | 🟡 Warning → Slack |
+| `FrequentPodRestarts` | > 3 restarts in 30 min | 🔴 Critical → PagerDuty |
+| `DatabaseHighCPU` | Cloud SQL CPU > 80% for 10 min | 🟡 Warning → Slack |
+
+Metrics sourced from Spring Boot Actuator (`http_server_requests_seconds_*`),
+Kafka client metrics, kube-state-metrics, and Cloud SQL exporter. See
+[`monitoring/README.md`](monitoring/README.md) for dashboard inventory and
+escalation routing.
+
+### Dashboards
+
+Service overview, order pipeline, Kafka & messaging, database health, Redis,
+ML model performance, Kubernetes cluster, and data platform. Documented in
+`monitoring/README.md`.
+
+### Testing
+
+| Stack | Framework | Pattern | Command |
+|-------|-----------|---------|---------|
+| Java | JUnit Platform (Gradle) | Unit + Testcontainers/PostgreSQL integration | `./gradlew :services:<svc>:test` |
+| Go | `go test` | Unit + race detection | `go test -race ./...` |
+| Python | pytest | Unit + FastAPI TestClient | `pytest -v` |
+| Contracts | Gradle proto compilation + JSON Schema validation | Breaking change detection on PR | `./gradlew :contracts:build` |
+| Data | dbt test + Great Expectations | Model-level assertions + data quality suites | `dbt test --select <selector>` |
+
+> **Iter-3 finding:** The master review (`docs/reviews/iter3/master-review.md` §5)
+> identifies "effective absence of test coverage across the fleet" as a P0 issue.
+> Representative services wire in Testcontainers, but fleet-wide coverage gates
+> are not yet enforced in CI.
+
+---
+
+## Known Limitations & Current-State Gaps
+
+These are grounded in the iteration-3 principal engineering review
+(`docs/reviews/iter3/master-review.md`) and implementation program
+(`docs/reviews/iter3/implementation-program.md`). They represent the honest
+delta between target architecture and current codebase.
+
+| Area | Gap | Reference |
+|------|-----|-----------|
+| **Edge services** | `mobile-bff-service` and `admin-gateway-service` are scaffolds with stub endpoints, not production aggregators | iter3 master-review §4.2, §5 P0 |
+| **Checkout authority** | Checkout logic exists in both `checkout-orchestrator-service` and `order-service`; needs single-owner ADR | iter3 master-review §4.3 |
+| **Payment idempotency** | Pending-state recovery and webhook durability are incomplete | iter3 master-review §4.3 |
+| **Search indexing** | catalog → search indexing path is non-functional; availability-aware ranking absent | iter3 master-review §4.4 |
+| **Dark-store loop** | Inventory → warehouse → fulfillment → dispatch → rider → delivery is not a closed operational loop | iter3 master-review §4.5 |
+| **Contract enforcement** | Event contracts exist in `contracts/` but are not fully CI-enforced; ghost events reported | iter3 master-review §5 P0 |
+| **Test coverage** | Fleet-wide test coverage gates not enforced in CI; no repo-wide lint task wired | iter3 master-review §5 P0 |
+| **Deploy lineage** | Image registry references may not match deploy artifact expectations | iter3 master-review §5 P0 |
+| **ML serving** | Training scripts export native artifacts (`.lgb`, `.xgb`); end-to-end ONNX export/promotion path is partial | `ml/README.md` honesty note |
+| **Data platform** | Beam pipelines use processing time instead of event time in some paths | iter3 master-review §5 P1 |
+| **AI governance** | AI services exist but governance (tool-risk classification, HITL, PII redaction) is not yet implemented | iter3 master-review §10 |
+
+The iteration-3 implementation program prescribes a **seven-wave remediation sequence:**
+Wave 0 (truth restoration) → Wave 1 (money-path hardening) → Wave 2 (dark-store loop) →
+Wave 3 (read/decision hardening) → Wave 4 (event/data/ML) → Wave 5 (SLO governance) →
+Wave 6 (governed AI rollout). See `docs/reviews/iter3/implementation-program.md` for
+the full wave plan, dependency map, and exit conditions.
+
+---
+
+## Comparison Note — Q-Commerce Platform Patterns
+
+This section is grounded in `docs/reviews/iter3/benchmarks/` (global and India
+operator patterns) and `docs/reviews/iter3/master-review.md` §7.
+
+**Where InstaCommerce is directionally aligned** with patterns seen in public
+engineering disclosures from Instacart, DoorDash, Blinkit, Zepto, and Swiggy
+Instamart:
+
+- Domain-oriented microservice decomposition with database-per-service isolation
+- Event-driven architecture via transactional outbox + CDC + Kafka
+- Temporal for saga orchestration (checkout, fulfillment)
+- Separate data and AI/ML planes with feature-store integration
+- GitOps-based delivery (ArgoCD + Helm + Terraform)
+
+**Where leading operators are stronger** (per iter-3 benchmarking):
+
+- **Closed operational loops** — inventory → dispatch → delivery is fully wired, not implied
+- **Contract discipline** — fewer ghost interfaces, stronger shared semantics
+- **Latency ownership** — explicit hot-path budgets, clear sync vs. async separation
+- **Governance maturity** — CODEOWNERS, ADRs, test gates, change classification
+- **Search truth** — availability-aware ranking with real-time freshness
+
+> The iter-3 review concludes that the gap is not architectural direction but
+> **implemented control**: authority clarity, contract enforcement, idempotency,
+> and measurable reliability governance.
+
+---
+
+## Documentation Index
+
+| Document | Path | Description |
+|----------|------|-------------|
+| Documentation hub | [`docs/README.md`](docs/README.md) | Central navigation for all architecture, review, and iter3 materials |
+| High-Level Design | [`docs/architecture/HLD.md`](docs/architecture/HLD.md) | C4 system context, container view, domain boundaries, NFRs |
+| Low-Level Design | [`docs/architecture/LLD.md`](docs/architecture/LLD.md) | State machines, sagas, class diagrams, database schemas |
+| Data Flow | [`docs/architecture/DATA-FLOW.md`](docs/architecture/DATA-FLOW.md) | Event-driven flows, outbox, CDC, streaming, GDPR erasure |
+| Infrastructure | [`docs/architecture/INFRASTRUCTURE.md`](docs/architecture/INFRASTRUCTURE.md) | GKE, Istio, Terraform modules, auto-scaling, DR |
+| Iter-3 HLD Diagrams | [`docs/architecture/ITER3-HLD-DIAGRAMS.md`](docs/architecture/ITER3-HLD-DIAGRAMS.md) | Six-plane boundary diagrams, refreshed C4 context |
+| Iter-3 Review Hub | [`docs/reviews/iter3/README.md`](docs/reviews/iter3/README.md) | Master review, service/platform guides, benchmarks, appendices |
+| Iter-3 Implementation Program | [`docs/reviews/iter3/implementation-program.md`](docs/reviews/iter3/implementation-program.md) | Seven-wave execution plan with dependency map |
+| Contracts | [`contracts/README.md`](contracts/README.md) | Event envelope, JSON Schema catalog, gRPC protos, evolution rules |
+| Data Platform | [`data-platform/README.md`](data-platform/README.md) | BigQuery, dbt layers, Airflow, Beam/Dataflow, quality gates |
+| ML Platform | [`ml/README.md`](ml/README.md) | Model inventory, MLOps pipeline, training configs, serving |
+| Monitoring | [`monitoring/README.md`](monitoring/README.md) | Alert rules, dashboard inventory, escalation routing |
+| Helm Deployment | [`deploy/helm/README.md`](deploy/helm/README.md) | Chart configuration, environment values |
+| Terraform IaC | [`infra/terraform/README.md`](infra/terraform/README.md) | GCP module hierarchy, backend config |
+| ArgoCD GitOps | [`argocd/README.md`](argocd/README.md) | App-of-apps manifest, sync configuration |
+
+---
+
+## License
+
+MIT License — see full text below.
 
 ```
 MIT License
@@ -462,9 +674,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-
----
-
-<p align="center">
-  Built with ❤️ by the InstaCommerce Engineering Team
-</p>
