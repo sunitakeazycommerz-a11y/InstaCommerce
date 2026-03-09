@@ -17,6 +17,7 @@ Every monetary mutation is recorded via a **double-entry ledger** so wallet bala
 - [Database Schema](#database-schema)
 - [Scheduled Jobs](#scheduled-jobs)
 - [Configuration](#configuration)
+- [Known Limitations](#known-limitations)
 - [Running Locally](#running-locally)
 
 ---
@@ -28,8 +29,8 @@ Every monetary mutation is recorded via a **double-entry ledger** so wallet bala
 │  API Gateway │ ────────▶ │  wallet-loyalty-service     │ ───────▶│ PostgreSQL │
 └──────────────┘           │  (Spring Boot 3 / Java)     │         └────────────┘
                            │                              │
-  Kafka (order.events) ──▶ │  OrderEventConsumer          │
-  Kafka (payment.events) ▶ │  PaymentEventConsumer        │
+   Kafka (order.events / orders.events) ──▶ │  OrderEventConsumer    │
+   Kafka (payment.events / payments.events) ▶ │ PaymentEventConsumer │
                            │                              │
                            │  Outbox → CDC relay ─────────┼──▶ Kafka (wallet.events)
                            └────────────────────────────┘
@@ -51,8 +52,8 @@ Every monetary mutation is recorded via a **double-entry ledger** so wallet bala
 | | `ReferralService` | Code generation (SecureRandom), redemption with dual rewards |
 | | `WalletLedgerService` | Double-entry bookkeeping (top-up, purchase, refund, promo) |
 | | `OutboxService` | Transactional outbox writes (propagation = MANDATORY) |
-| **Kafka** | `OrderEventConsumer` | Listens `order.events` — earns points + 2 % cashback on delivery |
-| | `PaymentEventConsumer` | Listens `payment.events` — processes refunds back to wallet |
+| **Kafka** | `OrderEventConsumer` | Listens `order.events` / `orders.events` — earns points + 2% cashback on delivery |
+| | `PaymentEventConsumer` | Listens `payment.events` / `payments.events` — processes refunds back to wallet |
 | **Jobs** | `PointsExpiryJob` | Daily 02:00 — expires stale loyalty points |
 | | `OutboxCleanupJob` | Every 6 h — purges sent outbox rows (7-day retention) |
 | **Domain** | `Wallet`, `WalletTransaction`, `WalletLedgerEntry`, `LoyaltyAccount`, `LoyaltyTransaction`, `LoyaltyTier`, `ReferralCode`, `ReferralRedemption`, `OutboxEvent` | JPA entities |
@@ -88,8 +89,8 @@ sequenceDiagram
     deactivate DB
 
     WalletService->>WalletService: @CacheEvict("walletBalance")
-    WalletService-->>WalletController: WalletResponse
-    WalletController-->>Client: 200 OK {balanceCents, currency}
+    WalletService-->>WalletController: WalletTransactionResponse
+    WalletController-->>Client: 200 OK {type, amountCents, balanceAfterCents, ...}
 ```
 
 ### Loyalty Points Lifecycle
@@ -177,7 +178,7 @@ Tier is determined by `lifetimePoints` and is checked after every `earnPoints` c
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/wallet/balance` | `USER` | Current balance (cached) |
-| `POST` | `/wallet/topup` | `USER` | Top-up wallet (`TopUpRequest`) |
+| `POST` | `/wallet/topup` | `USER` | Top-up wallet after payment-service verification (`TopUpRequest`) |
 | `POST` | `/wallet/debit` | `USER` | Debit wallet (`DebitRequest`) |
 | `GET` | `/wallet/transactions` | `USER` | Paginated transaction history |
 
@@ -193,10 +194,18 @@ Tier is determined by `lifetimePoints` and is checked after every `earnPoints` c
 { "amountCents": 1200, "referenceType": "ORDER", "referenceId": "ord_xyz" }
 ```
 
-**WalletResponse**
+**Top-up / debit response**
 
 ```json
-{ "balanceCents": 8500, "currency": "INR" }
+{
+  "type": "CREDIT",
+  "amountCents": 5000,
+  "balanceAfterCents": 8500,
+  "referenceType": "TOPUP",
+  "referenceId": "topup-pay_abc123",
+  "description": "Wallet top-up via payment pay_abc123",
+  "createdAt": "2025-01-15T10:30:00Z"
+}
 ```
 
 ### Loyalty
@@ -222,7 +231,7 @@ Tier is determined by `lifetimePoints` and is checked after every `earnPoints` c
 **ReferralCodeResponse**
 
 ```json
-{ "code": "A7X9K2", "uses": 3, "maxUses": 10, "rewardCents": 200 }
+{ "code": "A7X9K2Q9", "uses": 3, "maxUses": 10, "rewardCents": 5000 }
 ```
 
 ### Common Error Response
@@ -249,8 +258,8 @@ Tier is determined by `lifetimePoints` and is checked after every `earnPoints` c
 
 | Consumer | Topic | Trigger Event | Action |
 |----------|-------|---------------|--------|
-| `OrderEventConsumer` | `order.events` | `OrderDelivered` | Earns loyalty points + credits 2 % cashback to wallet |
-| `PaymentEventConsumer` | `payment.events` | `PaymentRefunded` | Credits refund amount back to wallet |
+| `OrderEventConsumer` | `order.events`, `orders.events` | `OrderDelivered` | Earns loyalty points + credits 2% cashback to wallet |
+| `PaymentEventConsumer` | `payment.events`, `payments.events` | `PaymentRefunded` | Credits refund amount back to wallet |
 
 Both consumers deserialise an `EventEnvelope` and delegate to `WalletService` / `LoyaltyService`.
 
@@ -357,7 +366,7 @@ Key properties in `application.yml` / environment:
 |----------|---------|-------------|
 | `wallet.jwt.issuer` | — | Expected JWT issuer |
 | `wallet.jwt.public-key` | — | RSA public key (PEM or Base64) |
-| `wallet.loyalty.points-per-order` | — | Points multiplier |
+| `wallet.loyalty.points-per-rupee` | `1` | Loyalty earn rate (`orderTotalCents / 100`) |
 | `wallet.referral.reward-cents` | — | Reward per referral |
 | `spring.datasource.url` | — | PostgreSQL JDBC URL |
 | `spring.kafka.bootstrap-servers` | — | Kafka broker list |
@@ -374,6 +383,16 @@ Key properties in `application.yml` / environment:
 
 ---
 
+## Known Limitations
+
+- `payment-service.base-url` exists in `application.yml`, but the current
+  `PaymentClient` still hardcodes `http://payment-service:8080`
+- the top-up path is intentionally fail-closed on payment verification
+  unavailability; callers should expect `PAYMENT_SERVICE_UNAVAILABLE`
+- referral codes are 8 characters long in the current implementation
+
+---
+
 ## Running Locally
 
 ```bash
@@ -384,5 +403,5 @@ docker compose up -d postgres kafka
 ./gradlew :services:wallet-loyalty-service:bootRun
 
 # Health check
-curl http://localhost:8080/actuator/health
+curl http://localhost:8093/actuator/health
 ```

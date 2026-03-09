@@ -207,15 +207,16 @@ erDiagram
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SERVER_PORT` | `8092` | HTTP listen port |
-| `SPRING_DATASOURCE_URL` | — | PostgreSQL JDBC URL |
-| `SPRING_KAFKA_BOOTSTRAP_SERVERS` | — | Kafka broker addresses |
-| `ROUTING_ETA_AVERAGE_SPEED_KMH` | `25` | Base rider speed |
-| `ROUTING_ETA_PREPARATION_TIME_MINUTES` | `3` | Added prep time per delivery |
-| `ROUTING_ETA_ROAD_DISTANCE_MULTIPLIER` | `1.4` | Haversine → road distance factor |
-| `ROUTING_ETA_PEAK_SPEED_MULTIPLIER` | `0.6` | Speed reduction during rush hours |
-| `ROUTING_ETA_NIGHT_SPEED_MULTIPLIER` | `1.2` | Speed boost during night hours |
-| `JWT_PUBLIC_KEY` | — | RSA public key (GCP Secret Manager) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector.monitoring:4318` | OpenTelemetry collector |
+| `ROUTING_DB_URL` | — | PostgreSQL JDBC URL |
+| `KAFKA_BOOTSTRAP_SERVERS` | — | Kafka broker addresses |
+| `ETA_AVG_SPEED_KMH` | `25` | Base rider speed |
+| `ETA_PREP_TIME_MINUTES` | `3` | Added prep time per delivery |
+| `ETA_ROAD_DISTANCE_MULTIPLIER` | `1.4` | Haversine → road distance factor |
+| `ETA_PEAK_SPEED_MULTIPLIER` | `0.6` | Speed reduction during rush hours |
+| `ETA_NIGHT_SPEED_MULTIPLIER` | `1.2` | Speed boost during night hours |
+| `ROUTING_JWT_PUBLIC_KEY` | — | RSA public key (GCP Secret Manager) |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` | OTLP traces endpoint |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` | OTLP metrics endpoint |
 
 ### Caching
 
@@ -223,7 +224,8 @@ Caffeine cache: 100 000 entries max, 10-second TTL (ETA calculations).
 
 ### CORS
 
-Allowed origins: `http://localhost:3000`, `https://*.instacommerce.dev`.
+The STOMP endpoint currently uses `setAllowedOriginPatterns("*")`; tighten this
+before exposing the service beyond trusted internal clients.
 
 ## Build & Run
 
@@ -246,3 +248,10 @@ docker run -p 8092:8092 routing-eta-service
 - JJWT 0.12.5 (JWT authentication)
 - Micrometer + OTLP (tracing & metrics)
 - GCP Secret Manager, Cloud SQL socket factory
+
+## Known Limitations
+
+- WebSocket origin policy is currently permissive (`*`) and should be narrowed
+  during production hardening
+- the README now reflects the real environment variable names from
+  `application.yml`; older names such as `ROUTING_ETA_*` were inaccurate

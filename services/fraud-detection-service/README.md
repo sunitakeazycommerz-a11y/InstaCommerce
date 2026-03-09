@@ -1,6 +1,9 @@
 # Fraud Detection Service
 
-Rule-based and ML-powered fraud scoring, velocity checks, and blocklist management for InstaCommerce.
+Rule-based fraud scoring, velocity checks, and blocklist management for
+InstaCommerce. The service consumes order/payment events to enrich velocity
+signals, but the repository implementation is currently rule-engine centric
+rather than a fully wired ML-serving stack.
 Every order/payment event is evaluated through a multi-stage pipeline that produces a risk score and an automated decision (**ALLOW / FLAG / REVIEW / BLOCK**).
 
 ## Table of Contents
@@ -17,6 +20,7 @@ Every order/payment event is evaluated through a multi-stage pipeline that produ
 - [Database Schema](#database-schema)
 - [Scheduled Jobs](#scheduled-jobs)
 - [Configuration](#configuration)
+- [Known Limitations](#known-limitations)
 - [Running Locally](#running-locally)
 
 ---
@@ -143,13 +147,13 @@ Each rule stores its parameters in a `conditionJson` (JSONB) column, validated b
 
 ```mermaid
 flowchart TD
-    Admin["Admin (ROLE_ADMIN)"] -->|POST /admin/fraud/blocklist| BL[BlocklistService.block]
-    BL --> DB[(blocked_entities)]
-    BL --> CE["@CacheEvict('blocklist')"]
+        Admin["Admin (ROLE_ADMIN)"] -->|POST /admin/fraud/blocklist| BL[BlocklistService.block]
+        BL --> DB[(blocked_entities)]
+        BL --> CE["@CacheEvict('blocklist')"]
 
-    Admin -->|DELETE /admin/fraud/blocklist/:id| UB[BlocklistService.unblock]
-    UB --> DB
-    UB --> CE2["@CacheEvict('blocklist')"]
+        Admin -->|DELETE /admin/fraud/blocklist/{entityType}/{entityValue}| UB[BlocklistService.unblock]
+        UB --> DB
+        UB --> CE2["@CacheEvict('blocklist')"]
 
     ScoreReq[Scoring Request] --> Check[BlocklistService.isBlocked]
     Check -->|"@Cacheable('blocklist')"| DB
@@ -250,7 +254,7 @@ graph TD
 |--------|------|------|-------------|
 | `GET` | `/admin/fraud/blocklist` | `ADMIN` | List active blocked entities |
 | `POST` | `/admin/fraud/blocklist` | `ADMIN` | Block an entity (`BlockRequest`) |
-| `DELETE` | `/admin/fraud/blocklist/:id` | `ADMIN` | Unblock an entity |
+| `DELETE` | `/admin/fraud/blocklist/{entityType}/{entityValue}` | `ADMIN` | Unblock an entity |
 
 **BlockRequest**
 
@@ -286,8 +290,8 @@ graph TD
 
 | Consumer | Topic | Trigger Event | Action |
 |----------|-------|---------------|--------|
-| `OrderEventConsumer` | `order.events` | `OrderPlaced` | Increments velocity counters for user, device, IP |
-| `PaymentEventConsumer` | `payment.events` | `PaymentFailed` | Tracks failed payment attempts in velocity counters |
+| `OrderEventConsumer` | `order.events`, `orders.events` | `OrderPlaced` | Increments velocity counters for user, device, IP and amount windows |
+| `PaymentEventConsumer` | `payment.events`, `payments.events` | `PaymentFailed` | Tracks failed payment attempts for user, device, and IP windows |
 
 Both consumers deserialise an `EventEnvelope` record (`id`, `aggregateId`, `eventType`, `payload`).
 Kafka error handling uses `FixedBackOff` with DLT (dead-letter topic) fallback.
@@ -404,11 +408,19 @@ docker compose up -d postgres kafka
 ./gradlew :services:fraud-detection-service:bootRun
 
 # Health check
-curl http://localhost:8080/actuator/health
+curl http://localhost:8095/actuator/health
 
 # Score a transaction
-curl -X POST http://localhost:8080/fraud/score \
+curl -X POST http://localhost:8095/fraud/score \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{"userId":"...","orderId":"...","totalCents":5000}'
 ```
+
+## Known Limitations
+
+- the README previously overstated ML coupling; the checked-in implementation is
+  still primarily rule/velocity based
+- Kafka listeners use explicit listener group IDs (`fraud-detection-orders`,
+  `fraud-detection-payments`) instead of the shared default consumer group from
+  `application.yml`
