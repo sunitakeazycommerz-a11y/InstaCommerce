@@ -1,6 +1,13 @@
 # InstaCommerce Data Platform
 
-Analytics data warehouse (dbt), workflow orchestration (Airflow), real-time streaming pipelines (Apache Beam on Dataflow), and data quality enforcement (Great Expectations) for the InstaCommerce Q-commerce platform.
+Analytics data warehouse (dbt), workflow orchestration (Airflow), real-time
+streaming pipelines (Apache Beam on Dataflow), and data quality enforcement
+(Great Expectations) for the InstaCommerce Q-commerce platform.
+
+> **Source-of-truth note:** the detailed streaming contract lives in
+> [`streaming/README.md`](streaming/README.md). This top-level README focuses on
+> platform architecture and now mirrors the actual pipeline windows, sinks, and
+> DAG schedules in the repository.
 
 ---
 
@@ -90,7 +97,8 @@ data-platform/
 │           ├── mart_rider_performance.sql
 │           ├── mart_search_funnel.sql
 │           ├── mart_product_analytics.sql
-│           └── mart_user_cohort_retention.sql
+│           ├── mart_user_cohort_retention.sql
+│           └── mart_sponsored_opportunities.sql
 │
 ├── airflow/                           # Cloud Composer DAGs
 │   ├── requirements.txt
@@ -167,6 +175,7 @@ flowchart TB
         mart_search["mart_search_funnel"]
         mart_product["mart_product_analytics"]
         mart_cohort["mart_user_cohort_retention"]
+        mart_sponsored["mart_sponsored_opportunities"]
     end
 
     orders --> stg_orders
@@ -186,6 +195,7 @@ flowchart TB
     int_user_history --> mart_cohort
     int_product_perf --> mart_product
     stg_searches & stg_cart --> mart_search
+    stg_searches & stg_cart --> mart_sponsored
 ```
 
 ### dbt Quick Start
@@ -210,8 +220,8 @@ flowchart TB
         quality["data_quality\n⏰ every 2h"]
         marts["dbt_marts\n⏰ daily 02:00"]
         features["ml_feature_refresh\n⏰ every 4h"]
-        training["ml_training\n⏰ weekly"]
-        alerts["monitoring_alerts\n⏰ every 30m"]
+        training["ml_training\n⏰ daily 04:00"]
+        alerts["monitoring_alerts\n⏰ every 15m"]
     end
 
     staging --> quality
@@ -228,8 +238,8 @@ flowchart TB
 | `data_quality` | `0 */2 * * *` | Run Great Expectations suites post-load |
 | `dbt_marts` | `0 2 * * *` | Rebuild analytics marts (daily) |
 | `ml_feature_refresh` | `0 */4 * * *` | Recompute ML feature tables in BigQuery |
-| `ml_training` | `0 3 * * 0` | Trigger weekly model retraining |
-| `monitoring_alerts` | `*/30 * * * *` | Check SLA freshness & alert on Slack |
+| `ml_training` | `0 4 * * *` | Trigger daily model retraining / evaluation pipeline |
+| `monitoring_alerts` | `*/15 * * * *` | Check SLA freshness & alert on Slack |
 
 ---
 
@@ -255,24 +265,26 @@ flowchart LR
 
     subgraph Sinks["Sinks"]
         BQ["BigQuery\n(Analytics)"]
-        Redis["Redis\n(Real-Time Features)"]
-        GCS["GCS\n(Data Lake)"]
     end
 
-    OE --> OP --> BQ & GCS
-    PE --> PP --> BQ & GCS
-    CE --> CP --> BQ & Redis
-    IE --> IP --> BQ & Redis
-    RL --> RLP --> Redis & GCS
+    OE --> OP --> BQ
+    PE --> PP --> BQ
+    CE --> CP --> BQ
+    IE --> IP --> BQ
+    RL --> RLP --> BQ
 ```
 
 | Pipeline | Source Topic | Sinks | Window | Purpose |
 |----------|-------------|-------|--------|---------|
-| `order_events_pipeline` | `order.events` | BigQuery, GCS | 1 min fixed | Order analytics + archival |
-| `payment_events_pipeline` | `payment.events` | BigQuery, GCS | 1 min fixed | Payment reconciliation |
-| `cart_events_pipeline` | `cart.events` | BigQuery, Redis | 30 sec sliding | Cart analytics, real-time funnel |
-| `inventory_events_pipeline` | `inventory.events` | BigQuery, Redis | 1 min fixed | Stock level tracking |
-| `rider_location_pipeline` | `rider.location` | Redis, GCS | 5 sec sliding | Real-time rider tracking |
+| `order_events_pipeline` | `order.events` | BigQuery | 1 min fixed | Order analytics and SLA tracking |
+| `payment_events_pipeline` | `payment.events` | BigQuery | 1 min fixed | Payment reconciliation and success metrics |
+| `cart_events_pipeline` | `cart.events` | BigQuery | 15 min session | Cart analytics and abandonment modeling |
+| `inventory_events_pipeline` | `inventory.events` | BigQuery | 5 min fixed | Stock velocity and stockout tracking |
+| `rider_location_pipeline` | `rider.location` | BigQuery | 1 min fixed | Rider utilization and zone-level tracking |
+
+> The streaming README contains the canonical per-pipeline deployment and
+> monitoring details. Use this top-level table as the architecture summary and
+> [`streaming/README.md`](streaming/README.md) for execution specifics.
 
 ---
 

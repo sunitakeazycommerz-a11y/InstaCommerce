@@ -499,6 +499,7 @@ All settings use the `AI_ORCHESTRATOR_` env prefix (case-insensitive).
 | `AI_ORCHESTRATOR_INVENTORY_SERVICE_URL` | `http://inventory-service:8080` | Inventory service URL |
 | `AI_ORCHESTRATOR_CART_SERVICE_URL` | `http://cart-service:8088` | Cart service URL |
 | `AI_ORCHESTRATOR_ORDER_SERVICE_URL` | `http://order-service:8080` | Order service URL |
+| `AI_ORCHESTRATOR_INTERNAL_SERVICE_TOKEN` | — | Token attached to downstream internal-service calls; not an inbound auth control |
 
 ### Guardrail-Specific Variables
 
@@ -527,3 +528,50 @@ uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload
 ```
 
 The v2 LangGraph endpoints are mounted at `/v2/`. Legacy v1 endpoints remain at `/api/v1/ai/`.
+
+## Security & Trust Model
+
+- **Outbound auth:** when `AI_ORCHESTRATOR_INTERNAL_SERVICE_TOKEN` is set, tool
+  calls attach it to downstream service requests
+- **Inbound auth:** the current FastAPI surface does **not** document or enforce
+  a production-grade inbound authentication layer yet; treat this as a platform
+  gap, not a hidden feature
+- **Guardrails:** prompt-injection checks, PII redaction, output validation,
+  budget ceilings, and escalation rules are implemented in-process
+
+## Testing Status
+
+- there are currently **no test files** under `services/ai-orchestrator-service`
+- the highest-priority missing coverage is adversarial guardrail testing,
+  checkpoint/recovery behavior, tool timeout behavior, and policy/escalation
+  decisions
+- use the iteration-3 governance review as the test-plan seed:
+  [`../../docs/reviews/iter3/platform/ai-agent-governance.md`](../../docs/reviews/iter3/platform/ai-agent-governance.md)
+
+## Operations & Runbook Focus Areas
+
+Monitor and operationalize these signals before promoting the service to
+customer-facing traffic:
+
+1. tool circuit breakers opening repeatedly for catalog/pricing/inventory/order
+2. checkpoint storage falling back from Redis to in-memory mode
+3. escalation volume spikes, especially for low-confidence or safety-triggered
+   paths
+4. budget exhaustion / queue backpressure spikes on `/v2/agent/invoke`
+
+## Known Limitations
+
+The repository contains a strong orchestration core, but several production
+controls are still maturing. The authoritative review is
+[`../../docs/reviews/iter3/platform/ai-agent-governance.md`](../../docs/reviews/iter3/platform/ai-agent-governance.md).
+Key current gaps:
+
+1. inbound authentication is not yet a documented/implemented hard gate for the
+   public FastAPI surface
+2. rate limiting and some guardrail state are in-process, so behavior scales
+   per replica rather than from a global control plane
+3. escalation and audit integration are not yet documented as durable,
+   enterprise-grade workflows
+4. the README diagrams describe the intended platform well, but rollout should
+   still follow the governance review rather than assuming every safety control
+   is already production-complete

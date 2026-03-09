@@ -1,6 +1,10 @@
 # InstaCommerce ML Platform
 
-Production machine learning platform powering search, recommendations, fraud detection, demand forecasting, ETA prediction, and customer lifetime value for Q-commerce. Covers model training, real-time serving, a dual-layer feature store, a unified evaluation framework, and MLOps automation.
+Machine learning platform repository for search, recommendations, fraud
+detection, demand forecasting, ETA prediction, and customer lifetime value for
+Q-commerce. The repo contains working training/serving components plus a richer
+productionization roadmap; not every canary, registry, or rollback behavior
+shown below is fully wired in the current codebase.
 
 ---
 
@@ -13,7 +17,7 @@ flowchart LR
     Evaluate["✅ Evaluate\n(Promotion Gates)"]
     Shadow["👻 Shadow Mode\n(Parallel Inference)"]
     Canary["🐤 Canary\n(5% Traffic)"]
-    Production["🚀 Production\n(Vertex AI Endpoints)"]
+        Production["🚀 Target Production\n(Vertex AI Endpoints)"]
     Monitor["📊 Monitor\n(Prometheus + PSI)"]
     Retrain["🔄 Retrain\n(Drift Trigger)"]
 
@@ -49,6 +53,11 @@ graph TB
 | **AI Orchestrator** | Routing / Ensemble | Spring Boot | < 50 ms | — | Orchestrate multi-model calls | ✅ Production |
 
 ---
+
+> **Current artifact reality:** the training scripts in this repository export
+> native model artifacts today (`.lgb`, `.xgb`, `.pkl`, `.json`). The serving
+> layer attempts ONNX runtime when ONNX artifacts are available, but the
+> end-to-end ONNX export/promotion path is still partial in the repo.
 
 ## Directory Structure
 
@@ -187,7 +196,7 @@ flowchart LR
         Split["✂️ Train/Val/Test\nSplit"]
         Train["🏋️ Train Model\n(LightGBM / XGBoost / PyTorch)"]
         Evaluate["✅ Evaluate\n(Promotion Gates)"]
-        Export["📦 Export ONNX\n(+ Model Card)"]
+        Export["📦 Export native artifact\n(+ Model Card)"]
         Register["🏷️ Register\n(MLflow Registry)"]
     end
 
@@ -231,7 +240,7 @@ python -m ml.train.clv_prediction.train \
 
 ```bash
 python -m ml.eval.evaluate \
-  --model-path artifacts/search-ranking/v1/model.onnx \
+  --model-path artifacts/search-ranking/v1/model.lgb \
   --test-data gs://instacommerce-ml/datasets/search_ranking/test.parquet \
   --gates-config ml/train/search_ranking/config.yaml \
   --bias-check \
@@ -319,9 +328,12 @@ classDiagram
 ```
 
 Every predictor:
-1. Loads an **ONNX Runtime** artifact from MLflow Model Registry
-2. Falls back to **rule-based heuristics** if model loading fails (`DEGRADED` status)
-3. Returns a standardised `PredictionResult` with version, latency, and fallback flag
+1. Attempts to load an **ONNX Runtime** artifact when an ONNX export is
+   available
+2. Falls back to **native artifacts** (`.lgb`, `.xgb`, `.pkl`, `.json`) and then
+   to **rule-based heuristics** if model loading fails (`DEGRADED` status)
+3. Returns a standardised `PredictionResult` with version, latency, and
+   fallback flag
 
 ---
 
@@ -412,6 +424,21 @@ All experiments are tracked in MLflow:
 - **Tracking URI**: Set via `MLFLOW_TRACKING_URI` environment variable
 - **Artifacts**: Stored in GCS (`gs://instacommerce-ml/mlflow-artifacts/`)
 - **Model Registry**: MLflow Model Registry for versioning and stage transitions (Staging → Production → Archived)
+
+## Known Limitations
+
+The repo already contains the core building blocks, but the full production
+posture described in the platform diagrams is still maturing. See
+[`../docs/reviews/iter3/platform/ml-platform-productionization.md`](../docs/reviews/iter3/platform/ml-platform-productionization.md)
+for the detailed gap assessment. The highest-signal current limitations are:
+
+1. model registry / promotion state is still repository-centric rather than a
+   fully durable control plane
+2. shadow-mode comparison state is not documented as durable across failures
+3. rollback is closer to a kill-switch posture than a true previous-version
+   revert workflow
+4. several feature-store ingestion paths are still scaffolded relative to the
+   target architecture
 
 ## Infrastructure
 
