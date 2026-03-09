@@ -128,10 +128,9 @@ public class StalePendingPaymentRecoveryJob {
             return RecoveryOutcome.COMPLETED_FORWARD;
         }
         if (pspState.isCaptured()) {
-            // PSP already captured — complete authorization then capture
-            txHelper.completeAuthorization(payment.getId(), payment.getPspReference());
+            // PSP already captured — reconcile directly to CAPTURED in one transaction
             long capturedCents = resolveCapturedAmount(pspState, payment);
-            txHelper.completeCaptured(payment.getId(), capturedCents);
+            txHelper.reconcileDirectToCaptured(payment.getId(), payment.getPspReference(), capturedCents);
             return RecoveryOutcome.COMPLETED_FORWARD;
         }
 
@@ -142,6 +141,12 @@ public class StalePendingPaymentRecoveryJob {
     }
 
     private RecoveryOutcome recoverCapturePending(Payment payment) {
+        if (payment.getPspReference() == null || payment.getPspReference().isBlank()) {
+            txHelper.resolveStaleCaptureFailed(payment.getId(),
+                "no_psp_reference_after_threshold");
+            return RecoveryOutcome.REVERTED;
+        }
+
         GatewayStatusResult pspState = paymentGateway.getStatus(payment.getPspReference());
 
         if (pspState.isInFlight()) {
@@ -170,6 +175,12 @@ public class StalePendingPaymentRecoveryJob {
     }
 
     private RecoveryOutcome recoverVoidPending(Payment payment) {
+        if (payment.getPspReference() == null || payment.getPspReference().isBlank()) {
+            txHelper.resolveStaleVoidFailed(payment.getId(),
+                "no_psp_reference_after_threshold");
+            return RecoveryOutcome.REVERTED;
+        }
+
         GatewayStatusResult pspState = paymentGateway.getStatus(payment.getPspReference());
 
         if (pspState.isInFlight()) {

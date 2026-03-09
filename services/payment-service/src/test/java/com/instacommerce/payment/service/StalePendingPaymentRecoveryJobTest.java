@@ -116,8 +116,8 @@ class StalePendingPaymentRecoveryJobTest {
         }
 
         @Test
-        @DisplayName("PSP says captured → completes auth and capture")
-        void pspCaptured_completesAuthAndCapture() {
+        @DisplayName("PSP says captured → reconciles directly to CAPTURED")
+        void pspCaptured_reconcilesDirectToCaptured() {
             Payment p = payment(PaymentStatus.AUTHORIZE_PENDING, "pi_test_123");
             when(paymentGateway.getStatus("pi_test_123"))
                 .thenReturn(pspResult(PspPaymentState.SUCCEEDED, 10000L));
@@ -125,20 +125,21 @@ class StalePendingPaymentRecoveryJobTest {
             RecoveryOutcome outcome = job.recoverPayment(p);
 
             assertThat(outcome).isEqualTo(RecoveryOutcome.COMPLETED_FORWARD);
-            verify(txHelper).completeAuthorization(p.getId(), "pi_test_123");
-            verify(txHelper).completeCaptured(p.getId(), 10000L);
+            verify(txHelper).reconcileDirectToCaptured(p.getId(), "pi_test_123", 10000L);
+            verify(txHelper, never()).completeAuthorization(any(), any());
+            verify(txHelper, never()).completeCaptured(any(), anyLong());
         }
 
         @Test
-        @DisplayName("PSP says captured with no amount → uses payment amountCents")
-        void pspCapturedNoAmount_usesPaymentAmount() {
+        @DisplayName("PSP says captured with no amount → reconciles using payment amountCents")
+        void pspCapturedNoAmount_reconcilesUsingPaymentAmount() {
             Payment p = payment(PaymentStatus.AUTHORIZE_PENDING, "pi_test_123");
             when(paymentGateway.getStatus("pi_test_123"))
                 .thenReturn(pspResult(PspPaymentState.SUCCEEDED, 0L));
 
             job.recoverPayment(p);
 
-            verify(txHelper).completeCaptured(p.getId(), 10000L);
+            verify(txHelper).reconcileDirectToCaptured(p.getId(), "pi_test_123", 10000L);
         }
 
         @Test
@@ -187,6 +188,32 @@ class StalePendingPaymentRecoveryJobTest {
     @Nested
     @DisplayName("CAPTURE_PENDING recovery")
     class CapturePending {
+
+        @Test
+        @DisplayName("No PSP reference → reverts to AUTHORIZED")
+        void noPspReference_reverts() {
+            Payment p = payment(PaymentStatus.CAPTURE_PENDING, null);
+
+            RecoveryOutcome outcome = job.recoverPayment(p);
+
+            assertThat(outcome).isEqualTo(RecoveryOutcome.REVERTED);
+            verify(txHelper).resolveStaleCaptureFailed(
+                eq(p.getId()), eq("no_psp_reference_after_threshold"));
+            verifyNoInteractions(paymentGateway);
+        }
+
+        @Test
+        @DisplayName("Blank PSP reference → reverts to AUTHORIZED")
+        void blankPspReference_reverts() {
+            Payment p = payment(PaymentStatus.CAPTURE_PENDING, "  ");
+
+            RecoveryOutcome outcome = job.recoverPayment(p);
+
+            assertThat(outcome).isEqualTo(RecoveryOutcome.REVERTED);
+            verify(txHelper).resolveStaleCaptureFailed(
+                eq(p.getId()), eq("no_psp_reference_after_threshold"));
+            verifyNoInteractions(paymentGateway);
+        }
 
         @Test
         @DisplayName("PSP says captured → completes capture")
@@ -273,6 +300,32 @@ class StalePendingPaymentRecoveryJobTest {
     @Nested
     @DisplayName("VOID_PENDING recovery")
     class VoidPending {
+
+        @Test
+        @DisplayName("No PSP reference → reverts to AUTHORIZED")
+        void noPspReference_reverts() {
+            Payment p = payment(PaymentStatus.VOID_PENDING, null);
+
+            RecoveryOutcome outcome = job.recoverPayment(p);
+
+            assertThat(outcome).isEqualTo(RecoveryOutcome.REVERTED);
+            verify(txHelper).resolveStaleVoidFailed(
+                eq(p.getId()), eq("no_psp_reference_after_threshold"));
+            verifyNoInteractions(paymentGateway);
+        }
+
+        @Test
+        @DisplayName("Blank PSP reference → reverts to AUTHORIZED")
+        void blankPspReference_reverts() {
+            Payment p = payment(PaymentStatus.VOID_PENDING, "  ");
+
+            RecoveryOutcome outcome = job.recoverPayment(p);
+
+            assertThat(outcome).isEqualTo(RecoveryOutcome.REVERTED);
+            verify(txHelper).resolveStaleVoidFailed(
+                eq(p.getId()), eq("no_psp_reference_after_threshold"));
+            verifyNoInteractions(paymentGateway);
+        }
 
         @Test
         @DisplayName("PSP says canceled → completes void")
