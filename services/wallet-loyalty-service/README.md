@@ -51,7 +51,7 @@ Every monetary mutation is recorded via a **double-entry ledger** so wallet bala
 
 **Upstream triggers:** `order-service` (OrderDelivered → earn points + cashback), `payment-service` (PaymentRefunded → wallet credit).
 **Downstream consumers:** `data-platform` / analytics read `wallet.events` via Debezium CDC relay from the outbox table.
-**Sync dependency:** `payment-service` — called during top-up to verify payment completion before crediting the wallet (fail-closed).
+**Sync dependencies:** `payment-service` — called during top-up to verify payment completion before crediting the wallet (fail-closed). `order-service` — called by `PaymentEventConsumer` to resolve `userId` from `orderId` on refund events (fail-closed; refund credit is retried until order-service is reachable).
 
 ---
 
@@ -115,7 +115,8 @@ flowchart TB
 | | `PaymentEventConsumer` | Listens `payment.events` + `payments.events` → credits refund amount on `PaymentRefunded` |
 | **Jobs** | `PointsExpiryJob` | Daily 02:00 — batch-expires stale `EARN` transactions older than `points-expiry-months` (default 12). Uses `PROPAGATION_REQUIRES_NEW` per account and pages accounts in batches of 500. |
 | | `OutboxCleanupJob` | Every 6 h — deletes `sent = true` outbox rows older than 7 days |
-| **Client** | `PaymentClient` | `RestTemplate`-based client for `payment-service`. Connect timeout 2 s, read timeout 3 s. Used only in top-up path. |
+| **Client** | `PaymentClient` | `RestClient`-based client for `payment-service`. Connect timeout 2 s, read timeout 3 s. Used only in top-up path. |
+| | `RestOrderLookupClient` | `RestClient`-based client for `order-service` (`/admin/orders/{orderId}`). Connect timeout 3 s, read timeout 5 s. Uses `X-Internal-Service` / `X-Internal-Token` headers. Used by `PaymentEventConsumer` to resolve `userId` from refund events. |
 | **Security** | `JwtAuthenticationFilter` | `OncePerRequestFilter` — validates RSA JWT via JJWT, extracts `sub` (userId) and `roles`. Skips `/actuator/**` and `/error`. |
 | | `DefaultJwtService` | Parses JWT with `Jwts.parser().verifyWith(publicKey).requireIssuer(...)` |
 | | `JwtKeyLoader` | Loads RSA public key from PEM/Base64 config |
@@ -421,9 +422,11 @@ sequenceDiagram
 | Consumer | Topics | Event | Action |
 |---|---|---|---|
 | `OrderEventConsumer` | `order.events`, `orders.events` | `OrderDelivered` | Calls `loyaltyService.earnPoints(userId, orderId, totalCents)` then credits 2% cashback via `walletService.credit()` |
-| `PaymentEventConsumer` | `payment.events`, `payments.events` | `PaymentRefunded` | Calls `walletService.credit(userId, refundAmountCents, REFUND, refund-{paymentId})` |
+| `PaymentEventConsumer` | `payment.events`, `payments.events` | `PaymentRefunded` | Resolves `userId` via `OrderLookupClient.findOrder(orderId)`, then calls `walletService.credit(userId, amountCents, REFUND, refundId)` |
 
-Both consumers deserialise raw JSON via Jackson `ObjectMapper.readTree()`, extract `eventType`, and dispatch only on matching types. Unrecognised events are silently ignored. Exceptions are caught and logged (no DLQ in current implementation).
+Both consumers deserialise raw JSON via Jackson `ObjectMapper.readTree()`, extract `eventType`, and dispatch only on matching types. Unrecognised events are silently ignored. `PaymentEventConsumer` propagates parse and validation errors (no catch-all); `OrderEventConsumer` catches and logs.
+
+**Kafka error handling (PaymentEventConsumer):** A `DefaultErrorHandler` with `DeadLetterPublishingRecoverer` provides production-safe retry and dead-letter routing (topic suffix `.DLT`). Transient failures (order-service 5xx, network timeouts) are attempted up to 3 times total (1 initial delivery + 2 retries) with 1 s fixed backoff. Non-retryable failures — malformed JSON (`JsonProcessingException`), missing/invalid fields (`IllegalArgumentException`), and order genuinely not found (`OrderNotFoundException` from order-service 404) — skip retry and are routed to the DLT immediately. This prevents both silent message loss after transient failures and infinite retry loops for permanent errors.
 
 Consumer group: `wallet-loyalty-service`. Auto-offset-reset: `earliest`.
 
@@ -687,8 +690,7 @@ The test suite uses JUnit 5 (`useJUnitPlatform()`), `spring-boot-starter-test` (
 | **C6-F2** | `LoyaltyService.earnPoints()` has no pessimistic lock on `LoyaltyAccount`. Concurrent `OrderDelivered` events for the same user can race, causing a lost-update on `pointsBalance`. The V8 idempotency index prevents duplicate transactions for the same order, but two different orders processed concurrently can still race. Target fix: add `findByUserIdForUpdate` to `LoyaltyAccountRepository`. | 🔴 Critical | `docs/reviews/iter3/services/customer-engagement.md` §2.2 |
 | **C6-F4** | Outbox cleanup deletes by `created_at` rather than `sent_at` (no `sent_at` column exists). If the CDC relay lags beyond 7 days, rows may be deleted before relay, losing downstream events. Target fix: add `sent_at` column, clean by `sent_at`. | 🟠 High | `docs/reviews/iter3/services/customer-engagement.md` §2.2 |
 | **C6-F7** | `WalletLedgerService.verifyBalance()` exists in code but is not called by any scheduled job. Ledger-vs-wallet drift is undetectable until manual audit. Target fix: add a `WalletIntegrityJob` (ShedLock, daily 04:00) that scans recently-active wallets and reports mismatches as a Prometheus metric. | 🟠 High | `docs/reviews/iter3/diagrams/lld/engagement-loyalty-fraud.md` §2.4 |
-| **HARDCODED-URL** | `PaymentClient` hardcodes `rootUri("http://payment-service:8080")` instead of using the `payment-service.base-url` property from `application.yml`. | 🟡 Medium | `client/PaymentClient.java` line 23 |
-| **NO-DLQ** | Kafka consumers catch all exceptions and log them, but do not publish to a dead-letter queue. Poison messages are silently dropped. | 🟡 Medium | `kafka/OrderEventConsumer.java`, `kafka/PaymentEventConsumer.java` |
+| **NO-DLQ** | `OrderEventConsumer` catches all exceptions and logs them, but does not publish to a dead-letter queue. `PaymentEventConsumer` routes to DLT via `KafkaErrorConfig` after retry exhaustion or for non-retryable errors (`JsonProcessingException`, `IllegalArgumentException`, `OrderNotFoundException`). | 🟡 Medium (OrderEventConsumer only) | `kafka/OrderEventConsumer.java` |
 | **NO-REFERRAL-FRAUD** | Referral redemption checks code validity and self-referral but does not track device/IP. A single person can create multiple accounts and exploit their own referral code. | 🟡 Medium | `docs/reviews/iter3/diagrams/lld/engagement-loyalty-fraud.md` §2.6 |
 | **TIER-NO-DOWNGRADE** | Tiers are monotonically non-decreasing. If lifetime points are adjusted downward (e.g., fraud clawback), the tier is not recalculated. | 🟡 Low | `service/LoyaltyService.java` `checkTierUpgrade()` |
 | **REFERRAL-CODE-8** | Referral codes are 8 characters from a 31-char alphabet. Sufficient for current scale but not configurable. | ℹ️ Info | `service/ReferralService.java` |
@@ -707,6 +709,34 @@ The test suite uses JUnit 5 (`useJUnitPlatform()`), `spring-boot-starter-test` (
 | **Points expiry** | Regulatory requirement in many jurisdictions. Common in Swiggy, Zomato, Dunzo loyalty programmes. | ✅ Configurable `points-expiry-months`, batch processing with `REQUIRES_NEW` isolation. | No per-user notification before expiry. |
 | **Tiered loyalty** | Standard (Bronze → Silver → Gold → Platinum). Swiggy ONE, Zomato Pro use similar structures. | ✅ Four tiers with configurable thresholds. | Tiers are earn-only (no downgrade), no tier-specific benefits are modeled in this service. |
 | **Referral with fraud controls** | Best practice includes device fingerprint + IP rate limiting (Rappi, Glovo, Zepto). | ⚠️ Basic validation only (self-referral, max uses, one-per-user). | No device/IP tracking, no fraud-service integration. |
+
+---
+
+## PaymentRefunded Consumer — Rollout & Dependencies
+
+The `PaymentEventConsumer` consumes `PaymentRefunded` events published by `payment-service` when the `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` flag is active.
+
+**Deploy order:**
+1. Deploy the updated `wallet-loyalty-service` with the corrected consumer and `ORDER_SERVICE_URL` / `INTERNAL_SERVICE_TOKEN` env vars.
+2. Verify the consumer is healthy (`/actuator/health/readiness`) and connected to Kafka (`payment.events` group lag visible in Kafka UI).
+3. Only then enable `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED: "true"` on `payment-service` in the target environment.
+
+**Runtime dependency — order-service:**
+- The consumer calls `order-service` `/admin/orders/{orderId}` to resolve `userId` for each refund event.
+- If `order-service` is unreachable, the consumer throws and Kafka retries the message (back-off per consumer config). Refund credits are delayed but not lost.
+- Prolonged order-service downtime will cause consumer lag to grow; monitor `kafka_consumer_lag` for group `wallet-loyalty-service`.
+
+**Rollback:**
+- Disable `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` on `payment-service` to stop new events.
+- Redeploy the previous `wallet-loyalty-service` image if needed.
+- Unconsumed or partially-consumed events remain on the topic and are safe to leave unprocessed.
+
+**Environment variables added in this wave:**
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ORDER_SERVICE_URL` | `http://order-service:8080` | Base URL for order-service REST lookups |
+| `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Shared token for `X-Internal-Token` header on internal service calls |
 
 ---
 
