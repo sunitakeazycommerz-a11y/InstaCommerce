@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/assets/logo-placeholder.png" alt="InstaCommerce Logo" width="200" />
-</p>
-
 <h1 align="center">InstaCommerce</h1>
 
 <p align="center">
@@ -41,6 +37,12 @@
 ## 🏗 Architecture Overview
 
 The platform follows a **domain-driven microservices architecture** with event-driven communication via Kafka, orchestrated workflows via Temporal, and a polyglot service mesh managed by Istio on GKE. In the current transactional model, the checkout money path remains orchestrated in `checkout-orchestrator-service`, while downstream order progression from fulfillment through delivery is migrating to Kafka-driven choreography behind explicit rollout controls.
+
+> **Current-state note:** Some edge-facing services in the repository, notably
+> `mobile-bff-service` and `admin-gateway-service`, are still scaffolds rather
+> than full aggregators. Their service READMEs document both the current
+> implementation and the intended target architecture so the repo entrypoint
+> stays honest about runtime reality.
 
 ```mermaid
 graph TB
@@ -213,8 +215,8 @@ graph TB
 | 9 | `inventory-service` | Java | 8089 | Real-time stock levels, reservation, replenishment | ✅ Active |
 | 10 | `fulfillment-service` | Java | 8090 | Pick-pack-dispatch orchestration via Temporal | ✅ Active |
 | 11 | `notification-service` | Java | 8091 | Push, SMS, email notifications via templates | ✅ Active |
-| 12 | `mobile-bff` | Java | 8092 | Backend-for-Frontend aggregation for mobile | ✅ Active |
-| 13 | `admin-gateway` | Java | 8093 | Internal admin API aggregation | ✅ Active |
+| 12 | `mobile-bff-service` | Java | 8092 | Mobile edge facade — currently a scaffold with a stub `/home` endpoint | 🟡 Scaffold |
+| 13 | `admin-gateway-service` | Java | 8093 | Admin edge facade — currently a scaffold with a stub `/dashboard` endpoint | 🟡 Scaffold |
 | 14 | `wallet-loyalty-service` | Java | 8094 | Digital wallet, loyalty points, cashback | ✅ Active |
 | 15 | `fraud-detection-service` | Java | 8095 | Real-time fraud scoring, rule engine | ✅ Active |
 | 16 | `audit-trail-service` | Java | 8096 | Immutable audit log, compliance events | ✅ Active |
@@ -263,11 +265,11 @@ docker-compose up -d
 # 4. Run a specific service
 ./gradlew :services:order-service:bootRun
 
-# 5. Run Go services
-cd services/outbox-relay && go run ./cmd/main.go
+# 5. Run a Go service
+cd services/outbox-relay-service && go run .
 
 # 6. Run Python AI services
-cd services/ai-orchestrator && pip install -r requirements.txt && uvicorn app.main:app --port 9001
+cd services/ai-orchestrator-service && pip install -r requirements.txt && uvicorn app.main:app --port 8100
 ```
 
 ### Running Individual Services
@@ -276,8 +278,8 @@ cd services/ai-orchestrator && pip install -r requirements.txt && uvicorn app.ma
 # Java service (any of the 20 services)
 ./gradlew :services:<service-name>:bootRun
 
-# Go service (any of the 7 services)
-cd services/<service-name> && go run ./cmd/main.go
+# Go service (any of the Go services)
+cd services/<service-name> && go run .
 
 # Python service
 cd services/<service-name> && uvicorn app.main:app --reload
@@ -302,67 +304,53 @@ cd services/<service-name> && pytest -v
 
 ```
 InstaCommerce/
-├── services/                  # 30 microservices (Java, Python, Go)
-│   ├── identity-service/      #   🔐 Auth & identity (Java)
-│   ├── catalog-service/       #   📦 Product catalog (Java)
-│   ├── search-service/        #   🔍 Product search (Java)
-│   ├── pricing-service/       #   💲 Pricing engine (Java)
-│   ├── cart-service/          #   🛒 Cart management (Java)
-│   ├── checkout-orchestrator/ #   🔄 Checkout saga (Java)
-│   ├── order-service/         #   📋 Order lifecycle (Java)
-│   ├── payment-service/       #   💳 Payments (Java)
-│   ├── inventory-service/     #   📊 Inventory (Java)
-│   ├── fulfillment-service/   #   🚀 Fulfillment (Java)
-│   ├── notification-service/  #   🔔 Notifications (Java)
-│   ├── mobile-bff/            #   📲 Mobile BFF (Java)
-│   ├── admin-gateway/         #   🔧 Admin API (Java)
-│   ├── wallet-loyalty-service/#   👛 Wallet & loyalty (Java)
-│   ├── fraud-detection-service/#  🛡 Fraud detection (Java)
-│   ├── audit-trail-service/   #   📝 Audit trail (Java)
-│   ├── config-service/        #   ⚙ Feature flags (Java)
-│   ├── rider-fleet-service/   #   🏍 Rider fleet (Java)
-│   ├── routing-eta-service/   #   🗺 Routing & ETA (Java)
-│   ├── warehouse-service/     #   🏭 Warehouse ops (Java)
-│   ├── ai-orchestrator/       #   🧠 AI agents (Python)
-│   ├── ai-inference/          #   🤖 ML inference (Python)
-│   ├── outbox-relay/          #   📤 Outbox → Kafka (Go)
-│   ├── cdc-consumer/          #   🔁 CDC consumer (Go)
-│   ├── location-ingestion/    #   📍 GPS ingestion (Go)
-│   ├── payment-webhook/       #   🪝 Payment webhooks (Go)
-│   ├── dispatch-optimizer/    #   🧮 Dispatch optimization (Go)
-│   ├── stream-processor/      #   🌊 Stream processing (Go)
-│   └── reconciliation-engine/ #   ⚖ Reconciliation (Go)
-├── contracts/                 # Event schemas (Avro/JSON) + gRPC protos
-│   ├── avro/                  #   Avro schema definitions
-│   ├── proto/                 #   Protocol Buffer definitions
-│   └── json-schema/           #   JSON Schema for REST APIs
-├── deploy/helm/               # Kubernetes Helm charts per service
-├── infra/terraform/           # GCP infrastructure as code
-│   ├── modules/               #   VPC, GKE, Cloud SQL, Memorystore, etc.
-│   └── environments/          #   dev / staging / production
-├── argocd/                    # GitOps application manifests
-├── ml/                        # ML training, serving, feature store
-│   ├── training/              #   Model training pipelines
-│   ├── serving/               #   Model serving configs
-│   └── feature_store/         #   Feature definitions & pipelines
-├── data-platform/             # Data engineering
-│   ├── dbt/                   #   dbt models & transformations
-│   ├── airflow/               #   DAG definitions
-│   ├── streaming/             #   Kafka Connect & stream configs
-│   └── quality/               #   Great Expectations data quality
-├── monitoring/                # Observability
-│   ├── prometheus/            #   Alert rules & recording rules
-│   ├── grafana/               #   Dashboard JSON definitions
-│   └── otel/                  #   OpenTelemetry collector config
-├── docs/                      # Architecture documentation
-│   ├── hld/                   #   High-level design documents
-│   ├── lld/                   #   Low-level design documents
-│   └── reviews/               #   Architecture review reports
-├── scripts/                   # Utility & automation scripts
-├── docker-compose.yml         # Local development infrastructure
-├── build.gradle               # Root Gradle build
-├── settings.gradle            # Multi-project settings
-└── README.md                  # ← You are here
+├── services/                         # Java, Go, and Python services
+│   ├── admin-gateway-service/
+│   ├── ai-inference-service/
+│   ├── ai-orchestrator-service/
+│   ├── audit-trail-service/
+│   ├── cart-service/
+│   ├── catalog-service/
+│   ├── cdc-consumer-service/
+│   ├── checkout-orchestrator-service/
+│   ├── config-feature-flag-service/
+│   ├── dispatch-optimizer-service/
+│   ├── fraud-detection-service/
+│   ├── fulfillment-service/
+│   ├── go-shared/                    # Shared Go packages for platform services
+│   ├── identity-service/
+│   ├── inventory-service/
+│   ├── location-ingestion-service/
+│   ├── mobile-bff-service/
+│   ├── notification-service/
+│   ├── order-service/
+│   ├── outbox-relay-service/
+│   ├── payment-service/
+│   ├── payment-webhook-service/
+│   ├── pricing-service/
+│   ├── reconciliation-engine/
+│   ├── rider-fleet-service/
+│   ├── routing-eta-service/
+│   ├── search-service/
+│   ├── stream-processor-service/
+│   ├── wallet-loyalty-service/
+│   └── warehouse-service/
+├── contracts/                        # Shared Protobuf + event schemas
+├── data-platform/                    # dbt, Airflow, Beam/Dataflow, quality
+├── data-platform-jobs/               # Batch jobs adjacent to the data platform
+├── deploy/helm/                      # Helm charts and environment values
+├── argocd/                           # GitOps application manifests
+├── infra/terraform/                  # GCP infrastructure as code
+├── ml/                               # ML training, feature store, serving docs
+├── monitoring/                       # Alerting rules and dashboard metadata
+├── docs/
+│   ├── architecture/                 # HLD, LLD, data-flow, infrastructure
+│   └── reviews/                      # Service reviews and iteration programs
+├── scripts/                          # Utility and bootstrap scripts
+├── docker-compose.yml                # Local development infrastructure
+├── build.gradle.kts                  # Root Gradle build
+├── settings.gradle.kts               # Multi-project settings
+└── README.md                         # ← You are here
 ```
 
 ---
@@ -392,14 +380,17 @@ InstaCommerce/
 
 | Document | Description | Location |
 |---|---|---|
-| 🏛 **High-Level Design** | System architecture, domain model, integration patterns | [`docs/hld/`](docs/hld/) |
-| 🔬 **Low-Level Design** | Service internals, API contracts, DB schemas | [`docs/lld/`](docs/lld/) |
-| 🔄 **Data Flow Diagrams** | End-to-end order flow, payment flow, fulfillment flow | [`docs/hld/data-flow/`](docs/hld/) |
+| 🧭 **Documentation Hub** | Central navigation for architecture docs, reviews, and iter3 deep dives | [`docs/README.md`](docs/README.md) |
+| 🏛 **High-Level Design** | System context, bounded contexts, integration patterns | [`docs/architecture/HLD.md`](docs/architecture/HLD.md) |
+| 🔬 **Low-Level Design** | Service internals, state machines, API/database detail | [`docs/architecture/LLD.md`](docs/architecture/LLD.md) |
+| 🔄 **Data Flow Diagrams** | End-to-end order, eventing, data, and ML flows | [`docs/architecture/DATA-FLOW.md`](docs/architecture/DATA-FLOW.md) |
+| 🧱 **Infrastructure** | GKE, GitOps, networking, data stores, and DR posture | [`docs/architecture/INFRASTRUCTURE.md`](docs/architecture/INFRASTRUCTURE.md) |
+| 🧪 **Iteration 3 Review Hub** | Benchmarks, diagrams, service guides, platform guides, appendices | [`docs/reviews/iter3/README.md`](docs/reviews/iter3/README.md) |
 | 🏗 **Infrastructure** | Terraform modules, GKE setup, networking | [`infra/terraform/`](infra/terraform/) |
 | 📊 **ML Documentation** | Model cards, training pipelines, feature store | [`ml/`](ml/) |
 | 📦 **Contract Schemas** | Avro events, gRPC protos, JSON schemas | [`contracts/`](contracts/) |
 | 🚀 **Deployment Guide** | Helm charts, ArgoCD apps, rollback procedures | [`deploy/`](deploy/) |
-| 📈 **Monitoring Runbook** | Alert definitions, dashboard guide, incident response | [`monitoring/`](monitoring/) |
+| 📈 **Monitoring & Alerts** | Alert definitions, dashboard inventory, and escalation routing | [`monitoring/README.md`](monitoring/README.md) |
 
 ---
 
