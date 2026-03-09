@@ -439,7 +439,14 @@ graph LR
 
 ---
 
-## 10. Rollout & Ownership Guidance
+## 10. Validation & Maintenance Workflow
+
+- validate README or architecture-hub changes with `git diff --check` and link checks where practical
+- treat `settings.gradle.kts`, `.github/workflows/ci.yml`, and `contracts/README.md` as source-of-truth inputs when updating service inventory or platform claims
+- prefer additive doc updates that call out current-state gaps instead of silently rewriting target-state narratives as if they were already deployed
+- when implementation changes land, update the nearest service README first, then the docs hub if the repo-level reading order or architecture map changed
+
+## 11. Rollout & Ownership Guidance
 
 The iteration-3 implementation program
 ([`reviews/iter3/implementation-program.md`](reviews/iter3/implementation-program.md))
@@ -474,7 +481,7 @@ provide per-wave rollout and rollback procedures.
 
 ---
 
-## 11. Known Limitations
+## 12. Known Limitations
 
 These limitations are documented in the checked-in review artifacts and are not
 yet resolved at the time of writing.
@@ -492,7 +499,7 @@ yet resolved at the time of writing.
 
 ---
 
-## 12. Comparison Note — Q-Commerce Documentation Programs
+## 13. Comparison Note — Q-Commerce Documentation Programs
 
 The iteration-3 benchmark documents
 ([`benchmarks/global-operator-patterns.md`](reviews/iter3/benchmarks/global-operator-patterns.md),

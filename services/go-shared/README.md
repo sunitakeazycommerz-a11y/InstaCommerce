@@ -706,6 +706,12 @@ Changes require platform-team approval plus 2 additional reviewers.
 
 ---
 
+## Rollout & Rollback
+
+- update shared packages with compatibility in mind because a small API change can fan out across every Go service in the repo
+- roll out breaking behavior behind additive helpers or migration windows rather than in-place signature churn
+- validate one consumer locally first, then expand to the rest of the Go fleet before merging wide-reaching shared-library changes
+
 ## Known Limitations
 
 These are grounded in checked-in code and documented in
