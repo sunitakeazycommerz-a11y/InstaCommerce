@@ -192,6 +192,68 @@ public class PaymentTransactionHelper {
         });
     }
 
+    // --- Recovery resolution helpers (used by StalePendingPaymentRecoveryJob) ---
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resolveStaleAuthorizationFailed(UUID paymentId, String reason) {
+        paymentRepository.findById(paymentId).ifPresent(p -> {
+            if (p.getStatus() != PaymentStatus.AUTHORIZE_PENDING) return;
+            p.setStatus(PaymentStatus.FAILED);
+            paymentRepository.save(p);
+            outboxService.publish("Payment", p.getId().toString(), "PaymentFailed",
+                Map.of("orderId", p.getOrderId(),
+                    "paymentId", p.getId(),
+                    "reason", reason,
+                    "resolvedBy", "stale-pending-recovery"));
+            auditLogService.log(null,
+                "RECOVERY_AUTH_FAILED",
+                "Payment",
+                p.getId().toString(),
+                Map.of("orderId", p.getOrderId(),
+                    "reason", reason));
+        });
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resolveStaleCaptureFailed(UUID paymentId, String reason) {
+        paymentRepository.findById(paymentId).ifPresent(p -> {
+            if (p.getStatus() != PaymentStatus.CAPTURE_PENDING) return;
+            p.setStatus(PaymentStatus.AUTHORIZED);
+            paymentRepository.save(p);
+            outboxService.publish("Payment", p.getId().toString(), "PaymentCaptureReverted",
+                Map.of("orderId", p.getOrderId(),
+                    "paymentId", p.getId(),
+                    "reason", reason,
+                    "resolvedBy", "stale-pending-recovery"));
+            auditLogService.log(null,
+                "RECOVERY_CAPTURE_REVERTED",
+                "Payment",
+                p.getId().toString(),
+                Map.of("orderId", p.getOrderId(),
+                    "reason", reason));
+        });
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resolveStaleVoidFailed(UUID paymentId, String reason) {
+        paymentRepository.findById(paymentId).ifPresent(p -> {
+            if (p.getStatus() != PaymentStatus.VOID_PENDING) return;
+            p.setStatus(PaymentStatus.AUTHORIZED);
+            paymentRepository.save(p);
+            outboxService.publish("Payment", p.getId().toString(), "PaymentVoidReverted",
+                Map.of("orderId", p.getOrderId(),
+                    "paymentId", p.getId(),
+                    "reason", reason,
+                    "resolvedBy", "stale-pending-recovery"));
+            auditLogService.log(null,
+                "RECOVERY_VOID_REVERTED",
+                "Payment",
+                p.getId().toString(),
+                Map.of("orderId", p.getOrderId(),
+                    "reason", reason));
+        });
+    }
+
     private String normalizeCurrency(String currency) {
         if (currency == null || currency.isBlank()) {
             return "INR";
