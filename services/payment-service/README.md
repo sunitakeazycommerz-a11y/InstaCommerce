@@ -635,13 +635,53 @@ The server starts on port **8086** by default. Flyway runs migrations automatica
 ./gradlew :services:payment-service:test
 ```
 
+## OrderCancelled Consumer (Choreography)
+
+When enabled, payment-service consumes `OrderCancelled` events from the `orders.events` Kafka topic and automatically initiates the appropriate fund-release action based on the current payment state.
+
+### Void-vs-Refund Behavior by Payment State
+
+| Payment State at Event Time | Action | Ledger Effect | Outbox Event |
+|---|---|---|---|
+| `AUTHORIZED` | **Void** — cancel the authorization hold at Stripe | DEBIT `authorization_hold` / CREDIT `customer_receivable` | `PaymentVoided` |
+| `CAPTURED` / `PARTIALLY_REFUNDED` | **Full refund** — refund the captured amount minus any already-refunded amount | DEBIT `merchant_payable` / CREDIT `customer_receivable` | `PaymentRefunded` |
+| `VOIDED` / `REFUNDED` / `FAILED` | **No-op** — already terminal, log and skip | — | — |
+| `paymentId` missing / blank | **No-op** — cancellation happened before a payment was assigned, so no financial action is required | — | — |
+| `AUTHORIZE_PENDING` / `CAPTURE_PENDING` / `VOID_PENDING` | **Retry, then dead-letter** — the listener retries briefly and moves the record to `<topic>.DLT` if the payment never leaves the in-flight state | — | — |
+
+The consumer uses the same three-phase pattern (pending state → PSP call → complete/revert) and idempotency guarantees as the REST-driven void and refund flows documented above. The `paymentId` carried in the `OrderCancelled` payload is used to identify the payment record; malformed payloads, malformed `paymentId` values, and unrecoverable processing failures are routed to the Kafka dead-letter topic instead of being silently dropped or guessed from `orderId`.
+
+### Consumer Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED` | `false` | Feature gate — set to `true` to activate the consumer |
+| `PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_TOPIC` | `orders.events` | Kafka topic to consume |
+| `PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_GROUP` | `payment-service-order-cancelled` | Kafka consumer group ID |
+
+The consumer is **off by default** in base and production Helm values and **on in dev** to allow integration testing before wider rollout.
+
+---
+
 ## Rollout and Rollback
 
 - stage PSP, webhook, and ledger changes behind compatibility windows because payment mutations are money-path critical
 - monitor duplicate authorizations, refund failures, webhook lag, and reconciliation divergence during rollout
 - roll back application code before touching additive schema changes; keep idempotency records and ledger history intact for investigation
 
+### OrderCancelled Consumer Rollout
+
+1. **Enable in dev** — `PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED: "true"` is already set in `values-dev.yaml`. Validate void and refund paths with test cancellations.
+2. **Enable in prod** — flip `PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED` to `"true"` in `values-prod.yaml` once dev validation is complete and monitoring confirms no anomalies.
+3. **Rollback** — set the flag back to `"false"` and redeploy. The consumer stops processing new events; any in-flight PSP call completes normally via the existing three-phase pattern. Kafka consumer offsets are retained, so re-enabling will resume from the last committed offset.
+4. **Monitoring** — watch for: increased void/refund error rates, ledger imbalance alerts, consumer lag on the `orders.events` topic, growth in `orders.events.DLT`, and Stripe webhook reconciliation mismatches.
+
+---
+
 ## Known Limitations
 
+- the OrderCancelled consumer does not yet handle partial-capture scenarios where only a subset of the authorized amount was captured; it issues a full refund of `capturedCents − refundedCents`
+- if a cancellation event arrives while authorization, capture, or void processing is still in flight (`AUTHORIZE_PENDING`, `CAPTURE_PENDING`, `VOID_PENDING`), the listener retries briefly and then dead-letters the event for manual investigation rather than forcing recovery inline
+- the current contract upgrade keeps `paymentId` additive in `OrderCancelled.v1.json`, so producer-side tests or a future `v2` schema should eventually make the field mandatory for cancellations that are expected to trigger a refund or void
 - refund choreography and durable reconciliation hardening are still active follow-up areas from the iter3 money-path review
 - shared internal-token posture remains weaker than workload-identity-based service auth and should continue to be treated as an improvement target

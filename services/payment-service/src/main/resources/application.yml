@@ -25,11 +25,23 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      ack-mode: record
 
 payment:
   jwt:
     issuer: ${PAYMENT_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${PAYMENT_JWT_PUBLIC_KEY}}
+  choreography:
+    order-cancelled-consumer-enabled: ${PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED:false}
+    order-cancelled-topic: ${PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_TOPIC:orders.events}
+    order-cancelled-consumer-group: ${PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_GROUP:payment-service-order-cancelled}
 
 stripe:
   api-key: ${sm://stripe-api-key:${STRIPE_API_KEY}}

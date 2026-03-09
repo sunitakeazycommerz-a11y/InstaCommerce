@@ -1,0 +1,34 @@
+package com.instacommerce.payment.config;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import org.apache.kafka.common.TopicPartition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.listener.CommonErrorHandler;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.util.backoff.FixedBackOff;
+
+@Configuration
+@ConditionalOnProperty(
+    prefix = "payment.choreography",
+    name = "order-cancelled-consumer-enabled",
+    havingValue = "true")
+public class KafkaConfig {
+    private static final Logger log = LoggerFactory.getLogger(KafkaConfig.class);
+
+    @Bean
+    public CommonErrorHandler kafkaErrorHandler(KafkaOperations<String, String> kafkaOperations) {
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaOperations,
+            (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition()));
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3L));
+        errorHandler.addNotRetryableExceptions(JsonProcessingException.class, IllegalArgumentException.class);
+        errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+        log.info("Configured payment Kafka error handler with DLT recovery");
+        return errorHandler;
+    }
+}

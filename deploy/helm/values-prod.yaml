@@ -21,6 +21,8 @@ services:
   payment-service:
     replicas: 3
     tag: prod
+    env:
+      PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED: "false"
   fulfillment-service:
     replicas: 3
     tag: prod
