@@ -207,6 +207,7 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///fulfillment_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "true"
     hpa:
       minReplicas: 2
       maxReplicas: 5

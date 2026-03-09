@@ -210,6 +210,14 @@ flowchart LR
 
 **Error handling:** `DefaultErrorHandler` with `FixedBackOff(1000 ms, 3 retries)` → Dead Letter Topic on exhaustion.
 
+> **Choreography rollout note:** The legacy HTTP callback to order-service
+> (`OrderStatusEventListener` → `RestOrderClient.updateStatus`) can be disabled
+> via `FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED=false` once
+> order-service's Kafka-based fulfillment event consumer is promoted to handle
+> status transitions. Disabling the callback avoids a dual-update path where both
+> the HTTP call and the Kafka choreography consumer update the same order state.
+> Outbox event publishing is unaffected by this flag.
+
 ---
 
 ### 7. API Reference
@@ -406,6 +414,7 @@ Migrations managed by **Flyway** (`src/main/resources/db/migration/` — V1 thro
 | JWT issuer | `FULFILLMENT_JWT_ISSUER` | `instacommerce-identity` |
 | JWT public key | `FULFILLMENT_JWT_PUBLIC_KEY` | — |
 | Default delivery ETA | `FULFILLMENT_DEFAULT_ETA_MINUTES` | `15` |
+| Order-status HTTP callback | `FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED` | `true` |
 
 ## Tech Stack
 

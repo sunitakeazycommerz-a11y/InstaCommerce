@@ -44,6 +44,8 @@ fulfillment:
       base-url: ${PAYMENT_SERVICE_URL:http://localhost:8086}
     inventory:
       base-url: ${INVENTORY_SERVICE_URL:http://localhost:8083}
+  choreography:
+    order-status-callback-enabled: ${FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED:true}
   delivery:
     default-eta-minutes: ${FULFILLMENT_DEFAULT_ETA_MINUTES:15}
 

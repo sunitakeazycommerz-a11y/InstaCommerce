@@ -7,6 +7,7 @@ public class FulfillmentProperties {
     private final Jwt jwt = new Jwt();
     private final Clients clients = new Clients();
     private final Delivery delivery = new Delivery();
+    private final Choreography choreography = new Choreography();
 
     public Jwt getJwt() {
         return jwt;
@@ -18,6 +19,10 @@ public class FulfillmentProperties {
 
     public Delivery getDelivery() {
         return delivery;
+    }
+
+    public Choreography getChoreography() {
+        return choreography;
     }
 
     public static class Jwt {
@@ -80,6 +85,18 @@ public class FulfillmentProperties {
 
         public void setDefaultEtaMinutes(int defaultEtaMinutes) {
             this.defaultEtaMinutes = defaultEtaMinutes;
+        }
+    }
+
+    public static class Choreography {
+        private boolean orderStatusCallbackEnabled = true;
+
+        public boolean isOrderStatusCallbackEnabled() {
+            return orderStatusCallbackEnabled;
+        }
+
+        public void setOrderStatusCallbackEnabled(boolean orderStatusCallbackEnabled) {
+            this.orderStatusCallbackEnabled = orderStatusCallbackEnabled;
         }
     }
 }
