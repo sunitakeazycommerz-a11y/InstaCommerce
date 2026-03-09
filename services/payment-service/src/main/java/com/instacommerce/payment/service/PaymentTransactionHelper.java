@@ -35,8 +35,8 @@ public class PaymentTransactionHelper {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Payment savePendingAuthorization(AuthorizeRequest request) {
-        Optional<Payment> existing = paymentRepository.findByIdempotencyKey(request.idempotencyKey());
+    public Payment savePendingAuthorization(AuthorizeRequest request, String normalizedKey) {
+        Optional<Payment> existing = paymentRepository.findByIdempotencyKey(normalizedKey);
         if (existing.isPresent()) {
             Payment payment = existing.get();
             if (!payment.getOrderId().equals(request.orderId())
@@ -54,7 +54,7 @@ public class PaymentTransactionHelper {
         payment.setRefundedCents(0);
         payment.setCurrency(currency);
         payment.setStatus(PaymentStatus.AUTHORIZE_PENDING);
-        payment.setIdempotencyKey(request.idempotencyKey());
+        payment.setIdempotencyKey(normalizedKey);
         payment.setPaymentMethod(request.paymentMethod());
         return paymentRepository.save(payment);
     }
@@ -63,6 +63,12 @@ public class PaymentTransactionHelper {
     public Payment completeAuthorization(UUID paymentId, String pspReference) {
         Payment payment = paymentRepository.findById(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+        if (payment.getStatus() == PaymentStatus.AUTHORIZED) {
+            return payment; // idempotent no-op
+        }
+        if (payment.getStatus() != PaymentStatus.AUTHORIZE_PENDING) {
+            throw new PaymentInvalidStateException(paymentId, payment.getStatus());
+        }
         payment.setStatus(PaymentStatus.AUTHORIZED);
         payment.setPspReference(pspReference);
         Payment saved = paymentRepository.save(payment);
@@ -111,6 +117,12 @@ public class PaymentTransactionHelper {
     public Payment completeCaptured(UUID paymentId, long capturedCents) {
         Payment payment = paymentRepository.findById(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+        if (payment.getStatus() == PaymentStatus.CAPTURED) {
+            return payment; // idempotent no-op
+        }
+        if (payment.getStatus() != PaymentStatus.CAPTURE_PENDING) {
+            throw new PaymentInvalidStateException(paymentId, payment.getStatus());
+        }
         payment.setStatus(PaymentStatus.CAPTURED);
         payment.setCapturedCents(capturedCents);
         Payment saved = paymentRepository.save(payment);
@@ -160,6 +172,12 @@ public class PaymentTransactionHelper {
     public Payment completeVoided(UUID paymentId) {
         Payment payment = paymentRepository.findById(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+        if (payment.getStatus() == PaymentStatus.VOIDED) {
+            return payment; // idempotent no-op
+        }
+        if (payment.getStatus() != PaymentStatus.VOID_PENDING) {
+            throw new PaymentInvalidStateException(paymentId, payment.getStatus());
+        }
         Instant voidedAt = Instant.now();
         payment.setStatus(PaymentStatus.VOIDED);
         Payment saved = paymentRepository.save(payment);
@@ -189,6 +207,116 @@ public class PaymentTransactionHelper {
                 p.setStatus(PaymentStatus.AUTHORIZED);
                 paymentRepository.save(p);
             }
+        });
+    }
+
+    /**
+     * Single-transaction reconciliation for AUTHORIZE_PENDING payments that the PSP
+     * already captured. Transitions directly to CAPTURED with combined side effects,
+     * avoiding the fragile two-step completeAuthorization → completeCaptured path.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Payment reconcileDirectToCaptured(UUID paymentId, String pspReference, long capturedCents) {
+        Payment payment = paymentRepository.findById(paymentId)
+            .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+        if (payment.getStatus() == PaymentStatus.CAPTURED) {
+            return payment; // idempotent no-op
+        }
+        if (payment.getStatus() != PaymentStatus.AUTHORIZE_PENDING) {
+            throw new PaymentInvalidStateException(paymentId, payment.getStatus());
+        }
+        payment.setPspReference(pspReference);
+        payment.setStatus(PaymentStatus.CAPTURED);
+        payment.setCapturedCents(capturedCents);
+        Payment saved = paymentRepository.save(payment);
+        ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
+            "customer_receivable", "authorization_hold", "AUTHORIZATION", saved.getId().toString(),
+            "Authorization hold (recovery reconciliation)");
+        ledgerService.recordDoubleEntry(saved.getId(), capturedCents,
+            "authorization_hold", "merchant_payable", "CAPTURE", saved.getId().toString(),
+            "Capture (recovery reconciliation)");
+        outboxService.publish("Payment", saved.getId().toString(), "PaymentAuthorized",
+            Map.of("orderId", saved.getOrderId(),
+                "paymentId", saved.getId(),
+                "amountCents", saved.getAmountCents(),
+                "currency", saved.getCurrency(),
+                "resolvedBy", "stale-pending-recovery"));
+        outboxService.publish("Payment", saved.getId().toString(), "PaymentCaptured",
+            Map.of("orderId", saved.getOrderId(),
+                "paymentId", saved.getId(),
+                "amountCents", capturedCents,
+                "currency", saved.getCurrency(),
+                "resolvedBy", "stale-pending-recovery"));
+        auditLogService.log(null,
+            "RECOVERY_RECONCILED_TO_CAPTURED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "amountCents", saved.getAmountCents(),
+                "capturedCents", capturedCents,
+                "currency", saved.getCurrency()));
+        return saved;
+    }
+
+    // --- Recovery resolution helpers (used by StalePendingPaymentRecoveryJob) ---
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resolveStaleAuthorizationFailed(UUID paymentId, String reason) {
+        paymentRepository.findById(paymentId).ifPresent(p -> {
+            if (p.getStatus() != PaymentStatus.AUTHORIZE_PENDING) return;
+            p.setStatus(PaymentStatus.FAILED);
+            paymentRepository.save(p);
+            outboxService.publish("Payment", p.getId().toString(), "PaymentFailed",
+                Map.of("orderId", p.getOrderId(),
+                    "paymentId", p.getId(),
+                    "reason", reason,
+                    "resolvedBy", "stale-pending-recovery"));
+            auditLogService.log(null,
+                "RECOVERY_AUTH_FAILED",
+                "Payment",
+                p.getId().toString(),
+                Map.of("orderId", p.getOrderId(),
+                    "reason", reason));
+        });
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resolveStaleCaptureFailed(UUID paymentId, String reason) {
+        paymentRepository.findById(paymentId).ifPresent(p -> {
+            if (p.getStatus() != PaymentStatus.CAPTURE_PENDING) return;
+            p.setStatus(PaymentStatus.AUTHORIZED);
+            paymentRepository.save(p);
+            outboxService.publish("Payment", p.getId().toString(), "PaymentCaptureReverted",
+                Map.of("orderId", p.getOrderId(),
+                    "paymentId", p.getId(),
+                    "reason", reason,
+                    "resolvedBy", "stale-pending-recovery"));
+            auditLogService.log(null,
+                "RECOVERY_CAPTURE_REVERTED",
+                "Payment",
+                p.getId().toString(),
+                Map.of("orderId", p.getOrderId(),
+                    "reason", reason));
+        });
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resolveStaleVoidFailed(UUID paymentId, String reason) {
+        paymentRepository.findById(paymentId).ifPresent(p -> {
+            if (p.getStatus() != PaymentStatus.VOID_PENDING) return;
+            p.setStatus(PaymentStatus.AUTHORIZED);
+            paymentRepository.save(p);
+            outboxService.publish("Payment", p.getId().toString(), "PaymentVoidReverted",
+                Map.of("orderId", p.getOrderId(),
+                    "paymentId", p.getId(),
+                    "reason", reason,
+                    "resolvedBy", "stale-pending-recovery"));
+            auditLogService.log(null,
+                "RECOVERY_VOID_REVERTED",
+                "Payment",
+                p.getId().toString(),
+                Map.of("orderId", p.getOrderId(),
+                    "reason", reason));
         });
     }
 

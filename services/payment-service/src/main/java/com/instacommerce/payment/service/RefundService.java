@@ -32,7 +32,7 @@ public class RefundService {
      * Step 3: Update to COMPLETED in new TX.
      */
     public RefundResponse refund(UUID paymentId, RefundRequest request) {
-        String idempotencyKey = normalizeIdempotencyKey(request.idempotencyKey());
+        String idempotencyKey = IdempotencyKeys.normalize(request.idempotencyKey());
         if (idempotencyKey != null) {
             Optional<Refund> existing = refundRepository.findByIdempotencyKey(idempotencyKey);
             if (existing.isPresent()) {
@@ -58,13 +58,6 @@ public class RefundService {
 
         Refund saved = txHelper.completeRefund(pending.refundId(), paymentId, request, result.refundId());
         return RefundMapper.toResponse(saved);
-    }
-
-    private String normalizeIdempotencyKey(String key) {
-        if (key == null || key.isBlank()) {
-            return null;
-        }
-        return key.trim();
     }
 
     private String generateIdempotencyKey() {

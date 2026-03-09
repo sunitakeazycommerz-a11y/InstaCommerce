@@ -26,5 +26,14 @@ public class MockPaymentGateway implements PaymentGateway {
     public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey) {
         return GatewayRefundResult.success("mock_re_" + UUID.randomUUID());
     }
+
+    @Override
+    public GatewayStatusResult getStatus(String pspReference) {
+        return GatewayStatusResult.of(
+            GatewayStatusResult.PspPaymentState.REQUIRES_CAPTURE,
+            "requires_capture",
+            0L
+        );
+    }
 }
 

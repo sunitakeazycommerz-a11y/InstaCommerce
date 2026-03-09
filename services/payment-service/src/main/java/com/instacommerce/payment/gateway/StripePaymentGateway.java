@@ -88,6 +88,19 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     @Override
+    public GatewayStatusResult getStatus(String pspReference) {
+        ensureApiKey();
+        try {
+            RequestOptions options = buildOptions(null);
+            PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
+            GatewayStatusResult.PspPaymentState state = mapStripeStatus(intent.getStatus());
+            return GatewayStatusResult.of(state, intent.getStatus(), intent.getAmountReceived());
+        } catch (StripeException ex) {
+            throw toGatewayException(ex);
+        }
+    }
+
+    @Override
     public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey) {
         ensureApiKey();
         try {
@@ -112,6 +125,22 @@ public class StripePaymentGateway implements PaymentGateway {
             builder.setIdempotencyKey(idempotencyKey);
         }
         return builder.build();
+    }
+
+    private GatewayStatusResult.PspPaymentState mapStripeStatus(String stripeStatus) {
+        if (stripeStatus == null) {
+            return GatewayStatusResult.PspPaymentState.UNKNOWN;
+        }
+        return switch (stripeStatus) {
+            case "requires_payment_method" -> GatewayStatusResult.PspPaymentState.REQUIRES_PAYMENT_METHOD;
+            case "requires_confirmation" -> GatewayStatusResult.PspPaymentState.REQUIRES_CONFIRMATION;
+            case "requires_action" -> GatewayStatusResult.PspPaymentState.REQUIRES_ACTION;
+            case "processing" -> GatewayStatusResult.PspPaymentState.PROCESSING;
+            case "requires_capture" -> GatewayStatusResult.PspPaymentState.REQUIRES_CAPTURE;
+            case "succeeded" -> GatewayStatusResult.PspPaymentState.SUCCEEDED;
+            case "canceled" -> GatewayStatusResult.PspPaymentState.CANCELED;
+            default -> GatewayStatusResult.PspPaymentState.UNKNOWN;
+        };
     }
 
     private boolean isAuthorized(String status) {

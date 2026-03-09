@@ -92,6 +92,8 @@ sequenceDiagram
 
 **Idempotency:** If a request arrives with an `idempotencyKey` that already exists, the service returns the existing payment without calling Stripe again. A mismatch on `orderId` or `amountCents` raises `DuplicatePaymentException`.
 
+**Key normalization:** Idempotency keys are trimmed and, if longer than 64 characters (the `VARCHAR(64)` column limit), deterministically compressed to a 64-character lowercase hex SHA-256 digest. This is transparent to callers — they submit raw keys and the service normalizes internally. See `IdempotencyKeys.normalize()` for the implementation.
+
 ---
 
 ## 3. Refund Flow
@@ -614,6 +616,10 @@ Key environment variables (see `application.yml`):
 | `PAYMENT_JWT_ISSUER` | `instacommerce-identity` | Expected JWT issuer |
 | `PAYMENT_JWT_PUBLIC_KEY` | — | RSA public key for JWT verification |
 | `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Service-to-service auth token |
+| `PAYMENT_STALE_PENDING_RECOVERY_ENABLED` | `false` | Enable stale pending payment recovery job |
+| `PAYMENT_STALE_PENDING_RECOVERY_CRON` | `0 */5 * * * *` | Cron schedule for recovery job |
+| `PAYMENT_STALE_PENDING_RECOVERY_THRESHOLD_MINUTES` | `30` | Minutes before a pending payment is considered stale |
+| `PAYMENT_STALE_PENDING_RECOVERY_BATCH_SIZE` | `50` | Max payments recovered per job run |
 
 ---
 
@@ -663,6 +669,57 @@ The consumer is **off by default** in base and production Helm values and **on i
 
 ---
 
+## Stale Pending Payment Recovery
+
+### What It Does
+
+A ShedLock-guarded scheduled job that detects payments stuck in transient pending states (`AUTHORIZE_PENDING`, `CAPTURE_PENDING`, `VOID_PENDING`) beyond a configurable staleness threshold and resolves them by re-querying the PSP for the authoritative outcome.
+
+Payments can become stuck when the process crashes or the network fails between Phase 1 (save pending state) and Phase 3 (complete/revert) of the three-phase payment lifecycle. While Stripe webhooks handle most of these cases, the recovery job acts as a safety net for scenarios where the webhook is delayed, lost, or the PSP call never reached Stripe.
+
+### Recovery Behavior by State
+
+| Stuck State | Recovery Action | Success Outcome | Failure Outcome |
+|---|---|---|---|
+| `AUTHORIZE_PENDING` | Query Stripe for PaymentIntent status | Transition to `AUTHORIZED` or `FAILED` based on PSP state | Mark `FAILED` after threshold; log for manual review |
+| `CAPTURE_PENDING` | Query Stripe for capture confirmation | Transition to `CAPTURED` or revert to `AUTHORIZED` | Revert to `AUTHORIZED`; operator investigates |
+| `VOID_PENDING` | Query Stripe for cancellation confirmation | Transition to `VOIDED` or revert to `AUTHORIZED` | Revert to `AUTHORIZED`; operator investigates |
+
+Each recovery attempt follows the same idempotency and ledger-consistency guarantees as the normal payment flows. ShedLock ensures only one instance runs the job across the replica set.
+
+### Configuration
+
+| Variable | `application.yml` Property | Default | Description |
+|---|---|---|---|
+| `PAYMENT_STALE_PENDING_RECOVERY_ENABLED` | `payment.recovery.stale-pending-enabled` | `false` | Feature gate — set to `true` to activate the recovery job |
+| `PAYMENT_STALE_PENDING_RECOVERY_CRON` | `payment.recovery.stale-pending-cron` | `0 */5 * * * *` (every 5 min) | Spring cron expression for job scheduling |
+| `PAYMENT_STALE_PENDING_RECOVERY_THRESHOLD_MINUTES` | `payment.recovery.stale-threshold-minutes` | `30` | Minimum age (minutes) before a pending payment is considered stale |
+| `PAYMENT_STALE_PENDING_RECOVERY_BATCH_SIZE` | `payment.recovery.batch-size` | `50` | Maximum payments processed per job run |
+
+The recovery job is **off by default** in base and production Helm values and **on in dev** to allow integration testing before wider rollout, following the same rollout posture as the OrderCancelled consumer.
+
+### Stale Pending Recovery Rollout
+
+1. **Enable in dev** — `PAYMENT_STALE_PENDING_RECOVERY_ENABLED: "true"` is already set in `values-dev.yaml`. Verify that stale payments transition correctly by creating test payments and killing the service mid-flow.
+2. **Enable in prod** — flip `PAYMENT_STALE_PENDING_RECOVERY_ENABLED` to `"true"` in `values-prod.yaml` once dev validation is complete. Consider starting with a longer threshold (e.g., `60` minutes) and smaller batch size (e.g., `25`) for initial prod rollout.
+3. **Rollback** — set `PAYMENT_STALE_PENDING_RECOVERY_ENABLED` back to `"false"` and redeploy. The job stops scheduling immediately. Any in-flight recovery iteration completes normally because each payment is resolved in its own transaction. No data migration or cleanup is required.
+4. **Tuning** — adjust `PAYMENT_STALE_PENDING_RECOVERY_CRON`, `PAYMENT_STALE_PENDING_RECOVERY_THRESHOLD_MINUTES`, and `PAYMENT_STALE_PENDING_RECOVERY_BATCH_SIZE` via Helm values without code changes. Lower thresholds surface stuck payments faster but increase PSP query load; larger batch sizes speed recovery but increase per-run DB and Stripe API pressure.
+
+### Metrics and Alerts
+
+Operators should watch the following during and after rollout:
+
+| Metric / Signal | What to Watch | Action |
+|---|---|---|
+| `payment.recovery.stale_pending.processed` | Count of payments recovered per run | Sustained high counts may indicate an upstream reliability issue |
+| `payment.recovery.stale_pending.failed` | Recovery attempts that could not resolve via PSP | Investigate individual payments; may need manual reconciliation |
+| `payment.recovery.stale_pending.duration` | Job execution time | If consistently near the cron interval, increase interval or reduce batch size |
+| Stripe API error rate | 4xx/5xx from recovery PSP queries | Throttle batch size or pause recovery if Stripe is degraded |
+| Ledger balance check | `SUM(debits) = SUM(credits)` invariant | Any imbalance after recovery runs requires immediate investigation |
+| ShedLock `payment_stale_pending_recovery` | Lock acquisition and release | Stuck locks indicate a crashed recovery run; ShedLock's `lockAtMostFor` provides automatic expiry |
+
+---
+
 ## Rollout and Rollback
 
 - stage PSP, webhook, and ledger changes behind compatibility windows because payment mutations are money-path critical
@@ -685,3 +742,4 @@ The consumer is **off by default** in base and production Helm values and **on i
 - the current contract upgrade keeps `paymentId` additive in `OrderCancelled.v1.json`, so producer-side tests or a future `v2` schema should eventually make the field mandatory for cancellations that are expected to trigger a refund or void
 - refund choreography and durable reconciliation hardening are still active follow-up areas from the iter3 money-path review
 - shared internal-token posture remains weaker than workload-identity-based service auth and should continue to be treated as an improvement target
+- the stale pending recovery job resolves `AUTHORIZE_PENDING`, `CAPTURE_PENDING`, and `VOID_PENDING` states only; `REFUND_PENDING` recovery and durable reconciliation hardening are still active follow-up areas
