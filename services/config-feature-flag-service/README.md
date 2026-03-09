@@ -15,7 +15,7 @@ Centralized feature flag management and A/B experimentation platform for InstaCo
 
 ---
 
-## Architecture Overview
+## High-Level Design (HLD)
 
 ```mermaid
 graph TB
@@ -68,7 +68,9 @@ graph TB
 
 ---
 
-## Key Components
+## Low-Level Design (LLD)
+
+### Key Components
 
 | Component | Responsibility |
 |---|---|
@@ -420,3 +422,22 @@ feature-flag:
 - Guava Murmur3 Hashing
 - OpenTelemetry + Prometheus
 - Docker (Alpine, non-root)
+
+---
+
+## Testing
+
+```bash
+./gradlew :services:config-feature-flag-service:test
+```
+
+## Rollout and Rollback
+
+- introduce new flags and experiment variants before wiring callers to hard dependencies on them
+- watch cache-hit ratios, evaluation latency, and stale-flag incidents during rollouts
+- roll back by restoring the previous image and disabling newly introduced flags rather than deleting rows during an incident
+
+## Known Limitations
+
+- feature-flag propagation is still bounded by cache TTL and caller polling behavior, not a fully push-driven control plane
+- governance for high-risk rollout flags should stay synchronized with the iter3 platform-foundations review and the owning service runbooks

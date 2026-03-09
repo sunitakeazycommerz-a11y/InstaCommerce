@@ -25,7 +25,7 @@ Every order/payment event is evaluated through a multi-stage pipeline that produ
 
 ---
 
-## Architecture Overview
+## High-Level Design (HLD)
 
 ```
 ┌──────────────┐   REST    ┌──────────────────────────────┐   JPA    ┌────────────┐
@@ -43,7 +43,9 @@ Every order/payment event is evaluated through a multi-stage pipeline that produ
 
 ---
 
-## Component Map
+## Low-Level Design (LLD)
+
+### Component Map
 
 | Layer | Class | Responsibility |
 |-------|-------|----------------|
@@ -424,3 +426,17 @@ curl -X POST http://localhost:8095/fraud/score \
 - Kafka listeners use explicit listener group IDs (`fraud-detection-orders`,
   `fraud-detection-payments`) instead of the shared default consumer group from
   `application.yml`
+
+---
+
+## Testing
+
+```bash
+./gradlew :services:fraud-detection-service:test
+```
+
+## Rollout and Rollback
+
+- ship fraud-rule changes with observability on false-positive rate, manual overrides, and topic lag
+- canary consumer or scoring-path changes before widening them across all payment/order traffic
+- roll back by restoring the previous image or reverting the rule set; avoid destructive data cleanup in the same window

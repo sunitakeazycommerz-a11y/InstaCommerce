@@ -17,6 +17,10 @@ Handles payment authorization, capture, void, refunds, double-entry ledger bookk
 
 ---
 
+## High-Level Design (HLD)
+
+The payment service owns authorization, capture, void, refund, ledger, and webhook application for the money path. The state machine below is the top-level HLD view of how payment intent state progresses across synchronous PSP calls and asynchronous webhook completion.
+
 ## 1. Payment State Machine
 
 ```mermaid
@@ -569,6 +573,8 @@ erDiagram
 
 ---
 
+## Low-Level Design (LLD)
+
 ## Key Components
 
 | Component | Package | Responsibility |
@@ -622,3 +628,20 @@ docker run -d --name payments-db -e POSTGRES_DB=payments -e POSTGRES_PASSWORD=po
 ```
 
 The server starts on port **8086** by default. Flyway runs migrations automatically on startup (`spring.jpa.hibernate.ddl-auto=validate`).
+
+## Testing
+
+```bash
+./gradlew :services:payment-service:test
+```
+
+## Rollout and Rollback
+
+- stage PSP, webhook, and ledger changes behind compatibility windows because payment mutations are money-path critical
+- monitor duplicate authorizations, refund failures, webhook lag, and reconciliation divergence during rollout
+- roll back application code before touching additive schema changes; keep idempotency records and ledger history intact for investigation
+
+## Known Limitations
+
+- refund choreography and durable reconciliation hardening are still active follow-up areas from the iter3 money-path review
+- shared internal-token posture remains weaker than workload-identity-based service auth and should continue to be treated as an improvement target

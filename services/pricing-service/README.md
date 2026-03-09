@@ -27,7 +27,7 @@
 
 ---
 
-## Architecture
+## High-Level Design (HLD)
 
 ```mermaid
 graph TB
@@ -79,7 +79,9 @@ graph TB
 
 ---
 
-## Service Components
+## Low-Level Design (LLD)
+
+### Service Components
 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
@@ -546,3 +548,16 @@ curl http://localhost:8087/admin/promotions \
 | Job | Schedule | Lock | Description |
 |-----|----------|------|-------------|
 | `outbox-cleanup` | Every 6 hours | ShedLock (5–30 min) | Deletes sent outbox events older than 7 days |
+
+---
+
+## Rollout and Rollback
+
+- introduce pricing-rule or promotion-evaluation changes with contract compatibility for cart and checkout callers
+- monitor quote drift, promotion redemption anomalies, and outbox lag during rollout
+- roll back application behavior before attempting destructive migration rollback; keep additive schema paths available
+
+## Known Limitations
+
+- pricing correctness still depends on tighter quote-authority semantics with cart and checkout, as called out in the iter3 decision-plane review
+- promotion and coupon behavior must stay aligned with downstream order and loyalty accounting to avoid hidden revenue leakage

@@ -27,7 +27,7 @@
 
 ---
 
-## Architecture
+## High-Level Design (HLD)
 
 ```mermaid
 graph TB
@@ -70,7 +70,9 @@ graph TB
 
 ---
 
-## Service Components
+## Low-Level Design (LLD)
+
+### Service Components
 
 | Component | Package | Responsibility |
 |-----------|---------|---------------|
@@ -547,3 +549,16 @@ curl -X POST http://localhost:8088/cart/validate \
 |-----|----------|------|-------------|
 | `expired-cart-cleanup` | Every 15 min | ShedLock | Deletes carts past `expiresAt` |
 | `outbox-cleanup` | Daily 3 AM | ShedLock | Deletes sent outbox events older than retention period |
+
+---
+
+## Rollout and Rollback
+
+- roll out pricing and validation contract changes behind compatibility windows because cart correctness depends on downstream pricing behavior
+- monitor stale-cart cleanup, outbox backlog, and validation failures during deploys
+- roll back by restoring the previous image and keeping schema changes additive
+
+## Known Limitations
+
+- price validation still depends on downstream contract correctness and is called out in the iter3 cart/pricing review as an active hardening area
+- cart semantics remain tightly coupled to checkout authority, so money-path policy changes must be coordinated with `checkout-orchestrator-service`

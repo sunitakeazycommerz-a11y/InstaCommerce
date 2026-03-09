@@ -8,7 +8,7 @@ shown below is fully wired in the current codebase.
 
 ---
 
-## MLOps Pipeline
+## High-Level Design (HLD)
 
 ```mermaid
 flowchart LR
@@ -59,7 +59,9 @@ graph TB
 > layer attempts ONNX runtime when ONNX artifacts are available, but the
 > end-to-end ONNX export/promotion path is still partial in the repo.
 
-## Directory Structure
+## Low-Level Design (LLD)
+
+### Repository Structure
 
 ```
 ml/
@@ -450,3 +452,21 @@ for the detailed gap assessment. The highest-signal current limitations are:
 | **Orchestration** | Cloud Composer | Airflow DAGs for training + feature refresh |
 | **Experiment Tracking** | MLflow | Metrics, artifacts, model registry |
 | **Monitoring** | Prometheus + Grafana | Prediction latency, drift PSI, error rate |
+
+## Testing and Validation
+
+Use the existing training and evaluation paths rather than ad hoc notebooks when validating model changes:
+
+```bash
+python -m pytest -v
+python ml/eval/evaluate.py --help
+```
+
+In practice, model-specific training validation is driven by the scripts under `ml/train/*/train.py` plus the evaluation gates encoded in `ml/eval/evaluate.py`.
+
+## Rollout and Rollback
+
+- treat model rollout as a staged process: train -> evaluate -> shadow/compare -> promote -> monitor
+- prefer reversible weight/config changes over in-place predictor rewrites
+- keep fallback heuristics available for ETA, fraud, ranking, and demand paths when model artifacts or features are unavailable
+- use the iter3 productionization review as the source of truth for shadow mode, rollback, lineage, and drift gaps before broadening automation

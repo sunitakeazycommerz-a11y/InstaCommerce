@@ -2,7 +2,7 @@
 
 Event-driven notification delivery service for InstaCommerce. Consumes domain events from order, payment, fulfillment, and identity Kafka topics and delivers notifications via SMS, email, and push channels. Features a Mustache template engine, database-backed deduplication, user preference-based channel routing, and GDPR-compliant erasure handling.
 
-## Architecture Overview
+## High-Level Design (HLD)
 
 | Layer | Components |
 |---|---|
@@ -336,3 +336,26 @@ src/main/java/com/instacommerce/notification/
 ├── service/                 # Core services: Notification, Template, Deduplication, UserPreference, Erasure
 └── template/                # TemplateRegistry, TemplateDefinition
 ```
+
+## Low-Level Design (LLD)
+
+`NotificationService`, `TemplateService`, `UserPreferenceService`, `DeduplicationService`, the provider SPI, and retry/DLQ infrastructure form the internal LLD. The diagrams and schema below document the concrete flow from Kafka event ingestion through template rendering, preference checks, provider delivery, retry, and GDPR erasure.
+
+---
+
+## Testing
+
+```bash
+./gradlew :services:notification-service:test
+```
+
+## Rollout and Rollback
+
+- roll out new templates and provider integrations with DLQ monitoring enabled so bad renders or provider failures are visible immediately
+- stage privacy-sensitive changes with audit log verification and erasure-path testing
+- roll back at the application layer first; preserve notification history and retry rows for forensic continuity
+
+## Known Limitations
+
+- provider coverage and privacy controls still depend on disciplined template governance across producing services
+- notification correctness is downstream of event quality; malformed or incomplete producer payloads remain a primary failure source

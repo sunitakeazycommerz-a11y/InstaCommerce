@@ -18,7 +18,7 @@ Product management, categories, full-text search, pricing strategies, and coupon
 
 ---
 
-## Architecture
+## High-Level Design (HLD)
 
 ```mermaid
 graph LR
@@ -434,3 +434,26 @@ curl http://localhost:8082/actuator/health/liveness
 | `CATALOG_JWT_ISSUER` | `instacommerce-identity` | Expected JWT issuer |
 | `CATALOG_JWT_PUBLIC_KEY` | — | RSA public key for JWT verification |
 | `TRACING_PROBABILITY` | `1.0` | OpenTelemetry trace sampling rate |
+
+## Low-Level Design (LLD)
+
+The low-level design centers on `ProductService`, `SearchService`, `PricingService`, `CouponService`, PostgreSQL-backed repositories, and the outbox/audit jobs listed below. The following strategy, lifecycle, and flow diagrams document how those components collaborate inside the service boundary.
+
+---
+
+## Testing
+
+```bash
+./gradlew :services:catalog-service:test
+```
+
+## Rollout and Rollback
+
+- keep search/indexing and catalog write-path changes additive so downstream search consumers can tolerate overlap windows
+- monitor outbox lag, search freshness, and admin write failures during rollout
+- roll back application behavior first; reserve schema rollbacks for cases where additive migrations cannot preserve compatibility
+
+## Known Limitations
+
+- search freshness and typo-tolerance remain behind the benchmark set by leading q-commerce operators and are still called out in the iter3 read/decision review
+- catalog event semantics must remain aligned with `contracts/` and downstream search/index consumers as the browse plane evolves
