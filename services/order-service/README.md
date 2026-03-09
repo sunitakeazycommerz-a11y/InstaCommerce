@@ -71,7 +71,7 @@ Order-service contains its own `CheckoutWorkflowImpl` + `CheckoutController` on 
 
 ### Choreography (outbound events)
 
-All order mutations write to the `outbox_events` table inside the same database transaction. Events are relayed to the `order.events` Kafka topic via CDC (Debezium) or a poll-based relay.
+All order mutations write to the `outbox_events` table inside the same database transaction. Events are relayed to the `orders.events` Kafka topic via CDC (Debezium) or a poll-based relay.
 
 ---
 
@@ -125,12 +125,12 @@ flowchart TD
 
     OS -->|read/write| PG
     PG -->|outbox_events| DBZ
-    DBZ -->|order.events| KF
+    DBZ -->|orders.events| KF
     KF -->|fulfillment.events| OS
     KF -->|identity.events| OS
-    KF -->|order.events| FS
-    KF -->|order.events| NS
-    KF -->|order.events| AN
+    KF -->|orders.events| FS
+    KF -->|orders.events| NS
+    KF -->|orders.events| AN
 ```
 
 ---
@@ -439,7 +439,7 @@ flowchart LR
     end
 
     subgraph "Kafka Topics"
-        OEV[order.events]
+        OEV[orders.events]
         IEV[identity.events]
         FEV[fulfillment.events]
         DLT["*.DLT (dead letter)"]
@@ -460,7 +460,7 @@ flowchart LR
     OEV -.->|"on consumer failure"| DLT
 ```
 
-**Published events** (via outbox → `order.events`):
+**Published events** (via outbox → `orders.events`):
 
 | Event | Trigger | Key Payload Fields |
 |-------|---------|-------------------|

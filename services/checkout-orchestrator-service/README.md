@@ -538,6 +538,7 @@ Initiates a checkout workflow. Blocks until the Temporal workflow completes (syn
 | `401` | `TOKEN_INVALID` | JWT invalid or expired | `JwtAuthenticationFilter` |
 | `403` | `FORBIDDEN` | JWT `sub` ≠ request `userId` | `CheckoutController` |
 | `404` | `WORKFLOW_NOT_FOUND` | Workflow ID not found in Temporal | `WorkflowNotFoundException` |
+| `409` | `CHECKOUT_ALREADY_IN_PROGRESS` | Temporal rejected a duplicate workflow start for the same idempotency key; response details include `workflowId`, live `status` when query succeeds, and `statusPath` | `WorkflowExecutionAlreadyStarted` |
 | `500` | `CHECKOUT_WORKFLOW_FAILED` | Unrecoverable Temporal error | `WorkflowException` |
 | `503` | `DOWNSTREAM_UNAVAILABLE` | Downstream HTTP timeout | `ResourceAccessException` |
 
@@ -740,7 +741,7 @@ JSON-formatted via `logstash-logback-encoder`. Key log points:
 
 ### Current state
 
-**There are no tests checked in for this service.** The `src/test/` directory is empty. This is a **P0 gap** for a money-path service. The [testing-quality-governance review](../../docs/reviews/iter3/platform/testing-quality-governance.md) classifies checkout as **Tier 0** (requires integration + E2E + replay + load gate).
+**Focused controller tests are now checked in for this service.** `CheckoutControllerTest` covers idempotency cache hits and `WorkflowExecutionAlreadyStarted` collisions. This is still **insufficient** for a money-path service: the [testing-quality-governance review](../../docs/reviews/iter3/platform/testing-quality-governance.md) classifies checkout as **Tier 0** and still expects workflow replay, integration, contract, E2E, and load coverage.
 
 ### Recommended test strategy
 
@@ -773,7 +774,7 @@ The `POST /checkout` endpoint blocks the Tomcat thread for the full Temporal wor
 
 ### Workflow ID collision on idempotency TTL expiry
 
-If a client retries with the same `Idempotency-Key` after the 30-minute DB TTL expires but before the 5-minute Temporal workflow execution timeout, Temporal throws `WorkflowExecutionAlreadyStarted`. This exception is **not caught** in `CheckoutController` and propagates as HTTP 500. Fix: catch `WorkflowExecutionAlreadyStarted` and return the live workflow status.
+If a client retries with the same `Idempotency-Key` after the 30-minute DB TTL expires while Temporal still retains the workflow ID, `CheckoutController` now catches `WorkflowExecutionAlreadyStarted` and returns `409 CHECKOUT_ALREADY_IN_PROGRESS` with `workflowId`, `statusPath`, and the live workflow `status` when the Temporal query succeeds. The underlying workflow reuse rule still means clients should poll the existing workflow or use a fresh idempotency key after the original attempt completes.
 
 ### Payment idempotency key truncation
 
@@ -805,6 +806,8 @@ Step 7 (`clearCart`) swallows exceptions. A stale cart after successful checkout
 - **Temporal namespace:** The `instacommerce` namespace and `CHECKOUT_ORCHESTRATOR_TASK_QUEUE` task queue must exist in Temporal before the worker starts. The `WorkerFactory` bean has `initMethod = "start"` — if Temporal is unreachable, the application will fail to start.
 - **Graceful shutdown:** Configured with `server.shutdown=graceful` and a 30-second drain timeout (`spring.lifecycle.timeout-per-shutdown-phase=30s`). In-flight Temporal activities will be rescheduled by Temporal after the worker disconnects.
 - **JPA validation:** `spring.jpa.hibernate.ddl-auto=validate` — Hibernate validates the schema against entity mappings at startup. Schema drift will prevent boot.
+- **Mesh authorization prerequisite:** If Istio `AuthorizationPolicy` allow-lists are enforced, the `checkout-orchestrator-service` service account must be permitted to call `payment-service` and `inventory-service`; the current Helm auth policy examples do not yet grant that principal.
+- **Downstream URL prerequisite:** Helm values must override the localhost defaults for `CART_SERVICE_URL`, `PRICING_SERVICE_URL`, `INVENTORY_SERVICE_URL`, `PAYMENT_SERVICE_URL`, and `ORDER_SERVICE_URL` before any Kubernetes rollout. The current chart examples only wire Temporal explicitly.
 
 ### Rolling update safety
 
@@ -828,11 +831,11 @@ Step 7 (`clearCart`) swallows exceptions. A stale cart after successful checkout
 | # | Limitation | Severity | Reference |
 |---|---|:---:|---|
 | 1 | Synchronous `POST /checkout` blocks Tomcat thread for full workflow duration (up to 5 min) | High | [transactional-core §1.4](../../docs/reviews/iter3/services/transactional-core.md) |
-| 2 | No tests — 0 test files for a Tier 0 money-path service | Critical | [testing-quality §Tier 0](../../docs/reviews/iter3/platform/testing-quality-governance.md) |
-| 3 | `WorkflowExecutionAlreadyStarted` not caught in controller (HTTP 500 on TTL-expiry retry) | Medium | [transactional-core §1.5](../../docs/reviews/iter3/services/transactional-core.md) |
-| 4 | Payment idempotency key can exceed downstream `VARCHAR(64)` column width | Medium | [transactional-core §3.3](../../docs/reviews/iter3/services/transactional-core.md) |
-| 5 | No pricing lock/quote-token — race window between pricing and order creation | Medium | [transactional-core §2](../../docs/reviews/iter3/services/transactional-core.md) |
-| 6 | Dual checkout saga in `order-service` accepts client-supplied prices (P1 defect) | Critical | [transactional-core §1.1](../../docs/reviews/iter3/services/transactional-core.md) |
+| 2 | Thin test coverage — only controller-level tests exist; no workflow replay, integration, contract, E2E, or load suite for a Tier 0 money-path service | Critical | [testing-quality §Tier 0](../../docs/reviews/iter3/platform/testing-quality-governance.md) |
+| 3 | Payment idempotency key can exceed downstream `VARCHAR(64)` column width | Medium | [transactional-core §3.3](../../docs/reviews/iter3/services/transactional-core.md) |
+| 4 | No pricing lock/quote-token — race window between pricing and order creation | Medium | [transactional-core §2](../../docs/reviews/iter3/services/transactional-core.md) |
+| 5 | Dual checkout saga in `order-service` accepts client-supplied prices (P1 defect) | Critical | [transactional-core §1.1](../../docs/reviews/iter3/services/transactional-core.md) |
+| 6 | Helm/Istio rollout prerequisites are still manual: service URLs are not chart-wired and mesh auth allow-lists do not yet mention `checkout-orchestrator-service` | High | Review of `deploy/helm/values.yaml` and this service's `application.yml` |
 | 7 | Temporal SDK metrics (`temporal_workflow_*`) not wired to Micrometer | Low | [observability-sre §SLO-13](../../docs/reviews/iter3/platform/observability-sre.md) |
 | 8 | Compensation failure (void/refund) is swallowed as warn log — no alert, no dead-letter | Medium | Source: `CheckoutWorkflowImpl.compensatePayment()` |
 | 9 | No store throughput governor — no capacity check before checkout | Low | [india-operator-patterns §R2.5](../../docs/reviews/iter3/benchmarks/india-operator-patterns.md) |

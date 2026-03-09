@@ -388,6 +388,7 @@ graph LR
 
     subgraph "Contracts & Schemas"
         CONTRACTS["contracts/README.md"]
+        SCHEMAS["contracts/src/main/resources/schemas/README.md"]
     end
 
     subgraph "Deploy & Infra"
@@ -412,7 +413,7 @@ graph LR
     end
 
     HUB["docs/README.md ★"] --> ROOT & COMPOSE & SETTINGS
-    HUB --> CONTRACTS
+    HUB --> CONTRACTS & SCHEMAS
     HUB --> HELM & TF & ARGO
     HUB --> MON
     HUB --> DP & STREAM & DPJ & ML
@@ -427,6 +428,7 @@ graph LR
 | Docker Compose | [`../docker-compose.yml`](../docker-compose.yml) | Local infra: PostgreSQL, Redis, Kafka, Debezium, Temporal |
 | Gradle settings | [`../settings.gradle.kts`](../settings.gradle.kts) | Canonical list of 20 Java modules (`contracts` + 19 `services:*`) |
 | Contracts | [`../contracts/README.md`](../contracts/README.md) | Event envelope, JSON Schema, Protobuf definitions, topic naming |
+| Topic & schema registry | [`../contracts/src/main/resources/schemas/README.md`](../contracts/src/main/resources/schemas/README.md) | Canonical Kafka topic names, per-domain schema inventory, and legacy-vs-canonical topic aliases |
 | Helm charts | [`../deploy/helm/README.md`](../deploy/helm/README.md) | Kubernetes deployment, environment values |
 | Terraform | [`../infra/terraform/README.md`](../infra/terraform/README.md) | GCP infrastructure as code |
 | ArgoCD | [`../argocd/README.md`](../argocd/README.md) | GitOps application manifests |

@@ -34,7 +34,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleCheckoutException(CheckoutException ex, HttpServletRequest request) {
         log.warn("Checkout error: code={} message={}", ex.getCode(), ex.getMessage());
         return ResponseEntity.status(ex.getStatus())
-            .body(buildError(ex.getCode(), ex.getMessage(), List.of(), request));
+            .body(buildError(ex.getCode(), ex.getMessage(), ex.getDetails(), request));
     }
 
     @ExceptionHandler(WorkflowNotFoundException.class)
