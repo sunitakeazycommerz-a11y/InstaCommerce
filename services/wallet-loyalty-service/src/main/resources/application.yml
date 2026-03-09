@@ -34,6 +34,9 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       properties:
         spring.json.trusted.packages: "*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
   cache:
     type: caffeine
     caffeine:
@@ -51,6 +54,14 @@ wallet:
 
 payment-service:
   base-url: ${PAYMENT_SERVICE_URL:http://payment-service:8080}
+
+order-service:
+  base-url: ${ORDER_SERVICE_URL:http://order-service:8080}
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}
 
 management:
   tracing:

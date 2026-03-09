@@ -499,6 +499,8 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8093"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///wallet_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      ORDER_SERVICE_URL: http://order-service:8080
+      INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
     hpa:
       minReplicas: 2
       maxReplicas: 6
