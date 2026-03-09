@@ -11,6 +11,8 @@ dist/
 *.war
 *.ear
 *.zip
+# Exception: keep gradle wrapper JAR for reproducible builds
+!gradle/wrapper/gradle-wrapper.jar
 
 # Maven
 target/
