@@ -1,6 +1,16 @@
 # Fulfillment Service
 
-Pick-pack-deliver workflow engine. Consumes **order events** from Kafka, creates pick tasks for store pickers, manages the delivery lifecycle (rider assignment → dispatch → delivery), handles item substitutions with automatic refunds, and publishes **fulfillment events** via the transactional outbox pattern.
+Pick-pack-deliver workflow engine. Consumes **order events** from Kafka, creates
+pick tasks for store pickers, manages the delivery lifecycle, handles item
+substitutions with automatic refunds, and publishes **fulfillment events** via
+the transactional outbox pattern.
+
+> **Current rollout posture:** fulfillment still performs a legacy best-effort
+> HTTP status callback into order-service **and** writes Kafka-bound outbox
+> events. The HTTP callback can now be disabled independently via
+> `FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED=false` when
+> order-service choreography is ready to become the sole status propagation
+> path.
 
 ## Key Components
 
@@ -19,7 +29,7 @@ Pick-pack-deliver workflow engine. Consumes **order events** from Kafka, creates
 | Service | `AuditLogService` | Structured audit trail with IP, User-Agent, traceId |
 | Consumer | `OrderEventConsumer` | Listens to `orders.events` → creates pick tasks on `OrderPlaced` |
 | Consumer | `IdentityEventConsumer` | Listens to `identity.events` → anonymizes user on `UserErased` |
-| Client | `RestOrderClient` | Updates order status in order-service |
+| Client | `RestOrderClient` | Legacy best-effort order-status HTTP callback path into order-service |
 | Client | `RestInventoryClient` | Releases stock via inventory-service |
 | Client | `RestPaymentClient` | Issues refunds via payment-service |
 
@@ -52,20 +62,20 @@ stateDiagram-v2
     [*] --> PENDING: OrderPlaced event received
     PENDING --> IN_PROGRESS: First item picked / markPacked called
     IN_PROGRESS --> COMPLETED: All items resolved + markPacked
-    PENDING --> CANCELLED: Order cancelled
-    IN_PROGRESS --> CANCELLED: Order cancelled
     COMPLETED --> [*]
-    CANCELLED --> [*]
 ```
 
-| From | Allowed To |
-|------|-----------|
-| `PENDING` | `IN_PROGRESS`, `CANCELLED` |
-| `IN_PROGRESS` | `COMPLETED`, `CANCELLED` |
+| From | Current write-path transitions |
+|------|-------------------------------|
+| `PENDING` | `IN_PROGRESS` |
+| `IN_PROGRESS` | `COMPLETED` |
 | `COMPLETED` | _(terminal)_ |
-| `CANCELLED` | _(terminal)_ |
 
-**Pick Item statuses:** `PENDING` → `PICKED`, `MISSING`, or `SUBSTITUTED`
+**Pick item statuses:** `PENDING` → `PICKED`, `MISSING`, or `SUBSTITUTED`
+
+> `CANCELLED` exists in `PickTaskStatus` and is reflected in tracking/status
+> mapping code, but no controller or event flow currently drives a cancellation
+> transition.
 
 ---
 
@@ -74,23 +84,18 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> ASSIGNED: Rider assigned to order
-    ASSIGNED --> PICKED_UP: Rider collects package
-    PICKED_UP --> IN_TRANSIT: En route to customer
-    IN_TRANSIT --> DELIVERED: Delivery confirmed
-    ASSIGNED --> FAILED: Assignment failed
-    PICKED_UP --> FAILED: Delivery issue
-    IN_TRANSIT --> FAILED: Delivery issue
+    ASSIGNED --> DELIVERED: Delivery confirmed
     DELIVERED --> [*]
-    FAILED --> [*]
 ```
 
-| From | Allowed To |
-|------|-----------|
-| `ASSIGNED` | `PICKED_UP`, `FAILED` |
-| `PICKED_UP` | `IN_TRANSIT`, `FAILED` |
-| `IN_TRANSIT` | `DELIVERED`, `FAILED` |
+| From | Current write-path transitions |
+|------|-------------------------------|
+| `ASSIGNED` | `DELIVERED` |
 | `DELIVERED` | _(terminal)_ |
-| `FAILED` | _(terminal)_ |
+
+> `PICKED_UP`, `IN_TRANSIT`, and `FAILED` exist in `DeliveryStatus` and are
+> normalized by tracking logic, but current controller/service write paths only
+> persist `ASSIGNED` and `DELIVERED`.
 
 ---
 
@@ -124,19 +129,25 @@ sequenceDiagram
     participant RAS as RiderAssignmentService
     participant RiderRepo as RiderRepository
     participant DeliveryRepo as DeliveryRepository
-    participant OrderClient as RestOrderClient
     participant Outbox as OutboxService
+    participant EventBus as ApplicationEventPublisher
+    participant Listener as OrderStatusEventListener
+    participant OrderClient as RestOrderClient
 
     Admin->>AdminController: POST /admin/fulfillment/orders/{orderId}/assign<br/>{riderId, estimatedMinutes}
     AdminController->>DS: assignRider(orderId, riderId, etaMinutes)
     DS->>RiderRepo: findById(riderId)
     RiderRepo-->>DS: Rider
-    DS->>RiderRepo: save(rider.available = false)
+    DS->>RiderRepo: save(rider.isAvailable = false)
     DS->>DeliveryRepo: save(Delivery: ASSIGNED)
     DS->>Outbox: publish("OrderDispatched")
-    DS->>OrderClient: updateStatus(orderId, "OUT_FOR_DELIVERY")
+    DS->>EventBus: publish OrderStatusUpdateEvent("OUT_FOR_DELIVERY")
     DS-->>AdminController: DeliveryResponse
     AdminController-->>Admin: 200 OK
+
+    Note over EventBus,Listener: AFTER_COMMIT best-effort legacy callback
+    EventBus->>Listener: handleOrderStatusUpdate(...)
+    Listener->>OrderClient: updateStatus(orderId, "OUT_FOR_DELIVERY")
 
     Note over DS,RAS: Auto-assignment path (after packing)
     DS->>RAS: assignRider(storeId)
@@ -188,8 +199,8 @@ flowchart LR
     FEV --> NS
     OEV -.->|on failure| DLT
 
-    PS -->|HTTP| ORD
-    DS -->|HTTP| ORD
+    PS -->|AFTER_COMMIT best-effort HTTP| ORD
+    DS -->|AFTER_COMMIT best-effort HTTP| ORD
 ```
 
 **Published events** (via outbox → `fulfillment.events`):
@@ -198,7 +209,7 @@ flowchart LR
 |-------|---------|-------------------|
 | `OrderPacked` | Pick task completed | `orderId`, `userId`, `storeId`, `packedAt`, `note` |
 | `OrderDispatched` | Rider assigned & dispatched | `orderId`, `riderId`, `estimatedMinutes`, `dispatchedAt` |
-| `OrderDelivered` | Delivery confirmed | `orderId`, `riderId`, `deliveredAt` |
+| `OrderDelivered` | Delivery confirmed | `orderId`, `userId`, `deliveredAt` |
 | `OrderModified` | Item missing / substituted | `orderId`, `productId`, `missingQty`, `refundCents` |
 
 **Consumed events:**
@@ -210,13 +221,17 @@ flowchart LR
 
 **Error handling:** `DefaultErrorHandler` with `FixedBackOff(1000 ms, 3 retries)` → Dead Letter Topic on exhaustion.
 
-> **Choreography rollout note:** The legacy HTTP callback to order-service
-> (`OrderStatusEventListener` → `RestOrderClient.updateStatus`) can be disabled
-> via `FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED=false` once
-> order-service's Kafka-based fulfillment event consumer is promoted to handle
-> status transitions. Disabling the callback avoids a dual-update path where both
-> the HTTP call and the Kafka choreography consumer update the same order state.
-> Outbox event publishing is unaffected by this flag.
+### Dual-write migration note
+
+- `OutboxService.publish(...)` is the durable propagation path. It participates
+  in the same transaction as fulfillment state changes.
+- `OrderStatusEventListener` runs **after commit** and performs a best-effort
+  HTTP callback into order-service for backward compatibility.
+- `FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED=false` disables only
+  the legacy HTTP callback path. It does **not** disable outbox publishing.
+- The callback should be turned off before enabling the Kafka consumer-driven
+  order lifecycle path in environments where both would otherwise update the
+  same order state.
 
 ---
 
@@ -346,7 +361,7 @@ erDiagram
         varchar name
         varchar phone
         varchar store_id
-        boolean available
+        boolean is_available
         timestamptz created_at
     }
 
@@ -405,16 +420,23 @@ Migrations managed by **Flyway** (`src/main/resources/db/migration/` — V1 thro
 | Property | Env Var | Default |
 |----------|---------|---------|
 | Server port | `SERVER_PORT` | `8087` |
-| Database URL | — | `jdbc:postgresql://localhost:5432/fulfillment` |
-| Database password | `FULFILLMENT_DB_PASSWORD` | — |
+| Database URL | `FULFILLMENT_DB_URL` | `jdbc:postgresql://localhost:5432/fulfillment` |
+| Database user | `FULFILLMENT_DB_USER` | `postgres` |
+| Database password | `FULFILLMENT_DB_PASSWORD` | _secret-backed_ |
 | Kafka bootstrap | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` |
+| Kafka consumer group | `FULFILLMENT_KAFKA_GROUP` | `fulfillment-service` |
 | Order service URL | `ORDER_SERVICE_URL` | `http://localhost:8085` |
 | Payment service URL | `PAYMENT_SERVICE_URL` | `http://localhost:8086` |
 | Inventory service URL | `INVENTORY_SERVICE_URL` | `http://localhost:8083` |
 | JWT issuer | `FULFILLMENT_JWT_ISSUER` | `instacommerce-identity` |
-| JWT public key | `FULFILLMENT_JWT_PUBLIC_KEY` | — |
+| JWT public key | `FULFILLMENT_JWT_PUBLIC_KEY` | _secret-backed_ |
+| Internal service token | `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` |
 | Default delivery ETA | `FULFILLMENT_DEFAULT_ETA_MINUTES` | `15` |
 | Order-status HTTP callback | `FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED` | `true` |
+| Trace sampling | `TRACING_PROBABILITY` | `1.0` |
+| OTLP traces endpoint | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` |
+| OTLP metrics endpoint | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` |
+| Environment tag | `ENVIRONMENT` | `dev` |
 
 ## Tech Stack
 
@@ -425,3 +447,33 @@ Migrations managed by **Flyway** (`src/main/resources/db/migration/` — V1 thro
 - **Micrometer + OTLP** for metrics and distributed tracing
 - **Testcontainers** (PostgreSQL) for integration tests
 - **GCP Secret Manager** for secrets in production
+
+## Local Development & Validation
+
+```bash
+# Run the service from the repository root
+./gradlew :services:fulfillment-service:bootRun
+
+# Run the currently available focused tests
+./gradlew :services:fulfillment-service:test
+```
+
+### Runtime notes
+
+- local application port: `8087`
+- container port / healthcheck path: `8080` with `/actuator/health/liveness`
+- readiness endpoint: `/actuator/health/readiness`
+- Prometheus scrape endpoint: `/actuator/prometheus`
+
+## Known Limitations
+
+1. The service currently emits fulfillment outbox events **and** performs a
+   best-effort after-commit HTTP callback into order-service; this is an
+   intentional migration posture, not the final choreography target.
+2. Delivery write paths currently persist only `ASSIGNED` and `DELIVERED` even
+   though the enum also defines `PICKED_UP`, `IN_TRANSIT`, and `FAILED`.
+3. `PickTaskStatus.CANCELLED` exists in the domain model, but no controller or
+   consumer flow currently drives cancellation.
+4. The only focused automated test currently present in this module covers the
+   new order-status callback flag behavior; broader fulfillment integration
+   coverage is still needed.
