@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -30,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class OrderService {
     private static final int MAX_PAGE_SIZE = 100;
+    private static final Logger logger = LoggerFactory.getLogger(OrderService.class);
     private final OrderRepository orderRepository;
     private final OrderStatusHistoryRepository statusHistoryRepository;
     private final OutboxService outboxService;
@@ -203,6 +206,35 @@ public class OrderService {
         }
     }
 
+    @Transactional
+    public void advanceLifecycleFromFulfillment(UUID orderId, OrderStatus targetStatus, String changedBy, String note) {
+        Order order = orderRepository.findById(orderId)
+            .orElseThrow(() -> new OrderNotFoundException(orderId));
+        OrderStatus currentStatus = order.getStatus();
+        if (currentStatus == OrderStatus.CANCELLED
+            || currentStatus == OrderStatus.FAILED
+            || currentStatus == OrderStatus.DELIVERED) {
+            logger.info("Ignoring fulfillment event for order {} in terminal state {}", orderId, currentStatus);
+            return;
+        }
+        if (currentStatus == OrderStatus.PENDING) {
+            throw new InvalidOrderStateException(
+                "Cannot apply fulfillment event " + targetStatus + " while order is PENDING");
+        }
+        if (hasReachedLifecycleStep(currentStatus, targetStatus)) {
+            logger.debug("Ignoring stale fulfillment event for order {} at {} (target {})",
+                orderId, currentStatus, targetStatus);
+            return;
+        }
+        for (OrderStatus nextStatus : fulfillmentProgressionFor(targetStatus)) {
+            if (hasReachedLifecycleStep(currentStatus, nextStatus)) {
+                continue;
+            }
+            updateOrderStatus(orderId, nextStatus, changedBy, note);
+            currentStatus = nextStatus;
+        }
+    }
+
     private void recordStatusChange(Order order, OrderStatus from, OrderStatus to,
                                     String changedBy, String note) {
         OrderStatusHistory history = new OrderStatusHistory();
@@ -246,6 +278,34 @@ public class OrderService {
     private Pageable sanitize(Pageable pageable) {
         int size = Math.min(pageable.getPageSize(), MAX_PAGE_SIZE);
         return PageRequest.of(pageable.getPageNumber(), size, pageable.getSort());
+    }
+
+    private boolean hasReachedLifecycleStep(OrderStatus current, OrderStatus target) {
+        return lifecycleRank(current) >= lifecycleRank(target);
+    }
+
+    private int lifecycleRank(OrderStatus status) {
+        return switch (status) {
+            case PLACED -> 1;
+            case PACKING -> 2;
+            case PACKED -> 3;
+            case OUT_FOR_DELIVERY -> 4;
+            case DELIVERED -> 5;
+            default -> Integer.MIN_VALUE;
+        };
+    }
+
+    private List<OrderStatus> fulfillmentProgressionFor(OrderStatus targetStatus) {
+        return switch (targetStatus) {
+            case PACKED -> List.of(OrderStatus.PACKING, OrderStatus.PACKED);
+            case OUT_FOR_DELIVERY -> List.of(OrderStatus.PACKING, OrderStatus.PACKED, OrderStatus.OUT_FOR_DELIVERY);
+            case DELIVERED -> List.of(
+                OrderStatus.PACKING,
+                OrderStatus.PACKED,
+                OrderStatus.OUT_FOR_DELIVERY,
+                OrderStatus.DELIVERED);
+            default -> throw new IllegalArgumentException("Unsupported fulfillment target status: " + targetStatus);
+        };
     }
 
     private Order fetchOrder(UUID orderId, UUID requesterId, boolean isAdmin) {

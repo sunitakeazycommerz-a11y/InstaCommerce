@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.instacommerce.order.service.OrderServiceFulfillmentLifecycleTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-03-09T04:07:29.823Z" hostname="omkars-MacBook-Air.local" time="0.143">
+  <properties/>
+  <testcase name="advancesPackedEventThroughPackingAndPacked()" classname="com.instacommerce.order.service.OrderServiceFulfillmentLifecycleTest" time="0.135"/>
+  <testcase name="rejectsFulfillmentEventForPendingOrder()" classname="com.instacommerce.order.service.OrderServiceFulfillmentLifecycleTest" time="0.004"/>
+  <testcase name="ignoresStaleFulfillmentEventWhenOrderAlreadyAdvanced()" classname="com.instacommerce.order.service.OrderServiceFulfillmentLifecycleTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

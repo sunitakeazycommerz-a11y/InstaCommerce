@@ -40,7 +40,7 @@
 
 ## 🏗 Architecture Overview
 
-The platform follows a **domain-driven microservices architecture** with event-driven communication via Kafka, orchestrated workflows via Temporal, and a polyglot service mesh managed by Istio on GKE.
+The platform follows a **domain-driven microservices architecture** with event-driven communication via Kafka, orchestrated workflows via Temporal, and a polyglot service mesh managed by Istio on GKE. In the current transactional model, the checkout money path remains orchestrated in `checkout-orchestrator-service`, while downstream order progression from fulfillment through delivery is migrating to Kafka-driven choreography behind explicit rollout controls.
 
 ```mermaid
 graph TB

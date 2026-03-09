@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.instacommerce.order.consumer.FulfillmentEventConsumerTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-03-09T04:07:29.052Z" hostname="omkars-MacBook-Air.local" time="0.627">
+  <properties/>
+  <testcase name="mapsDispatchedEventToOutForDelivery()" classname="com.instacommerce.order.consumer.FulfillmentEventConsumerTest" time="0.616"/>
+  <testcase name="ignoresUnsupportedFulfillmentEvent()" classname="com.instacommerce.order.consumer.FulfillmentEventConsumerTest" time="0.009"/>
+  <system-out><![CDATA[09:37:29.675 [Test worker] INFO com.instacommerce.order.consumer.FulfillmentEventConsumer -- Ignoring OrderModified event for aggregateId=fa006adb-e275-4dc7-8252-bf4b10bc4464
+]]></system-out>
+  <system-err><![CDATA[Mockito is currently self-attaching to enable the inline-mock-maker. This will no longer work in future releases of the JDK. Please add Mockito as an agent to your build as described in Mockito's documentation: https://javadoc.io/doc/org.mockito/mockito-core/latest/org.mockito/org/mockito/Mockito.html#0.3
+WARNING: A Java agent has been loaded dynamically (/Users/omkarkumar/.gradle/caches/modules-2/files-2.1/net.bytebuddy/byte-buddy-agent/1.17.8/f09415827a71be7ed621c7bd02550678f28bc81c/byte-buddy-agent-1.17.8.jar)
+WARNING: If a serviceability tool is in use, please run with -XX:+EnableDynamicAgentLoading to hide this warning
+WARNING: If a serviceability tool is not in use, please run with -Djdk.instrument.traceUsage for more information
+WARNING: Dynamic loading of agents will be disallowed by default in a future release
+]]></system-err>
+</testsuite>

@@ -15,6 +15,9 @@ services:
   order-service:
     replicas: 3
     tag: prod
+    env:
+      ORDER_CHECKOUT_DIRECT_SAGA_ENABLED: "false"
+      ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED: "false"
   payment-service:
     replicas: 3
     tag: prod

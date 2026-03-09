@@ -1,13 +1,13 @@
 # Order Service
 
-Manages the order lifecycle from placement through delivery or cancellation. Uses **Temporal** for checkout workflow orchestration (saga pattern with automatic compensation) and **Kafka** for event publishing via the transactional outbox pattern.
+Manages the order lifecycle from placement through delivery or cancellation. Uses **Temporal** for the checkout money-path orchestration (saga pattern with automatic compensation) and **Kafka** for downstream choreography via the transactional outbox pattern and fulfillment lifecycle consumers.
 
 ## Key Components
 
 | Layer | Component | Responsibility |
 |-------|-----------|----------------|
 | Controller | `OrderController` | Customer-facing order endpoints (`/orders`) |
-| Controller | `CheckoutController` | Initiates Temporal checkout workflow (`/checkout`) |
+| Controller | `CheckoutController` | Legacy direct checkout entrypoint (`/checkout`), now guardable for orchestrator-only deployments |
 | Controller | `AdminOrderController` | Admin order management (`/admin/orders`) |
 | Service | `OrderService` | Order CRUD, state transitions, outbox publishing |
 | Service | `OutboxService` | Transactional outbox writes (runs inside caller's `@Transactional`) |
@@ -18,6 +18,7 @@ Manages the order lifecycle from placement through delivery or cancellation. Use
 | Activity | `OrderActivities` | Create order, cancel order, update status |
 | Activity | `CartActivities` | Clear cart after successful checkout |
 | Consumer | `IdentityEventConsumer` | Listens to `identity.events` for GDPR user-erasure |
+| Consumer | `FulfillmentEventConsumer` | Listens to `fulfillment.events` to advance orders through packing, dispatch, and delivery |
 | Domain | `OrderStateMachine` | Enforces valid state transitions |
 
 ## Architecture
@@ -57,6 +58,8 @@ Valid transitions enforced by `OrderStateMachine`:
 ---
 
 ### 2. Checkout Saga (Temporal Workflow)
+
+`checkout-orchestrator-service` should remain the primary checkout authority. The local `/checkout` path exists for controlled rollback and migration use, and can be disabled with `ORDER_CHECKOUT_DIRECT_SAGA_ENABLED=false`.
 
 ```mermaid
 sequenceDiagram
@@ -201,11 +204,13 @@ flowchart LR
         OBS[OutboxService]
         OE[(outbox_events)]
         IEC[IdentityEventConsumer]
+        FEC[FulfillmentEventConsumer]
     end
 
     subgraph Kafka Topics
         OEV[order.events]
         IEV[identity.events]
+        FEV[fulfillment.events]
         DLT[*.DLT]
     end
 
@@ -219,6 +224,7 @@ flowchart LR
     OE -->|CDC / poll relay| OEV
     OEV --> FS & NS & AS
     IEV --> IEC
+    FEV --> FEC --> OS
     OEV -.->|on failure| DLT
 ```
 
@@ -236,6 +242,10 @@ flowchart LR
 | Topic | Event | Action |
 |-------|-------|--------|
 | `identity.events` | `UserErased` | Anonymize user data in orders (GDPR) |
+| `fulfillment.events` | `OrderPacked` | Advance `PLACED`/`PACKING` orders to `PACKED` (bridges through `PACKING` if needed) |
+| `fulfillment.events` | `OrderDispatched` | Advance orders to `OUT_FOR_DELIVERY` |
+| `fulfillment.events` | `OrderDelivered` | Advance orders to `DELIVERED` |
+| `fulfillment.events` | `OrderModified` | Logged and ignored pending dedicated order-modification handling |
 
 ---
 
@@ -475,10 +485,13 @@ flowchart TD
 | Inventory service | `INVENTORY_SERVICE_URL` | `http://localhost:8083` |
 | Cart service | `CART_SERVICE_URL` | `http://localhost:8084` |
 | Payment service | `PAYMENT_SERVICE_URL` | `http://localhost:8086` |
+| Kafka bootstrap | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` |
 | Temporal address | `TEMPORAL_HOST` | `localhost:7233` |
 | Temporal namespace | `TEMPORAL_NAMESPACE` | `instacommerce` |
 | Temporal task queue | `TEMPORAL_TASK_QUEUE` | `CHECKOUT_TASK_QUEUE` |
 | JWT issuer | `ORDER_JWT_ISSUER` | `instacommerce-identity` |
+| Legacy direct checkout | `ORDER_CHECKOUT_DIRECT_SAGA_ENABLED` | `true` |
+| Fulfillment consumer toggle | `ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED` | `false` |
 | Checkout rate limit | — | 10 requests / 60 s per user |
 
 ## Tech Stack

@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class OrderProperties {
     private final Jwt jwt = new Jwt();
     private final Clients clients = new Clients();
+    private final Checkout checkout = new Checkout();
 
     public Jwt getJwt() {
         return jwt;
@@ -13,6 +14,10 @@ public class OrderProperties {
 
     public Clients getClients() {
         return clients;
+    }
+
+    public Checkout getCheckout() {
+        return checkout;
     }
 
     public static class Jwt {
@@ -63,6 +68,18 @@ public class OrderProperties {
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+    }
+
+    public static class Checkout {
+        private boolean directSagaEnabled = true;
+
+        public boolean isDirectSagaEnabled() {
+            return directSagaEnabled;
+        }
+
+        public void setDirectSagaEnabled(boolean directSagaEnabled) {
+            this.directSagaEnabled = directSagaEnabled;
         }
     }
 }

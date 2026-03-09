@@ -173,6 +173,8 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///order_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      ORDER_CHECKOUT_DIRECT_SAGA_ENABLED: "true"
+      ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED: "false"
     hpa:
       minReplicas: 2
       maxReplicas: 10
