@@ -280,7 +280,9 @@ class WebhookEventProcessorOccTest {
             // Total refundedCents = 1500 (tracked) + 2000 (cumulative) = 3500
             assertThat(p.getRefundedCents()).isEqualTo(3500);
 
+            // CAS-lost refund detached before re-read; CAS-won refund detached after completion
             verify(entityManager).detach(first);
+            verify(entityManager).detach(second);
             assertThat(meterRegistry.counter("payment.webhook.refund.occ", "outcome", "completed").count())
                 .isEqualTo(1.0);
         }

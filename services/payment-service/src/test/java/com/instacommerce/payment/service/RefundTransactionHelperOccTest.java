@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -274,6 +275,70 @@ class RefundTransactionHelperOccTest {
 
             verifyNoInteractions(ledgerService, outboxService, auditLogService);
             verify(entityManager, org.mockito.Mockito.times(2)).detach(pending);
+        }
+
+        @Test
+        @DisplayName("CAS row-count 1 → refund completed, payment updated, ledger/outbox/audit emitted once")
+        void casSuccess_happyPath() {
+            Payment payment = capturedPayment();
+            Refund pending = pendingRefund(payment.getId());
+
+            // findById: (1) discover paymentId, (2) re-read after lock → still PENDING
+            when(refundRepository.findById(pending.getId()))
+                .thenReturn(Optional.of(pending))
+                .thenReturn(Optional.of(pending));
+
+            when(paymentRepository.findByIdForUpdate(payment.getId()))
+                .thenReturn(Optional.of(payment));
+
+            when(refundRepository.compareAndSetPendingToCompleted(pending.getId(), pending.getVersion()))
+                .thenReturn(1);
+
+            when(paymentRepository.save(payment)).thenReturn(payment);
+
+            Refund result = helper.completeStaleRefund(pending.getId());
+
+            // --- returned refund is marked COMPLETED in-memory ---
+            assertThat(result.getStatus()).isEqualTo(RefundStatus.COMPLETED);
+            assertThat(result.getId()).isEqualTo(pending.getId());
+
+            // --- refund entity detached twice: initial read + after CAS success ---
+            verify(entityManager, times(2)).detach(pending);
+
+            // --- payment state updated correctly ---
+            assertThat(payment.getRefundedCents()).isEqualTo(pending.getAmountCents());
+            assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
+            verify(paymentRepository).save(payment);
+
+            // --- ledger double-entry emitted exactly once ---
+            verify(ledgerService).recordDoubleEntry(
+                org.mockito.ArgumentMatchers.eq(payment.getId()),
+                org.mockito.ArgumentMatchers.eq((long) pending.getAmountCents()),
+                org.mockito.ArgumentMatchers.eq("merchant_payable"),
+                org.mockito.ArgumentMatchers.eq("customer_receivable"),
+                org.mockito.ArgumentMatchers.eq("REFUND"),
+                org.mockito.ArgumentMatchers.eq(pending.getId().toString()),
+                org.mockito.ArgumentMatchers.eq("Refund"));
+
+            // --- outbox event emitted exactly once with PaymentRefunded ---
+            verify(outboxService).publish(
+                org.mockito.ArgumentMatchers.eq("Payment"),
+                org.mockito.ArgumentMatchers.eq(payment.getId().toString()),
+                org.mockito.ArgumentMatchers.eq("PaymentRefunded"),
+                any());
+
+            // --- audit log emitted exactly once for recovery completion ---
+            verify(auditLogService).log(
+                any(),
+                org.mockito.ArgumentMatchers.eq("RECOVERY_REFUND_COMPLETED"),
+                org.mockito.ArgumentMatchers.eq("Refund"),
+                org.mockito.ArgumentMatchers.eq(pending.getId().toString()),
+                org.mockito.ArgumentMatchers.eq(Map.of(
+                    "paymentId", payment.getId(),
+                    "amountCents", pending.getAmountCents())));
+
+            // --- no legacy refundRepository.save() call (CAS did the transition) ---
+            verify(refundRepository, never()).save(any(Refund.class));
         }
 
         @Test

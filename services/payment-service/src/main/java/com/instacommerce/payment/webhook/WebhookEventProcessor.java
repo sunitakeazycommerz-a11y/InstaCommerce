@@ -285,6 +285,11 @@ public class WebhookEventProcessor {
                 tracked.getId(), tracked.getAmountCents(), tracked.getReason()));
             log.info("Webhook completed tracked refund {} (pspRefundId={}, amount={})",
                 tracked.getId(), pspRefundId, tracked.getAmountCents());
+
+            // The native CAS query bypassed JPA, so the managed entity still
+            // holds stale PENDING state.  Detach it to avoid persistence-context
+            // confusion for the remainder of this webhook transaction.
+            entityManager.detach(tracked);
         }
 
         return completions;
