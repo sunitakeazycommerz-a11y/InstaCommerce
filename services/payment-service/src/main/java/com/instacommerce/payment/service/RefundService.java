@@ -45,7 +45,7 @@ public class RefundService {
 
         GatewayRefundResult result;
         try {
-            result = paymentGateway.refund(pending.pspReference(), request.amountCents(), appliedKey);
+            result = paymentGateway.refund(pending.pspReference(), request.amountCents(), appliedKey, pending.refundId());
         } catch (Exception ex) {
             txHelper.markRefundFailed(pending.refundId());
             throw ex;

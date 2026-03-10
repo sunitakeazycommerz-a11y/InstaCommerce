@@ -501,6 +501,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql:///wallet_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       ORDER_SERVICE_URL: http://order-service:8080
       INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
+      WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "false"
     hpa:
       minReplicas: 2
       maxReplicas: 6

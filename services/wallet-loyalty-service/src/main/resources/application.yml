@@ -43,6 +43,8 @@ spring:
       spec: maximumSize=10000,expireAfterWrite=60s
 
 wallet:
+  consumer:
+    payment-refund-enabled: ${WALLET_CONSUMER_PAYMENT_REFUND_ENABLED:false}
   jwt:
     issuer: ${WALLET_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${WALLET_JWT_PUBLIC_KEY}}

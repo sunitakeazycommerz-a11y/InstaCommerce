@@ -23,7 +23,7 @@ public class MockPaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey) {
+    public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey, UUID internalRefundId) {
         return GatewayRefundResult.success("mock_re_" + UUID.randomUUID());
     }
 
@@ -36,4 +36,3 @@ public class MockPaymentGateway implements PaymentGateway {
         );
     }
 }
-

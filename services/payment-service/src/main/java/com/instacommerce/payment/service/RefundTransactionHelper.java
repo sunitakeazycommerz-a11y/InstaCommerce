@@ -75,14 +75,13 @@ public class RefundTransactionHelper {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void persistPspRefundId(UUID refundId, String pspRefundId) {
-        refundRepository.findById(refundId).ifPresent(r -> {
-            r.setPspRefundId(pspRefundId);
-            refundRepository.save(r);
-        });
+        refundRepository.setPspRefundIdIfMissing(refundId, pspRefundId);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Refund completeRefund(UUID refundId, UUID paymentId, RefundRequest request, String pspRefundId) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+            .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         Refund refund = refundRepository.findById(refundId).orElseThrow();
         if (refund.getStatus() == RefundStatus.COMPLETED) {
             log.info("Refund {} already completed (likely by webhook), skipping synchronous completion", refundId);
@@ -92,8 +91,6 @@ public class RefundTransactionHelper {
         refund.setPspRefundId(pspRefundId);
         Refund saved = refundRepository.save(refund);
 
-        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
-            .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         payment.setRefundedCents(payment.getRefundedCents() + request.amountCents());
         if (payment.getRefundedCents() >= payment.getCapturedCents()) {
             payment.setStatus(PaymentStatus.REFUNDED);

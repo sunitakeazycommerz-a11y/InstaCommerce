@@ -89,7 +89,9 @@ public class WebhookEventProcessor {
             }
         }
 
-        paymentRepository.findByPspReference(pspReference)
+        // Lock the payment row before touching tracked refund rows so webhook
+        // processing uses the same payment -> refund lock order as sync completion.
+        paymentRepository.findByPspReferenceForUpdate(pspReference)
             .ifPresent(payment -> applyEvent(payment, type, objectNode, eventId));
     }
 
@@ -230,9 +232,14 @@ public class WebhookEventProcessor {
                 continue;
             }
 
-            Refund tracked = refundRepository.findByPspRefundId(pspRefundId).orElse(null);
+            Refund tracked = findTrackedRefund(entry, pspRefundId);
             if (tracked == null) {
                 continue; // Untracked/manual refund — handled by cumulative fallback
+            }
+            if (!payment.getId().equals(tracked.getPaymentId())) {
+                log.warn("Tracked refund {} belongs to payment {} not {}, skipping",
+                    tracked.getId(), tracked.getPaymentId(), payment.getId());
+                continue;
             }
             if (tracked.getStatus() == RefundStatus.COMPLETED) {
                 continue; // Already completed by synchronous path
@@ -243,6 +250,7 @@ public class WebhookEventProcessor {
                 continue;
             }
 
+            tracked.setPspRefundId(pspRefundId);
             tracked.setStatus(RefundStatus.COMPLETED);
             refundRepository.save(tracked);
 
@@ -255,6 +263,24 @@ public class WebhookEventProcessor {
         }
 
         return completions;
+    }
+
+    private Refund findTrackedRefund(JsonNode entry, String pspRefundId) {
+        Refund tracked = refundRepository.findByPspRefundId(pspRefundId).orElse(null);
+        if (tracked != null) {
+            return tracked;
+        }
+
+        String internalRefundId = textValue(entry.path("metadata"), "internalRefundId");
+        if (internalRefundId == null || internalRefundId.isBlank()) {
+            return null;
+        }
+        try {
+            return refundRepository.findById(UUID.fromString(internalRefundId)).orElse(null);
+        } catch (IllegalArgumentException ex) {
+            log.warn("Webhook refund metadata has invalid internalRefundId {}", internalRefundId);
+            return null;
+        }
     }
 
     record TrackedRefundCompletion(UUID refundId, long amountCents, String reason) {}

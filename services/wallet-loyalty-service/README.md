@@ -679,7 +679,7 @@ The test suite uses JUnit 5 (`useJUnitPlatform()`), `spring-boot-starter-test` (
 - **Kafka consumer group** (`wallet-loyalty-service`) — adding or removing pods triggers a Kafka rebalance. Events are reprocessed from the last committed offset; idempotency constraints prevent duplicate mutations.
 - **Cache invalidation on deploy** — Caffeine is in-memory per pod. On deploy, caches start cold. `walletBalance` cache TTL is 60 s, so stale reads self-heal quickly.
 - **Docker image** uses `eclipse-temurin:21-jre-alpine`, runs as non-root user `app` (UID 1001), and configures ZGC with `MaxRAMPercentage=75.0`.
-- **Feature-flag integration** — none currently. Loyalty earn rate and referral reward amounts are `application.yml` config; changing them requires a redeploy or environment variable update.
+- **Feature-flag integration** — `PaymentEventConsumer` is gated by `WALLET_CONSUMER_PAYMENT_REFUND_ENABLED` (default `false`), following the same `@ConditionalOnProperty` pattern used by payment-service. Loyalty earn rate and referral reward amounts are `application.yml` config; changing them requires a redeploy or environment variable update.
 
 ---
 
@@ -714,12 +714,22 @@ The test suite uses JUnit 5 (`useJUnitPlatform()`), `spring-boot-starter-test` (
 
 ## PaymentRefunded Consumer — Rollout & Dependencies
 
-The `PaymentEventConsumer` consumes `PaymentRefunded` events published by `payment-service` when the `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` flag is active.
+The `PaymentEventConsumer` consumes `PaymentRefunded` events published by `payment-service` when the `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` flag is active on the payment side.
+
+The consumer itself is gated by an independent feature flag `WALLET_CONSUMER_PAYMENT_REFUND_ENABLED` (Spring property `wallet.consumer.payment-refund-enabled`). When `false` (the default), the `PaymentEventConsumer` bean is not created and no Kafka subscription is registered for the payment topics.
+
+**Feature flag:**
+
+| Variable | Spring property | Default | Purpose |
+|---|---|---|---|
+| `WALLET_CONSUMER_PAYMENT_REFUND_ENABLED` | `wallet.consumer.payment-refund-enabled` | `false` | Gates creation of the `PaymentEventConsumer` bean. When `false`, the service deploys without subscribing to `payment.events` / `payments.events`. |
 
 **Deploy order:**
-1. Deploy the updated `wallet-loyalty-service` with the corrected consumer and `ORDER_SERVICE_URL` / `INTERNAL_SERVICE_TOKEN` env vars.
-2. Verify the consumer is healthy (`/actuator/health/readiness`) and connected to Kafka (`payment.events` group lag visible in Kafka UI).
-3. Only then enable `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED: "true"` on `payment-service` in the target environment.
+1. Deploy the updated `wallet-loyalty-service` with `WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "false"` (the default). The service starts without the consumer.
+2. Verify the service is healthy (`/actuator/health/readiness`). Confirm no Kafka consumer group is registered for `payment.events` in Kafka UI.
+3. Set `WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "true"` and redeploy wallet-loyalty-service. The consumer bean is now created and subscribes to the payment topics.
+4. Verify the consumer is connected to Kafka (`payment.events` group lag visible in Kafka UI).
+5. Ensure `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED: "true"` is active on `payment-service` in the target environment so refund events are actually published.
 
 **Runtime dependency — order-service:**
 - The consumer calls `order-service` `/admin/orders/{orderId}` to resolve `userId` for each refund event.
@@ -727,8 +737,8 @@ The `PaymentEventConsumer` consumes `PaymentRefunded` events published by `payme
 - Prolonged order-service downtime will cause consumer lag to grow; monitor `kafka_consumer_lag` for group `wallet-loyalty-service`.
 
 **Rollback:**
-- Disable `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` on `payment-service` to stop new events.
-- Redeploy the previous `wallet-loyalty-service` image if needed.
+- Set `WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "false"` and redeploy wallet-loyalty-service. The consumer bean is removed and no events are consumed.
+- Alternatively, disable `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` on `payment-service` to stop new events at the source.
 - Unconsumed or partially-consumed events remain on the topic and are safe to leave unprocessed.
 
 **Environment variables added in this wave:**
@@ -737,6 +747,7 @@ The `PaymentEventConsumer` consumes `PaymentRefunded` events published by `payme
 |---|---|---|
 | `ORDER_SERVICE_URL` | `http://order-service:8080` | Base URL for order-service REST lookups |
 | `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Shared token for `X-Internal-Token` header on internal service calls |
+| `WALLET_CONSUMER_PAYMENT_REFUND_ENABLED` | `false` | Independent feature flag for the `PaymentEventConsumer` bean |
 
 ---
 

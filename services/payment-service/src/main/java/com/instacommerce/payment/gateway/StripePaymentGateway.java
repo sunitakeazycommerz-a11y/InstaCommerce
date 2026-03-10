@@ -101,12 +101,13 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey) {
+    public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey, java.util.UUID internalRefundId) {
         ensureApiKey();
         try {
             RefundCreateParams params = RefundCreateParams.builder()
                 .setPaymentIntent(pspReference)
                 .setAmount(amountCents)
+                .putMetadata("internalRefundId", internalRefundId.toString())
                 .build();
             RequestOptions options = buildOptions(idempotencyKey);
             Refund refund = Refund.create(params, options);
@@ -163,4 +164,3 @@ public class StripePaymentGateway implements PaymentGateway {
         return new PaymentGatewayException(message, ex);
     }
 }
-

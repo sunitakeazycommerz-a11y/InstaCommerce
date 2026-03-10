@@ -127,7 +127,7 @@ class IdempotencyKeyNormalizationTest {
             when(txHelper.savePendingRefund(eq(paymentId), eq(request), eq(NORMALIZED_LONG_KEY)))
                 .thenReturn(new RefundTransactionHelper.RefundPendingResult(
                     UUID.randomUUID(), "psp_ref_1"));
-            when(paymentGateway.refund(eq("psp_ref_1"), eq(3000L), eq(NORMALIZED_LONG_KEY)))
+            when(paymentGateway.refund(eq("psp_ref_1"), eq(3000L), eq(NORMALIZED_LONG_KEY), any()))
                 .thenReturn(new GatewayRefundResult(true, "refund_1", null));
 
             com.instacommerce.payment.domain.model.Refund refund =
@@ -145,7 +145,7 @@ class IdempotencyKeyNormalizationTest {
             // TX helper received normalized key for storage
             verify(txHelper).savePendingRefund(eq(paymentId), eq(request), eq(NORMALIZED_LONG_KEY));
             // Gateway received normalized key
-            verify(paymentGateway).refund(eq("psp_ref_1"), eq(3000L), eq(NORMALIZED_LONG_KEY));
+            verify(paymentGateway).refund(eq("psp_ref_1"), eq(3000L), eq(NORMALIZED_LONG_KEY), any());
         }
     }
 

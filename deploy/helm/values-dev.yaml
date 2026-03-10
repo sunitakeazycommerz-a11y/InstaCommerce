@@ -53,6 +53,8 @@ services:
     tag: dev
   wallet-loyalty-service:
     tag: dev
+    env:
+      WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "true"
   audit-trail-service:
     tag: dev
   fraud-detection-service:
