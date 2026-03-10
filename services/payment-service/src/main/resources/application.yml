@@ -44,6 +44,7 @@ payment:
     order-cancelled-consumer-group: ${PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_GROUP:payment-service-order-cancelled}
   webhook:
     refund-outbox-enabled: ${PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED:false}
+    capture-void-outbox-enabled: ${PAYMENT_WEBHOOK_CAPTURE_VOID_OUTBOX_ENABLED:false}
   recovery:
     stale-pending-enabled: ${PAYMENT_STALE_PENDING_RECOVERY_ENABLED:false}
     stale-pending-cron: ${PAYMENT_STALE_PENDING_RECOVERY_CRON:0 */5 * * * *}
