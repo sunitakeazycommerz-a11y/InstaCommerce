@@ -194,7 +194,7 @@ class WebhookRefundHandlerTest {
             stubPaymentLookupWithSave(p);
 
             processorOutboxDisabled.processEvent("evt_1", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 3000));
+                objectMapper.createObjectNode().put("amount_refunded", 3000), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(3000);
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
@@ -211,7 +211,7 @@ class WebhookRefundHandlerTest {
             stubPaymentLookupWithSave(p);
 
             processorOutboxDisabled.processEvent("evt_2", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 10000));
+                objectMapper.createObjectNode().put("amount_refunded", 10000), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(10000);
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.REFUNDED);
@@ -229,7 +229,7 @@ class WebhookRefundHandlerTest {
             stubPaymentLookup(p);
 
             processorOutboxDisabled.processEvent("evt_bad", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 5000));
+                objectMapper.createObjectNode().put("amount_refunded", 5000), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(0);
             assertThat(p.getStatus()).isEqualTo(terminalStatus);
@@ -251,7 +251,7 @@ class WebhookRefundHandlerTest {
 
             assertThatThrownBy(() ->
                 processorOutboxDisabled.processEvent("evt_transient", "charge.refunded", PSP_REF,
-                    objectMapper.createObjectNode().put("amount_refunded", 5000)))
+                    objectMapper.createObjectNode().put("amount_refunded", 5000), null))
                 .isInstanceOf(WebhookEventHandler.TransientWebhookStateException.class);
 
             assertThat(p.getRefundedCents()).isEqualTo(0);
@@ -270,7 +270,7 @@ class WebhookRefundHandlerTest {
             stubPaymentLookup(p);
 
             processorOutboxDisabled.processEvent("evt_term", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 10000));
+                objectMapper.createObjectNode().put("amount_refunded", 10000), null);
 
             verify(paymentRepository, never()).save(any());
             verifyNoInteractions(ledgerService);
@@ -290,7 +290,7 @@ class WebhookRefundHandlerTest {
             stubPaymentLookupWithSave(p);
 
             processorOutboxEnabled.processEvent("evt_out_1", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 5000));
+                objectMapper.createObjectNode().put("amount_refunded", 5000), null);
 
             @SuppressWarnings("unchecked")
             ArgumentCaptor<java.util.Map<String, Object>> payloadCaptor =
@@ -318,7 +318,7 @@ class WebhookRefundHandlerTest {
             stubPaymentLookupWithSave(p);
 
             processorOutboxDisabled.processEvent("evt_out_2", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 5000));
+                objectMapper.createObjectNode().put("amount_refunded", 5000), null);
 
             verify(ledgerService).recordDoubleEntry(
                 any(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyString());
@@ -332,7 +332,7 @@ class WebhookRefundHandlerTest {
             stubPaymentLookup(p);
 
             processorOutboxEnabled.processEvent("evt_out_3", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 5000));
+                objectMapper.createObjectNode().put("amount_refunded", 5000), null);
 
             verify(paymentRepository, never()).save(any());
             verifyNoInteractions(outboxService);
@@ -366,7 +366,7 @@ class WebhookRefundHandlerTest {
 
             // First call: processes normally
             processorOutboxEnabled.processEvent("evt_first", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 5000));
+                objectMapper.createObjectNode().put("amount_refunded", 5000), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(5000);
             verify(ledgerService).recordDoubleEntry(
@@ -377,7 +377,7 @@ class WebhookRefundHandlerTest {
             // Simulate second webhook with same cumulative amount_refunded
             // (payment.refundedCents is now 5000 from first call)
             processorOutboxEnabled.processEvent("evt_second", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 5000));
+                objectMapper.createObjectNode().put("amount_refunded", 5000), null);
 
             // No additional ledger or outbox calls beyond the first
             verifyNoMoreInteractions(ledgerService);
@@ -455,7 +455,7 @@ class WebhookRefundHandlerTest {
             stubPaymentLookupWithSave(p);
 
             processorOutboxEnabled.processEvent("evt_contract", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 4000));
+                objectMapper.createObjectNode().put("amount_refunded", 4000), null);
 
             @SuppressWarnings("unchecked")
             ArgumentCaptor<java.util.Map<String, Object>> payloadCaptor =
@@ -490,7 +490,7 @@ class WebhookRefundHandlerTest {
             handler.handle(refundWebhookPayload("evt_delegate", 5000));
 
             verify(mockProcessor).processEvent(
-                eq("evt_delegate"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class));
+                eq("evt_delegate"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class), any(String.class));
         }
 
         @Test
@@ -504,12 +504,12 @@ class WebhookRefundHandlerTest {
             org.mockito.Mockito.doThrow(new PessimisticLockingFailureException("lock"))
                 .doNothing()
                 .when(mockProcessor)
-                .processEvent(eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class));
+                .processEvent(eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class), any(String.class));
 
             handler.handle(refundWebhookPayload("evt_lock", 5000));
 
             verify(mockProcessor, org.mockito.Mockito.times(2)).processEvent(
-                eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class));
+                eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class), any(String.class));
         }
 
         @Test
@@ -570,7 +570,7 @@ class WebhookRefundHandlerTest {
                 pending.getId(), "re_stripe_1", pending.getVersion())).thenReturn(1);
 
             processorOutboxEnabled.processEvent("evt_tracked", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntries(3000, new String[][]{{"re_stripe_1", "3000"}}));
+                objectNodeWithRefundEntries(3000, new String[][]{{"re_stripe_1", "3000"}}), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(3000);
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
@@ -600,7 +600,7 @@ class WebhookRefundHandlerTest {
             when(refundRepository.findByPspRefundId("re_stripe_1")).thenReturn(Optional.of(completed));
 
             processorOutboxEnabled.processEvent("evt_after_sync", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntries(3000, new String[][]{{"re_stripe_1", "3000"}}));
+                objectNodeWithRefundEntries(3000, new String[][]{{"re_stripe_1", "3000"}}), null);
 
             // No double-count: refundedCents stays at 3000
             assertThat(p.getRefundedCents()).isEqualTo(3000);
@@ -624,7 +624,7 @@ class WebhookRefundHandlerTest {
             processorOutboxEnabled.processEvent("evt_meta", "charge.refunded", PSP_REF,
                 objectNodeWithRefundEntries(3000, new String[][]{
                     {"re_stripe_meta", "3000", "succeeded", pending.getId().toString()}
-                }));
+                }), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(3000);
             verify(ledgerService).recordDoubleEntry(
@@ -648,7 +648,7 @@ class WebhookRefundHandlerTest {
 
             // Webhook completes the tracked refund
             processorOutboxEnabled.processEvent("evt_race", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntries(5000, new String[][]{{"re_stripe_2", "5000"}}));
+                objectNodeWithRefundEntries(5000, new String[][]{{"re_stripe_2", "5000"}}), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(5000);
 
@@ -681,7 +681,7 @@ class WebhookRefundHandlerTest {
                 objectNodeWithRefundEntries(5000, new String[][]{
                     {"re_tracked", "3000"},
                     {"re_manual", "2000"}
-                }));
+                }), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(5000);
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
@@ -709,7 +709,7 @@ class WebhookRefundHandlerTest {
 
             // Plain webhook without refunds.data — same as pre-wave5
             processorOutboxDisabled.processEvent("evt_legacy", "charge.refunded", PSP_REF,
-                objectMapper.createObjectNode().put("amount_refunded", 4000));
+                objectMapper.createObjectNode().put("amount_refunded", 4000), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(4000);
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
@@ -729,7 +729,7 @@ class WebhookRefundHandlerTest {
 
             // Refund entry has status "pending" (not yet settled at Stripe)
             processorOutboxDisabled.processEvent("evt_pending_stripe", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntries(3000, new String[][]{{"re_pending", "3000", "pending"}}));
+                objectNodeWithRefundEntries(3000, new String[][]{{"re_pending", "3000", "pending"}}), null);
 
             assertThat(p.getRefundedCents()).isEqualTo(3000);
             verify(ledgerService).recordDoubleEntry(

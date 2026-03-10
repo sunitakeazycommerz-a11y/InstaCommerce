@@ -82,11 +82,14 @@ public class WebhookEventProcessor {
     }
 
     @Transactional
-    public void processEvent(String eventId, String type, String pspReference, JsonNode objectNode) {
+    public void processEvent(String eventId, String type, String pspReference,
+                             JsonNode objectNode, String rawPayload) {
         if (eventId != null && !eventId.isBlank()) {
             try {
                 ProcessedWebhookEvent processed = new ProcessedWebhookEvent();
                 processed.setEventId(eventId);
+                processed.setEventType(type);
+                processed.setRawPayload(rawPayload);
                 processedWebhookEventRepository.saveAndFlush(processed);
             } catch (DataIntegrityViolationException ex) {
                 log.debug("Webhook event {} already processed (concurrent), skipping", eventId);

@@ -17,6 +17,12 @@ public class ProcessedWebhookEvent {
     @Column(name = "processed_at", nullable = false)
     private Instant processedAt;
 
+    @Column(name = "event_type")
+    private String eventType;
+
+    @Column(name = "raw_payload", columnDefinition = "jsonb")
+    private String rawPayload;
+
     @PrePersist
     void prePersist() {
         if (processedAt == null) {
@@ -38,5 +44,21 @@ public class ProcessedWebhookEvent {
 
     public void setProcessedAt(Instant processedAt) {
         this.processedAt = processedAt;
+    }
+
+    public String getEventType() {
+        return eventType;
+    }
+
+    public void setEventType(String eventType) {
+        this.eventType = eventType;
+    }
+
+    public String getRawPayload() {
+        return rawPayload;
+    }
+
+    public void setRawPayload(String rawPayload) {
+        this.rawPayload = rawPayload;
     }
 }
