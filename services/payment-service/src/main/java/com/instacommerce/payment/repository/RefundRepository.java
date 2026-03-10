@@ -19,10 +19,12 @@ public interface RefundRepository extends JpaRepository<Refund, UUID> {
 
     List<Refund> findByPaymentId(UUID paymentId);
 
-    @Modifying(clearAutomatically = true)
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update Refund r
-           set r.pspRefundId = :pspRefundId
+           set r.pspRefundId = :pspRefundId,
+               r.version = r.version + 1,
+               r.updatedAt = CURRENT_TIMESTAMP
          where r.id = :refundId
            and r.pspRefundId is null
         """)
@@ -41,5 +43,55 @@ public interface RefundRepository extends JpaRepository<Refund, UUID> {
         @Param("status") RefundStatus status,
         @Param("cutoff") Instant cutoff,
         Pageable pageable
+    );
+
+    // --- Wave 8 compare-and-set updates (row-count semantics) ---
+
+    @Modifying(clearAutomatically = false, flushAutomatically = true)
+    @Query("""
+        update Refund r
+           set r.status    = com.instacommerce.payment.domain.model.RefundStatus.FAILED,
+               r.version   = r.version + 1,
+               r.updatedAt = CURRENT_TIMESTAMP
+         where r.id      = :refundId
+           and r.status   = com.instacommerce.payment.domain.model.RefundStatus.PENDING
+           and r.version  = :expectedVersion
+        """)
+    int compareAndSetPendingToFailed(
+        @Param("refundId") UUID refundId,
+        @Param("expectedVersion") long expectedVersion
+    );
+
+    @Modifying(clearAutomatically = false, flushAutomatically = true)
+    @Query("""
+        update Refund r
+           set r.status    = com.instacommerce.payment.domain.model.RefundStatus.COMPLETED,
+               r.version   = r.version + 1,
+               r.updatedAt = CURRENT_TIMESTAMP
+         where r.id      = :refundId
+           and r.status   = com.instacommerce.payment.domain.model.RefundStatus.PENDING
+           and r.version  = :expectedVersion
+        """)
+    int compareAndSetPendingToCompleted(
+        @Param("refundId") UUID refundId,
+        @Param("expectedVersion") long expectedVersion
+    );
+
+    @Modifying(clearAutomatically = false, flushAutomatically = true)
+    @Query("""
+        update Refund r
+           set r.status      = com.instacommerce.payment.domain.model.RefundStatus.COMPLETED,
+               r.pspRefundId = :pspRefundId,
+               r.version     = r.version + 1,
+               r.updatedAt   = CURRENT_TIMESTAMP
+         where r.id      = :refundId
+           and r.status   = com.instacommerce.payment.domain.model.RefundStatus.PENDING
+           and r.version  = :expectedVersion
+           and (r.pspRefundId is null or r.pspRefundId = :pspRefundId)
+        """)
+    int compareAndSetPendingToCompletedWithPspRefundId(
+        @Param("refundId") UUID refundId,
+        @Param("pspRefundId") String pspRefundId,
+        @Param("expectedVersion") long expectedVersion
     );
 }
