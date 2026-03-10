@@ -70,10 +70,10 @@ class WebhookRefundHandlerTest {
         meterRegistry = new SimpleMeterRegistry();
         processorOutboxEnabled = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerService, outboxService, meterRegistry, true);
+            ledgerService, outboxService, meterRegistry, true, false);
         processorOutboxDisabled = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerService, outboxService, meterRegistry, false);
+            ledgerService, outboxService, meterRegistry, false, false);
         ReflectionTestUtils.setField(processorOutboxEnabled, "entityManager", entityManager);
         ReflectionTestUtils.setField(processorOutboxDisabled, "entityManager", entityManager);
         handlerOutboxEnabled = new WebhookEventHandler(

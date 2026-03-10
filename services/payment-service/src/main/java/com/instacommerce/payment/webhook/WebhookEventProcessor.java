@@ -54,6 +54,44 @@ public class WebhookEventProcessor {
         PaymentStatus.FAILED
     );
 
+    static final Set<PaymentStatus> CAPTURABLE_STATES = Set.of(
+        PaymentStatus.CAPTURE_PENDING,
+        PaymentStatus.AUTHORIZED
+    );
+
+    static final Set<PaymentStatus> TERMINAL_NON_CAPTURABLE = Set.of(
+        PaymentStatus.VOIDED,
+        PaymentStatus.FAILED,
+        PaymentStatus.REFUNDED,
+        PaymentStatus.PARTIALLY_REFUNDED
+    );
+
+    static final Set<PaymentStatus> VOIDABLE_STATES = Set.of(
+        PaymentStatus.VOID_PENDING,
+        PaymentStatus.AUTHORIZED
+    );
+
+    static final Set<PaymentStatus> TERMINAL_NON_VOIDABLE = Set.of(
+        PaymentStatus.CAPTURED,
+        PaymentStatus.FAILED,
+        PaymentStatus.REFUNDED,
+        PaymentStatus.PARTIALLY_REFUNDED
+    );
+
+    static final Set<PaymentStatus> FAILABLE_STATES = Set.of(
+        PaymentStatus.AUTHORIZE_PENDING,
+        PaymentStatus.AUTHORIZED,
+        PaymentStatus.CAPTURE_PENDING,
+        PaymentStatus.VOID_PENDING
+    );
+
+    static final Set<PaymentStatus> TERMINAL_NON_FAILABLE = Set.of(
+        PaymentStatus.CAPTURED,
+        PaymentStatus.VOIDED,
+        PaymentStatus.REFUNDED,
+        PaymentStatus.PARTIALLY_REFUNDED
+    );
+
     private final PaymentRepository paymentRepository;
     private final ProcessedWebhookEventRepository processedWebhookEventRepository;
     private final RefundRepository refundRepository;
@@ -61,6 +99,7 @@ public class WebhookEventProcessor {
     private final OutboxService outboxService;
     private final MeterRegistry meterRegistry;
     private final boolean refundOutboxEnabled;
+    private final boolean captureVoidOutboxEnabled;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -71,7 +110,8 @@ public class WebhookEventProcessor {
                                  LedgerService ledgerService,
                                  OutboxService outboxService,
                                  MeterRegistry meterRegistry,
-                                 @Value("${payment.webhook.refund-outbox-enabled:false}") boolean refundOutboxEnabled) {
+                                 @Value("${payment.webhook.refund-outbox-enabled:false}") boolean refundOutboxEnabled,
+                                 @Value("${payment.webhook.capture-void-outbox-enabled:false}") boolean captureVoidOutboxEnabled) {
         this.paymentRepository = paymentRepository;
         this.processedWebhookEventRepository = processedWebhookEventRepository;
         this.refundRepository = refundRepository;
@@ -79,6 +119,7 @@ public class WebhookEventProcessor {
         this.outboxService = outboxService;
         this.meterRegistry = meterRegistry;
         this.refundOutboxEnabled = refundOutboxEnabled;
+        this.captureVoidOutboxEnabled = captureVoidOutboxEnabled;
     }
 
     @Transactional
@@ -117,6 +158,17 @@ public class WebhookEventProcessor {
         if (payment.getStatus() == PaymentStatus.CAPTURED) {
             return;
         }
+        if (TERMINAL_NON_CAPTURABLE.contains(payment.getStatus())) {
+            log.warn("Webhook capture rejected: payment {} in terminal non-capturable state {}",
+                payment.getId(), payment.getStatus());
+            meterRegistry.counter("payment.webhook.capture", "outcome", "terminal_rejected").increment();
+            return;
+        }
+        if (!CAPTURABLE_STATES.contains(payment.getStatus())) {
+            meterRegistry.counter("payment.webhook.capture", "outcome", "transient_deferred").increment();
+            throw new WebhookEventHandler.TransientWebhookStateException(payment.getId(), payment.getStatus());
+        }
+
         long amount = longValue(objectNode, "amount_received", "amount");
         long capturedAmount = amount > 0 ? amount : payment.getAmountCents();
         long previousCaptured = payment.getCapturedCents();
@@ -127,27 +179,60 @@ public class WebhookEventProcessor {
         if (delta > 0) {
             ledgerService.recordDoubleEntry(saved.getId(), delta,
                 "authorization_hold", "merchant_payable", "CAPTURE",
-                referenceId(eventId, saved), "Capture (webhook)");
+                saved.getId().toString(), "Capture (webhook)");
         }
+        if (captureVoidOutboxEnabled) {
+            publishCaptureOutbox(saved, capturedAmount);
+            meterRegistry.counter("payment.webhook.capture", "outcome", "outbox_published").increment();
+        }
+        meterRegistry.counter("payment.webhook.capture", "outcome", "processed").increment();
     }
 
     private void handleVoided(Payment payment, String eventId) {
         if (payment.getStatus() == PaymentStatus.VOIDED) {
             return;
         }
+        if (TERMINAL_NON_VOIDABLE.contains(payment.getStatus())) {
+            log.warn("Webhook void rejected: payment {} in terminal non-voidable state {}",
+                payment.getId(), payment.getStatus());
+            meterRegistry.counter("payment.webhook.void", "outcome", "terminal_rejected").increment();
+            return;
+        }
+        if (!VOIDABLE_STATES.contains(payment.getStatus())) {
+            meterRegistry.counter("payment.webhook.void", "outcome", "transient_deferred").increment();
+            throw new WebhookEventHandler.TransientWebhookStateException(payment.getId(), payment.getStatus());
+        }
+
         payment.setStatus(PaymentStatus.VOIDED);
         Payment saved = paymentRepository.save(payment);
         ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
             "authorization_hold", "customer_receivable", "VOID",
-            referenceId(eventId, saved), "Authorization void (webhook)");
+            saved.getId().toString(), "Authorization void (webhook)");
+        if (captureVoidOutboxEnabled) {
+            publishVoidOutbox(saved);
+            meterRegistry.counter("payment.webhook.void", "outcome", "outbox_published").increment();
+        }
+        meterRegistry.counter("payment.webhook.void", "outcome", "processed").increment();
     }
 
     private void handleFailed(Payment payment) {
         if (payment.getStatus() == PaymentStatus.FAILED) {
             return;
         }
+        if (TERMINAL_NON_FAILABLE.contains(payment.getStatus())) {
+            log.warn("Webhook fail rejected: payment {} in terminal non-failable state {}",
+                payment.getId(), payment.getStatus());
+            meterRegistry.counter("payment.webhook.fail", "outcome", "terminal_rejected").increment();
+            return;
+        }
+        if (!FAILABLE_STATES.contains(payment.getStatus())) {
+            meterRegistry.counter("payment.webhook.fail", "outcome", "transient_deferred").increment();
+            throw new WebhookEventHandler.TransientWebhookStateException(payment.getId(), payment.getStatus());
+        }
+
         payment.setStatus(PaymentStatus.FAILED);
         paymentRepository.save(payment);
+        meterRegistry.counter("payment.webhook.fail", "outcome", "processed").increment();
     }
 
     private void handleRefunded(Payment payment, JsonNode objectNode, String eventId) {
@@ -317,6 +402,25 @@ public class WebhookEventProcessor {
     }
 
     record TrackedRefundCompletion(UUID refundId, long amountCents, String reason) {}
+
+    private void publishCaptureOutbox(Payment payment, long capturedCents) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("amountCents", capturedCents);
+        payload.put("currency", payment.getCurrency());
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentCaptured", payload);
+    }
+
+    private void publishVoidOutbox(Payment payment) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("amountCents", payment.getAmountCents());
+        payload.put("currency", payment.getCurrency());
+        payload.put("voidedAt", Instant.now().toString());
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentVoided", payload);
+    }
 
     private void publishTrackedRefundOutbox(Payment payment, TrackedRefundCompletion completion) {
         Map<String, Object> payload = new LinkedHashMap<>();
