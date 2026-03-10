@@ -28,6 +28,7 @@ import com.instacommerce.payment.repository.RefundRepository;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import jakarta.persistence.EntityManager;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,6 +43,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class WebhookRefundHandlerTest {
@@ -53,6 +55,7 @@ class WebhookRefundHandlerTest {
     @Mock RefundRepository refundRepository;
     @Mock LedgerService ledgerService;
     @Mock OutboxService outboxService;
+    @Mock EntityManager entityManager;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private SimpleMeterRegistry meterRegistry;
@@ -71,6 +74,8 @@ class WebhookRefundHandlerTest {
         processorOutboxDisabled = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
             ledgerService, outboxService, meterRegistry, false);
+        ReflectionTestUtils.setField(processorOutboxEnabled, "entityManager", entityManager);
+        ReflectionTestUtils.setField(processorOutboxDisabled, "entityManager", entityManager);
         handlerOutboxEnabled = new WebhookEventHandler(
             objectMapper, processedWebhookEventRepository, processorOutboxEnabled);
         handlerOutboxDisabled = new WebhookEventHandler(
@@ -512,10 +517,11 @@ class WebhookRefundHandlerTest {
         void transientDeferral_exceptionPropagatesForRollback() {
             // Verifies the structural precondition for rollback: the exception thrown by the
             // processor is NOT swallowed by the handler's retry loop (it only retries on
-            // ObjectOptimisticLockingFailureException). In a Spring context, the @Transactional
-            // proxy on the processor rolls back the dedup INSERT when this RuntimeException
-            // propagates. A full Testcontainers integration test would verify the actual
-            // rollback; this unit test confirms the exception path is intact.
+            // lock-conflict exceptions like PessimisticLockingFailureException). In a Spring
+            // context, the @Transactional proxy on the processor rolls back the dedup INSERT
+            // when this RuntimeException propagates. A full Testcontainers integration test
+            // would verify the actual rollback; this unit test confirms the exception path
+            // is intact.
             Payment p = payment(PaymentStatus.CAPTURE_PENDING, 0, 0);
             when(processedWebhookEventRepository.existsById("evt_rollback")).thenReturn(false);
             stubPaymentLookup(p);
@@ -560,12 +566,12 @@ class WebhookRefundHandlerTest {
             Refund pending = pendingRefund(p.getId(), 3000, "re_stripe_1");
             stubPaymentLookupWithSave(p);
             when(refundRepository.findByPspRefundId("re_stripe_1")).thenReturn(Optional.of(pending));
-            when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(refundRepository.compareAndSetPendingToCompletedWithPspRefundId(
+                pending.getId(), "re_stripe_1", pending.getVersion())).thenReturn(1);
 
             processorOutboxEnabled.processEvent("evt_tracked", "charge.refunded", PSP_REF,
                 objectNodeWithRefundEntries(3000, new String[][]{{"re_stripe_1", "3000"}}));
 
-            assertThat(pending.getStatus()).isEqualTo(RefundStatus.COMPLETED);
             assertThat(p.getRefundedCents()).isEqualTo(3000);
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
 
@@ -612,15 +618,14 @@ class WebhookRefundHandlerTest {
             stubPaymentLookupWithSave(p);
             when(refundRepository.findByPspRefundId("re_stripe_meta")).thenReturn(Optional.empty());
             when(refundRepository.findById(pending.getId())).thenReturn(Optional.of(pending));
-            when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(refundRepository.compareAndSetPendingToCompletedWithPspRefundId(
+                pending.getId(), "re_stripe_meta", pending.getVersion())).thenReturn(1);
 
             processorOutboxEnabled.processEvent("evt_meta", "charge.refunded", PSP_REF,
                 objectNodeWithRefundEntries(3000, new String[][]{
                     {"re_stripe_meta", "3000", "succeeded", pending.getId().toString()}
                 }));
 
-            assertThat(pending.getStatus()).isEqualTo(RefundStatus.COMPLETED);
-            assertThat(pending.getPspRefundId()).isEqualTo("re_stripe_meta");
             assertThat(p.getRefundedCents()).isEqualTo(3000);
             verify(ledgerService).recordDoubleEntry(
                 eq(p.getId()), eq(3000L),
@@ -638,13 +643,13 @@ class WebhookRefundHandlerTest {
             Refund pending = pendingRefund(p.getId(), 5000, "re_stripe_2");
             stubPaymentLookupWithSave(p);
             when(refundRepository.findByPspRefundId("re_stripe_2")).thenReturn(Optional.of(pending));
-            when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(refundRepository.compareAndSetPendingToCompletedWithPspRefundId(
+                pending.getId(), "re_stripe_2", pending.getVersion())).thenReturn(1);
 
             // Webhook completes the tracked refund
             processorOutboxEnabled.processEvent("evt_race", "charge.refunded", PSP_REF,
                 objectNodeWithRefundEntries(5000, new String[][]{{"re_stripe_2", "5000"}}));
 
-            assertThat(pending.getStatus()).isEqualTo(RefundStatus.COMPLETED);
             assertThat(p.getRefundedCents()).isEqualTo(5000);
 
             // Exactly one ledger + one outbox call
@@ -667,7 +672,8 @@ class WebhookRefundHandlerTest {
             stubPaymentLookupWithSave(p);
             when(refundRepository.findByPspRefundId("re_tracked")).thenReturn(Optional.of(pending));
             when(refundRepository.findByPspRefundId("re_manual")).thenReturn(Optional.empty());
-            when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(refundRepository.compareAndSetPendingToCompletedWithPspRefundId(
+                pending.getId(), "re_tracked", pending.getVersion())).thenReturn(1);
 
             // Webhook has both a tracked refund and an untracked manual refund
             // Total amount_refunded = 5000 (3000 tracked + 2000 manual)
@@ -677,7 +683,6 @@ class WebhookRefundHandlerTest {
                     {"re_manual", "2000"}
                 }));
 
-            assertThat(pending.getStatus()).isEqualTo(RefundStatus.COMPLETED);
             assertThat(p.getRefundedCents()).isEqualTo(5000);
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
 

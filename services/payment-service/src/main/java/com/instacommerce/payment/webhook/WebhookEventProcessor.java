@@ -12,6 +12,8 @@ import com.instacommerce.payment.repository.RefundRepository;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -59,6 +61,9 @@ public class WebhookEventProcessor {
     private final OutboxService outboxService;
     private final MeterRegistry meterRegistry;
     private final boolean refundOutboxEnabled;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     public WebhookEventProcessor(PaymentRepository paymentRepository,
                                  ProcessedWebhookEventRepository processedWebhookEventRepository,
@@ -250,9 +255,29 @@ public class WebhookEventProcessor {
                 continue;
             }
 
-            tracked.setPspRefundId(pspRefundId);
-            tracked.setStatus(RefundStatus.COMPLETED);
-            refundRepository.save(tracked);
+            int updated = refundRepository.compareAndSetPendingToCompletedWithPspRefundId(
+                tracked.getId(), pspRefundId, tracked.getVersion());
+
+            if (updated == 0) {
+                // CAS failed: another writer modified this refund concurrently.
+                // Detach the stale entity so the re-read hits the database.
+                entityManager.detach(tracked);
+                Refund fresh = refundRepository.findById(tracked.getId()).orElse(null);
+                RefundStatus currentStatus = fresh != null ? fresh.getStatus() : null;
+                if (currentStatus == RefundStatus.COMPLETED) {
+                    log.info("Refund {} already completed by concurrent writer (pspRefundId={}), skipping idempotently",
+                        tracked.getId(), pspRefundId);
+                } else if (currentStatus == RefundStatus.FAILED) {
+                    log.error("Refund {} CAS: PSP says success but local status is FAILED — needs reconciliation attention (pspRefundId={})",
+                        tracked.getId(), pspRefundId);
+                } else {
+                    log.warn("Refund {} CAS conflict: unexpected status {} after version conflict (pspRefundId={})",
+                        tracked.getId(), currentStatus, pspRefundId);
+                }
+                meterRegistry.counter("payment.webhook.refund.occ",
+                    "outcome", currentStatus != null ? currentStatus.name().toLowerCase() : "not_found").increment();
+                continue;
+            }
 
             payment.setRefundedCents(payment.getRefundedCents() + tracked.getAmountCents());
 
@@ -260,6 +285,11 @@ public class WebhookEventProcessor {
                 tracked.getId(), tracked.getAmountCents(), tracked.getReason()));
             log.info("Webhook completed tracked refund {} (pspRefundId={}, amount={})",
                 tracked.getId(), pspRefundId, tracked.getAmountCents());
+
+            // The native CAS query bypassed JPA, so the managed entity still
+            // holds stale PENDING state.  Detach it to avoid persistence-context
+            // confusion for the remainder of this webhook transaction.
+            entityManager.detach(tracked);
         }
 
         return completions;
