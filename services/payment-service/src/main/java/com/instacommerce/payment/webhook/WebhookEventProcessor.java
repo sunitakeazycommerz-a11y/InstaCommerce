@@ -4,14 +4,19 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.domain.model.ProcessedWebhookEvent;
+import com.instacommerce.payment.domain.model.Refund;
+import com.instacommerce.payment.domain.model.RefundStatus;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
+import com.instacommerce.payment.repository.RefundRepository;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -49,6 +54,7 @@ public class WebhookEventProcessor {
 
     private final PaymentRepository paymentRepository;
     private final ProcessedWebhookEventRepository processedWebhookEventRepository;
+    private final RefundRepository refundRepository;
     private final LedgerService ledgerService;
     private final OutboxService outboxService;
     private final MeterRegistry meterRegistry;
@@ -56,12 +62,14 @@ public class WebhookEventProcessor {
 
     public WebhookEventProcessor(PaymentRepository paymentRepository,
                                  ProcessedWebhookEventRepository processedWebhookEventRepository,
+                                 RefundRepository refundRepository,
                                  LedgerService ledgerService,
                                  OutboxService outboxService,
                                  MeterRegistry meterRegistry,
                                  @Value("${payment.webhook.refund-outbox-enabled:false}") boolean refundOutboxEnabled) {
         this.paymentRepository = paymentRepository;
         this.processedWebhookEventRepository = processedWebhookEventRepository;
+        this.refundRepository = refundRepository;
         this.ledgerService = ledgerService;
         this.outboxService = outboxService;
         this.meterRegistry = meterRegistry;
@@ -145,35 +153,123 @@ public class WebhookEventProcessor {
             throw new WebhookEventHandler.TransientWebhookStateException(payment.getId(), payment.getStatus());
         }
 
-        long refunded = longValue(objectNode, "amount_refunded");
-        if (refunded <= 0) {
-            return;
+        // Phase 1: Complete any tracked pending refunds matched by pspRefundId
+        List<TrackedRefundCompletion> trackedCompletions = completeTrackedRefunds(payment, objectNode);
+
+        // Phase 2: Cumulative fallback for untracked/manual refunds or payloads without per-refund entries
+        long cumulativeRefunded = longValue(objectNode, "amount_refunded");
+        long untrackedDelta = 0;
+        if (cumulativeRefunded > 0) {
+            long updatedRefunded = Math.max(payment.getRefundedCents(), cumulativeRefunded);
+            untrackedDelta = updatedRefunded - payment.getRefundedCents();
+            if (untrackedDelta > 0) {
+                payment.setRefundedCents(updatedRefunded);
+            }
         }
-        long previousRefunded = payment.getRefundedCents();
-        long updatedRefunded = Math.max(previousRefunded, refunded);
-        long delta = updatedRefunded - previousRefunded;
-        if (delta == 0) {
+
+        if (trackedCompletions.isEmpty() && untrackedDelta == 0) {
             return;
         }
 
-        payment.setRefundedCents(updatedRefunded);
-        if (updatedRefunded >= payment.getCapturedCents()) {
+        // Update payment status and persist
+        if (payment.getRefundedCents() >= payment.getCapturedCents()) {
             payment.setStatus(PaymentStatus.REFUNDED);
         } else {
             payment.setStatus(PaymentStatus.PARTIALLY_REFUNDED);
         }
         Payment saved = paymentRepository.save(payment);
 
-        ledgerService.recordDoubleEntry(saved.getId(), delta,
-            "merchant_payable", "customer_receivable", "REFUND",
-            referenceId(eventId, saved), "Refund (webhook)");
+        // Ledger + outbox for each tracked refund completion
+        for (TrackedRefundCompletion completion : trackedCompletions) {
+            ledgerService.recordDoubleEntry(saved.getId(), completion.amountCents(),
+                "merchant_payable", "customer_receivable", "REFUND",
+                completion.refundId().toString(), "Refund (webhook)");
+            if (refundOutboxEnabled) {
+                publishTrackedRefundOutbox(saved, completion);
+            }
+        }
+
+        // Ledger + outbox for untracked cumulative delta (manual/dashboard refunds)
+        if (untrackedDelta > 0) {
+            ledgerService.recordDoubleEntry(saved.getId(), untrackedDelta,
+                "merchant_payable", "customer_receivable", "REFUND",
+                referenceId(eventId, saved), "Refund (webhook)");
+            if (refundOutboxEnabled) {
+                publishRefundOutbox(saved, untrackedDelta, eventId);
+            }
+        }
 
         meterRegistry.counter("payment.webhook.refund", "outcome", "processed").increment();
-
-        if (refundOutboxEnabled) {
-            publishRefundOutbox(saved, delta, eventId);
+        if (!trackedCompletions.isEmpty()) {
+            meterRegistry.counter("payment.webhook.refund", "outcome", "tracked_completed")
+                .increment(trackedCompletions.size());
+        }
+        if (refundOutboxEnabled && (!trackedCompletions.isEmpty() || untrackedDelta > 0)) {
             meterRegistry.counter("payment.webhook.refund", "outcome", "outbox_published").increment();
         }
+    }
+
+    /**
+     * Inspects per-refund entries from the Stripe {@code charge.refunded} payload
+     * ({@code refunds.data[*]}) and completes any matching pending {@link Refund} rows.
+     */
+    private List<TrackedRefundCompletion> completeTrackedRefunds(Payment payment, JsonNode objectNode) {
+        JsonNode refundsData = objectNode.path("refunds").path("data");
+        if (!refundsData.isArray()) {
+            return List.of();
+        }
+
+        List<TrackedRefundCompletion> completions = new ArrayList<>();
+        for (JsonNode entry : refundsData) {
+            String pspRefundId = textValue(entry, "id");
+            if (pspRefundId == null || pspRefundId.isBlank()) {
+                continue;
+            }
+            String status = textValue(entry, "status");
+            if (!"succeeded".equals(status)) {
+                continue;
+            }
+
+            Refund tracked = refundRepository.findByPspRefundId(pspRefundId).orElse(null);
+            if (tracked == null) {
+                continue; // Untracked/manual refund — handled by cumulative fallback
+            }
+            if (tracked.getStatus() == RefundStatus.COMPLETED) {
+                continue; // Already completed by synchronous path
+            }
+            if (tracked.getStatus() != RefundStatus.PENDING) {
+                log.warn("Tracked refund {} in unexpected state {} for pspRefundId {}, skipping",
+                    tracked.getId(), tracked.getStatus(), pspRefundId);
+                continue;
+            }
+
+            tracked.setStatus(RefundStatus.COMPLETED);
+            refundRepository.save(tracked);
+
+            payment.setRefundedCents(payment.getRefundedCents() + tracked.getAmountCents());
+
+            completions.add(new TrackedRefundCompletion(
+                tracked.getId(), tracked.getAmountCents(), tracked.getReason()));
+            log.info("Webhook completed tracked refund {} (pspRefundId={}, amount={})",
+                tracked.getId(), pspRefundId, tracked.getAmountCents());
+        }
+
+        return completions;
+    }
+
+    record TrackedRefundCompletion(UUID refundId, long amountCents, String reason) {}
+
+    private void publishTrackedRefundOutbox(Payment payment, TrackedRefundCompletion completion) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("refundId", completion.refundId().toString());
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("amountCents", completion.amountCents());
+        payload.put("currency", payment.getCurrency());
+        payload.put("refundedAt", Instant.now());
+        String reason = completion.reason();
+        payload.put("reason", (reason != null && !reason.isBlank()) ? reason : "webhook");
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentRefunded", payload);
     }
 
     private void publishRefundOutbox(Payment payment, long refundDelta, String eventId) {
@@ -203,6 +299,14 @@ public class WebhookEventProcessor {
             }
         }
         return 0;
+    }
+
+    private String textValue(JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        return value.asText();
     }
 
     private String referenceId(String eventId, Payment payment) {

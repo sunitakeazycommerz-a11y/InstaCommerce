@@ -11,6 +11,8 @@ import org.springframework.data.repository.query.Param;
 public interface RefundRepository extends JpaRepository<Refund, UUID> {
     Optional<Refund> findByIdempotencyKey(String idempotencyKey);
 
+    Optional<Refund> findByPspRefundId(String pspRefundId);
+
     List<Refund> findByPaymentId(UUID paymentId);
 
     @Query("""
