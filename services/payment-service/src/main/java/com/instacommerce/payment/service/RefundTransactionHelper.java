@@ -14,12 +14,16 @@ import com.instacommerce.payment.repository.RefundRepository;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Component
 public class RefundTransactionHelper {
+    private static final Logger log = LoggerFactory.getLogger(RefundTransactionHelper.class);
+
     private final RefundRepository refundRepository;
     private final PaymentRepository paymentRepository;
     private final LedgerService ledgerService;
@@ -65,15 +69,28 @@ public class RefundTransactionHelper {
         return new RefundPendingResult(saved.getId(), payment.getPspReference());
     }
 
+    /**
+     * Persist the PSP refund ID on the pending row immediately after the gateway call
+     * succeeds, so the webhook path can match it before synchronous completion runs.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void persistPspRefundId(UUID refundId, String pspRefundId) {
+        refundRepository.setPspRefundIdIfMissing(refundId, pspRefundId);
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Refund completeRefund(UUID refundId, UUID paymentId, RefundRequest request, String pspRefundId) {
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+            .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         Refund refund = refundRepository.findById(refundId).orElseThrow();
+        if (refund.getStatus() == RefundStatus.COMPLETED) {
+            log.info("Refund {} already completed (likely by webhook), skipping synchronous completion", refundId);
+            return refund;
+        }
         refund.setStatus(RefundStatus.COMPLETED);
         refund.setPspRefundId(pspRefundId);
         Refund saved = refundRepository.save(refund);
 
-        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
-            .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         payment.setRefundedCents(payment.getRefundedCents() + request.amountCents());
         if (payment.getRefundedCents() >= payment.getCapturedCents()) {
             payment.setStatus(PaymentStatus.REFUNDED);

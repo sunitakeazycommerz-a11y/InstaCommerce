@@ -6,6 +6,7 @@ import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import java.io.IOException;
 import java.util.UUID;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -67,18 +68,19 @@ public class WebhookEventHandler {
             return;
         }
 
-        // Retry with backoff on optimistic lock conflicts
+        // Retry with backoff on lock conflicts so brief webhook/refund contention
+        // resolves locally before we rely on PSP-side retries.
         for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
             try {
                 processor.processEvent(eventId, type, pspReference, objectNode);
                 return;
-            } catch (ObjectOptimisticLockingFailureException ex) {
+            } catch (ObjectOptimisticLockingFailureException | PessimisticLockingFailureException ex) {
                 if (attempt == MAX_RETRY_ATTEMPTS) {
-                    log.error("Webhook event {} failed after {} retries due to optimistic lock conflict",
+                    log.error("Webhook event {} failed after {} retries due to lock conflict",
                         eventId, MAX_RETRY_ATTEMPTS, ex);
                     throw ex;
                 }
-                log.warn("Optimistic lock conflict on webhook event {}, retrying (attempt {}/{})",
+                log.warn("Lock conflict on webhook event {}, retrying (attempt {}/{})",
                     eventId, attempt, MAX_RETRY_ATTEMPTS);
                 try {
                     Thread.sleep(RETRY_BACKOFF_MS * attempt);

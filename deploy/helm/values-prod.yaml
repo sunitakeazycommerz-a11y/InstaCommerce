@@ -91,6 +91,8 @@ services:
   wallet-loyalty-service:
     replicas: 2
     tag: prod
+    env:
+      WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "false"
   audit-trail-service:
     replicas: 2
     tag: prod

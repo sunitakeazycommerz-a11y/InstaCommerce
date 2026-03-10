@@ -1,5 +1,7 @@
 package com.instacommerce.payment.gateway;
 
+import java.util.UUID;
+
 public interface PaymentGateway {
     GatewayAuthResult authorize(GatewayAuthRequest request);
 
@@ -7,7 +9,7 @@ public interface PaymentGateway {
 
     GatewayVoidResult voidAuth(String pspReference, String idempotencyKey);
 
-    GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey);
+    GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey, UUID internalRefundId);
 
     /**
      * Retrieves the current payment state from the PSP without issuing any mutations.

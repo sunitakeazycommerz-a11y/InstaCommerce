@@ -45,7 +45,7 @@ public class RefundService {
 
         GatewayRefundResult result;
         try {
-            result = paymentGateway.refund(pending.pspReference(), request.amountCents(), appliedKey);
+            result = paymentGateway.refund(pending.pspReference(), request.amountCents(), appliedKey, pending.refundId());
         } catch (Exception ex) {
             txHelper.markRefundFailed(pending.refundId());
             throw ex;
@@ -55,6 +55,10 @@ public class RefundService {
             txHelper.markRefundFailed(pending.refundId());
             throw new PaymentGatewayException(result.failureReason());
         }
+
+        // Persist PSP refund ID immediately so the webhook path can match this refund
+        // before synchronous completion runs, closing the race window.
+        txHelper.persistPspRefundId(pending.refundId(), result.refundId());
 
         Refund saved = txHelper.completeRefund(pending.refundId(), paymentId, request, result.refundId());
         return RefundMapper.toResponse(saved);

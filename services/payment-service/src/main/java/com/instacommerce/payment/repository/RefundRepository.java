@@ -4,6 +4,7 @@ import com.instacommerce.payment.domain.model.Refund;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -11,7 +12,18 @@ import org.springframework.data.repository.query.Param;
 public interface RefundRepository extends JpaRepository<Refund, UUID> {
     Optional<Refund> findByIdempotencyKey(String idempotencyKey);
 
+    Optional<Refund> findByPspRefundId(String pspRefundId);
+
     List<Refund> findByPaymentId(UUID paymentId);
+
+    @Modifying(clearAutomatically = true)
+    @Query("""
+        update Refund r
+           set r.pspRefundId = :pspRefundId
+         where r.id = :refundId
+           and r.pspRefundId is null
+        """)
+    int setPspRefundIdIfMissing(@Param("refundId") UUID refundId, @Param("pspRefundId") String pspRefundId);
 
     @Query("""
         select coalesce(sum(r.amountCents), 0)

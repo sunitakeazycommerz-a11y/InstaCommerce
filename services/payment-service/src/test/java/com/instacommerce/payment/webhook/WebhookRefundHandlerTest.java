@@ -15,11 +15,16 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.domain.model.ProcessedWebhookEvent;
+import com.instacommerce.payment.domain.model.Refund;
+import com.instacommerce.payment.domain.model.RefundStatus;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
+import com.instacommerce.payment.repository.RefundRepository;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -36,6 +41,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.PessimisticLockingFailureException;
 
 @ExtendWith(MockitoExtension.class)
 class WebhookRefundHandlerTest {
@@ -44,6 +50,7 @@ class WebhookRefundHandlerTest {
 
     @Mock PaymentRepository paymentRepository;
     @Mock ProcessedWebhookEventRepository processedWebhookEventRepository;
+    @Mock RefundRepository refundRepository;
     @Mock LedgerService ledgerService;
     @Mock OutboxService outboxService;
 
@@ -59,10 +66,10 @@ class WebhookRefundHandlerTest {
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
         processorOutboxEnabled = new WebhookEventProcessor(
-            paymentRepository, processedWebhookEventRepository,
+            paymentRepository, processedWebhookEventRepository, refundRepository,
             ledgerService, outboxService, meterRegistry, true);
         processorOutboxDisabled = new WebhookEventProcessor(
-            paymentRepository, processedWebhookEventRepository,
+            paymentRepository, processedWebhookEventRepository, refundRepository,
             ledgerService, outboxService, meterRegistry, false);
         handlerOutboxEnabled = new WebhookEventHandler(
             objectMapper, processedWebhookEventRepository, processorOutboxEnabled);
@@ -88,6 +95,24 @@ class WebhookRefundHandlerTest {
         return p;
     }
 
+    private Refund pendingRefund(UUID paymentId, long amountCents, String pspRefundId) {
+        Refund r = new Refund();
+        r.setId(UUID.randomUUID());
+        r.setPaymentId(paymentId);
+        r.setAmountCents(amountCents);
+        r.setPspRefundId(pspRefundId);
+        r.setIdempotencyKey("idem-" + UUID.randomUUID());
+        r.setStatus(RefundStatus.PENDING);
+        r.setCreatedAt(Instant.now());
+        return r;
+    }
+
+    private Refund completedRefund(UUID paymentId, long amountCents, String pspRefundId) {
+        Refund r = pendingRefund(paymentId, amountCents, pspRefundId);
+        r.setStatus(RefundStatus.COMPLETED);
+        return r;
+    }
+
     private String refundWebhookPayload(String eventId, long amountRefunded) {
         return """
             {
@@ -103,8 +128,47 @@ class WebhookRefundHandlerTest {
             """.formatted(eventId, PSP_REF, amountRefunded);
     }
 
+    private String refundWebhookPayloadWithEntries(String eventId, long amountRefunded,
+                                                    String[][] refundEntries) {
+        ObjectNode root = objectMapper.createObjectNode();
+        root.put("id", eventId);
+        root.put("type", "charge.refunded");
+        ObjectNode dataObj = root.putObject("data").putObject("object");
+        dataObj.put("payment_intent", PSP_REF);
+        dataObj.put("amount_refunded", amountRefunded);
+        ObjectNode refundsObj = dataObj.putObject("refunds");
+        ArrayNode arr = refundsObj.putArray("data");
+        for (String[] entry : refundEntries) {
+            ObjectNode refundNode = arr.addObject();
+            refundNode.put("id", entry[0]);
+            refundNode.put("amount", Long.parseLong(entry[1]));
+            refundNode.put("status", entry.length > 2 ? entry[2] : "succeeded");
+            if (entry.length > 3) {
+                refundNode.putObject("metadata").put("internalRefundId", entry[3]);
+            }
+        }
+        return root.toString();
+    }
+
+    private ObjectNode objectNodeWithRefundEntries(long amountRefunded, String[][] refundEntries) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("amount_refunded", amountRefunded);
+        ObjectNode refundsObj = node.putObject("refunds");
+        ArrayNode arr = refundsObj.putArray("data");
+        for (String[] entry : refundEntries) {
+            ObjectNode refundNode = arr.addObject();
+            refundNode.put("id", entry[0]);
+            refundNode.put("amount", Long.parseLong(entry[1]));
+            refundNode.put("status", entry.length > 2 ? entry[2] : "succeeded");
+            if (entry.length > 3) {
+                refundNode.putObject("metadata").put("internalRefundId", entry[3]);
+            }
+        }
+        return node;
+    }
+
     private void stubPaymentLookup(Payment payment) {
-        when(paymentRepository.findByPspReference(PSP_REF)).thenReturn(Optional.of(payment));
+        when(paymentRepository.findByPspReferenceForUpdate(PSP_REF)).thenReturn(Optional.of(payment));
     }
 
     private void stubPaymentLookupWithSave(Payment payment) {
@@ -327,7 +391,7 @@ class WebhookRefundHandlerTest {
         void validCapturedRefund_endToEnd() {
             Payment p = payment(PaymentStatus.CAPTURED, 10000, 0);
             when(processedWebhookEventRepository.existsById("evt_e2e")).thenReturn(false);
-            when(paymentRepository.findByPspReference(PSP_REF)).thenReturn(Optional.of(p));
+            stubPaymentLookup(p);
             when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
 
             handlerOutboxEnabled.handle(refundWebhookPayload("evt_e2e", 10000));
@@ -349,7 +413,7 @@ class WebhookRefundHandlerTest {
         void transientState_propagatesToController() {
             Payment p = payment(PaymentStatus.CAPTURE_PENDING, 0, 0);
             when(processedWebhookEventRepository.existsById("evt_trans")).thenReturn(false);
-            when(paymentRepository.findByPspReference(PSP_REF)).thenReturn(Optional.of(p));
+            stubPaymentLookup(p);
 
             assertThatThrownBy(() ->
                 handlerOutboxEnabled.handle(refundWebhookPayload("evt_trans", 5000)))
@@ -425,6 +489,25 @@ class WebhookRefundHandlerTest {
         }
 
         @Test
+        @DisplayName("Pessimistic lock conflicts are retried locally")
+        void pessimisticLockConflict_retriesLocally() {
+            WebhookEventProcessor mockProcessor = mock(WebhookEventProcessor.class);
+            WebhookEventHandler handler = new WebhookEventHandler(
+                objectMapper, processedWebhookEventRepository, mockProcessor);
+
+            when(processedWebhookEventRepository.existsById("evt_lock")).thenReturn(false);
+            org.mockito.Mockito.doThrow(new PessimisticLockingFailureException("lock"))
+                .doNothing()
+                .when(mockProcessor)
+                .processEvent(eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class));
+
+            handler.handle(refundWebhookPayload("evt_lock", 5000));
+
+            verify(mockProcessor, org.mockito.Mockito.times(2)).processEvent(
+                eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class));
+        }
+
+        @Test
         @DisplayName("Transient deferral propagates through handle() — dedup rollback depends on TX boundary")
         void transientDeferral_exceptionPropagatesForRollback() {
             // Verifies the structural precondition for rollback: the exception thrown by the
@@ -435,7 +518,7 @@ class WebhookRefundHandlerTest {
             // rollback; this unit test confirms the exception path is intact.
             Payment p = payment(PaymentStatus.CAPTURE_PENDING, 0, 0);
             when(processedWebhookEventRepository.existsById("evt_rollback")).thenReturn(false);
-            when(paymentRepository.findByPspReference(PSP_REF)).thenReturn(Optional.of(p));
+            stubPaymentLookup(p);
 
             assertThatThrownBy(() ->
                 handlerOutboxEnabled.handle(refundWebhookPayload("evt_rollback", 5000)))
@@ -452,7 +535,7 @@ class WebhookRefundHandlerTest {
         void terminalRejection_doesNotThrow() {
             Payment p = payment(PaymentStatus.VOIDED, 0, 0);
             when(processedWebhookEventRepository.existsById("evt_terminal")).thenReturn(false);
-            when(paymentRepository.findByPspReference(PSP_REF)).thenReturn(Optional.of(p));
+            stubPaymentLookup(p);
 
             // Should complete without exception; dedup marker commits (correct behavior)
             handlerOutboxEnabled.handle(refundWebhookPayload("evt_terminal", 5000));
@@ -461,6 +544,193 @@ class WebhookRefundHandlerTest {
             verify(paymentRepository, never()).save(any());
             assertThat(meterRegistry.counter("payment.webhook.refund", "outcome", "terminal_rejected").count())
                 .isEqualTo(1.0);
+        }
+    }
+
+    // --- Tracked refund race-condition tests ---
+
+    @Nested
+    @DisplayName("Race condition: webhook vs synchronous refund completion")
+    class TrackedRefundRace {
+
+        @Test
+        @DisplayName("Webhook with per-refund entry completes tracked PENDING refund and uses internal refund ID")
+        void webhookCompletesTrackedPendingRefund() {
+            Payment p = payment(PaymentStatus.CAPTURED, 10000, 0);
+            Refund pending = pendingRefund(p.getId(), 3000, "re_stripe_1");
+            stubPaymentLookupWithSave(p);
+            when(refundRepository.findByPspRefundId("re_stripe_1")).thenReturn(Optional.of(pending));
+            when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            processorOutboxEnabled.processEvent("evt_tracked", "charge.refunded", PSP_REF,
+                objectNodeWithRefundEntries(3000, new String[][]{{"re_stripe_1", "3000"}}));
+
+            assertThat(pending.getStatus()).isEqualTo(RefundStatus.COMPLETED);
+            assertThat(p.getRefundedCents()).isEqualTo(3000);
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
+
+            // Ledger uses internal refund ID, not synthetic
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(3000L),
+                eq("merchant_payable"), eq("customer_receivable"),
+                eq("REFUND"), eq(pending.getId().toString()), eq("Refund (webhook)"));
+
+            // Outbox uses internal refund ID
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<java.util.Map<String, Object>> payloadCaptor =
+                ArgumentCaptor.forClass(java.util.Map.class);
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentRefunded"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue().get("refundId")).isEqualTo(pending.getId().toString());
+        }
+
+        @Test
+        @DisplayName("Webhook with tracked refund already COMPLETED (sync won) produces no double-count")
+        void webhookAfterSyncCompletion_noDoubleCount() {
+            Payment p = payment(PaymentStatus.PARTIALLY_REFUNDED, 10000, 3000);
+            Refund completed = completedRefund(p.getId(), 3000, "re_stripe_1");
+            stubPaymentLookup(p);
+            when(refundRepository.findByPspRefundId("re_stripe_1")).thenReturn(Optional.of(completed));
+
+            processorOutboxEnabled.processEvent("evt_after_sync", "charge.refunded", PSP_REF,
+                objectNodeWithRefundEntries(3000, new String[][]{{"re_stripe_1", "3000"}}));
+
+            // No double-count: refundedCents stays at 3000
+            assertThat(p.getRefundedCents()).isEqualTo(3000);
+            // No payment save, no ledger, no outbox
+            verify(paymentRepository, never()).save(any());
+            verifyNoInteractions(ledgerService);
+            verifyNoInteractions(outboxService);
+        }
+
+        @Test
+        @DisplayName("Webhook matches tracked refund by internalRefundId metadata before pspRefundId is persisted")
+        void webhookMatchesTrackedRefundByInternalRefundIdMetadata() {
+            Payment p = payment(PaymentStatus.CAPTURED, 10000, 0);
+            Refund pending = pendingRefund(p.getId(), 3000, null);
+            stubPaymentLookupWithSave(p);
+            when(refundRepository.findByPspRefundId("re_stripe_meta")).thenReturn(Optional.empty());
+            when(refundRepository.findById(pending.getId())).thenReturn(Optional.of(pending));
+            when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            processorOutboxEnabled.processEvent("evt_meta", "charge.refunded", PSP_REF,
+                objectNodeWithRefundEntries(3000, new String[][]{
+                    {"re_stripe_meta", "3000", "succeeded", pending.getId().toString()}
+                }));
+
+            assertThat(pending.getStatus()).isEqualTo(RefundStatus.COMPLETED);
+            assertThat(pending.getPspRefundId()).isEqualTo("re_stripe_meta");
+            assertThat(p.getRefundedCents()).isEqualTo(3000);
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(3000L),
+                eq("merchant_payable"), eq("customer_receivable"),
+                eq("REFUND"), eq(pending.getId().toString()), eq("Refund (webhook)"));
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentRefunded"), any());
+        }
+
+        @Test
+        @DisplayName("Webhook beats sync: no duplicate PaymentRefunded event emitted")
+        void webhookBeatsSync_noDuplicateEvent() {
+            Payment p = payment(PaymentStatus.CAPTURED, 10000, 0);
+            Refund pending = pendingRefund(p.getId(), 5000, "re_stripe_2");
+            stubPaymentLookupWithSave(p);
+            when(refundRepository.findByPspRefundId("re_stripe_2")).thenReturn(Optional.of(pending));
+            when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Webhook completes the tracked refund
+            processorOutboxEnabled.processEvent("evt_race", "charge.refunded", PSP_REF,
+                objectNodeWithRefundEntries(5000, new String[][]{{"re_stripe_2", "5000"}}));
+
+            assertThat(pending.getStatus()).isEqualTo(RefundStatus.COMPLETED);
+            assertThat(p.getRefundedCents()).isEqualTo(5000);
+
+            // Exactly one ledger + one outbox call
+            verify(ledgerService).recordDoubleEntry(
+                any(), eq(5000L), anyString(), anyString(), anyString(), anyString(), anyString());
+            verify(outboxService).publish(
+                anyString(), anyString(), eq("PaymentRefunded"), any());
+
+            // No further interactions (no duplicate)
+            verifyNoMoreInteractions(ledgerService);
+            verifyNoMoreInteractions(outboxService);
+        }
+
+        @Test
+        @DisplayName("Mixed tracked + untracked refunds: tracked uses internal ID, untracked uses cumulative delta")
+        void mixedTrackedAndUntrackedRefunds() {
+            // Payment already has 0 refunded, capture of 10000
+            Payment p = payment(PaymentStatus.CAPTURED, 10000, 0);
+            Refund pending = pendingRefund(p.getId(), 3000, "re_tracked");
+            stubPaymentLookupWithSave(p);
+            when(refundRepository.findByPspRefundId("re_tracked")).thenReturn(Optional.of(pending));
+            when(refundRepository.findByPspRefundId("re_manual")).thenReturn(Optional.empty());
+            when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Webhook has both a tracked refund and an untracked manual refund
+            // Total amount_refunded = 5000 (3000 tracked + 2000 manual)
+            processorOutboxEnabled.processEvent("evt_mixed", "charge.refunded", PSP_REF,
+                objectNodeWithRefundEntries(5000, new String[][]{
+                    {"re_tracked", "3000"},
+                    {"re_manual", "2000"}
+                }));
+
+            assertThat(pending.getStatus()).isEqualTo(RefundStatus.COMPLETED);
+            assertThat(p.getRefundedCents()).isEqualTo(5000);
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
+
+            // Two ledger calls: one for tracked (3000), one for untracked delta (2000)
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(3000L),
+                eq("merchant_payable"), eq("customer_receivable"),
+                eq("REFUND"), eq(pending.getId().toString()), eq("Refund (webhook)"));
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(2000L),
+                eq("merchant_payable"), eq("customer_receivable"),
+                eq("REFUND"), eq("evt_mixed"), eq("Refund (webhook)"));
+
+            // Two outbox calls
+            verify(outboxService, org.mockito.Mockito.times(2)).publish(
+                eq("Payment"), eq(p.getId().toString()), eq("PaymentRefunded"), any());
+        }
+
+        @Test
+        @DisplayName("Webhook without refunds.data array falls back to cumulative path (wave 3 preserved)")
+        void noPerRefundEntries_cumulativeFallback() {
+            Payment p = payment(PaymentStatus.CAPTURED, 10000, 0);
+            stubPaymentLookupWithSave(p);
+
+            // Plain webhook without refunds.data — same as pre-wave5
+            processorOutboxDisabled.processEvent("evt_legacy", "charge.refunded", PSP_REF,
+                objectMapper.createObjectNode().put("amount_refunded", 4000));
+
+            assertThat(p.getRefundedCents()).isEqualTo(4000);
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED);
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(4000L),
+                eq("merchant_payable"), eq("customer_receivable"),
+                eq("REFUND"), eq("evt_legacy"), eq("Refund (webhook)"));
+            // No refundRepository interactions for per-refund path
+            verifyNoInteractions(refundRepository);
+        }
+
+        @Test
+        @DisplayName("Per-refund entry with non-succeeded status is skipped, cumulative fallback applies")
+        void pendingStripeRefund_skippedByPerRefundPath() {
+            Payment p = payment(PaymentStatus.CAPTURED, 10000, 0);
+            stubPaymentLookupWithSave(p);
+
+            // Refund entry has status "pending" (not yet settled at Stripe)
+            processorOutboxDisabled.processEvent("evt_pending_stripe", "charge.refunded", PSP_REF,
+                objectNodeWithRefundEntries(3000, new String[][]{{"re_pending", "3000", "pending"}}));
+
+            assertThat(p.getRefundedCents()).isEqualTo(3000);
+            verify(ledgerService).recordDoubleEntry(
+                any(), eq(3000L), anyString(), anyString(), anyString(), anyString(), anyString());
+            // findByPspRefundId never called because status != "succeeded"
+            verify(refundRepository, never()).findByPspRefundId(anyString());
         }
     }
 }
