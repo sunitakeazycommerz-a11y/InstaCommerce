@@ -151,7 +151,7 @@ class WebhookEventProcessorOccTest {
 
             // amount_refunded=0 isolates the tracked CAS path from cumulative fallback
             processor.processEvent("evt_occ_1", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntry(0, "re_occ_1", 3000));
+                objectNodeWithRefundEntry(0, "re_occ_1", 3000), null);
 
             // Tracked path CAS lost → refundedCents must NOT be incremented
             assertThat(p.getRefundedCents()).isEqualTo(0);
@@ -182,7 +182,7 @@ class WebhookEventProcessorOccTest {
             when(refundRepository.findById(pending.getId())).thenReturn(Optional.of(freshFailed));
 
             processor.processEvent("evt_occ_fail", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntry(3000, "re_occ_fail", 3000));
+                objectNodeWithRefundEntry(3000, "re_occ_fail", 3000), null);
 
             // refundedCents was not bumped by the tracked path
             // (cumulative fallback may bump it, which is correct for FAILED+PSP-succeeded scenario)
@@ -207,7 +207,7 @@ class WebhookEventProcessorOccTest {
             when(refundRepository.findById(pending.getId())).thenReturn(Optional.empty());
 
             processor.processEvent("evt_occ_gone", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntry(3000, "re_occ_gone", 3000));
+                objectNodeWithRefundEntry(3000, "re_occ_gone", 3000), null);
 
             verify(entityManager).detach(pending);
             assertThat(meterRegistry.counter("payment.webhook.refund.occ", "outcome", "not_found").count())
@@ -228,7 +228,7 @@ class WebhookEventProcessorOccTest {
             when(refundRepository.findById(pending.getId())).thenReturn(Optional.of(stillPending));
 
             processor.processEvent("evt_occ_weird", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntry(3000, "re_occ_weird", 3000));
+                objectNodeWithRefundEntry(3000, "re_occ_weird", 3000), null);
 
             verify(entityManager).detach(pending);
             assertThat(meterRegistry.counter("payment.webhook.refund.occ", "outcome", "pending").count())
@@ -272,7 +272,7 @@ class WebhookEventProcessorOccTest {
             e2.put("amount", 1500);
             e2.put("status", "succeeded");
 
-            processor.processEvent("evt_mixed_occ", "charge.refunded", PSP_REF, node);
+            processor.processEvent("evt_mixed_occ", "charge.refunded", PSP_REF, node, null);
 
             // Only the second refund's amount is counted (first was CAS-skipped)
             // The tracked path adds 1500 for the second refund.
@@ -303,7 +303,7 @@ class WebhookEventProcessorOccTest {
             // amount_refunded = 5000, but tracked refund was only 3000
             // After CAS=0, cumulative fallback sees 5000 > 0 → delta = 5000
             processor.processEvent("evt_occ_fb", "charge.refunded", PSP_REF,
-                objectNodeWithRefundEntry(5000, "re_occ_fb", 3000));
+                objectNodeWithRefundEntry(5000, "re_occ_fb", 3000), null);
 
             // Cumulative fallback applies the full delta since tracked path didn't bump
             assertThat(p.getRefundedCents()).isEqualTo(5000);

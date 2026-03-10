@@ -72,7 +72,7 @@ public class WebhookEventHandler {
         // resolves locally before we rely on PSP-side retries.
         for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
             try {
-                processor.processEvent(eventId, type, pspReference, objectNode);
+                processor.processEvent(eventId, type, pspReference, objectNode, payload);
                 return;
             } catch (ObjectOptimisticLockingFailureException | PessimisticLockingFailureException ex) {
                 if (attempt == MAX_RETRY_ATTEMPTS) {
