@@ -11,6 +11,8 @@ import com.instacommerce.payment.exception.RefundExceedsChargeException;
 import com.instacommerce.payment.dto.request.RefundRequest;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.RefundRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -29,6 +31,9 @@ public class RefundTransactionHelper {
     private final LedgerService ledgerService;
     private final OutboxService outboxService;
     private final AuditLogService auditLogService;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     public RefundTransactionHelper(RefundRepository refundRepository,
                                    PaymentRepository paymentRepository,
@@ -138,8 +143,11 @@ public class RefundTransactionHelper {
                     refundId, r.getStatus());
                 return;
             }
-            r.setStatus(RefundStatus.FAILED);
-            refundRepository.save(r);
+            int updated = refundRepository.compareAndSetPendingToFailed(refundId, r.getVersion());
+            if (updated == 0) {
+                log.info("Refund {} modified concurrently, skipping markRefundFailed — concurrent write wins",
+                    refundId);
+            }
         });
     }
 
@@ -156,8 +164,12 @@ public class RefundTransactionHelper {
                     refundId, r.getStatus());
                 return;
             }
-            r.setStatus(RefundStatus.FAILED);
-            refundRepository.save(r);
+            int updated = refundRepository.compareAndSetPendingToFailed(refundId, r.getVersion());
+            if (updated == 0) {
+                log.info("Refund {} modified concurrently, skipping resolveStaleRefundFailed — concurrent write wins",
+                    refundId);
+                return;
+            }
 
             auditLogService.log(null, "RECOVERY_REFUND_FAILED", "Refund", r.getId().toString(),
                 Map.of("paymentId", r.getPaymentId(), "reason", reason));
@@ -174,12 +186,18 @@ public class RefundTransactionHelper {
     public Refund completeStaleRefund(UUID refundId) {
         // Read refund only to discover the paymentId; all decisions use the
         // re-read below so the status check is inside the payment lock.
-        UUID paymentId = refundRepository.findById(refundId).orElseThrow().getPaymentId();
+        Refund initial = refundRepository.findById(refundId).orElseThrow();
+        UUID paymentId = initial.getPaymentId();
 
         // Acquire the payment lock first — same order as completeRefund() and
         // the webhook path — to prevent TOCTOU double-count of refundedCents.
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+
+        // Detach the stale entity so the re-read bypasses the first-level cache
+        // and sees any concurrent completion that committed while we waited on
+        // the payment lock (mirrors WebhookEventProcessor's OCC re-read pattern).
+        entityManager.detach(initial);
 
         // Re-read refund after the lock so the status guard sees any concurrent
         // completion that committed while we were waiting on the lock.
@@ -195,8 +213,29 @@ public class RefundTransactionHelper {
             return refund;
         }
 
+        int updated = refundRepository.compareAndSetPendingToCompleted(refundId, refund.getVersion());
+        if (updated == 0) {
+            // CAS lost — another writer committed between our re-read and the CAS.
+            // Detach the stale entity so the re-read bypasses the L1 cache.
+            entityManager.detach(refund);
+            Refund current = refundRepository.findById(refundId).orElse(null);
+            if (current != null && current.getStatus() == RefundStatus.COMPLETED) {
+                log.info("Refund {} already completed by concurrent writer during recovery, returning idempotently",
+                    refundId);
+                return current;
+            }
+            String currentStatus = current != null ? current.getStatus().name() : "UNREADABLE";
+            log.error("Refund {} CAS lost during completeStaleRefund, current status={} — requires manual review",
+                refundId, currentStatus);
+            throw new IllegalStateException(
+                "Refund " + refundId + " CAS lost during completeStaleRefund, current status=" + currentStatus);
+        }
+
+        // CAS succeeded — the DB row is now COMPLETED. Detach the managed entity
+        // (which still holds the pre-CAS version) to prevent dirty-check conflicts
+        // at flush time, then update in-memory for the return value.
+        entityManager.detach(refund);
         refund.setStatus(RefundStatus.COMPLETED);
-        Refund saved = refundRepository.save(refund);
 
         payment.setRefundedCents(payment.getRefundedCents() + refund.getAmountCents());
         if (payment.getRefundedCents() >= payment.getCapturedCents()) {
@@ -207,24 +246,24 @@ public class RefundTransactionHelper {
         Payment savedPayment = paymentRepository.save(payment);
 
         ledgerService.recordDoubleEntry(savedPayment.getId(), refund.getAmountCents(),
-            "merchant_payable", "customer_receivable", "REFUND", saved.getId().toString(), "Refund");
+            "merchant_payable", "customer_receivable", "REFUND", refund.getId().toString(), "Refund");
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("orderId", savedPayment.getOrderId());
         payload.put("paymentId", savedPayment.getId());
-        payload.put("refundId", saved.getId());
+        payload.put("refundId", refund.getId());
         payload.put("amountCents", refund.getAmountCents());
         payload.put("currency", savedPayment.getCurrency());
-        payload.put("refundedAt", saved.getCreatedAt());
-        if (saved.getReason() != null && !saved.getReason().isBlank()) {
-            payload.put("reason", saved.getReason());
+        payload.put("refundedAt", refund.getCreatedAt());
+        if (refund.getReason() != null && !refund.getReason().isBlank()) {
+            payload.put("reason", refund.getReason());
         }
         outboxService.publish("Payment", savedPayment.getId().toString(), "PaymentRefunded", payload);
 
-        auditLogService.log(null, "RECOVERY_REFUND_COMPLETED", "Refund", saved.getId().toString(),
+        auditLogService.log(null, "RECOVERY_REFUND_COMPLETED", "Refund", refund.getId().toString(),
             Map.of("paymentId", savedPayment.getId(), "amountCents", refund.getAmountCents()));
 
-        return saved;
+        return refund;
     }
 
     private void ensurePspReference(Payment payment) {
