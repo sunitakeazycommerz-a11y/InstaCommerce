@@ -56,12 +56,16 @@ public class PaymentService {
                 request.paymentMethod()
             ));
         } catch (Exception ex) {
-            txHelper.markAuthorizationFailed(pending.getId());
+            String reason = (ex.getMessage() != null && !ex.getMessage().isBlank())
+                ? ex.getMessage() : "PSP authorization error";
+            txHelper.markAuthorizationFailed(pending.getId(), reason);
             throw ex;
         }
 
         if (!result.success()) {
-            txHelper.markAuthorizationFailed(pending.getId());
+            String reason = (result.declineReason() != null && !result.declineReason().isBlank())
+                ? result.declineReason() : "Authorization declined by PSP";
+            txHelper.markAuthorizationFailed(pending.getId(), reason);
             throw new PaymentDeclinedException(result.declineReason());
         }
 
