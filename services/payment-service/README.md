@@ -195,6 +195,8 @@ sequenceDiagram
             Handler->>Ledger: DEBIT merchant_payable / CREDIT customer_receivable
         else payment_intent.payment_failed
             Handler->>DB: UPDATE payment → FAILED
+            Handler->>Ledger: DEBIT authorization_hold / CREDIT customer_receivable (if auth hold exists)
+            Handler->>Outbox: PaymentFailed
         end
     end
 
@@ -228,6 +230,10 @@ flowchart LR
 
     subgraph Void
         V1[DEBIT authorization_hold] -->|amount| V2[CREDIT customer_receivable]
+    end
+
+    subgraph Failure Release
+        F1[DEBIT authorization_hold] -->|amount| F2[CREDIT customer_receivable]
     end
 
     subgraph Refund
@@ -340,7 +346,7 @@ flowchart TD
     H -- payment_intent.succeeded --> I[Set CAPTURED + ledger entries]
     H -- payment_intent.canceled --> J[Set VOIDED + ledger entries]
     H -- charge.refunded --> K[Update refundedCents + ledger entries]
-    H -- payment_intent.payment_failed --> L[Set FAILED]
+    H -- payment_intent.payment_failed --> L[Set FAILED + release hold if present + publish PaymentFailed]
     I & J & K & L --> M[Commit TX]
     M --> N[Return 200 OK]
 

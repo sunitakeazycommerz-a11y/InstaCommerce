@@ -1,6 +1,7 @@
 package com.instacommerce.payment.service;
 
 import com.instacommerce.payment.domain.model.Payment;
+import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.repository.LedgerBalanceSummary;
 import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Component;
  *   <li>Total debits == total credits (double-entry balance)</li>
  *   <li>Refund ledger totals align with {@code payment.refundedCents}</li>
  *   <li>Capture ledger totals align with {@code payment.capturedCents}</li>
+ *   <li>FAILED payments have no unreleased authorization holds</li>
  * </ol>
  * <p>
  * This job never mutates data. It is feature-flagged behind
@@ -40,8 +42,11 @@ public class LedgerIntegrityVerificationJob {
 
     private static final Logger log = LoggerFactory.getLogger(LedgerIntegrityVerificationJob.class);
 
+    private static final String REF_TYPE_AUTHORIZATION = "AUTHORIZATION";
     private static final String REF_TYPE_CAPTURE = "CAPTURE";
+    private static final String REF_TYPE_FAILURE_RELEASE = "FAILURE_RELEASE";
     private static final String REF_TYPE_REFUND = "REFUND";
+    private static final String REF_TYPE_VOID = "VOID";
     private static final String ENTRY_TYPE_DEBIT = "DEBIT";
     private static final String ENTRY_TYPE_CREDIT = "CREDIT";
 
@@ -154,6 +159,20 @@ public class LedgerIntegrityVerificationJob {
                     + "(ledgerCaptureCredits={}¢, payment.capturedCents={}¢)",
                 paymentId, ledgerCaptureCredits, payment.getCapturedCents());
             driftDetected = true;
+        }
+
+        // Rule 4: FAILED payments should not have unreleased authorization holds
+        if (payment.getStatus() == PaymentStatus.FAILED) {
+            long authDebit = sumByRefTypeAndEntryType(summaries, REF_TYPE_AUTHORIZATION, ENTRY_TYPE_DEBIT);
+            long releaseCredit = sumByRefTypeAndEntryType(summaries, REF_TYPE_FAILURE_RELEASE, ENTRY_TYPE_CREDIT)
+                + sumByRefTypeAndEntryType(summaries, REF_TYPE_VOID, ENTRY_TYPE_CREDIT);
+            if (authDebit > 0 && releaseCredit < authDebit) {
+                counter("ledger.verification.drift", "FAILED_AUTH_HOLD_UNRELEASED").increment();
+                log.warn("Ledger integrity verification: FAILED payment has unreleased authorization hold "
+                        + "for paymentId={} (authDebit={}¢, releaseCredit={}¢, unreleasedHold={}¢)",
+                    paymentId, authDebit, releaseCredit, authDebit - releaseCredit);
+                driftDetected = true;
+            }
         }
 
         return driftDetected;

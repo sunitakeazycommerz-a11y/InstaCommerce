@@ -26,6 +26,7 @@ import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import com.instacommerce.payment.repository.RefundRepository;
+import com.instacommerce.payment.service.AuditLogService;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -57,6 +58,7 @@ class WebhookRefundHandlerTest {
     @Mock LedgerEntryRepository ledgerEntryRepository;
     @Mock LedgerService ledgerService;
     @Mock OutboxService outboxService;
+    @Mock AuditLogService auditLogService;
     @Mock EntityManager entityManager;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -72,10 +74,10 @@ class WebhookRefundHandlerTest {
         meterRegistry = new SimpleMeterRegistry();
         processorOutboxEnabled = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerEntryRepository, ledgerService, outboxService, meterRegistry, true, false);
+            ledgerEntryRepository, ledgerService, outboxService, auditLogService, meterRegistry, true, false);
         processorOutboxDisabled = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerEntryRepository, ledgerService, outboxService, meterRegistry, false, false);
+            ledgerEntryRepository, ledgerService, outboxService, auditLogService, meterRegistry, false, false);
         ReflectionTestUtils.setField(processorOutboxEnabled, "entityManager", entityManager);
         ReflectionTestUtils.setField(processorOutboxDisabled, "entityManager", entityManager);
         handlerOutboxEnabled = new WebhookEventHandler(

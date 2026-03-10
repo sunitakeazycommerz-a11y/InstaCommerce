@@ -48,6 +48,10 @@ class LedgerIntegrityVerificationJobTest {
     // --- Helpers ---
 
     private Payment payment(long capturedCents, long refundedCents) {
+        return payment(capturedCents, refundedCents, PaymentStatus.CAPTURED);
+    }
+
+    private Payment payment(long capturedCents, long refundedCents, PaymentStatus status) {
         Payment p = new Payment();
         p.setId(UUID.randomUUID());
         p.setOrderId(UUID.randomUUID());
@@ -55,7 +59,7 @@ class LedgerIntegrityVerificationJobTest {
         p.setCapturedCents(capturedCents);
         p.setRefundedCents(refundedCents);
         p.setCurrency("INR");
-        p.setStatus(PaymentStatus.CAPTURED);
+        p.setStatus(status);
         p.setPspReference("psp-" + UUID.randomUUID());
         p.setIdempotencyKey("key-" + UUID.randomUUID());
         p.setCreatedAt(Instant.now().minusSeconds(600));
@@ -329,6 +333,101 @@ class LedgerIntegrityVerificationJobTest {
             assertThat(counterValue("ledger.verification.drift", "DEBIT_CREDIT_MISMATCH")).isEqualTo(1.0);
             assertThat(counterValue("ledger.verification.drift", "REFUND_MISMATCH")).isEqualTo(1.0);
             assertThat(counterValue("ledger.verification.drift", "CAPTURE_MISMATCH")).isEqualTo(1.0);
+        }
+    }
+
+    // --- FAILED payment with unreleased authorization hold ---
+
+    @Nested
+    @DisplayName("FAILED_AUTH_HOLD_UNRELEASED drift")
+    class FailedAuthHoldUnreleased {
+
+        @Test
+        @DisplayName("Drift detected when FAILED payment has authorization hold with no release")
+        void failedPayment_noRelease_driftDetected() {
+            UUID paymentId = UUID.randomUUID();
+            Payment p = payment(0, 0, PaymentStatus.FAILED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            // Authorization placed but never released
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000)
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "FAILED_AUTH_HOLD_UNRELEASED")).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("No drift when FAILED payment authorization is fully released")
+        void failedPayment_fullyReleased_noDrift() {
+            UUID paymentId = UUID.randomUUID();
+            Payment p = payment(0, 0, PaymentStatus.FAILED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            // Authorization placed and fully released – debits==credits overall
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000),
+                summary("FAILURE_RELEASE", "DEBIT", 10000),
+                summary("FAILURE_RELEASE", "CREDIT", 10000)
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "FAILED_AUTH_HOLD_UNRELEASED")).isZero();
+        }
+
+        @Test
+        @DisplayName("Drift detected when FAILED payment authorization is only partially released")
+        void failedPayment_partialRelease_driftDetected() {
+            UUID paymentId = UUID.randomUUID();
+            Payment p = payment(0, 0, PaymentStatus.FAILED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            // 10000¢ authorized but only 6000¢ released – 4000¢ still held
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000),
+                summary("FAILURE_RELEASE", "DEBIT", 6000),
+                summary("FAILURE_RELEASE", "CREDIT", 6000)
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "FAILED_AUTH_HOLD_UNRELEASED")).isEqualTo(1.0);
+            // Overall debits != credits since void only partially reverses
+            assertThat(counterValue("ledger.verification.drift", "DEBIT_CREDIT_MISMATCH")).isZero();
+        }
+
+        @Test
+        @DisplayName("No drift for non-FAILED payment with unreleased authorization hold")
+        void capturedPayment_withAuthHold_noDrift() {
+            UUID paymentId = UUID.randomUUID();
+            Payment p = payment(10000, 0, PaymentStatus.CAPTURED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            // Authorize + capture, no void – legitimate for CAPTURED status
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000),
+                summary("CAPTURE", "DEBIT", 10000),
+                summary("CAPTURE", "CREDIT", 10000)
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "FAILED_AUTH_HOLD_UNRELEASED")).isZero();
         }
     }
 }

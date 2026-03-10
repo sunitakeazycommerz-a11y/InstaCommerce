@@ -172,6 +172,33 @@ class LedgerEntryRepositoryIntegrationTest {
         assertThat(index.get("CAPTURE:CREDIT")).isEqualTo(3000L);
     }
 
+    @Test
+    void groupedTotals_includeAuthorizationAndFailureReleaseReferenceTypes() {
+        Payment failedPayment = saveCapturedPayment();
+        failedPayment.setStatus(PaymentStatus.FAILED);
+        failedPayment.setCapturedCents(0L);
+        paymentRepository.saveAndFlush(failedPayment);
+
+        String referenceId = failedPayment.getId().toString();
+        saveLedgerEntry(failedPayment.getId(), LedgerEntryType.DEBIT, 10_000L, "AUTHORIZATION", referenceId);
+        saveLedgerEntry(failedPayment.getId(), LedgerEntryType.CREDIT, 10_000L, "AUTHORIZATION", referenceId);
+        saveLedgerEntry(failedPayment.getId(), LedgerEntryType.DEBIT, 10_000L, "FAILURE_RELEASE", referenceId);
+        saveLedgerEntry(failedPayment.getId(), LedgerEntryType.CREDIT, 10_000L, "FAILURE_RELEASE", referenceId);
+
+        List<LedgerBalanceSummary> summaries =
+            ledgerEntryRepository.sumByPaymentIdGrouped(failedPayment.getId());
+
+        Map<String, Long> index = summaries.stream()
+            .collect(Collectors.toMap(
+                s -> s.getReferenceType() + ":" + s.getEntryType(),
+                LedgerBalanceSummary::getTotalAmountCents));
+
+        assertThat(index.get("AUTHORIZATION:DEBIT")).isEqualTo(10_000L);
+        assertThat(index.get("AUTHORIZATION:CREDIT")).isEqualTo(10_000L);
+        assertThat(index.get("FAILURE_RELEASE:DEBIT")).isEqualTo(10_000L);
+        assertThat(index.get("FAILURE_RELEASE:CREDIT")).isEqualTo(10_000L);
+    }
+
     // ── findDistinctPaymentIdsWithEntriesSince ─────────────────────────
 
     @Test

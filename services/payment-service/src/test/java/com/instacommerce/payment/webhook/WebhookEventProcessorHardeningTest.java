@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -17,6 +18,7 @@ import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import com.instacommerce.payment.repository.RefundRepository;
+import com.instacommerce.payment.service.AuditLogService;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -60,6 +62,7 @@ class WebhookEventProcessorHardeningTest {
     @Mock LedgerEntryRepository ledgerEntryRepository;
     @Mock LedgerService ledgerService;
     @Mock OutboxService outboxService;
+    @Mock AuditLogService auditLogService;
     @Mock EntityManager entityManager;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -73,12 +76,12 @@ class WebhookEventProcessorHardeningTest {
         meterRegistry = new SimpleMeterRegistry();
         processorCaptureVoidOutboxOn = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerEntryRepository, ledgerService, outboxService, meterRegistry,
+            ledgerEntryRepository, ledgerService, outboxService, auditLogService, meterRegistry,
             /* refundOutboxEnabled */ false,
             /* captureVoidOutboxEnabled */ true);
         processorCaptureVoidOutboxOff = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerEntryRepository, ledgerService, outboxService, meterRegistry,
+            ledgerEntryRepository, ledgerService, outboxService, auditLogService, meterRegistry,
             /* refundOutboxEnabled */ false,
             /* captureVoidOutboxEnabled */ false);
         ReflectionTestUtils.setField(processorCaptureVoidOutboxOn, "entityManager", entityManager);
@@ -238,7 +241,7 @@ class WebhookEventProcessorHardeningTest {
 
             assertThat(p.getStatus()).isEqualTo(status);
             verify(paymentRepository, never()).save(any());
-            verifyNoInteractions(ledgerService, outboxService);
+            verifyNoInteractions(ledgerService, outboxService, auditLogService);
             assertThat(meterRegistry.counter(
                 "payment.webhook.fail", "outcome", "terminal_rejected").count())
                 .isEqualTo(1.0);
@@ -438,6 +441,17 @@ class WebhookEventProcessorHardeningTest {
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), any());
+            ArgumentCaptor<Map<String, Object>> auditDetailsCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(auditLogService).log(
+                isNull(),
+                eq("PAYMENT_FAILED"),
+                eq("Payment"),
+                eq(p.getId().toString()),
+                auditDetailsCaptor.capture());
+            assertThat(auditDetailsCaptor.getValue())
+                .containsEntry("orderId", p.getOrderId())
+                .containsEntry("previousStatus", PaymentStatus.AUTHORIZE_PENDING.name())
+                .containsEntry("authReleased", false);
             assertThat(meterRegistry.counter(
                 "payment.webhook.fail", "outcome", "auth_released").count())
                 .isEqualTo(0.0);
@@ -466,6 +480,17 @@ class WebhookEventProcessorHardeningTest {
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), any());
+            ArgumentCaptor<Map<String, Object>> auditDetailsCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(auditLogService).log(
+                isNull(),
+                eq("PAYMENT_FAILED"),
+                eq("Payment"),
+                eq(p.getId().toString()),
+                auditDetailsCaptor.capture());
+            assertThat(auditDetailsCaptor.getValue())
+                .containsEntry("orderId", p.getOrderId())
+                .containsEntry("previousStatus", status.name())
+                .containsEntry("authReleased", true);
             assertThat(meterRegistry.counter(
                 "payment.webhook.fail", "outcome", "auth_released").count())
                 .isEqualTo(1.0);
@@ -493,6 +518,12 @@ class WebhookEventProcessorHardeningTest {
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), any());
+            verify(auditLogService).log(
+                isNull(),
+                eq("PAYMENT_FAILED"),
+                eq("Payment"),
+                eq(p.getId().toString()),
+                any());
             assertThat(meterRegistry.counter(
                 "payment.webhook.fail", "outcome", "auth_released").count())
                 .isEqualTo(0.0);
@@ -510,7 +541,7 @@ class WebhookEventProcessorHardeningTest {
 
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.FAILED);
             verify(paymentRepository, never()).save(any());
-            verifyNoInteractions(ledgerService, ledgerEntryRepository, outboxService);
+            verifyNoInteractions(ledgerService, ledgerEntryRepository, outboxService, auditLogService);
         }
 
         @Test

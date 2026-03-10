@@ -10,6 +10,7 @@ import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import com.instacommerce.payment.repository.RefundRepository;
+import com.instacommerce.payment.service.AuditLogService;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -106,6 +107,7 @@ public class WebhookEventProcessor {
     private final LedgerEntryRepository ledgerEntryRepository;
     private final LedgerService ledgerService;
     private final OutboxService outboxService;
+    private final AuditLogService auditLogService;
     private final MeterRegistry meterRegistry;
     private final boolean refundOutboxEnabled;
     private final boolean captureVoidOutboxEnabled;
@@ -119,6 +121,7 @@ public class WebhookEventProcessor {
                                  LedgerEntryRepository ledgerEntryRepository,
                                  LedgerService ledgerService,
                                  OutboxService outboxService,
+                                 AuditLogService auditLogService,
                                  MeterRegistry meterRegistry,
                                  @Value("${payment.webhook.refund-outbox-enabled:false}") boolean refundOutboxEnabled,
                                  @Value("${payment.webhook.capture-void-outbox-enabled:false}") boolean captureVoidOutboxEnabled) {
@@ -128,6 +131,7 @@ public class WebhookEventProcessor {
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.ledgerService = ledgerService;
         this.outboxService = outboxService;
+        this.auditLogService = auditLogService;
         this.meterRegistry = meterRegistry;
         this.refundOutboxEnabled = refundOutboxEnabled;
         this.captureVoidOutboxEnabled = captureVoidOutboxEnabled;
@@ -243,6 +247,7 @@ public class WebhookEventProcessor {
 
         PaymentStatus previousStatus = payment.getStatus();
         String reason = extractFailureReason(objectNode, previousStatus);
+        boolean authReleased = false;
 
         payment.setStatus(PaymentStatus.FAILED);
         Payment saved = paymentRepository.save(payment);
@@ -255,12 +260,21 @@ public class WebhookEventProcessor {
             ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
                 "authorization_hold", "customer_receivable", "FAILURE_RELEASE",
                 saved.getId().toString(), "Authorization release on failure (webhook)");
+            authReleased = true;
             log.info("Released authorization hold for failed payment {} (previous status: {})",
                 saved.getId(), previousStatus);
             meterRegistry.counter("payment.webhook.fail", "outcome", "auth_released").increment();
         }
 
         publishFailedOutbox(saved, reason);
+        auditLogService.log(null,
+            "PAYMENT_FAILED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "previousStatus", previousStatus.name(),
+                "reason", reason,
+                "authReleased", authReleased));
 
         log.info("Payment {} failed via webhook: previousStatus={}, reason={}",
             saved.getId(), previousStatus, reason);
