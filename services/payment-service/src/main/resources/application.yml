@@ -49,6 +49,10 @@ payment:
     stale-pending-cron: ${PAYMENT_STALE_PENDING_RECOVERY_CRON:0 */5 * * * *}
     stale-threshold-minutes: ${PAYMENT_STALE_PENDING_RECOVERY_THRESHOLD_MINUTES:30}
     batch-size: ${PAYMENT_STALE_PENDING_RECOVERY_BATCH_SIZE:50}
+    stale-pending-refund-enabled: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_ENABLED:false}
+    stale-pending-refund-cron: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_CRON:0 */10 * * * *}
+    stale-pending-refund-threshold-minutes: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_THRESHOLD_MINUTES:60}
+    stale-pending-refund-batch-size: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_BATCH_SIZE:50}
 
 stripe:
   api-key: ${sm://stripe-api-key:${STRIPE_API_KEY}}

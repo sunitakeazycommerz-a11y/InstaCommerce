@@ -16,4 +16,13 @@ public interface PaymentGateway {
      * Used by the stale-pending recovery job to reconcile local state with PSP truth.
      */
     GatewayStatusResult getStatus(String pspReference);
+
+    /**
+     * Retrieves the current refund state from the PSP without issuing any mutations.
+     * Used by the refund recovery job to reconcile stale local refund records with PSP truth.
+     *
+     * @param pspRefundId the PSP-assigned refund identifier (e.g. Stripe {@code re_xxx})
+     * @return a read-only snapshot of the refund's current state at the PSP
+     */
+    GatewayRefundStatusResult getRefundStatus(String pspRefundId);
 }

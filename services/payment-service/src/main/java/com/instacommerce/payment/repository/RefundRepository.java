@@ -1,9 +1,12 @@
 package com.instacommerce.payment.repository;
 
 import com.instacommerce.payment.domain.model.Refund;
+import com.instacommerce.payment.domain.model.RefundStatus;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -32,4 +35,11 @@ public interface RefundRepository extends JpaRepository<Refund, UUID> {
           and r.status = com.instacommerce.payment.domain.model.RefundStatus.PENDING
         """)
     long sumPendingAmountByPaymentId(@Param("paymentId") UUID paymentId);
+
+    @Query("SELECT r FROM Refund r WHERE r.status = :status AND r.updatedAt < :cutoff ORDER BY r.updatedAt ASC")
+    List<Refund> findStalePendingRefunds(
+        @Param("status") RefundStatus status,
+        @Param("cutoff") Instant cutoff,
+        Pageable pageable
+    );
 }

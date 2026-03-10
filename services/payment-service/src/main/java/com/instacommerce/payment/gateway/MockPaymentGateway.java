@@ -35,4 +35,13 @@ public class MockPaymentGateway implements PaymentGateway {
             0L
         );
     }
+
+    @Override
+    public GatewayRefundStatusResult getRefundStatus(String pspRefundId) {
+        return GatewayRefundStatusResult.of(
+            GatewayRefundStatusResult.PspRefundState.SUCCEEDED,
+            "succeeded",
+            0L
+        );
+    }
 }

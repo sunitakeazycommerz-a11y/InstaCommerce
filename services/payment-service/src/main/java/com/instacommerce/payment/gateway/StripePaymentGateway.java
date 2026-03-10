@@ -101,6 +101,19 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     @Override
+    public GatewayRefundStatusResult getRefundStatus(String pspRefundId) {
+        ensureApiKey();
+        try {
+            RequestOptions options = buildOptions(null);
+            Refund refund = Refund.retrieve(pspRefundId, options);
+            GatewayRefundStatusResult.PspRefundState state = mapStripeRefundStatus(refund.getStatus());
+            return GatewayRefundStatusResult.of(state, refund.getStatus(), refund.getAmount());
+        } catch (StripeException ex) {
+            throw toGatewayException(ex);
+        }
+    }
+
+    @Override
     public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey, java.util.UUID internalRefundId) {
         ensureApiKey();
         try {
@@ -141,6 +154,20 @@ public class StripePaymentGateway implements PaymentGateway {
             case "succeeded" -> GatewayStatusResult.PspPaymentState.SUCCEEDED;
             case "canceled" -> GatewayStatusResult.PspPaymentState.CANCELED;
             default -> GatewayStatusResult.PspPaymentState.UNKNOWN;
+        };
+    }
+
+    private GatewayRefundStatusResult.PspRefundState mapStripeRefundStatus(String stripeStatus) {
+        if (stripeStatus == null) {
+            return GatewayRefundStatusResult.PspRefundState.UNKNOWN;
+        }
+        return switch (stripeStatus) {
+            case "pending" -> GatewayRefundStatusResult.PspRefundState.PENDING;
+            case "succeeded" -> GatewayRefundStatusResult.PspRefundState.SUCCEEDED;
+            case "failed" -> GatewayRefundStatusResult.PspRefundState.FAILED;
+            case "canceled" -> GatewayRefundStatusResult.PspRefundState.CANCELED;
+            case "requires_action" -> GatewayRefundStatusResult.PspRefundState.REQUIRES_ACTION;
+            default -> GatewayRefundStatusResult.PspRefundState.UNKNOWN;
         };
     }
 

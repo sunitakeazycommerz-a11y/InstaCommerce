@@ -133,9 +133,98 @@ public class RefundTransactionHelper {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markRefundFailed(UUID refundId) {
         refundRepository.findById(refundId).ifPresent(r -> {
+            if (r.getStatus() != RefundStatus.PENDING) {
+                log.info("Refund {} not PENDING (status={}), skipping markRefundFailed",
+                    refundId, r.getStatus());
+                return;
+            }
             r.setStatus(RefundStatus.FAILED);
             refundRepository.save(r);
         });
+    }
+
+    /**
+     * Recovery-path: mark a stale PENDING refund as FAILED with an audit reason.
+     * Guards against overwriting terminal states in case a webhook resolved the
+     * refund between the recovery query and this call.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resolveStaleRefundFailed(UUID refundId, String reason) {
+        refundRepository.findById(refundId).ifPresent(r -> {
+            if (r.getStatus() != RefundStatus.PENDING) {
+                log.info("Refund {} no longer PENDING (status={}), skipping recovery failure",
+                    refundId, r.getStatus());
+                return;
+            }
+            r.setStatus(RefundStatus.FAILED);
+            refundRepository.save(r);
+
+            auditLogService.log(null, "RECOVERY_REFUND_FAILED", "Refund", r.getId().toString(),
+                Map.of("paymentId", r.getPaymentId(), "reason", reason));
+        });
+    }
+
+    /**
+     * Recovery-path: complete a stale PENDING refund that the PSP confirms as succeeded.
+     * Mirrors {@link #completeRefund} but derives amount/reason from the persisted
+     * refund row instead of requiring a {@code RefundRequest}.
+     * Guards against overwriting terminal states.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Refund completeStaleRefund(UUID refundId) {
+        // Read refund only to discover the paymentId; all decisions use the
+        // re-read below so the status check is inside the payment lock.
+        UUID paymentId = refundRepository.findById(refundId).orElseThrow().getPaymentId();
+
+        // Acquire the payment lock first — same order as completeRefund() and
+        // the webhook path — to prevent TOCTOU double-count of refundedCents.
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
+            .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+
+        // Re-read refund after the lock so the status guard sees any concurrent
+        // completion that committed while we were waiting on the lock.
+        Refund refund = refundRepository.findById(refundId).orElseThrow();
+
+        if (refund.getStatus() == RefundStatus.COMPLETED) {
+            log.info("Refund {} already completed, skipping recovery completion", refundId);
+            return refund;
+        }
+        if (refund.getStatus() != RefundStatus.PENDING) {
+            log.info("Refund {} no longer PENDING (status={}), skipping recovery completion",
+                refundId, refund.getStatus());
+            return refund;
+        }
+
+        refund.setStatus(RefundStatus.COMPLETED);
+        Refund saved = refundRepository.save(refund);
+
+        payment.setRefundedCents(payment.getRefundedCents() + refund.getAmountCents());
+        if (payment.getRefundedCents() >= payment.getCapturedCents()) {
+            payment.setStatus(PaymentStatus.REFUNDED);
+        } else {
+            payment.setStatus(PaymentStatus.PARTIALLY_REFUNDED);
+        }
+        Payment savedPayment = paymentRepository.save(payment);
+
+        ledgerService.recordDoubleEntry(savedPayment.getId(), refund.getAmountCents(),
+            "merchant_payable", "customer_receivable", "REFUND", saved.getId().toString(), "Refund");
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", savedPayment.getOrderId());
+        payload.put("paymentId", savedPayment.getId());
+        payload.put("refundId", saved.getId());
+        payload.put("amountCents", refund.getAmountCents());
+        payload.put("currency", savedPayment.getCurrency());
+        payload.put("refundedAt", saved.getCreatedAt());
+        if (saved.getReason() != null && !saved.getReason().isBlank()) {
+            payload.put("reason", saved.getReason());
+        }
+        outboxService.publish("Payment", savedPayment.getId().toString(), "PaymentRefunded", payload);
+
+        auditLogService.log(null, "RECOVERY_REFUND_COMPLETED", "Refund", saved.getId().toString(),
+            Map.of("paymentId", savedPayment.getId(), "amountCents", refund.getAmountCents()));
+
+        return saved;
     }
 
     private void ensurePspReference(Payment payment) {
