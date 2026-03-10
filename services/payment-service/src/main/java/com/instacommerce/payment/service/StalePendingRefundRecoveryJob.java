@@ -109,6 +109,16 @@ public class StalePendingRefundRecoveryJob {
         GatewayRefundStatusResult pspState = paymentGateway.getRefundStatus(refund.getPspRefundId());
 
         if (pspState.isSucceeded()) {
+            if (pspState.amountRefundedCents() != null
+                    && pspState.amountRefundedCents() != refund.getAmountCents()) {
+                log.warn("Refund recovery: PSP amount mismatch for refund {} "
+                        + "(local={}¢, psp={}¢, pspRefundId={}). "
+                        + "Proceeding with local amount — review for reconciliation.",
+                    refund.getId(), refund.getAmountCents(),
+                    pspState.amountRefundedCents(), refund.getPspRefundId());
+                meterRegistry.counter("refund.recovery.psp_amount_mismatch",
+                    "status", "COMPLETED_FORWARD").increment();
+            }
             txHelper.completeStaleRefund(refund.getId());
             return RecoveryOutcome.COMPLETED_FORWARD;
         }

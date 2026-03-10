@@ -215,7 +215,7 @@ public class RefundTransactionHelper {
         payload.put("refundId", saved.getId());
         payload.put("amountCents", refund.getAmountCents());
         payload.put("currency", savedPayment.getCurrency());
-        payload.put("refundedAt", saved.getUpdatedAt());
+        payload.put("refundedAt", saved.getCreatedAt());
         if (saved.getReason() != null && !saved.getReason().isBlank()) {
             payload.put("reason", saved.getReason());
         }
