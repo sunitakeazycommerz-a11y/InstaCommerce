@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
+import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import com.instacommerce.payment.repository.RefundRepository;
@@ -21,6 +22,7 @@ import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -54,6 +57,7 @@ class WebhookEventProcessorHardeningTest {
     @Mock PaymentRepository paymentRepository;
     @Mock ProcessedWebhookEventRepository processedWebhookEventRepository;
     @Mock RefundRepository refundRepository;
+    @Mock LedgerEntryRepository ledgerEntryRepository;
     @Mock LedgerService ledgerService;
     @Mock OutboxService outboxService;
     @Mock EntityManager entityManager;
@@ -69,12 +73,12 @@ class WebhookEventProcessorHardeningTest {
         meterRegistry = new SimpleMeterRegistry();
         processorCaptureVoidOutboxOn = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerService, outboxService, meterRegistry,
+            ledgerEntryRepository, ledgerService, outboxService, meterRegistry,
             /* refundOutboxEnabled */ false,
             /* captureVoidOutboxEnabled */ true);
         processorCaptureVoidOutboxOff = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerService, outboxService, meterRegistry,
+            ledgerEntryRepository, ledgerService, outboxService, meterRegistry,
             /* refundOutboxEnabled */ false,
             /* captureVoidOutboxEnabled */ false);
         ReflectionTestUtils.setField(processorCaptureVoidOutboxOn, "entityManager", entityManager);
@@ -234,7 +238,7 @@ class WebhookEventProcessorHardeningTest {
 
             assertThat(p.getStatus()).isEqualTo(status);
             verify(paymentRepository, never()).save(any());
-            verifyNoInteractions(ledgerService);
+            verifyNoInteractions(ledgerService, outboxService);
             assertThat(meterRegistry.counter(
                 "payment.webhook.fail", "outcome", "terminal_rejected").count())
                 .isEqualTo(1.0);
@@ -243,7 +247,7 @@ class WebhookEventProcessorHardeningTest {
         @ParameterizedTest(name = "failed processes when payment in {0}")
         @EnumSource(value = PaymentStatus.class,
             names = {"AUTHORIZE_PENDING", "AUTHORIZED", "CAPTURE_PENDING", "VOID_PENDING"})
-        @DisplayName("failed marks eligible states as FAILED")
+        @DisplayName("failed marks eligible states as FAILED and publishes PaymentFailed outbox")
         void failedProcessesEligibleStates(PaymentStatus status) {
             Payment p = paymentInStatus(status, 5000);
             stubPaymentLookupWithSave(p);
@@ -254,7 +258,11 @@ class WebhookEventProcessorHardeningTest {
 
             assertThat(p.getStatus()).isEqualTo(PaymentStatus.FAILED);
             verify(paymentRepository).save(p);
+            // No auth hold ledger entry exists (mock default false), so no ledger interaction
             verifyNoInteractions(ledgerService);
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentFailed"), any());
             assertThat(meterRegistry.counter(
                 "payment.webhook.fail", "outcome", "processed").count())
                 .isEqualTo(1.0);
@@ -404,6 +412,196 @@ class WebhookEventProcessorHardeningTest {
                 eq("authorization_hold"), eq("customer_receivable"),
                 eq("VOID"), eq(p.getId().toString()),
                 eq("Authorization void (webhook)"));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 4. Wave 11 — Failure parity: auth release, outbox, audit
+    // ═══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Wave 11: Failure auth release, PaymentFailed outbox, audit")
+    class FailureParityWave11 {
+
+        @Test
+        @DisplayName("AUTHORIZE_PENDING failure does NOT release auth hold (no hold recorded yet)")
+        void failFromAuthorizePending_noLedgerRelease() {
+            Payment p = paymentInStatus(PaymentStatus.AUTHORIZE_PENDING, 5000);
+            stubPaymentLookupWithSave(p);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.payment_failed", PSP_REF,
+                emptyObjectNode(), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.FAILED);
+            verifyNoInteractions(ledgerService, ledgerEntryRepository);
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentFailed"), any());
+            assertThat(meterRegistry.counter(
+                "payment.webhook.fail", "outcome", "auth_released").count())
+                .isEqualTo(0.0);
+        }
+
+        @ParameterizedTest(name = "failure from {0} releases auth hold when ledger entry exists")
+        @EnumSource(value = PaymentStatus.class,
+            names = {"AUTHORIZED", "CAPTURE_PENDING", "VOID_PENDING"})
+        @DisplayName("post-authorization failure releases auth hold")
+        void failFromPostAuthState_releasesAuthHold(PaymentStatus status) {
+            Payment p = paymentInStatus(status, 7000);
+            stubPaymentLookupWithSave(p);
+            when(ledgerEntryRepository.existsByPaymentIdAndReferenceTypeAndReferenceId(
+                p.getId(), "AUTHORIZATION", p.getId().toString())).thenReturn(true);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.payment_failed", PSP_REF,
+                emptyObjectNode(), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.FAILED);
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(7000L),
+                eq("authorization_hold"), eq("customer_receivable"),
+                eq("FAILURE_RELEASE"), eq(p.getId().toString()),
+                eq("Authorization release on failure (webhook)"));
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentFailed"), any());
+            assertThat(meterRegistry.counter(
+                "payment.webhook.fail", "outcome", "auth_released").count())
+                .isEqualTo(1.0);
+            assertThat(meterRegistry.counter(
+                "payment.webhook.fail", "outcome", "processed").count())
+                .isEqualTo(1.0);
+        }
+
+        @ParameterizedTest(name = "failure from {0} skips auth release when no ledger entry exists")
+        @EnumSource(value = PaymentStatus.class,
+            names = {"AUTHORIZED", "CAPTURE_PENDING", "VOID_PENDING"})
+        @DisplayName("post-authorization failure without auth ledger entry skips release")
+        void failFromPostAuthState_noAuthEntry_skipsRelease(PaymentStatus status) {
+            Payment p = paymentInStatus(status, 7000);
+            stubPaymentLookupWithSave(p);
+            when(ledgerEntryRepository.existsByPaymentIdAndReferenceTypeAndReferenceId(
+                p.getId(), "AUTHORIZATION", p.getId().toString())).thenReturn(false);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.payment_failed", PSP_REF,
+                emptyObjectNode(), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.FAILED);
+            verifyNoInteractions(ledgerService);
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentFailed"), any());
+            assertThat(meterRegistry.counter(
+                "payment.webhook.fail", "outcome", "auth_released").count())
+                .isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("idempotent retry: already FAILED returns silently — no duplicate ledger/outbox")
+        void alreadyFailed_idempotentSkip() {
+            Payment p = paymentInStatus(PaymentStatus.FAILED, 5000);
+            stubPaymentLookup(p);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.payment_failed", PSP_REF,
+                emptyObjectNode(), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.FAILED);
+            verify(paymentRepository, never()).save(any());
+            verifyNoInteractions(ledgerService, ledgerEntryRepository, outboxService);
+        }
+
+        @Test
+        @DisplayName("retry with auth release uses dedup-safe ledger referenceId")
+        void retryAuthRelease_dedupSafe() {
+            Payment p = paymentInStatus(PaymentStatus.AUTHORIZED, 5000);
+            stubPaymentLookupWithSave(p);
+            when(ledgerEntryRepository.existsByPaymentIdAndReferenceTypeAndReferenceId(
+                p.getId(), "AUTHORIZATION", p.getId().toString())).thenReturn(true);
+
+            // First call
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.payment_failed", PSP_REF,
+                emptyObjectNode(), null);
+
+            // Verify FAILURE_RELEASE uses payment.getId() as referenceId
+            // (LedgerService.recordDoubleEntry dedups on paymentId+referenceType+referenceId)
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(5000L),
+                eq("authorization_hold"), eq("customer_receivable"),
+                eq("FAILURE_RELEASE"), eq(p.getId().toString()),
+                eq("Authorization release on failure (webhook)"));
+        }
+
+        @Test
+        @DisplayName("PaymentFailed outbox payload includes reason from PSP error message")
+        @SuppressWarnings("unchecked")
+        void outboxPayload_includesPspReason() {
+            Payment p = paymentInStatus(PaymentStatus.AUTHORIZED, 5000);
+            stubPaymentLookupWithSave(p);
+
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("id", PSP_REF);
+            ObjectNode error = node.putObject("last_payment_error");
+            error.put("message", "Your card was declined");
+            error.put("code", "card_declined");
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.payment_failed", PSP_REF,
+                node, null);
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentFailed"), payloadCaptor.capture());
+            Map<String, Object> payload = payloadCaptor.getValue();
+            assertThat(payload.get("orderId")).isEqualTo(p.getOrderId());
+            assertThat(payload.get("paymentId")).isEqualTo(p.getId());
+            assertThat(payload.get("reason")).isEqualTo("Your card was declined");
+        }
+
+        @Test
+        @DisplayName("PaymentFailed outbox uses PSP error code when message is absent")
+        @SuppressWarnings("unchecked")
+        void outboxPayload_fallsToPspCode() {
+            Payment p = paymentInStatus(PaymentStatus.CAPTURE_PENDING, 5000);
+            stubPaymentLookupWithSave(p);
+
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("id", PSP_REF);
+            ObjectNode error = node.putObject("last_payment_error");
+            error.put("code", "expired_card");
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.payment_failed", PSP_REF,
+                node, null);
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentFailed"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue().get("reason")).isEqualTo("PSP error: expired_card");
+        }
+
+        @Test
+        @DisplayName("PaymentFailed outbox falls back to generic reason when no PSP error")
+        @SuppressWarnings("unchecked")
+        void outboxPayload_fallsToGenericReason() {
+            Payment p = paymentInStatus(PaymentStatus.VOID_PENDING, 5000);
+            stubPaymentLookupWithSave(p);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.payment_failed", PSP_REF,
+                emptyObjectNode(), null);
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(outboxService).publish(
+                eq("Payment"), eq(p.getId().toString()),
+                eq("PaymentFailed"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue().get("reason"))
+                .isEqualTo("Payment failed during VOID_PENDING");
         }
     }
 }

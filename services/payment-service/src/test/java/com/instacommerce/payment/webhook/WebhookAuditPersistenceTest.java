@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.domain.model.ProcessedWebhookEvent;
+import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import com.instacommerce.payment.repository.RefundRepository;
@@ -47,6 +48,7 @@ class WebhookAuditPersistenceTest {
     @Mock PaymentRepository paymentRepository;
     @Mock ProcessedWebhookEventRepository processedWebhookEventRepository;
     @Mock RefundRepository refundRepository;
+    @Mock LedgerEntryRepository ledgerEntryRepository;
     @Mock LedgerService ledgerService;
     @Mock OutboxService outboxService;
     @Mock EntityManager entityManager;
@@ -61,7 +63,7 @@ class WebhookAuditPersistenceTest {
         meterRegistry = new SimpleMeterRegistry();
         processor = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerService, outboxService, meterRegistry, false, false);
+            ledgerEntryRepository, ledgerService, outboxService, meterRegistry, false, false);
         ReflectionTestUtils.setField(processor, "entityManager", entityManager);
         handler = new WebhookEventHandler(
             objectMapper, processedWebhookEventRepository, processor);
