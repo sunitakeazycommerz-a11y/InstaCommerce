@@ -61,7 +61,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Payment completeAuthorization(UUID paymentId, String pspReference) {
-        Payment payment = paymentRepository.findById(paymentId)
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         if (payment.getStatus() == PaymentStatus.AUTHORIZED) {
             return payment; // idempotent no-op
@@ -92,7 +92,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markAuthorizationFailed(UUID paymentId) {
-        paymentRepository.findById(paymentId).ifPresent(p -> {
+        paymentRepository.findByIdForUpdate(paymentId).ifPresent(p -> {
             p.setStatus(PaymentStatus.FAILED);
             paymentRepository.save(p);
         });
@@ -100,7 +100,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Payment saveCapturePending(UUID paymentId) {
-        Payment payment = paymentRepository.findById(paymentId)
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         if (payment.getStatus() == PaymentStatus.CAPTURED) {
             return payment;
@@ -115,7 +115,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Payment completeCaptured(UUID paymentId, long capturedCents) {
-        Payment payment = paymentRepository.findById(paymentId)
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         if (payment.getStatus() == PaymentStatus.CAPTURED) {
             return payment; // idempotent no-op
@@ -145,7 +145,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void revertToAuthorized(UUID paymentId) {
-        paymentRepository.findById(paymentId).ifPresent(p -> {
+        paymentRepository.findByIdForUpdate(paymentId).ifPresent(p -> {
             if (p.getStatus() == PaymentStatus.CAPTURE_PENDING) {
                 p.setStatus(PaymentStatus.AUTHORIZED);
                 paymentRepository.save(p);
@@ -155,7 +155,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Payment saveVoidPending(UUID paymentId) {
-        Payment payment = paymentRepository.findById(paymentId)
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         if (payment.getStatus() == PaymentStatus.VOIDED) {
             return payment;
@@ -170,7 +170,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Payment completeVoided(UUID paymentId) {
-        Payment payment = paymentRepository.findById(paymentId)
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         if (payment.getStatus() == PaymentStatus.VOIDED) {
             return payment; // idempotent no-op
@@ -202,7 +202,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void revertVoidToAuthorized(UUID paymentId) {
-        paymentRepository.findById(paymentId).ifPresent(p -> {
+        paymentRepository.findByIdForUpdate(paymentId).ifPresent(p -> {
             if (p.getStatus() == PaymentStatus.VOID_PENDING) {
                 p.setStatus(PaymentStatus.AUTHORIZED);
                 paymentRepository.save(p);
@@ -217,7 +217,7 @@ public class PaymentTransactionHelper {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Payment reconcileDirectToCaptured(UUID paymentId, String pspReference, long capturedCents) {
-        Payment payment = paymentRepository.findById(paymentId)
+        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
         if (payment.getStatus() == PaymentStatus.CAPTURED) {
             return payment; // idempotent no-op
@@ -262,7 +262,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void resolveStaleAuthorizationFailed(UUID paymentId, String reason) {
-        paymentRepository.findById(paymentId).ifPresent(p -> {
+        paymentRepository.findByIdForUpdate(paymentId).ifPresent(p -> {
             if (p.getStatus() != PaymentStatus.AUTHORIZE_PENDING) return;
             p.setStatus(PaymentStatus.FAILED);
             paymentRepository.save(p);
@@ -282,7 +282,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void resolveStaleCaptureFailed(UUID paymentId, String reason) {
-        paymentRepository.findById(paymentId).ifPresent(p -> {
+        paymentRepository.findByIdForUpdate(paymentId).ifPresent(p -> {
             if (p.getStatus() != PaymentStatus.CAPTURE_PENDING) return;
             p.setStatus(PaymentStatus.AUTHORIZED);
             paymentRepository.save(p);
@@ -302,7 +302,7 @@ public class PaymentTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void resolveStaleVoidFailed(UUID paymentId, String reason) {
-        paymentRepository.findById(paymentId).ifPresent(p -> {
+        paymentRepository.findByIdForUpdate(paymentId).ifPresent(p -> {
             if (p.getStatus() != PaymentStatus.VOID_PENDING) return;
             p.setStatus(PaymentStatus.AUTHORIZED);
             paymentRepository.save(p);
