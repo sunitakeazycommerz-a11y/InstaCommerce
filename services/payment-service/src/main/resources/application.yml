@@ -53,6 +53,11 @@ payment:
     stale-pending-refund-cron: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_CRON:0 */10 * * * *}
     stale-pending-refund-threshold-minutes: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_THRESHOLD_MINUTES:60}
     stale-pending-refund-batch-size: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_BATCH_SIZE:50}
+  verification:
+    ledger-integrity-enabled: ${PAYMENT_LEDGER_INTEGRITY_ENABLED:false}
+    ledger-integrity-cron: ${PAYMENT_LEDGER_INTEGRITY_CRON:0 */15 * * * *}
+    ledger-integrity-lookback-minutes: ${PAYMENT_LEDGER_INTEGRITY_LOOKBACK_MINUTES:60}
+    ledger-integrity-batch-size: ${PAYMENT_LEDGER_INTEGRITY_BATCH_SIZE:100}
 
 stripe:
   api-key: ${sm://stripe-api-key:${STRIPE_API_KEY}}
