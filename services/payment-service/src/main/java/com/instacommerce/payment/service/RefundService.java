@@ -10,10 +10,15 @@ import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.RefundRepository;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 @Service
 public class RefundService {
+    private static final Logger log = LoggerFactory.getLogger(RefundService.class);
+
     private final RefundRepository refundRepository;
     private final PaymentGateway paymentGateway;
     private final RefundTransactionHelper txHelper;
@@ -27,6 +32,7 @@ public class RefundService {
     }
 
     /**
+     * Three-step refund flow with idempotency and async PSP handling:
      * Step 1: Create PENDING refund record in TX (with pessimistic lock on payment).
      * Step 2: Call PSP outside TX.
      * Step 3: Update to COMPLETED in new TX.
@@ -41,7 +47,21 @@ public class RefundService {
         }
 
         String appliedKey = idempotencyKey == null ? generateIdempotencyKey() : idempotencyKey;
-        RefundTransactionHelper.RefundPendingResult pending = txHelper.savePendingRefund(paymentId, request, appliedKey);
+
+        RefundTransactionHelper.RefundPendingResult pending;
+        try {
+            pending = txHelper.savePendingRefund(paymentId, request, appliedKey);
+        } catch (DataIntegrityViolationException ex) {
+            // A concurrent request with the same idempotency key won the insert race.
+            // Re-fetch and return the winner's refund instead of surfacing a raw 500.
+            Optional<Refund> raceWinner = refundRepository.findByIdempotencyKey(appliedKey);
+            if (raceWinner.isPresent()) {
+                log.info("Duplicate refund idempotency key resolved via re-fetch (key={})", appliedKey);
+                return RefundMapper.toResponse(raceWinner.get());
+            }
+            // Not an idempotency-key conflict — propagate the original exception.
+            throw ex;
+        }
 
         GatewayRefundResult result;
         try {
