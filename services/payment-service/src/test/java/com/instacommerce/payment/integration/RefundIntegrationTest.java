@@ -38,6 +38,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -162,6 +163,49 @@ class RefundIntegrationTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void staleRefundEntityTriggersOptimisticLockFailure() {
+        Payment payment = saveCapturedPayment(10_000L);
+
+        // Persist a PENDING refund (version = 0)
+        Refund refund = new Refund();
+        refund.setPaymentId(payment.getId());
+        refund.setAmountCents(2_000L);
+        refund.setReason("test-occ");
+        refund.setIdempotencyKey("occ-key-" + UUID.randomUUID());
+        refund.setStatus(RefundStatus.PENDING);
+        Refund saved = refundRepository.saveAndFlush(refund);
+
+        // Read the entity into the persistence context (version = 0)
+        Refund stale = refundRepository.findById(saved.getId()).orElseThrow();
+        assertThat(stale.getVersion()).isEqualTo(0L);
+
+        // Simulate a concurrent writer bumping the version via raw SQL
+        jdbcTemplate.update(
+            "UPDATE refunds SET version = version + 1, status = 'COMPLETED' WHERE id = ?",
+            saved.getId());
+
+        // The stale entity still thinks version = 0, but the DB row is now version = 1
+        stale.setStatus(RefundStatus.FAILED);
+
+        assertThatThrownBy(() -> refundRepository.saveAndFlush(stale))
+            .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+
+        // Verify the concurrent writer's state won (COMPLETED, version = 1)
+        Refund winner = jdbcTemplate.queryForObject(
+            "SELECT status, version FROM refunds WHERE id = ?",
+            (rs, rowNum) -> {
+                Refund r = new Refund();
+                r.setStatus(RefundStatus.valueOf(rs.getString("status")));
+                r.setVersion(rs.getLong("version"));
+                return r;
+            },
+            saved.getId());
+        assertThat(winner).isNotNull();
+        assertThat(winner.getStatus()).isEqualTo(RefundStatus.COMPLETED);
+        assertThat(winner.getVersion()).isEqualTo(1L);
     }
 
     private Payment saveCapturedPayment(long capturedCents) {
