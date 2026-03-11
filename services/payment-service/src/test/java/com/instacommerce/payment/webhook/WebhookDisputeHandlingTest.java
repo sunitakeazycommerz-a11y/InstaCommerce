@@ -297,7 +297,12 @@ class WebhookDisputeHandlingTest {
             assertThat(payment.getStatus()).isEqualTo(PaymentStatus.DISPUTED);
             verify(paymentRepository, never()).save(any());
             verifyNoInteractions(ledgerService);
-            verifyNoInteractions(outboxService);
+
+            verify(outboxService).publish(
+                eq("Payment"),
+                eq(payment.getId().toString()),
+                eq("PaymentDisputeUpdated"),
+                any());
 
             ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
             verify(auditLogService).logSafely(

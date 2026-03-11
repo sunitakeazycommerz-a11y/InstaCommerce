@@ -8,6 +8,8 @@ import com.instacommerce.payment.exception.PaymentGatewayException;
 import com.instacommerce.payment.gateway.GatewayRefundResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.RefundRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -22,13 +24,16 @@ public class RefundService {
     private final RefundRepository refundRepository;
     private final PaymentGateway paymentGateway;
     private final RefundTransactionHelper txHelper;
+    private final MeterRegistry meterRegistry;
 
     public RefundService(RefundRepository refundRepository,
                          PaymentGateway paymentGateway,
-                         RefundTransactionHelper txHelper) {
+                         RefundTransactionHelper txHelper,
+                         MeterRegistry meterRegistry) {
         this.refundRepository = refundRepository;
         this.paymentGateway = paymentGateway;
         this.txHelper = txHelper;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -38,50 +43,62 @@ public class RefundService {
      * Step 3: Update to COMPLETED in new TX.
      */
     public RefundResponse refund(UUID paymentId, RefundRequest request) {
-        String idempotencyKey = IdempotencyKeys.normalize(request.idempotencyKey());
-        if (idempotencyKey != null) {
-            Optional<Refund> existing = refundRepository.findByIdempotencyKey(idempotencyKey);
-            if (existing.isPresent()) {
-                return RefundMapper.toResponse(existing.get());
-            }
-        }
-
-        String appliedKey = idempotencyKey == null ? generateIdempotencyKey() : idempotencyKey;
-
-        RefundTransactionHelper.RefundPendingResult pending;
+        Timer.Sample sample = Timer.start(meterRegistry);
+        String result = "success";
         try {
-            pending = txHelper.savePendingRefund(paymentId, request, appliedKey);
-        } catch (DataIntegrityViolationException ex) {
-            // A concurrent request with the same idempotency key won the insert race.
-            // Re-fetch and return the winner's refund instead of surfacing a raw 500.
-            Optional<Refund> raceWinner = refundRepository.findByIdempotencyKey(appliedKey);
-            if (raceWinner.isPresent()) {
-                log.info("Duplicate refund idempotency key resolved via re-fetch (key={})", appliedKey);
-                return RefundMapper.toResponse(raceWinner.get());
+            String idempotencyKey = IdempotencyKeys.normalize(request.idempotencyKey());
+            if (idempotencyKey != null) {
+                Optional<Refund> existing = refundRepository.findByIdempotencyKey(idempotencyKey);
+                if (existing.isPresent()) {
+                    return RefundMapper.toResponse(existing.get());
+                }
             }
-            // Not an idempotency-key conflict — propagate the original exception.
-            throw ex;
+
+            String appliedKey = idempotencyKey == null ? generateIdempotencyKey() : idempotencyKey;
+
+            RefundTransactionHelper.RefundPendingResult pending;
+            try {
+                pending = txHelper.savePendingRefund(paymentId, request, appliedKey);
+            } catch (DataIntegrityViolationException ex) {
+                Optional<Refund> raceWinner = refundRepository.findByIdempotencyKey(appliedKey);
+                if (raceWinner.isPresent()) {
+                    log.info("Duplicate refund idempotency key resolved via re-fetch (key={})", appliedKey);
+                    return RefundMapper.toResponse(raceWinner.get());
+                }
+                throw ex;
+            }
+
+            GatewayRefundResult gatewayResult;
+            try {
+                gatewayResult = paymentGateway.refund(pending.pspReference(), request.amountCents(), appliedKey, pending.refundId());
+            } catch (Exception ex) {
+                txHelper.markRefundFailed(pending.refundId());
+                throw ex;
+            }
+
+            if (!gatewayResult.success()) {
+                txHelper.markRefundFailed(pending.refundId());
+                throw new PaymentGatewayException(gatewayResult.failureReason());
+            }
+
+            // Persist PSP refund ID immediately so the webhook path can match this refund
+            // before synchronous completion runs, closing the race window.
+            txHelper.persistPspRefundId(pending.refundId(), gatewayResult.refundId());
+
+            Refund saved = txHelper.completeRefund(pending.refundId(), paymentId, request, gatewayResult.refundId());
+            return RefundMapper.toResponse(saved);
+        } catch (PaymentGatewayException e) {
+            result = "gateway_error";
+            throw e;
+        } catch (Exception e) {
+            result = "failure";
+            throw e;
+        } finally {
+            sample.stop(Timer.builder("payment.refund.duration")
+                .tag("result", result)
+                .register(meterRegistry));
+            meterRegistry.counter("payment.refund.total", "result", result).increment();
         }
-
-        GatewayRefundResult result;
-        try {
-            result = paymentGateway.refund(pending.pspReference(), request.amountCents(), appliedKey, pending.refundId());
-        } catch (Exception ex) {
-            txHelper.markRefundFailed(pending.refundId());
-            throw ex;
-        }
-
-        if (!result.success()) {
-            txHelper.markRefundFailed(pending.refundId());
-            throw new PaymentGatewayException(result.failureReason());
-        }
-
-        // Persist PSP refund ID immediately so the webhook path can match this refund
-        // before synchronous completion runs, closing the race window.
-        txHelper.persistPspRefundId(pending.refundId(), result.refundId());
-
-        Refund saved = txHelper.completeRefund(pending.refundId(), paymentId, request, result.refundId());
-        return RefundMapper.toResponse(saved);
     }
 
     private String generateIdempotencyKey() {

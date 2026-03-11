@@ -1,6 +1,8 @@
 package com.instacommerce.payment.gateway;
 
 import com.instacommerce.payment.exception.PaymentGatewayException;
+import com.instacommerce.payment.exception.PaymentGatewayTransientException;
+import com.stripe.exception.ApiConnectionException;
 import com.stripe.exception.CardException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.PaymentIntent;
@@ -184,6 +186,10 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     private PaymentGatewayException toGatewayException(StripeException ex) {
+        if (ex instanceof ApiConnectionException) {
+            return new PaymentGatewayTransientException(
+                "PSP communication failure: " + ex.getMessage(), ex);
+        }
         String code = ex.getCode();
         String message = (code == null || code.isBlank())
             ? "Payment processing failed"

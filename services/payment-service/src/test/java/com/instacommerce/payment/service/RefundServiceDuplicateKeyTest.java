@@ -38,7 +38,8 @@ class RefundServiceDuplicateKeyTest {
 
     @BeforeEach
     void setUp() {
-        service = new RefundService(refundRepository, paymentGateway, txHelper);
+        service = new RefundService(refundRepository, paymentGateway, txHelper,
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     private Refund existingRefund(UUID paymentId, String idempotencyKey) {

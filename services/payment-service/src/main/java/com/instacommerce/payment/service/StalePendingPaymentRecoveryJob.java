@@ -6,8 +6,10 @@ import com.instacommerce.payment.gateway.GatewayStatusResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.PaymentRepository;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -60,6 +62,21 @@ public class StalePendingPaymentRecoveryJob {
         this.meterRegistry = meterRegistry;
         this.staleThresholdMinutes = staleThresholdMinutes;
         this.batchSize = batchSize;
+
+        Gauge.builder("payment.pending.oldest_age_seconds", this, job -> {
+            try {
+                List<Payment> oldest = paymentRepository.findStalePendingPayments(
+                    PENDING_STATUSES, Instant.now(), PageRequest.ofSize(1));
+                if (oldest.isEmpty()) {
+                    return 0d;
+                }
+                return (double) Duration.between(oldest.get(0).getCreatedAt(), Instant.now()).getSeconds();
+            } catch (Exception ex) {
+                log.debug("Failed to compute oldest pending payment age", ex);
+                return 0d;
+            }
+        }).description("Age in seconds of the oldest pending payment")
+          .register(meterRegistry);
     }
 
     @Scheduled(cron = "${payment.recovery.stale-pending-cron:0 */5 * * * *}")

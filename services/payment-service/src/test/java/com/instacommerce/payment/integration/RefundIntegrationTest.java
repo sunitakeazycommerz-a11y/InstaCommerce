@@ -79,6 +79,7 @@ class RefundIntegrationTest {
         registry.add("payment.webhook.refund-outbox-enabled", () -> "false");
         registry.add("stripe.api-key", () -> "test-stripe-key");
         registry.add("stripe.webhook-secret", () -> "test-webhook-secret");
+        registry.add("internal.service.token", () -> "test-internal-service-token");
     }
 
     @Autowired
