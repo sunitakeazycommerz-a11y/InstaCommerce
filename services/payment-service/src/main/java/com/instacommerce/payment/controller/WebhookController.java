@@ -29,13 +29,13 @@ public class WebhookController {
                                                 @RequestHeader(value = "Stripe-Signature", required = true)
                                                 String signature) {
         if (!signatureVerifier.verify(payload, signature)) {
-            return ResponseEntity.badRequest().body("Invalid signature");
+            return ResponseEntity.badRequest().body("Bad Request");
         }
         try {
             webhookEventHandler.handle(payload);
         } catch (Exception ex) {
             log.error("Webhook processing failed", ex);
-            return ResponseEntity.internalServerError().body("Processing failed");
+            return ResponseEntity.internalServerError().body("Internal Server Error");
         }
         return ResponseEntity.ok("OK");
     }

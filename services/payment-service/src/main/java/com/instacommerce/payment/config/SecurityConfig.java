@@ -31,7 +31,7 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
+        configuration.setAllowedOriginPatterns(Arrays.asList(allowedOrigins.split(",")));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Request-Id", "X-Idempotency-Key"));
         configuration.setAllowCredentials(true);
@@ -52,9 +52,11 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/**", "/error", "/payments/webhook").permitAll()
-                .requestMatchers(HttpMethod.POST, "/payments/*/capture", "/payments/*/void").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.POST, "/payments/*/refund").hasRole("ADMIN")
+                .requestMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
+                .requestMatchers("/actuator/**").hasRole("ADMIN")
+                .requestMatchers("/error", "/payments/webhook").permitAll()
+                .requestMatchers(HttpMethod.POST, "/payments/*/capture", "/payments/*/void").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
+                .requestMatchers(HttpMethod.POST, "/payments/*/refund").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)

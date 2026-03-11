@@ -92,7 +92,7 @@ management:
     health:
       probes:
         enabled: true
-      show-details: always
+      show-details: when_authorized
       group:
         readiness:
           include: readinessState,db
@@ -107,4 +107,42 @@ management:
 internal:
   service:
     name: ${spring.application.name}
-    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}
+    token: ${INTERNAL_SERVICE_TOKEN}
+
+resilience4j:
+  circuitbreaker:
+    circuitBreakerAspectOrder: 2
+    instances:
+      paymentGateway:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 5
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        recordExceptions:
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+          - com.instacommerce.payment.exception.PaymentGatewayException
+        ignoreExceptions:
+          - com.instacommerce.payment.exception.PaymentDeclinedException
+  retry:
+    retryAspectOrder: 1
+    instances:
+      paymentGateway:
+        maxAttempts: 3
+        waitDuration: 1s
+        retryExceptions:
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+          - com.instacommerce.payment.exception.PaymentGatewayTransientException
+        ignoreExceptions:
+          - com.instacommerce.payment.exception.PaymentGatewayException
+          - com.instacommerce.payment.exception.PaymentDeclinedException
+  timelimiter:
+    instances:
+      paymentGateway:
+        timeoutDuration: 5s
+        cancelRunningFuture: true

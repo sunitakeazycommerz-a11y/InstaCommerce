@@ -62,7 +62,8 @@ class SyncAuthorizationFailureTest {
         helper = new PaymentTransactionHelper(
             paymentRepository, ledgerService, ledgerEntryRepository, outboxService, auditLogService);
         // PaymentService depends on the helper; stub savePendingAuthorization later per test
-        service = new PaymentService(paymentRepository, paymentGateway, helper);
+        service = new PaymentService(paymentRepository, paymentGateway, helper,
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     private Payment authPendingPayment() {

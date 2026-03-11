@@ -15,6 +15,8 @@ import com.instacommerce.payment.gateway.GatewayCaptureResult;
 import com.instacommerce.payment.gateway.GatewayVoidResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.PaymentRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,13 +26,16 @@ public class PaymentService {
     private final PaymentRepository paymentRepository;
     private final PaymentGateway paymentGateway;
     private final PaymentTransactionHelper txHelper;
+    private final MeterRegistry meterRegistry;
 
     public PaymentService(PaymentRepository paymentRepository,
                           PaymentGateway paymentGateway,
-                          PaymentTransactionHelper txHelper) {
+                          PaymentTransactionHelper txHelper,
+                          MeterRegistry meterRegistry) {
         this.paymentRepository = paymentRepository;
         this.paymentGateway = paymentGateway;
         this.txHelper = txHelper;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -39,38 +44,54 @@ public class PaymentService {
      * Step 3: Update to AUTHORIZED (or FAILED) in a new TX.
      */
     public PaymentResponse authorize(AuthorizeRequest request) {
-        String normalizedKey = IdempotencyKeys.normalize(request.idempotencyKey());
-        Payment pending = txHelper.savePendingAuthorization(request, normalizedKey);
-        if (pending == null) {
-            // idempotent hit — already exists
-            Payment existing = paymentRepository.findByIdempotencyKey(normalizedKey).orElseThrow();
-            return PaymentMapper.toResponse(existing);
-        }
-
-        GatewayAuthResult result;
+        Timer.Sample sample = Timer.start(meterRegistry);
+        String result = "success";
         try {
-            result = paymentGateway.authorize(new GatewayAuthRequest(
-                request.amountCents(),
-                pending.getCurrency(),
-                normalizedKey,
-                request.paymentMethod()
-            ));
-        } catch (Exception ex) {
-            String reason = (ex.getMessage() != null && !ex.getMessage().isBlank())
-                ? ex.getMessage() : "PSP authorization error";
-            txHelper.markAuthorizationFailed(pending.getId(), reason);
-            throw ex;
-        }
+            String normalizedKey = IdempotencyKeys.normalize(request.idempotencyKey());
+            Payment pending = txHelper.savePendingAuthorization(request, normalizedKey);
+            if (pending == null) {
+                // idempotent hit — already exists
+                Payment existing = paymentRepository.findByIdempotencyKey(normalizedKey).orElseThrow();
+                return PaymentMapper.toResponse(existing);
+            }
 
-        if (!result.success()) {
-            String reason = (result.declineReason() != null && !result.declineReason().isBlank())
-                ? result.declineReason() : "Authorization declined by PSP";
-            txHelper.markAuthorizationFailed(pending.getId(), reason);
-            throw new PaymentDeclinedException(result.declineReason());
-        }
+            GatewayAuthResult gatewayResult;
+            try {
+                gatewayResult = paymentGateway.authorize(new GatewayAuthRequest(
+                    request.amountCents(),
+                    pending.getCurrency(),
+                    normalizedKey,
+                    request.paymentMethod()
+                ));
+            } catch (Exception ex) {
+                String reason = (ex.getMessage() != null && !ex.getMessage().isBlank())
+                    ? ex.getMessage() : "PSP authorization error";
+                txHelper.markAuthorizationFailed(pending.getId(), reason);
+                throw ex;
+            }
 
-        Payment saved = txHelper.completeAuthorization(pending.getId(), result.pspReference());
-        return PaymentMapper.toResponse(saved);
+            if (!gatewayResult.success()) {
+                String reason = (gatewayResult.declineReason() != null && !gatewayResult.declineReason().isBlank())
+                    ? gatewayResult.declineReason() : "Authorization declined by PSP";
+                txHelper.markAuthorizationFailed(pending.getId(), reason);
+                throw new PaymentDeclinedException(gatewayResult.declineReason());
+            }
+
+            Payment saved = txHelper.completeAuthorization(pending.getId(), gatewayResult.pspReference());
+            return PaymentMapper.toResponse(saved);
+        } catch (PaymentGatewayException e) {
+            result = "gateway_error";
+            throw e;
+        } catch (Exception e) {
+            result = "failure";
+            throw e;
+        } finally {
+            sample.stop(Timer.builder("payment.operation.duration")
+                .tag("operation", "authorize")
+                .tag("result", result)
+                .register(meterRegistry));
+            meterRegistry.counter("payment.operation.total", "operation", "authorize", "result", result).increment();
+        }
     }
 
     /**
@@ -87,28 +108,44 @@ public class PaymentService {
     }
 
     public PaymentResponse capture(UUID paymentId, Long amountCents, String idempotencyKey) {
-        Payment payment = txHelper.saveCapturePending(paymentId);
-        if (payment.getStatus() == PaymentStatus.CAPTURED) {
-            return PaymentMapper.toResponse(payment);
-        }
-
-        long captureAmount = resolveCaptureAmount(payment, amountCents);
-        String normalizedKey = IdempotencyKeys.normalize(idempotencyKey);
-        GatewayCaptureResult result;
+        Timer.Sample sample = Timer.start(meterRegistry);
+        String result = "success";
         try {
-            result = paymentGateway.capture(payment.getPspReference(), captureAmount, normalizedKey);
-        } catch (Exception ex) {
-            txHelper.revertToAuthorized(paymentId);
-            throw ex;
-        }
+            Payment payment = txHelper.saveCapturePending(paymentId);
+            if (payment.getStatus() == PaymentStatus.CAPTURED) {
+                return PaymentMapper.toResponse(payment);
+            }
 
-        if (!result.success()) {
-            txHelper.revertToAuthorized(paymentId);
-            throw new PaymentGatewayException(result.failureReason());
-        }
+            long captureAmount = resolveCaptureAmount(payment, amountCents);
+            String normalizedKey = IdempotencyKeys.normalize(idempotencyKey);
+            GatewayCaptureResult gatewayResult;
+            try {
+                gatewayResult = paymentGateway.capture(payment.getPspReference(), captureAmount, normalizedKey);
+            } catch (Exception ex) {
+                txHelper.revertToAuthorized(paymentId);
+                throw ex;
+            }
 
-        Payment saved = txHelper.completeCaptured(paymentId, captureAmount);
-        return PaymentMapper.toResponse(saved);
+            if (!gatewayResult.success()) {
+                txHelper.revertToAuthorized(paymentId);
+                throw new PaymentGatewayException(gatewayResult.failureReason());
+            }
+
+            Payment saved = txHelper.completeCaptured(paymentId, captureAmount);
+            return PaymentMapper.toResponse(saved);
+        } catch (PaymentGatewayException e) {
+            result = "gateway_error";
+            throw e;
+        } catch (Exception e) {
+            result = "failure";
+            throw e;
+        } finally {
+            sample.stop(Timer.builder("payment.operation.duration")
+                .tag("operation", "capture")
+                .tag("result", result)
+                .register(meterRegistry));
+            meterRegistry.counter("payment.operation.total", "operation", "capture", "result", result).increment();
+        }
     }
 
     /**
@@ -121,27 +158,43 @@ public class PaymentService {
     }
 
     public PaymentResponse voidAuth(UUID paymentId, String idempotencyKey) {
-        Payment payment = txHelper.saveVoidPending(paymentId);
-        if (payment.getStatus() == PaymentStatus.VOIDED) {
-            return PaymentMapper.toResponse(payment);
-        }
-
-        String normalizedKey = IdempotencyKeys.normalize(idempotencyKey);
-        GatewayVoidResult result;
+        Timer.Sample sample = Timer.start(meterRegistry);
+        String result = "success";
         try {
-            result = paymentGateway.voidAuth(payment.getPspReference(), normalizedKey);
-        } catch (Exception ex) {
-            txHelper.revertVoidToAuthorized(paymentId);
-            throw ex;
-        }
+            Payment payment = txHelper.saveVoidPending(paymentId);
+            if (payment.getStatus() == PaymentStatus.VOIDED) {
+                return PaymentMapper.toResponse(payment);
+            }
 
-        if (!result.success()) {
-            txHelper.revertVoidToAuthorized(paymentId);
-            throw new PaymentGatewayException(result.failureReason());
-        }
+            String normalizedKey = IdempotencyKeys.normalize(idempotencyKey);
+            GatewayVoidResult gatewayResult;
+            try {
+                gatewayResult = paymentGateway.voidAuth(payment.getPspReference(), normalizedKey);
+            } catch (Exception ex) {
+                txHelper.revertVoidToAuthorized(paymentId);
+                throw ex;
+            }
 
-        Payment saved = txHelper.completeVoided(paymentId);
-        return PaymentMapper.toResponse(saved);
+            if (!gatewayResult.success()) {
+                txHelper.revertVoidToAuthorized(paymentId);
+                throw new PaymentGatewayException(gatewayResult.failureReason());
+            }
+
+            Payment saved = txHelper.completeVoided(paymentId);
+            return PaymentMapper.toResponse(saved);
+        } catch (PaymentGatewayException e) {
+            result = "gateway_error";
+            throw e;
+        } catch (Exception e) {
+            result = "failure";
+            throw e;
+        } finally {
+            sample.stop(Timer.builder("payment.operation.duration")
+                .tag("operation", "void")
+                .tag("result", result)
+                .register(meterRegistry));
+            meterRegistry.counter("payment.operation.total", "operation", "void", "result", result).increment();
+        }
     }
 
     @Transactional(readOnly = true)

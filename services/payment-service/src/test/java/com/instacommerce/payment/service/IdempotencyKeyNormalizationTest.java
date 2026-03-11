@@ -56,7 +56,14 @@ class IdempotencyKeyNormalizationTest {
         @Mock private PaymentRepository paymentRepository;
         @Mock private PaymentGateway paymentGateway;
         @Mock private PaymentTransactionHelper txHelper;
-        @InjectMocks private PaymentService paymentService;
+        private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        private PaymentService paymentService;
+
+        @org.junit.jupiter.api.BeforeEach
+        void init() {
+            paymentService = new PaymentService(paymentRepository, paymentGateway, txHelper, meterRegistry);
+        }
 
         @Test
         @DisplayName("Stores normalized key and passes it to PSP gateway")
@@ -114,7 +121,14 @@ class IdempotencyKeyNormalizationTest {
         @Mock private RefundRepository refundRepository;
         @Mock private PaymentGateway paymentGateway;
         @Mock private RefundTransactionHelper txHelper;
-        @InjectMocks private RefundService refundService;
+        private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        private RefundService refundService;
+
+        @org.junit.jupiter.api.BeforeEach
+        void init() {
+            refundService = new RefundService(refundRepository, paymentGateway, txHelper, meterRegistry);
+        }
 
         @Test
         @DisplayName("Looks up and stores normalized key for long refund idempotency key")
@@ -156,7 +170,14 @@ class IdempotencyKeyNormalizationTest {
         @Mock private PaymentRepository paymentRepository;
         @Mock private PaymentGateway paymentGateway;
         @Mock private PaymentTransactionHelper txHelper;
-        @InjectMocks private PaymentService paymentService;
+        private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        private PaymentService paymentService;
+
+        @org.junit.jupiter.api.BeforeEach
+        void init() {
+            paymentService = new PaymentService(paymentRepository, paymentGateway, txHelper, meterRegistry);
+        }
 
         @Test
         @DisplayName("UUID-length key is not hashed")

@@ -738,6 +738,8 @@ public class WebhookEventProcessor {
                 "reason", reason != null ? reason : "",
                 "currency", payment.getCurrency()));
 
+        publishDisputeUpdatedOutbox(payment, status, reason);
+
         log.info("Dispute update for payment {} (status={}, reason={})",
             payment.getId(), status, reason);
         meterRegistry.counter("payment.webhook.dispute_update", "outcome", "processed").increment();
@@ -815,6 +817,16 @@ public class WebhookEventProcessor {
         payload.put("currency", payment.getCurrency());
         payload.put("reason", reason != null ? reason : "");
         outboxService.publish("Payment", payment.getId().toString(), "PaymentDisputed", payload);
+    }
+
+    private void publishDisputeUpdatedOutbox(Payment payment, String disputeStatus, String reason) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("disputeStatus", disputeStatus != null ? disputeStatus : "");
+        payload.put("currency", payment.getCurrency());
+        payload.put("reason", reason != null ? reason : "");
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentDisputeUpdated", payload);
     }
 
     private void publishDisputeWonOutbox(Payment payment, long amountCents) {

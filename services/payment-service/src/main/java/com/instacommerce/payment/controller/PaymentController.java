@@ -7,6 +7,7 @@ import com.instacommerce.payment.dto.response.PaymentResponse;
 import com.instacommerce.payment.service.PaymentService;
 import jakarta.validation.Valid;
 import java.util.UUID;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -43,6 +44,7 @@ public class PaymentController {
         return paymentService.voidAuth(id, idempotencyKey);
     }
 
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     @GetMapping("/{id}")
     public PaymentResponse get(@PathVariable UUID id) {
         return paymentService.get(id);
