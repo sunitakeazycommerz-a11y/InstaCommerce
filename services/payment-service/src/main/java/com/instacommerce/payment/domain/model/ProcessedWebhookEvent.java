@@ -6,6 +6,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "processed_webhook_events")
@@ -20,6 +22,7 @@ public class ProcessedWebhookEvent {
     @Column(name = "event_type")
     private String eventType;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "raw_payload", columnDefinition = "jsonb")
     private String rawPayload;
 

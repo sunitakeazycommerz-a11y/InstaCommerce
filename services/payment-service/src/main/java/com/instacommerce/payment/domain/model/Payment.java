@@ -40,6 +40,7 @@ public class Payment {
     private String currency;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Column(name = "status", nullable = false, columnDefinition = "payment_status")
     private PaymentStatus status;
 
