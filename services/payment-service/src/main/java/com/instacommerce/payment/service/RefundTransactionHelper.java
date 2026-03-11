@@ -167,6 +167,11 @@ public class RefundTransactionHelper {
                 log.info("Refund {} modified concurrently, skipping markRefundFailed — concurrent write wins",
                     refundId);
             } else {
+                Payment payment = paymentRepository.findById(r.getPaymentId())
+                    .orElseThrow(() -> new PaymentNotFoundException(r.getPaymentId()));
+
+                publishRefundFailedEvent(payment, r, r.getReason(), "gateway");
+
                 auditLogService.logSafely(null,
                     "REFUND_GATEWAY_FAILED",
                     "Refund",
@@ -195,6 +200,11 @@ public class RefundTransactionHelper {
                     refundId);
                 return;
             }
+
+            Payment payment = paymentRepository.findById(r.getPaymentId())
+                .orElseThrow(() -> new PaymentNotFoundException(r.getPaymentId()));
+
+            publishRefundFailedEvent(payment, r, reason, "recovery");
 
             auditLogService.logSafely(null, "RECOVERY_REFUND_FAILED", "Refund", r.getId().toString(),
                 Map.of("paymentId", r.getPaymentId(), "reason", reason));
@@ -289,6 +299,18 @@ public class RefundTransactionHelper {
             Map.of("paymentId", savedPayment.getId(), "amountCents", refund.getAmountCents()));
 
         return refund;
+    }
+
+    private void publishRefundFailedEvent(Payment payment, Refund refund, String reason, String failureSource) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("refundId", refund.getId());
+        payload.put("amountCents", refund.getAmountCents());
+        payload.put("currency", payment.getCurrency());
+        payload.put("reason", reason);
+        payload.put("failureSource", failureSource);
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentRefundFailed", payload);
     }
 
     private void ensurePspReference(Payment payment) {

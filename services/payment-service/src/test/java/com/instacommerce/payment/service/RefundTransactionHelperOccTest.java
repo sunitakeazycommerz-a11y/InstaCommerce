@@ -164,14 +164,15 @@ class RefundTransactionHelperOccTest {
         @Test
         @DisplayName("CAS row-count 1 → audit log written on successful recovery")
         void casSuccess_auditsRecovery() {
-            UUID paymentId = UUID.randomUUID();
+            Payment payment = capturedPayment();
             UUID refundId = UUID.randomUUID();
-            Refund pending = pendingRefund(paymentId);
+            Refund pending = pendingRefund(payment.getId());
             pending.setId(refundId);
 
             when(refundRepository.findById(refundId)).thenReturn(Optional.of(pending));
             when(refundRepository.compareAndSetPendingToFailed(refundId, pending.getVersion()))
                 .thenReturn(1);
+            when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
 
             helper.resolveStaleRefundFailed(refundId, "gateway timeout");
 
@@ -180,7 +181,13 @@ class RefundTransactionHelperOccTest {
                 org.mockito.ArgumentMatchers.eq("RECOVERY_REFUND_FAILED"),
                 org.mockito.ArgumentMatchers.eq("Refund"),
                 org.mockito.ArgumentMatchers.eq(refundId.toString()),
-                org.mockito.ArgumentMatchers.eq(Map.of("paymentId", paymentId, "reason", "gateway timeout")));
+                org.mockito.ArgumentMatchers.eq(Map.of("paymentId", payment.getId(), "reason", "gateway timeout")));
+
+            verify(outboxService).publish(
+                org.mockito.ArgumentMatchers.eq("Payment"),
+                org.mockito.ArgumentMatchers.eq(payment.getId().toString()),
+                org.mockito.ArgumentMatchers.eq("PaymentRefundFailed"),
+                any());
         }
     }
 
