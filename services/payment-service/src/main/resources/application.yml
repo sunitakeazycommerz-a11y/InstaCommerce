@@ -22,6 +22,8 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+    properties:
+      jakarta.persistence.lock.timeout: 5000
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -43,19 +45,19 @@ payment:
     order-cancelled-topic: ${PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_TOPIC:orders.events}
     order-cancelled-consumer-group: ${PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_GROUP:payment-service-order-cancelled}
   webhook:
-    refund-outbox-enabled: ${PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED:false}
-    capture-void-outbox-enabled: ${PAYMENT_WEBHOOK_CAPTURE_VOID_OUTBOX_ENABLED:false}
+    refund-outbox-enabled: ${PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED:true}
+    capture-void-outbox-enabled: ${PAYMENT_WEBHOOK_CAPTURE_VOID_OUTBOX_ENABLED:true}
   recovery:
-    stale-pending-enabled: ${PAYMENT_STALE_PENDING_RECOVERY_ENABLED:false}
+    stale-pending-enabled: ${PAYMENT_STALE_PENDING_RECOVERY_ENABLED:true}
     stale-pending-cron: ${PAYMENT_STALE_PENDING_RECOVERY_CRON:0 */5 * * * *}
     stale-threshold-minutes: ${PAYMENT_STALE_PENDING_RECOVERY_THRESHOLD_MINUTES:30}
     batch-size: ${PAYMENT_STALE_PENDING_RECOVERY_BATCH_SIZE:50}
-    stale-pending-refund-enabled: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_ENABLED:false}
+    stale-pending-refund-enabled: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_ENABLED:true}
     stale-pending-refund-cron: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_CRON:0 */10 * * * *}
     stale-pending-refund-threshold-minutes: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_THRESHOLD_MINUTES:60}
     stale-pending-refund-batch-size: ${PAYMENT_STALE_PENDING_REFUND_RECOVERY_BATCH_SIZE:50}
   verification:
-    ledger-integrity-enabled: ${PAYMENT_LEDGER_INTEGRITY_ENABLED:false}
+    ledger-integrity-enabled: ${PAYMENT_LEDGER_INTEGRITY_ENABLED:true}
     ledger-integrity-cron: ${PAYMENT_LEDGER_INTEGRITY_CRON:0 */15 * * * *}
     ledger-integrity-lookback-minutes: ${PAYMENT_LEDGER_INTEGRITY_LOOKBACK_MINUTES:60}
     ledger-integrity-batch-size: ${PAYMENT_LEDGER_INTEGRITY_BATCH_SIZE:100}
