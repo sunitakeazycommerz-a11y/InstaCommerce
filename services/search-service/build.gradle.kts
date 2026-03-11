@@ -14,7 +14,7 @@ dependencies {
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
     implementation("io.micrometer:micrometer-tracing-bridge-otel")
     implementation("io.micrometer:micrometer-registry-otlp")
-    implementation("net.logstash.logback:logstash-logback-encoder:7.4")
+    implementation("net.logstash.logback:logstash-logback-encoder:9.0")
     implementation("com.google.cloud:spring-cloud-gcp-starter-secretmanager")
     implementation("com.google.cloud.sql:postgres-socket-factory:1.15.0")
     implementation("org.flywaydb:flyway-core")
