@@ -442,7 +442,7 @@ class WebhookEventProcessorHardeningTest {
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), any());
             ArgumentCaptor<Map<String, Object>> auditDetailsCaptor = ArgumentCaptor.forClass(Map.class);
-            verify(auditLogService).log(
+            verify(auditLogService).logSafely(
                 isNull(),
                 eq("PAYMENT_FAILED"),
                 eq("Payment"),
@@ -481,7 +481,7 @@ class WebhookEventProcessorHardeningTest {
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), any());
             ArgumentCaptor<Map<String, Object>> auditDetailsCaptor = ArgumentCaptor.forClass(Map.class);
-            verify(auditLogService).log(
+            verify(auditLogService).logSafely(
                 isNull(),
                 eq("PAYMENT_FAILED"),
                 eq("Payment"),
@@ -518,7 +518,7 @@ class WebhookEventProcessorHardeningTest {
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), any());
-            verify(auditLogService).log(
+            verify(auditLogService).logSafely(
                 isNull(),
                 eq("PAYMENT_FAILED"),
                 eq("Payment"),
