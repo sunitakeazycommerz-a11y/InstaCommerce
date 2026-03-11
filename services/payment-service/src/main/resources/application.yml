@@ -27,6 +27,8 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+    postgresql:
+      transactional-lock: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -85,6 +87,8 @@ management:
       prometheus:
         enabled: true
   endpoints:
+    access:
+      default: read-only
     web:
       exposure:
         include: health,info,prometheus,metrics

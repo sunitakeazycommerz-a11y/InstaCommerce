@@ -11,6 +11,8 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "ledger_entries")
@@ -23,6 +25,7 @@ public class LedgerEntry {
     private UUID paymentId;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Column(name = "entry_type", nullable = false, columnDefinition = "ledger_entry_type")
     private LedgerEntryType entryType;
 

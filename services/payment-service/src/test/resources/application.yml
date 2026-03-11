@@ -1,7 +1,21 @@
 spring:
   config:
     import: "optional:classpath:application-test-noop.properties"
+  flyway:
+    postgresql:
+      transactional-lock: false
   cloud:
     gcp:
       secretmanager:
         enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+management:
+  endpoints:
+    access:
+      default: read-only
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
