@@ -28,7 +28,8 @@ public class OrderCancelledEventConsumer {
     private static final Set<PaymentStatus> TERMINAL_SKIP = Set.of(
         PaymentStatus.VOIDED,
         PaymentStatus.REFUNDED,
-        PaymentStatus.FAILED);
+        PaymentStatus.FAILED,
+        PaymentStatus.DISPUTED);
     private static final Set<PaymentStatus> RETRYABLE_PENDING_STATES = Set.of(
         PaymentStatus.AUTHORIZE_PENDING,
         PaymentStatus.CAPTURE_PENDING,

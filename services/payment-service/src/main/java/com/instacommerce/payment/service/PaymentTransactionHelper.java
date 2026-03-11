@@ -6,10 +6,12 @@ import com.instacommerce.payment.dto.request.AuthorizeRequest;
 import com.instacommerce.payment.exception.DuplicatePaymentException;
 import com.instacommerce.payment.exception.PaymentGatewayException;
 import com.instacommerce.payment.exception.PaymentInvalidStateException;
+import com.instacommerce.payment.exception.InvalidCurrencyException;
 import com.instacommerce.payment.exception.PaymentNotFoundException;
 import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import java.time.Instant;
+import java.util.Currency;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -389,11 +391,18 @@ public class PaymentTransactionHelper {
         });
     }
 
-    private String normalizeCurrency(String currency) {
+    // Visible for testing
+    String normalizeCurrency(String currency) {
         if (currency == null || currency.isBlank()) {
             return "INR";
         }
-        return currency.trim().toUpperCase(Locale.ROOT);
+        String normalized = currency.trim().toUpperCase(Locale.ROOT);
+        try {
+            Currency.getInstance(normalized);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidCurrencyException(normalized);
+        }
+        return normalized;
     }
 
     private void ensurePspReference(Payment payment) {
