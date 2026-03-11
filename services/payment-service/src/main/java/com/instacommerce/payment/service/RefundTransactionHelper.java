@@ -155,7 +155,7 @@ public class RefundTransactionHelper {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markRefundFailed(UUID refundId) {
+    public void markRefundFailed(UUID refundId, String failureReason) {
         refundRepository.findById(refundId).ifPresent(r -> {
             if (r.getStatus() != RefundStatus.PENDING) {
                 log.info("Refund {} not PENDING (status={}), skipping markRefundFailed",
@@ -170,7 +170,9 @@ public class RefundTransactionHelper {
                 Payment payment = paymentRepository.findById(r.getPaymentId())
                     .orElseThrow(() -> new PaymentNotFoundException(r.getPaymentId()));
 
-                publishRefundFailedEvent(payment, r, r.getReason(), "gateway");
+                publishRefundFailedEvent(payment, r,
+                    normalizeFailureReason(failureReason, "PSP refund call failed"),
+                    "gateway");
 
                 auditLogService.logSafely(null,
                     "REFUND_GATEWAY_FAILED",
@@ -204,10 +206,12 @@ public class RefundTransactionHelper {
             Payment payment = paymentRepository.findById(r.getPaymentId())
                 .orElseThrow(() -> new PaymentNotFoundException(r.getPaymentId()));
 
-            publishRefundFailedEvent(payment, r, reason, "recovery");
+            String normalizedReason = normalizeFailureReason(reason, "Refund marked failed during recovery");
+
+            publishRefundFailedEvent(payment, r, normalizedReason, "recovery");
 
             auditLogService.logSafely(null, "RECOVERY_REFUND_FAILED", "Refund", r.getId().toString(),
-                Map.of("paymentId", r.getPaymentId(), "reason", reason));
+                Map.of("paymentId", r.getPaymentId(), "reason", normalizedReason));
         });
     }
 
@@ -311,6 +315,13 @@ public class RefundTransactionHelper {
         payload.put("reason", reason);
         payload.put("failureSource", failureSource);
         outboxService.publish("Payment", payment.getId().toString(), "PaymentRefundFailed", payload);
+    }
+
+    private String normalizeFailureReason(String failureReason, String defaultReason) {
+        if (failureReason == null || failureReason.isBlank()) {
+            return defaultReason;
+        }
+        return failureReason;
     }
 
     private void ensurePspReference(Payment payment) {

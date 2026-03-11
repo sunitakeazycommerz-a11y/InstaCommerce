@@ -107,7 +107,7 @@ class RefundTransactionHelperRefundFailedEventTest {
                 .thenReturn(1);
             when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
 
-            helper.markRefundFailed(pending.getId());
+            helper.markRefundFailed(pending.getId(), "psp refund timeout");
 
             @SuppressWarnings("unchecked")
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -124,7 +124,7 @@ class RefundTransactionHelperRefundFailedEventTest {
                 .containsEntry("refundId", pending.getId())
                 .containsEntry("amountCents", pending.getAmountCents())
                 .containsEntry("currency", "INR")
-                .containsEntry("reason", "damaged item")
+                .containsEntry("reason", "psp refund timeout")
                 .containsEntry("failureSource", "gateway")
                 .hasSize(7);
         }
@@ -140,7 +140,7 @@ class RefundTransactionHelperRefundFailedEventTest {
                 .thenReturn(1);
             when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
 
-            helper.markRefundFailed(pending.getId());
+            helper.markRefundFailed(pending.getId(), "psp refund timeout");
 
             verify(auditLogService).logSafely(
                 any(),
@@ -159,7 +159,7 @@ class RefundTransactionHelperRefundFailedEventTest {
             when(refundRepository.compareAndSetPendingToFailed(pending.getId(), pending.getVersion()))
                 .thenReturn(0);
 
-            helper.markRefundFailed(pending.getId());
+            helper.markRefundFailed(pending.getId(), "psp refund timeout");
 
             verifyNoInteractions(outboxService);
         }
@@ -175,10 +175,35 @@ class RefundTransactionHelperRefundFailedEventTest {
                 .thenReturn(1);
             when(paymentRepository.findById(paymentId)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> helper.markRefundFailed(pending.getId()))
+            assertThatThrownBy(() -> helper.markRefundFailed(pending.getId(), "psp refund timeout"))
                 .isInstanceOf(PaymentNotFoundException.class);
 
             verifyNoInteractions(outboxService);
+        }
+
+        @Test
+        @DisplayName("Blank gateway failure reason falls back to default non-null reason")
+        void blankGatewayReason_usesDefault() {
+            Payment payment = capturedPayment();
+            Refund pending = pendingRefund(payment.getId());
+
+            when(refundRepository.findById(pending.getId())).thenReturn(Optional.of(pending));
+            when(refundRepository.compareAndSetPendingToFailed(pending.getId(), pending.getVersion()))
+                .thenReturn(1);
+            when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
+
+            helper.markRefundFailed(pending.getId(), "   ");
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(outboxService).publish(
+                eq("Payment"),
+                eq(payment.getId().toString()),
+                eq("PaymentRefundFailed"),
+                payloadCaptor.capture());
+
+            assertThat(payloadCaptor.getValue())
+                .containsEntry("reason", "PSP refund call failed");
         }
     }
 
@@ -240,6 +265,39 @@ class RefundTransactionHelperRefundFailedEventTest {
                 eq("Refund"),
                 eq(pending.getId().toString()),
                 eq(Map.of("paymentId", payment.getId(), "reason", "gateway timeout")));
+        }
+
+        @Test
+        @DisplayName("Null recovery reason falls back to default reason for event and audit")
+        void nullRecoveryReason_usesDefault() {
+            Payment payment = capturedPayment();
+            Refund pending = pendingRefund(payment.getId());
+
+            when(refundRepository.findById(pending.getId())).thenReturn(Optional.of(pending));
+            when(refundRepository.compareAndSetPendingToFailed(pending.getId(), pending.getVersion()))
+                .thenReturn(1);
+            when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
+
+            helper.resolveStaleRefundFailed(pending.getId(), null);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(outboxService).publish(
+                eq("Payment"),
+                eq(payment.getId().toString()),
+                eq("PaymentRefundFailed"),
+                payloadCaptor.capture());
+
+            assertThat(payloadCaptor.getValue())
+                .containsEntry("reason", "Refund marked failed during recovery")
+                .containsEntry("failureSource", "recovery");
+
+            verify(auditLogService).logSafely(
+                any(),
+                eq("RECOVERY_REFUND_FAILED"),
+                eq("Refund"),
+                eq(pending.getId().toString()),
+                eq(Map.of("paymentId", payment.getId(), "reason", "Refund marked failed during recovery")));
         }
 
         @Test

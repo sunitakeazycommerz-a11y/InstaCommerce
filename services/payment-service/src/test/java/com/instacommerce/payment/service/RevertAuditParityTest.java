@@ -231,7 +231,7 @@ class RevertAuditParityTest {
             when(paymentRepository.findById(payment.getId()))
                 .thenReturn(Optional.of(payment));
 
-            refundHelper.markRefundFailed(refund.getId());
+            refundHelper.markRefundFailed(refund.getId(), "gateway timeout");
 
             verify(auditLogService).logSafely(
                 isNull(),
@@ -251,7 +251,7 @@ class RevertAuditParityTest {
             when(refundRepository.compareAndSetPendingToFailed(refund.getId(), refund.getVersion()))
                 .thenReturn(0);
 
-            refundHelper.markRefundFailed(refund.getId());
+            refundHelper.markRefundFailed(refund.getId(), "gateway timeout");
 
             verify(auditLogService, never()).logSafely(any(), any(), any(), any(), any(Map.class));
         }
@@ -265,7 +265,7 @@ class RevertAuditParityTest {
             when(refundRepository.findById(refund.getId()))
                 .thenReturn(Optional.of(refund));
 
-            refundHelper.markRefundFailed(refund.getId());
+            refundHelper.markRefundFailed(refund.getId(), "gateway timeout");
 
             verify(auditLogService, never()).logSafely(any(), any(), any(), any(), any(Map.class));
         }

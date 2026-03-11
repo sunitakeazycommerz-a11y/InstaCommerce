@@ -115,7 +115,7 @@ class RefundTransactionHelperOccTest {
                 .thenReturn(0);
 
             // Must not propagate any exception
-            helper.markRefundFailed(refundId);
+            helper.markRefundFailed(refundId, "psp timeout");
 
             // No ledger, outbox, or audit side effects
             verifyNoInteractions(ledgerService, outboxService, auditLogService);
@@ -131,7 +131,7 @@ class RefundTransactionHelperOccTest {
 
             when(refundRepository.findById(refundId)).thenReturn(Optional.of(completed));
 
-            helper.markRefundFailed(refundId);
+            helper.markRefundFailed(refundId, "psp timeout");
 
             verify(refundRepository, never()).compareAndSetPendingToFailed(any(), anyLong());
         }
