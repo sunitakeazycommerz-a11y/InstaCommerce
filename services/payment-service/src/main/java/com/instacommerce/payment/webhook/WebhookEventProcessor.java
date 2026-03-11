@@ -6,9 +6,11 @@ import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.domain.model.ProcessedWebhookEvent;
 import com.instacommerce.payment.domain.model.Refund;
 import com.instacommerce.payment.domain.model.RefundStatus;
+import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import com.instacommerce.payment.repository.RefundRepository;
+import com.instacommerce.payment.service.AuditLogService;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -92,11 +94,20 @@ public class WebhookEventProcessor {
         PaymentStatus.PARTIALLY_REFUNDED
     );
 
+    /** States where an authorization hold may already exist in ledger. */
+    static final Set<PaymentStatus> POST_AUTHORIZATION_STATES = Set.of(
+        PaymentStatus.AUTHORIZED,
+        PaymentStatus.CAPTURE_PENDING,
+        PaymentStatus.VOID_PENDING
+    );
+
     private final PaymentRepository paymentRepository;
     private final ProcessedWebhookEventRepository processedWebhookEventRepository;
     private final RefundRepository refundRepository;
+    private final LedgerEntryRepository ledgerEntryRepository;
     private final LedgerService ledgerService;
     private final OutboxService outboxService;
+    private final AuditLogService auditLogService;
     private final MeterRegistry meterRegistry;
     private final boolean refundOutboxEnabled;
     private final boolean captureVoidOutboxEnabled;
@@ -107,16 +118,20 @@ public class WebhookEventProcessor {
     public WebhookEventProcessor(PaymentRepository paymentRepository,
                                  ProcessedWebhookEventRepository processedWebhookEventRepository,
                                  RefundRepository refundRepository,
+                                 LedgerEntryRepository ledgerEntryRepository,
                                  LedgerService ledgerService,
                                  OutboxService outboxService,
+                                 AuditLogService auditLogService,
                                  MeterRegistry meterRegistry,
                                  @Value("${payment.webhook.refund-outbox-enabled:false}") boolean refundOutboxEnabled,
                                  @Value("${payment.webhook.capture-void-outbox-enabled:false}") boolean captureVoidOutboxEnabled) {
         this.paymentRepository = paymentRepository;
         this.processedWebhookEventRepository = processedWebhookEventRepository;
         this.refundRepository = refundRepository;
+        this.ledgerEntryRepository = ledgerEntryRepository;
         this.ledgerService = ledgerService;
         this.outboxService = outboxService;
+        this.auditLogService = auditLogService;
         this.meterRegistry = meterRegistry;
         this.refundOutboxEnabled = refundOutboxEnabled;
         this.captureVoidOutboxEnabled = captureVoidOutboxEnabled;
@@ -148,7 +163,7 @@ public class WebhookEventProcessor {
         switch (type) {
             case "payment_intent.succeeded" -> handleCaptured(payment, objectNode, eventId);
             case "payment_intent.canceled" -> handleVoided(payment, eventId);
-            case "payment_intent.payment_failed" -> handleFailed(payment);
+            case "payment_intent.payment_failed" -> handleFailed(payment, objectNode, eventId);
             case "charge.refunded" -> handleRefunded(payment, objectNode, eventId);
             default -> log.debug("Ignoring webhook event {}", type);
         }
@@ -215,7 +230,7 @@ public class WebhookEventProcessor {
         meterRegistry.counter("payment.webhook.void", "outcome", "processed").increment();
     }
 
-    private void handleFailed(Payment payment) {
+    private void handleFailed(Payment payment, JsonNode objectNode, String eventId) {
         if (payment.getStatus() == PaymentStatus.FAILED) {
             return;
         }
@@ -230,8 +245,39 @@ public class WebhookEventProcessor {
             throw new WebhookEventHandler.TransientWebhookStateException(payment.getId(), payment.getStatus());
         }
 
+        PaymentStatus previousStatus = payment.getStatus();
+        String reason = extractFailureReason(objectNode, previousStatus);
+        boolean authReleased = false;
+
         payment.setStatus(PaymentStatus.FAILED);
-        paymentRepository.save(payment);
+        Payment saved = paymentRepository.save(payment);
+
+        // Release authorization hold when failing from a post-authorization state,
+        // but only if an AUTHORIZATION ledger entry actually exists for this payment.
+        // Uses recordDoubleEntry dedup so webhook retries do not create duplicate releases.
+        if (POST_AUTHORIZATION_STATES.contains(previousStatus)
+                && hasAuthorizationLedgerEntry(saved.getId())) {
+            ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
+                "authorization_hold", "customer_receivable", "FAILURE_RELEASE",
+                saved.getId().toString(), "Authorization release on failure (webhook)");
+            authReleased = true;
+            log.info("Released authorization hold for failed payment {} (previous status: {})",
+                saved.getId(), previousStatus);
+            meterRegistry.counter("payment.webhook.fail", "outcome", "auth_released").increment();
+        }
+
+        publishFailedOutbox(saved, reason);
+        auditLogService.log(null,
+            "PAYMENT_FAILED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "previousStatus", previousStatus.name(),
+                "reason", reason,
+                "authReleased", authReleased));
+
+        log.info("Payment {} failed via webhook: previousStatus={}, reason={}",
+            saved.getId(), previousStatus, reason);
         meterRegistry.counter("payment.webhook.fail", "outcome", "processed").increment();
     }
 
@@ -445,6 +491,33 @@ public class WebhookEventProcessor {
         payload.put("refundedAt", Instant.now());
         payload.put("reason", "webhook");
         outboxService.publish("Payment", payment.getId().toString(), "PaymentRefunded", payload);
+    }
+
+    private void publishFailedOutbox(Payment payment, String reason) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("reason", reason);
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentFailed", payload);
+    }
+
+    private boolean hasAuthorizationLedgerEntry(UUID paymentId) {
+        return ledgerEntryRepository.existsByPaymentIdAndReferenceTypeAndReferenceId(
+            paymentId, "AUTHORIZATION", paymentId.toString());
+    }
+
+    private String extractFailureReason(JsonNode objectNode, PaymentStatus previousStatus) {
+        if (objectNode != null) {
+            String message = textValue(objectNode.path("last_payment_error"), "message");
+            if (message != null && !message.isBlank()) {
+                return message;
+            }
+            String code = textValue(objectNode.path("last_payment_error"), "code");
+            if (code != null && !code.isBlank()) {
+                return "PSP error: " + code;
+            }
+        }
+        return "Payment failed during " + previousStatus.name();
     }
 
     static UUID syntheticRefundId(String eventId) {

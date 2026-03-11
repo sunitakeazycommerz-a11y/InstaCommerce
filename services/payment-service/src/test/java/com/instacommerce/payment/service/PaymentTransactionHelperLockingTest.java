@@ -163,7 +163,7 @@ class PaymentTransactionHelperLockingTest {
             Payment payment = paymentInStatus(PaymentStatus.AUTHORIZE_PENDING);
             stubForUpdate(payment);
 
-            helper.markAuthorizationFailed(payment.getId());
+            helper.markAuthorizationFailed(payment.getId(), "test-reason");
 
             assertThat(payment.getStatus()).isEqualTo(PaymentStatus.FAILED);
             verifyUsedForUpdateOnly(payment.getId());
@@ -298,7 +298,7 @@ class PaymentTransactionHelperLockingTest {
             // Reverts
             Payment authPending2 = paymentInStatus(PaymentStatus.AUTHORIZE_PENDING);
             stubForUpdate(authPending2);
-            helper.markAuthorizationFailed(authPending2.getId());
+            helper.markAuthorizationFailed(authPending2.getId(), "test-reason");
 
             Payment capPending2 = paymentInStatus(PaymentStatus.CAPTURE_PENDING);
             stubForUpdate(capPending2);

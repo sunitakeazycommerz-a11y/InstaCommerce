@@ -12,9 +12,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.domain.model.ProcessedWebhookEvent;
+import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.ProcessedWebhookEventRepository;
 import com.instacommerce.payment.repository.RefundRepository;
+import com.instacommerce.payment.service.AuditLogService;
 import com.instacommerce.payment.service.LedgerService;
 import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -47,8 +49,10 @@ class WebhookAuditPersistenceTest {
     @Mock PaymentRepository paymentRepository;
     @Mock ProcessedWebhookEventRepository processedWebhookEventRepository;
     @Mock RefundRepository refundRepository;
+    @Mock LedgerEntryRepository ledgerEntryRepository;
     @Mock LedgerService ledgerService;
     @Mock OutboxService outboxService;
+    @Mock AuditLogService auditLogService;
     @Mock EntityManager entityManager;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -61,7 +65,7 @@ class WebhookAuditPersistenceTest {
         meterRegistry = new SimpleMeterRegistry();
         processor = new WebhookEventProcessor(
             paymentRepository, processedWebhookEventRepository, refundRepository,
-            ledgerService, outboxService, meterRegistry, false, false);
+            ledgerEntryRepository, ledgerService, outboxService, auditLogService, meterRegistry, false, false);
         ReflectionTestUtils.setField(processor, "entityManager", entityManager);
         handler = new WebhookEventHandler(
             objectMapper, processedWebhookEventRepository, processor);

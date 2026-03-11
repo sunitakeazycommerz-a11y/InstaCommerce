@@ -91,10 +91,25 @@ public class PaymentTransactionHelper {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markAuthorizationFailed(UUID paymentId) {
+    public void markAuthorizationFailed(UUID paymentId, String reason) {
         paymentRepository.findByIdForUpdate(paymentId).ifPresent(p -> {
+            if (p.getStatus() == PaymentStatus.FAILED) {
+                return; // already failed — idempotent no-op
+            }
+            String safeReason = (reason == null || reason.isBlank())
+                ? "Authorization failed" : reason;
             p.setStatus(PaymentStatus.FAILED);
             paymentRepository.save(p);
+            outboxService.publish("Payment", p.getId().toString(), "PaymentFailed",
+                Map.of("orderId", p.getOrderId(),
+                    "paymentId", p.getId(),
+                    "reason", safeReason));
+            auditLogService.log(null,
+                "PAYMENT_AUTHORIZATION_FAILED",
+                "Payment",
+                p.getId().toString(),
+                Map.of("orderId", p.getOrderId(),
+                    "reason", safeReason));
         });
     }
 
