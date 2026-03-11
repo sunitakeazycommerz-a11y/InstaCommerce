@@ -18,6 +18,7 @@ import com.instacommerce.payment.exception.PaymentDeclinedException;
 import com.instacommerce.payment.gateway.GatewayAuthRequest;
 import com.instacommerce.payment.gateway.GatewayAuthResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
+import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import java.util.Map;
 import java.util.Optional;
@@ -45,6 +46,7 @@ class SyncAuthorizationFailureTest {
 
     @Mock PaymentRepository paymentRepository;
     @Mock LedgerService ledgerService;
+    @Mock LedgerEntryRepository ledgerEntryRepository;
     @Mock OutboxService outboxService;
     @Mock AuditLogService auditLogService;
     @Mock PaymentGateway paymentGateway;
@@ -58,7 +60,7 @@ class SyncAuthorizationFailureTest {
     @BeforeEach
     void setUp() {
         helper = new PaymentTransactionHelper(
-            paymentRepository, ledgerService, outboxService, auditLogService);
+            paymentRepository, ledgerService, ledgerEntryRepository, outboxService, auditLogService);
         // PaymentService depends on the helper; stub savePendingAuthorization later per test
         service = new PaymentService(paymentRepository, paymentGateway, helper);
     }
@@ -121,7 +123,7 @@ class SyncAuthorizationFailureTest {
 
             helper.markAuthorizationFailed(payment.getId(), "Card expired");
 
-            verify(auditLogService).log(
+            verify(auditLogService).logSafely(
                 isNull(),
                 eq("PAYMENT_AUTHORIZATION_FAILED"),
                 eq("Payment"),

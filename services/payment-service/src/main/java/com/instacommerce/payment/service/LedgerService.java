@@ -9,9 +9,13 @@ import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class LedgerService {
@@ -19,10 +23,13 @@ public class LedgerService {
 
     private final LedgerEntryRepository ledgerEntryRepository;
     private final MeterRegistry meterRegistry;
+    private final PlatformTransactionManager transactionManager;
 
-    public LedgerService(LedgerEntryRepository ledgerEntryRepository, MeterRegistry meterRegistry) {
+    public LedgerService(LedgerEntryRepository ledgerEntryRepository, MeterRegistry meterRegistry,
+                         PlatformTransactionManager transactionManager) {
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.meterRegistry = meterRegistry;
+        this.transactionManager = transactionManager;
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -62,10 +69,26 @@ public class LedgerService {
             return Collections.emptyList();
         }
 
-        LedgerEntry debit = record(paymentId, LedgerEntryType.DEBIT, amountCents, debitAccount,
-            referenceType, referenceId, description);
-        LedgerEntry credit = record(paymentId, LedgerEntryType.CREDIT, amountCents, creditAccount,
-            referenceType, referenceId, description);
-        return List.of(debit, credit);
+        // Use REQUIRES_NEW so a constraint violation only rolls back the inner TX,
+        // keeping the caller's MANDATORY transaction intact.
+        TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
+        txTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        try {
+            List<LedgerEntry> result = txTemplate.execute(status -> {
+                LedgerEntry debit = record(paymentId, LedgerEntryType.DEBIT, amountCents, debitAccount,
+                    referenceType, referenceId, description);
+                LedgerEntry credit = record(paymentId, LedgerEntryType.CREDIT, amountCents, creditAccount,
+                    referenceType, referenceId, description);
+                return List.of(debit, credit);
+            });
+            return result != null ? result : Collections.emptyList();
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Ledger dedup race caught for payment={} refType={} refId={} — concurrent insert won; treating as idempotent no-op",
+                     paymentId, referenceType, referenceId, e);
+            meterRegistry.counter("ledger.dedup.race_caught",
+                    "reference_type", referenceType).increment();
+            return Collections.emptyList();
+        }
     }
 }

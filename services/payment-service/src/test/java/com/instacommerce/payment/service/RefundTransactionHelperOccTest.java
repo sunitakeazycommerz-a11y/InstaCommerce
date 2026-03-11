@@ -175,7 +175,7 @@ class RefundTransactionHelperOccTest {
 
             helper.resolveStaleRefundFailed(refundId, "gateway timeout");
 
-            verify(auditLogService).log(
+            verify(auditLogService).logSafely(
                 any(), // userId
                 org.mockito.ArgumentMatchers.eq("RECOVERY_REFUND_FAILED"),
                 org.mockito.ArgumentMatchers.eq("Refund"),
@@ -328,7 +328,7 @@ class RefundTransactionHelperOccTest {
                 any());
 
             // --- audit log emitted exactly once for recovery completion ---
-            verify(auditLogService).log(
+            verify(auditLogService).logSafely(
                 any(),
                 org.mockito.ArgumentMatchers.eq("RECOVERY_REFUND_COMPLETED"),
                 org.mockito.ArgumentMatchers.eq("Refund"),

@@ -13,6 +13,7 @@ import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.RefundRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import java.util.ConcurrentModificationException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -92,9 +93,27 @@ public class RefundTransactionHelper {
             log.info("Refund {} already completed (likely by webhook), skipping synchronous completion", refundId);
             return refund;
         }
+
+        int updated = refundRepository.compareAndSetPendingToCompletedWithPspRefundId(
+            refundId, pspRefundId, refund.getVersion());
+        if (updated == 0) {
+            // CAS lost — another writer committed between our read and the CAS.
+            // Detach the stale entity so the re-read bypasses the L1 cache.
+            entityManager.detach(refund);
+            Refund reloaded = refundRepository.findById(refundId).orElseThrow();
+            if (reloaded.getStatus() == RefundStatus.COMPLETED) {
+                log.info("Refund {} already completed by concurrent writer, returning idempotently", refundId);
+                return reloaded;
+            }
+            throw new ConcurrentModificationException(
+                "Refund " + refundId + " was concurrently modified to " + reloaded.getStatus());
+        }
+
+        // CAS succeeded — detach the managed entity (which still holds the pre-CAS
+        // version) to prevent dirty-check conflicts at flush time, then update in-memory.
+        entityManager.detach(refund);
         refund.setStatus(RefundStatus.COMPLETED);
         refund.setPspRefundId(pspRefundId);
-        Refund saved = refundRepository.save(refund);
 
         payment.setRefundedCents(payment.getRefundedCents() + request.amountCents());
         if (payment.getRefundedCents() >= payment.getCapturedCents()) {
@@ -106,17 +125,17 @@ public class RefundTransactionHelper {
 
         // DEBIT merchant_payable, CREDIT customer_receivable (money flows back to customer)
         ledgerService.recordDoubleEntry(savedPayment.getId(), request.amountCents(),
-            "merchant_payable", "customer_receivable", "REFUND", saved.getId().toString(), "Refund");
+            "merchant_payable", "customer_receivable", "REFUND", refund.getId().toString(), "Refund");
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("orderId", savedPayment.getOrderId());
         payload.put("paymentId", savedPayment.getId());
-        payload.put("refundId", saved.getId());
+        payload.put("refundId", refund.getId());
         payload.put("amountCents", request.amountCents());
         payload.put("currency", savedPayment.getCurrency());
-        payload.put("refundedAt", saved.getCreatedAt());
-        if (saved.getReason() != null && !saved.getReason().isBlank()) {
-            payload.put("reason", saved.getReason());
+        payload.put("refundedAt", refund.getCreatedAt());
+        if (refund.getReason() != null && !refund.getReason().isBlank()) {
+            payload.put("reason", refund.getReason());
         }
         outboxService.publish("Payment", savedPayment.getId().toString(), "PaymentRefunded", payload);
 
@@ -126,13 +145,13 @@ public class RefundTransactionHelper {
         if (request.reason() != null) {
             details.put("reason", request.reason());
         }
-        auditLogService.log(null,
+        auditLogService.logSafely(null,
             "REFUND_ISSUED",
             "Refund",
-            saved.getId().toString(),
+            refund.getId().toString(),
             details);
 
-        return saved;
+        return refund;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -171,7 +190,7 @@ public class RefundTransactionHelper {
                 return;
             }
 
-            auditLogService.log(null, "RECOVERY_REFUND_FAILED", "Refund", r.getId().toString(),
+            auditLogService.logSafely(null, "RECOVERY_REFUND_FAILED", "Refund", r.getId().toString(),
                 Map.of("paymentId", r.getPaymentId(), "reason", reason));
         });
     }
@@ -260,7 +279,7 @@ public class RefundTransactionHelper {
         }
         outboxService.publish("Payment", savedPayment.getId().toString(), "PaymentRefunded", payload);
 
-        auditLogService.log(null, "RECOVERY_REFUND_COMPLETED", "Refund", refund.getId().toString(),
+        auditLogService.logSafely(null, "RECOVERY_REFUND_COMPLETED", "Refund", refund.getId().toString(),
             Map.of("paymentId", savedPayment.getId(), "amountCents", refund.getAmountCents()));
 
         return refund;

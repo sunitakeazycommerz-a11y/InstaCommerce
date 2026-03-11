@@ -7,6 +7,7 @@ import com.instacommerce.payment.exception.DuplicatePaymentException;
 import com.instacommerce.payment.exception.PaymentGatewayException;
 import com.instacommerce.payment.exception.PaymentInvalidStateException;
 import com.instacommerce.payment.exception.PaymentNotFoundException;
+import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import java.time.Instant;
 import java.util.Locale;
@@ -21,15 +22,18 @@ import org.springframework.transaction.annotation.Transactional;
 public class PaymentTransactionHelper {
     private final PaymentRepository paymentRepository;
     private final LedgerService ledgerService;
+    private final LedgerEntryRepository ledgerEntryRepository;
     private final OutboxService outboxService;
     private final AuditLogService auditLogService;
 
     public PaymentTransactionHelper(PaymentRepository paymentRepository,
                                     LedgerService ledgerService,
+                                    LedgerEntryRepository ledgerEntryRepository,
                                     OutboxService outboxService,
                                     AuditLogService auditLogService) {
         this.paymentRepository = paymentRepository;
         this.ledgerService = ledgerService;
+        this.ledgerEntryRepository = ledgerEntryRepository;
         this.outboxService = outboxService;
         this.auditLogService = auditLogService;
     }
@@ -80,7 +84,7 @@ public class PaymentTransactionHelper {
                 "paymentId", saved.getId(),
                 "amountCents", saved.getAmountCents(),
                 "currency", saved.getCurrency()));
-        auditLogService.log(null,
+        auditLogService.logSafely(null,
             "PAYMENT_AUTHORIZED",
             "Payment",
             saved.getId().toString(),
@@ -100,11 +104,19 @@ public class PaymentTransactionHelper {
                 ? "Authorization failed" : reason;
             p.setStatus(PaymentStatus.FAILED);
             paymentRepository.save(p);
+            // Release authorization hold if one was recorded in the ledger.
+            // Dedup is handled by the V14 index + app-level check in recordDoubleEntry.
+            if (ledgerEntryRepository.existsByPaymentIdAndReferenceTypeAndReferenceId(
+                    p.getId(), "AUTHORIZATION", p.getId().toString())) {
+                ledgerService.recordDoubleEntry(p.getId(), p.getAmountCents(),
+                    "authorization_hold", "customer_receivable", "FAILURE_RELEASE",
+                    p.getId().toString(), "Authorization release on failure (sync)");
+            }
             outboxService.publish("Payment", p.getId().toString(), "PaymentFailed",
                 Map.of("orderId", p.getOrderId(),
                     "paymentId", p.getId(),
                     "reason", safeReason));
-            auditLogService.log(null,
+            auditLogService.logSafely(null,
                 "PAYMENT_AUTHORIZATION_FAILED",
                 "Payment",
                 p.getId().toString(),
@@ -155,7 +167,7 @@ public class PaymentTransactionHelper {
                 "paymentId", saved.getId(),
                 "amountCents", capturedCents,
                 "currency", saved.getCurrency()));
-        auditLogService.log(null,
+        auditLogService.logSafely(null,
             "PAYMENT_CAPTURED",
             "Payment",
             saved.getId().toString(),
@@ -211,7 +223,7 @@ public class PaymentTransactionHelper {
                 "amountCents", saved.getAmountCents(),
                 "currency", saved.getCurrency(),
                 "voidedAt", voidedAt.toString()));
-        auditLogService.log(null,
+        auditLogService.logSafely(null,
             "PAYMENT_VOIDED",
             "Payment",
             saved.getId().toString(),
@@ -276,7 +288,7 @@ public class PaymentTransactionHelper {
                 "amountCents", capturedCents,
                 "currency", saved.getCurrency(),
                 "resolvedBy", "stale-pending-recovery"));
-        auditLogService.log(null,
+        auditLogService.logSafely(null,
             "RECOVERY_RECONCILED_TO_CAPTURED",
             "Payment",
             saved.getId().toString(),
@@ -295,12 +307,20 @@ public class PaymentTransactionHelper {
             if (p.getStatus() != PaymentStatus.AUTHORIZE_PENDING) return;
             p.setStatus(PaymentStatus.FAILED);
             paymentRepository.save(p);
+            // Release authorization hold if one was recorded in the ledger.
+            // Dedup is handled by the V14 index + app-level check in recordDoubleEntry.
+            if (ledgerEntryRepository.existsByPaymentIdAndReferenceTypeAndReferenceId(
+                    p.getId(), "AUTHORIZATION", p.getId().toString())) {
+                ledgerService.recordDoubleEntry(p.getId(), p.getAmountCents(),
+                    "authorization_hold", "customer_receivable", "FAILURE_RELEASE",
+                    p.getId().toString(), "Authorization release on failure (recovery)");
+            }
             outboxService.publish("Payment", p.getId().toString(), "PaymentFailed",
                 Map.of("orderId", p.getOrderId(),
                     "paymentId", p.getId(),
                     "reason", reason,
                     "resolvedBy", "stale-pending-recovery"));
-            auditLogService.log(null,
+            auditLogService.logSafely(null,
                 "RECOVERY_AUTH_FAILED",
                 "Payment",
                 p.getId().toString(),
@@ -320,7 +340,7 @@ public class PaymentTransactionHelper {
                     "paymentId", p.getId(),
                     "reason", reason,
                     "resolvedBy", "stale-pending-recovery"));
-            auditLogService.log(null,
+            auditLogService.logSafely(null,
                 "RECOVERY_CAPTURE_REVERTED",
                 "Payment",
                 p.getId().toString(),
@@ -340,7 +360,7 @@ public class PaymentTransactionHelper {
                     "paymentId", p.getId(),
                     "reason", reason,
                     "resolvedBy", "stale-pending-recovery"));
-            auditLogService.log(null,
+            auditLogService.logSafely(null,
                 "RECOVERY_VOID_REVERTED",
                 "Payment",
                 p.getId().toString(),

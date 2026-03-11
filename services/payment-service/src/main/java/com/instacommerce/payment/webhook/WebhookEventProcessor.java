@@ -279,7 +279,7 @@ public class WebhookEventProcessor {
         }
 
         publishFailedOutbox(saved, reason);
-        auditLogService.log(null,
+        auditLogService.logSafely(null,
             "PAYMENT_FAILED",
             "Payment",
             saved.getId().toString(),

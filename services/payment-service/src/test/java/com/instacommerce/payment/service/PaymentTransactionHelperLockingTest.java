@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
+import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,6 +34,7 @@ class PaymentTransactionHelperLockingTest {
 
     @Mock PaymentRepository paymentRepository;
     @Mock LedgerService ledgerService;
+    @Mock LedgerEntryRepository ledgerEntryRepository;
     @Mock OutboxService outboxService;
     @Mock AuditLogService auditLogService;
 
@@ -41,7 +43,7 @@ class PaymentTransactionHelperLockingTest {
     @BeforeEach
     void setUp() {
         helper = new PaymentTransactionHelper(
-            paymentRepository, ledgerService, outboxService, auditLogService);
+            paymentRepository, ledgerService, ledgerEntryRepository, outboxService, auditLogService);
     }
 
     // --- Factory helpers ---
