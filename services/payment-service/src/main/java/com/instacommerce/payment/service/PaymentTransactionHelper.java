@@ -183,6 +183,16 @@ public class PaymentTransactionHelper {
             if (p.getStatus() == PaymentStatus.CAPTURE_PENDING) {
                 p.setStatus(PaymentStatus.AUTHORIZED);
                 paymentRepository.save(p);
+                outboxService.publish("Payment", p.getId().toString(), "PaymentCaptureReverted",
+                    Map.of("orderId", p.getOrderId(),
+                        "paymentId", p.getId(),
+                        "reason", "PSP capture call failed"));
+                auditLogService.logSafely(null,
+                    "CAPTURE_REVERTED",
+                    "Payment",
+                    p.getId().toString(),
+                    Map.of("orderId", p.getOrderId(),
+                        "reason", "PSP capture call failed"));
             }
         });
     }
@@ -240,6 +250,16 @@ public class PaymentTransactionHelper {
             if (p.getStatus() == PaymentStatus.VOID_PENDING) {
                 p.setStatus(PaymentStatus.AUTHORIZED);
                 paymentRepository.save(p);
+                outboxService.publish("Payment", p.getId().toString(), "PaymentVoidReverted",
+                    Map.of("orderId", p.getOrderId(),
+                        "paymentId", p.getId(),
+                        "reason", "PSP void call failed"));
+                auditLogService.logSafely(null,
+                    "VOID_REVERTED",
+                    "Payment",
+                    p.getId().toString(),
+                    Map.of("orderId", p.getOrderId(),
+                        "reason", "PSP void call failed"));
             }
         });
     }

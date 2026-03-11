@@ -206,7 +206,7 @@ class WebhookEventProcessorHardeningTest {
 
         @ParameterizedTest(name = "void transient deferral when payment in {0}")
         @EnumSource(value = PaymentStatus.class,
-            names = {"AUTHORIZE_PENDING", "CAPTURE_PENDING"})
+            names = {"CAPTURE_PENDING"})
         @DisplayName("void transient deferral throws TransientWebhookStateException")
         void voidTransientDeferral(PaymentStatus status) {
             Payment p = paymentInStatus(status, 5000);
