@@ -72,13 +72,17 @@ public class RefundService {
             try {
                 gatewayResult = paymentGateway.refund(pending.pspReference(), request.amountCents(), appliedKey, pending.refundId());
             } catch (Exception ex) {
-                txHelper.markRefundFailed(pending.refundId());
+                String failureReason = (ex.getMessage() != null && !ex.getMessage().isBlank())
+                    ? ex.getMessage() : "PSP refund call failed";
+                txHelper.markRefundFailed(pending.refundId(), failureReason);
                 throw ex;
             }
 
             if (!gatewayResult.success()) {
-                txHelper.markRefundFailed(pending.refundId());
-                throw new PaymentGatewayException(gatewayResult.failureReason());
+                String failureReason = (gatewayResult.failureReason() != null && !gatewayResult.failureReason().isBlank())
+                    ? gatewayResult.failureReason() : "PSP refund failed";
+                txHelper.markRefundFailed(pending.refundId(), failureReason);
+                throw new PaymentGatewayException(failureReason);
             }
 
             // Persist PSP refund ID immediately so the webhook path can match this refund

@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PaymentCaptureReverted",
+  "type": "object",
+  "required": ["orderId", "paymentId", "reason"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "paymentId": { "type": "string", "format": "uuid" },
+    "reason": { "type": "string" },
+    "resolvedBy": { "type": "string" }
+  }
+}

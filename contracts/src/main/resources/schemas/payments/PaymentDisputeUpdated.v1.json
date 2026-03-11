@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PaymentDisputeUpdated",
+  "type": "object",
+  "required": ["orderId", "paymentId", "disputeStatus"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "paymentId": { "type": "string", "format": "uuid" },
+    "disputeStatus": { "type": "string" },
+    "currency": { "type": "string" },
+    "reason": { "type": "string" }
+  }
+}

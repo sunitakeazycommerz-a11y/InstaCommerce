@@ -155,7 +155,7 @@ public class RefundTransactionHelper {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markRefundFailed(UUID refundId) {
+    public void markRefundFailed(UUID refundId, String failureReason) {
         refundRepository.findById(refundId).ifPresent(r -> {
             if (r.getStatus() != RefundStatus.PENDING) {
                 log.info("Refund {} not PENDING (status={}), skipping markRefundFailed",
@@ -167,6 +167,13 @@ public class RefundTransactionHelper {
                 log.info("Refund {} modified concurrently, skipping markRefundFailed — concurrent write wins",
                     refundId);
             } else {
+                Payment payment = paymentRepository.findById(r.getPaymentId())
+                    .orElseThrow(() -> new PaymentNotFoundException(r.getPaymentId()));
+
+                publishRefundFailedEvent(payment, r,
+                    normalizeFailureReason(failureReason, "PSP refund call failed"),
+                    "gateway");
+
                 auditLogService.logSafely(null,
                     "REFUND_GATEWAY_FAILED",
                     "Refund",
@@ -196,8 +203,15 @@ public class RefundTransactionHelper {
                 return;
             }
 
+            Payment payment = paymentRepository.findById(r.getPaymentId())
+                .orElseThrow(() -> new PaymentNotFoundException(r.getPaymentId()));
+
+            String normalizedReason = normalizeFailureReason(reason, "Refund marked failed during recovery");
+
+            publishRefundFailedEvent(payment, r, normalizedReason, "recovery");
+
             auditLogService.logSafely(null, "RECOVERY_REFUND_FAILED", "Refund", r.getId().toString(),
-                Map.of("paymentId", r.getPaymentId(), "reason", reason));
+                Map.of("paymentId", r.getPaymentId(), "reason", normalizedReason));
         });
     }
 
@@ -289,6 +303,25 @@ public class RefundTransactionHelper {
             Map.of("paymentId", savedPayment.getId(), "amountCents", refund.getAmountCents()));
 
         return refund;
+    }
+
+    private void publishRefundFailedEvent(Payment payment, Refund refund, String reason, String failureSource) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("refundId", refund.getId());
+        payload.put("amountCents", refund.getAmountCents());
+        payload.put("currency", payment.getCurrency());
+        payload.put("reason", reason);
+        payload.put("failureSource", failureSource);
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentRefundFailed", payload);
+    }
+
+    private String normalizeFailureReason(String failureReason, String defaultReason) {
+        if (failureReason == null || failureReason.isBlank()) {
+            return defaultReason;
+        }
+        return failureReason;
     }
 
     private void ensurePspReference(Payment payment) {

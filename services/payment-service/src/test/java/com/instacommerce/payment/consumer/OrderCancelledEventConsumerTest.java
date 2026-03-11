@@ -250,6 +250,18 @@ class OrderCancelledEventConsumerTest {
         }
 
         @Test
+        @DisplayName("DISPUTED → skips because dispute must be resolved externally")
+        void disputedSkipsIdempotently() throws Exception {
+            Payment payment = buildPayment(paymentId, orderId, PaymentStatus.DISPUTED, 10000, 10000, 0);
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(payment));
+
+            fireOrderCancelledEvent(orderId, paymentId, 10000, "test");
+
+            verify(paymentService, never()).voidAuth(any(), any());
+            verify(refundService, never()).refund(any(), any());
+        }
+
+        @Test
         @DisplayName("FAILED → skips because no recoverable funds remain")
         void failedSkipsIdempotently() throws Exception {
             Payment payment = buildPayment(paymentId, orderId, PaymentStatus.FAILED, 10000, 0, 0);

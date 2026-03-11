@@ -222,14 +222,16 @@ class RevertAuditParityTest {
         @Test
         @DisplayName("CAS success → records REFUND_GATEWAY_FAILED audit log")
         void markRefundFailed_recordsAuditLog() {
-            UUID paymentId = UUID.randomUUID();
-            Refund refund = pendingRefund(paymentId);
+            Payment payment = paymentInStatus(PaymentStatus.CAPTURED);
+            Refund refund = pendingRefund(payment.getId());
             when(refundRepository.findById(refund.getId()))
                 .thenReturn(Optional.of(refund));
             when(refundRepository.compareAndSetPendingToFailed(refund.getId(), refund.getVersion()))
                 .thenReturn(1);
+            when(paymentRepository.findById(payment.getId()))
+                .thenReturn(Optional.of(payment));
 
-            refundHelper.markRefundFailed(refund.getId());
+            refundHelper.markRefundFailed(refund.getId(), "gateway timeout");
 
             verify(auditLogService).logSafely(
                 isNull(),
@@ -249,7 +251,7 @@ class RevertAuditParityTest {
             when(refundRepository.compareAndSetPendingToFailed(refund.getId(), refund.getVersion()))
                 .thenReturn(0);
 
-            refundHelper.markRefundFailed(refund.getId());
+            refundHelper.markRefundFailed(refund.getId(), "gateway timeout");
 
             verify(auditLogService, never()).logSafely(any(), any(), any(), any(), any(Map.class));
         }
@@ -263,7 +265,7 @@ class RevertAuditParityTest {
             when(refundRepository.findById(refund.getId()))
                 .thenReturn(Optional.of(refund));
 
-            refundHelper.markRefundFailed(refund.getId());
+            refundHelper.markRefundFailed(refund.getId(), "gateway timeout");
 
             verify(auditLogService, never()).logSafely(any(), any(), any(), any(), any(Map.class));
         }
