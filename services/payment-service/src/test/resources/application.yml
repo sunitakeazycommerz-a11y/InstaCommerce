@@ -1,6 +1,6 @@
 spring:
   config:
-    import: ""
+    import: "optional:classpath:application-test-noop.properties"
   cloud:
     gcp:
       secretmanager:

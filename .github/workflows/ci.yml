@@ -253,14 +253,10 @@ jobs:
           cache: 'gradle'
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
-        with:
-          gradle-version: 8.14.3
       - name: Run tests
-        working-directory: services/${{ matrix.service }}
-        run: gradle test --no-daemon
+        run: ./gradlew :services:${{ matrix.service }}:test --no-daemon
       - name: Build bootJar
-        working-directory: services/${{ matrix.service }}
-        run: gradle bootJar --no-daemon
+        run: ./gradlew :services:${{ matrix.service }}:bootJar --no-daemon
       - name: Build Image
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
