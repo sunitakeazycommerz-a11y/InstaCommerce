@@ -68,7 +68,7 @@ class OutboxEnvelopeComplianceTest {
             OutboxEvent event = new OutboxEvent();
             event.prePersist();
 
-            assertThat(event.getSchemaVersion()).isEqualTo("1.0");
+            assertThat(event.getSchemaVersion()).isEqualTo("v1");
         }
 
         @Test
@@ -232,7 +232,7 @@ class OutboxEnvelopeComplianceTest {
 
             // Envelope fields per contracts/README.md
             assertThat(saved.getEventId()).isNotNull();
-            assertThat(saved.getSchemaVersion()).isEqualTo("1.0");
+            assertThat(saved.getSchemaVersion()).isEqualTo("v1");
             assertThat(saved.getSourceService()).isEqualTo("payment-service");
             assertThat(saved.getCorrelationId()).isEqualTo("trace-999");
             assertThat(saved.getEventTimestamp()).isNotNull();

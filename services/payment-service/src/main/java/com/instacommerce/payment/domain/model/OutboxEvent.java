@@ -60,7 +60,7 @@ public class OutboxEvent {
             eventId = UUID.randomUUID();
         }
         if (schemaVersion == null) {
-            schemaVersion = "1.0";
+            schemaVersion = "v1";
         }
         if (sourceService == null) {
             sourceService = "payment-service";
