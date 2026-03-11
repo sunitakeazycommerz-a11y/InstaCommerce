@@ -632,7 +632,8 @@ curl http://localhost:8089/checkout/checkout-u_abc123-test-key-001/status
 ### Docker
 
 ```bash
-docker build -t checkout-orchestrator-service .
+./gradlew :services:checkout-orchestrator-service:bootJar
+docker build -t checkout-orchestrator-service services/checkout-orchestrator-service
 docker run -p 8089:8089 \
   -e TEMPORAL_HOST=host.docker.internal \
   -e CHECKOUT_DB_URL=jdbc:postgresql://host.docker.internal:5432/checkout \

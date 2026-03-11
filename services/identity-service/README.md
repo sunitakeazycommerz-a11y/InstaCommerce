@@ -579,7 +579,8 @@ curl http://localhost:8081/actuator/health
 ### 8.4 Docker
 
 ```bash
-docker build -t identity-service -f services/identity-service/Dockerfile services/identity-service/
+./gradlew :services:identity-service:bootJar
+docker build -t identity-service services/identity-service/
 docker run -p 8081:8080 \
   -e IDENTITY_DB_URL=jdbc:postgresql://host.docker.internal:5432/identity_db \
   -e IDENTITY_DB_PASSWORD=postgres \

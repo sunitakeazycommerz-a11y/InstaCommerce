@@ -738,6 +738,7 @@ docker run -d --name inventory-pg \
 ./gradlew :services:inventory-service:bootRun
 
 # Option 3: Docker image
+./gradlew :services:inventory-service:bootJar
 docker build -t inventory-service services/inventory-service
 docker run -p 8083:8080 \
   -e INVENTORY_DB_URL=jdbc:postgresql://host.docker.internal:5432/inventory \
