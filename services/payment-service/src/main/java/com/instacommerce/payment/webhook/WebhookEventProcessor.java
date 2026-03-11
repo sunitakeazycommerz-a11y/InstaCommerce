@@ -58,7 +58,8 @@ public class WebhookEventProcessor {
 
     static final Set<PaymentStatus> CAPTURABLE_STATES = Set.of(
         PaymentStatus.CAPTURE_PENDING,
-        PaymentStatus.AUTHORIZED
+        PaymentStatus.AUTHORIZED,
+        PaymentStatus.AUTHORIZE_PENDING
     );
 
     static final Set<PaymentStatus> TERMINAL_NON_CAPTURABLE = Set.of(
@@ -162,6 +163,7 @@ public class WebhookEventProcessor {
     private void applyEvent(Payment payment, String type, JsonNode objectNode, String eventId) {
         switch (type) {
             case "payment_intent.succeeded" -> handleCaptured(payment, objectNode, eventId);
+            case "payment_intent.requires_capture" -> handleRequiresCapture(payment, eventId);
             case "payment_intent.canceled" -> handleVoided(payment, eventId);
             case "payment_intent.payment_failed" -> handleFailed(payment, objectNode, eventId);
             case "charge.refunded" -> handleRefunded(payment, objectNode, eventId);
@@ -184,6 +186,8 @@ public class WebhookEventProcessor {
             throw new WebhookEventHandler.TransientWebhookStateException(payment.getId(), payment.getStatus());
         }
 
+        boolean wasAuthorizePending = payment.getStatus() == PaymentStatus.AUTHORIZE_PENDING;
+
         long amount = longValue(objectNode, "amount_received", "amount");
         long capturedAmount = amount > 0 ? amount : payment.getAmountCents();
         long previousCaptured = payment.getCapturedCents();
@@ -191,6 +195,22 @@ public class WebhookEventProcessor {
         payment.setCapturedCents(Math.max(previousCaptured, capturedAmount));
         payment.setStatus(PaymentStatus.CAPTURED);
         Payment saved = paymentRepository.save(payment);
+
+        // When jumping AUTHORIZE_PENDING → CAPTURED directly (auth webhook not yet
+        // processed), record the authorization hold first so the capture and remainder
+        // release ledger entries have something to draw from.
+        if (wasAuthorizePending) {
+            ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
+                "customer_receivable", "authorization_hold", "AUTHORIZATION",
+                saved.getId().toString(), "Authorization hold (webhook direct capture)");
+            if (captureVoidOutboxEnabled) {
+                publishAuthorizedOutbox(saved);
+            }
+            log.info("Direct capture for AUTHORIZE_PENDING payment {}, recorded authorization hold",
+                saved.getId());
+            meterRegistry.counter("payment.webhook.capture", "outcome", "direct_from_authorize_pending").increment();
+        }
+
         if (delta > 0) {
             ledgerService.recordDoubleEntry(saved.getId(), delta,
                 "authorization_hold", "merchant_payable", "CAPTURE",
@@ -212,7 +232,56 @@ public class WebhookEventProcessor {
             publishCaptureOutbox(saved, capturedAmount);
             meterRegistry.counter("payment.webhook.capture", "outcome", "outbox_published").increment();
         }
+        auditLogService.logSafely(null,
+            "WEBHOOK_CAPTURED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "capturedCents", capturedAmount,
+                "currency", saved.getCurrency()));
         meterRegistry.counter("payment.webhook.capture", "outcome", "processed").increment();
+    }
+
+    private void handleRequiresCapture(Payment payment, String eventId) {
+        if (payment.getStatus() == PaymentStatus.AUTHORIZED
+                || payment.getStatus() == PaymentStatus.CAPTURED) {
+            log.debug("Webhook requires_capture idempotent no-op: payment {} already {}",
+                payment.getId(), payment.getStatus());
+            return;
+        }
+        if (TERMINAL_NON_CAPTURABLE.contains(payment.getStatus())) {
+            log.debug("Webhook requires_capture ignored: payment {} in terminal state {}",
+                payment.getId(), payment.getStatus());
+            return;
+        }
+        if (payment.getStatus() != PaymentStatus.AUTHORIZE_PENDING) {
+            log.debug("Webhook requires_capture ignored: payment {} in unexpected state {}",
+                payment.getId(), payment.getStatus());
+            return;
+        }
+
+        payment.setStatus(PaymentStatus.AUTHORIZED);
+        Payment saved = paymentRepository.save(payment);
+
+        ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
+            "customer_receivable", "authorization_hold", "AUTHORIZATION",
+            saved.getId().toString(), "Authorization hold (webhook)");
+
+        if (captureVoidOutboxEnabled) {
+            publishAuthorizedOutbox(saved);
+            meterRegistry.counter("payment.webhook.requires_capture", "outcome", "outbox_published").increment();
+        }
+
+        auditLogService.logSafely(null,
+            "WEBHOOK_AUTHORIZED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "amountCents", saved.getAmountCents(),
+                "currency", saved.getCurrency()));
+
+        log.info("Payment {} transitioned to AUTHORIZED via requires_capture webhook", saved.getId());
+        meterRegistry.counter("payment.webhook.requires_capture", "outcome", "processed").increment();
     }
 
     private void handleVoided(Payment payment, String eventId) {
@@ -239,6 +308,13 @@ public class WebhookEventProcessor {
             publishVoidOutbox(saved);
             meterRegistry.counter("payment.webhook.void", "outcome", "outbox_published").increment();
         }
+        auditLogService.logSafely(null,
+            "WEBHOOK_VOIDED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "amountCents", saved.getAmountCents(),
+                "currency", saved.getCurrency()));
         meterRegistry.counter("payment.webhook.void", "outcome", "processed").increment();
     }
 
@@ -352,6 +428,14 @@ public class WebhookEventProcessor {
             }
         }
 
+        auditLogService.logSafely(null,
+            "WEBHOOK_REFUNDED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "refundedCents", saved.getRefundedCents(),
+                "status", saved.getStatus().name(),
+                "currency", saved.getCurrency()));
         meterRegistry.counter("payment.webhook.refund", "outcome", "processed").increment();
         if (!trackedCompletions.isEmpty()) {
             meterRegistry.counter("payment.webhook.refund", "outcome", "tracked_completed")
@@ -468,6 +552,15 @@ public class WebhookEventProcessor {
         payload.put("amountCents", capturedCents);
         payload.put("currency", payment.getCurrency());
         outboxService.publish("Payment", payment.getId().toString(), "PaymentCaptured", payload);
+    }
+
+    private void publishAuthorizedOutbox(Payment payment) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("amountCents", payment.getAmountCents());
+        payload.put("currency", payment.getCurrency());
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentAuthorized", payload);
     }
 
     private void publishVoidOutbox(Payment payment) {
