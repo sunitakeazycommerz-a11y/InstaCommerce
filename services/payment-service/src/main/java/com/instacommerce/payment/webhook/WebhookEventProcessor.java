@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -53,7 +54,8 @@ public class WebhookEventProcessor {
 
     static final Set<PaymentStatus> TERMINAL_NON_REFUNDABLE = Set.of(
         PaymentStatus.VOIDED,
-        PaymentStatus.FAILED
+        PaymentStatus.FAILED,
+        PaymentStatus.DISPUTED
     );
 
     static final Set<PaymentStatus> CAPTURABLE_STATES = Set.of(
@@ -66,19 +68,36 @@ public class WebhookEventProcessor {
         PaymentStatus.VOIDED,
         PaymentStatus.FAILED,
         PaymentStatus.REFUNDED,
-        PaymentStatus.PARTIALLY_REFUNDED
+        PaymentStatus.PARTIALLY_REFUNDED,
+        PaymentStatus.DISPUTED
     );
 
     static final Set<PaymentStatus> VOIDABLE_STATES = Set.of(
         PaymentStatus.VOID_PENDING,
-        PaymentStatus.AUTHORIZED
+        PaymentStatus.AUTHORIZED,
+        PaymentStatus.AUTHORIZE_PENDING
     );
 
     static final Set<PaymentStatus> TERMINAL_NON_VOIDABLE = Set.of(
         PaymentStatus.CAPTURED,
         PaymentStatus.FAILED,
         PaymentStatus.REFUNDED,
+        PaymentStatus.PARTIALLY_REFUNDED,
+        PaymentStatus.DISPUTED
+    );
+
+    static final Set<PaymentStatus> DISPUTABLE_STATES = Set.of(
+        PaymentStatus.CAPTURED,
         PaymentStatus.PARTIALLY_REFUNDED
+    );
+
+    static final Set<PaymentStatus> TERMINAL_NON_DISPUTABLE = Set.of(
+        PaymentStatus.VOIDED,
+        PaymentStatus.FAILED,
+        PaymentStatus.AUTHORIZE_PENDING,
+        PaymentStatus.AUTHORIZED,
+        PaymentStatus.CAPTURE_PENDING,
+        PaymentStatus.VOID_PENDING
     );
 
     static final Set<PaymentStatus> FAILABLE_STATES = Set.of(
@@ -92,7 +111,8 @@ public class WebhookEventProcessor {
         PaymentStatus.CAPTURED,
         PaymentStatus.VOIDED,
         PaymentStatus.REFUNDED,
-        PaymentStatus.PARTIALLY_REFUNDED
+        PaymentStatus.PARTIALLY_REFUNDED,
+        PaymentStatus.DISPUTED
     );
 
     /** States where an authorization hold may already exist in ledger. */
@@ -167,6 +187,11 @@ public class WebhookEventProcessor {
             case "payment_intent.canceled" -> handleVoided(payment, eventId);
             case "payment_intent.payment_failed" -> handleFailed(payment, objectNode, eventId);
             case "charge.refunded" -> handleRefunded(payment, objectNode, eventId);
+            case "charge.refund.updated" -> handleRefundUpdated(payment, objectNode, eventId);
+            case "charge.expired" -> handleExpired(payment, eventId);
+            case "charge.dispute.created" -> handleDisputeCreated(payment, objectNode, eventId);
+            case "charge.dispute.updated" -> handleDisputeUpdated(payment, objectNode, eventId);
+            case "charge.dispute.closed" -> handleDisputeClosed(payment, objectNode, eventId);
             default -> log.debug("Ignoring webhook event {}", type);
         }
     }
@@ -299,11 +324,16 @@ public class WebhookEventProcessor {
             throw new WebhookEventHandler.TransientWebhookStateException(payment.getId(), payment.getStatus());
         }
 
+        boolean wasAuthorizePending = payment.getStatus() == PaymentStatus.AUTHORIZE_PENDING;
         payment.setStatus(PaymentStatus.VOIDED);
         Payment saved = paymentRepository.save(payment);
-        ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
-            "authorization_hold", "customer_receivable", "VOID",
-            saved.getId().toString(), "Authorization void (webhook)");
+        // Only record void ledger release if an authorization hold exists.
+        // AUTHORIZE_PENDING → VOIDED means the auth never completed, so no hold to release.
+        if (!wasAuthorizePending || hasAuthorizationLedgerEntry(saved.getId())) {
+            ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
+                "authorization_hold", "customer_receivable", "VOID",
+                saved.getId().toString(), "Authorization void (webhook)");
+        }
         if (captureVoidOutboxEnabled) {
             publishVoidOutbox(saved);
             meterRegistry.counter("payment.webhook.void", "outcome", "outbox_published").increment();
@@ -544,6 +574,266 @@ public class WebhookEventProcessor {
     }
 
     record TrackedRefundCompletion(UUID refundId, long amountCents, String reason) {}
+
+    private void handleRefundUpdated(Payment payment, JsonNode objectNode, String eventId) {
+        String pspRefundId = textValue(objectNode, "id");
+        if (pspRefundId == null || pspRefundId.isBlank()) {
+            pspRefundId = textValue(objectNode.path("refund"), "id");
+        }
+        if (pspRefundId == null || pspRefundId.isBlank()) {
+            log.warn("charge.refund.updated webhook missing refund ID, skipping");
+            meterRegistry.counter("payment.webhook.refund_update", "outcome", "missing_id").increment();
+            return;
+        }
+
+        String pspStatus = textValue(objectNode, "status");
+        if (pspStatus == null || pspStatus.isBlank()) {
+            pspStatus = textValue(objectNode.path("refund"), "status");
+        }
+
+        Optional<Refund> trackedOpt = refundRepository.findByPspRefundId(pspRefundId);
+        if (trackedOpt.isEmpty()) {
+            log.debug("charge.refund.updated for untracked pspRefundId={}, skipping", pspRefundId);
+            meterRegistry.counter("payment.webhook.refund_update", "outcome", "untracked").increment();
+            return;
+        }
+
+        Refund tracked = trackedOpt.get();
+
+        if ("failed".equals(pspStatus) && tracked.getStatus() == RefundStatus.COMPLETED) {
+            log.error("CRITICAL: Refund {} (pspRefundId={}) failed on PSP but locally COMPLETED — "
+                + "requires immediate reconciliation. paymentId={}, amountCents={}",
+                tracked.getId(), pspRefundId, tracked.getPaymentId(), tracked.getAmountCents());
+            meterRegistry.counter("payment.webhook.refund_update", "outcome", "psp_reversal_detected").increment();
+
+            auditLogService.logSafely(null,
+                "WEBHOOK_REFUND_PSP_FAILURE",
+                "Refund",
+                tracked.getId().toString(),
+                Map.of("paymentId", tracked.getPaymentId(),
+                    "pspRefundId", pspRefundId,
+                    "localStatus", tracked.getStatus().name(),
+                    "pspStatus", pspStatus,
+                    "amountCents", tracked.getAmountCents()));
+            return;
+        }
+
+        if ("succeeded".equals(pspStatus) && tracked.getStatus() == RefundStatus.PENDING) {
+            log.info("charge.refund.updated reports succeeded for PENDING refund {} — "
+                + "charge.refunded webhook should complete it", tracked.getId());
+            meterRegistry.counter("payment.webhook.refund_update", "outcome", "pending_succeeded").increment();
+        }
+
+        auditLogService.logSafely(null,
+            "WEBHOOK_REFUND_UPDATED",
+            "Refund",
+            tracked.getId().toString(),
+            Map.of("paymentId", tracked.getPaymentId(),
+                "pspRefundId", pspRefundId,
+                "pspStatus", pspStatus != null ? pspStatus : "unknown",
+                "localStatus", tracked.getStatus().name()));
+
+        meterRegistry.counter("payment.webhook.refund_update", "outcome", "processed").increment();
+    }
+
+    private void handleExpired(Payment payment, String eventId) {
+        if (payment.getStatus() == PaymentStatus.VOIDED || payment.getStatus() == PaymentStatus.FAILED) {
+            return;
+        }
+        if (payment.getStatus() == PaymentStatus.CAPTURED
+                || payment.getStatus() == PaymentStatus.PARTIALLY_REFUNDED
+                || payment.getStatus() == PaymentStatus.REFUNDED
+                || payment.getStatus() == PaymentStatus.DISPUTED) {
+            log.debug("Ignoring charge.expired for payment {} in post-capture state {}",
+                payment.getId(), payment.getStatus());
+            return;
+        }
+
+        boolean hadAuthHold = hasAuthorizationLedgerEntry(payment.getId());
+        payment.setStatus(PaymentStatus.VOIDED);
+        Payment saved = paymentRepository.save(payment);
+
+        if (hadAuthHold) {
+            ledgerService.recordDoubleEntry(saved.getId(), saved.getAmountCents(),
+                "authorization_hold", "customer_receivable", "VOID",
+                saved.getId().toString(), "Authorization expired (webhook)");
+        }
+
+        if (captureVoidOutboxEnabled) {
+            publishVoidOutbox(saved);
+        }
+
+        auditLogService.logSafely(null,
+            "WEBHOOK_EXPIRED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "amountCents", saved.getAmountCents(),
+                "currency", saved.getCurrency(),
+                "authHoldReleased", hadAuthHold));
+
+        log.info("Payment {} expired via webhook, transitioned to VOIDED (authHoldReleased={})",
+            saved.getId(), hadAuthHold);
+        meterRegistry.counter("payment.webhook.expired", "outcome", "processed").increment();
+    }
+
+    private void handleDisputeCreated(Payment payment, JsonNode objectNode, String eventId) {
+        if (payment.getStatus() == PaymentStatus.DISPUTED) {
+            log.debug("Webhook dispute created idempotent no-op: payment {} already DISPUTED",
+                payment.getId());
+            return;
+        }
+        if (TERMINAL_NON_DISPUTABLE.contains(payment.getStatus())) {
+            log.warn("Webhook dispute rejected: payment {} in terminal non-disputable state {}",
+                payment.getId(), payment.getStatus());
+            meterRegistry.counter("payment.webhook.dispute", "outcome", "terminal_rejected").increment();
+            return;
+        }
+        if (!DISPUTABLE_STATES.contains(payment.getStatus())) {
+            log.warn("Webhook dispute rejected: payment {} in unexpected state {}",
+                payment.getId(), payment.getStatus());
+            meterRegistry.counter("payment.webhook.dispute", "outcome", "unexpected_state").increment();
+            return;
+        }
+
+        long disputeAmount = longValue(objectNode, "amount");
+        if (disputeAmount <= 0) {
+            disputeAmount = payment.getCapturedCents();
+        }
+        String reason = textValue(objectNode, "reason");
+
+        payment.setStatus(PaymentStatus.DISPUTED);
+        Payment saved = paymentRepository.save(payment);
+
+        ledgerService.recordDoubleEntry(saved.getId(), disputeAmount,
+            "merchant_payable", "dispute_hold", "DISPUTE",
+            referenceId(eventId, saved), "Dispute created (webhook)");
+
+        publishDisputeCreatedOutbox(saved, disputeAmount, reason);
+
+        auditLogService.logSafely(null,
+            "WEBHOOK_DISPUTE_CREATED",
+            "Payment",
+            saved.getId().toString(),
+            Map.of("orderId", saved.getOrderId(),
+                "disputeAmountCents", disputeAmount,
+                "reason", reason != null ? reason : "",
+                "currency", saved.getCurrency()));
+
+        log.info("Payment {} transitioned to DISPUTED via webhook (amount={}, reason={})",
+            saved.getId(), disputeAmount, reason);
+        meterRegistry.counter("payment.webhook.dispute", "outcome", "processed").increment();
+    }
+
+    private void handleDisputeUpdated(Payment payment, JsonNode objectNode, String eventId) {
+        String status = textValue(objectNode, "status");
+        String reason = textValue(objectNode, "reason");
+
+        auditLogService.logSafely(null,
+            "WEBHOOK_DISPUTE_UPDATED",
+            "Payment",
+            payment.getId().toString(),
+            Map.of("orderId", payment.getOrderId(),
+                "disputeStatus", status != null ? status : "",
+                "reason", reason != null ? reason : "",
+                "currency", payment.getCurrency()));
+
+        log.info("Dispute update for payment {} (status={}, reason={})",
+            payment.getId(), status, reason);
+        meterRegistry.counter("payment.webhook.dispute_update", "outcome", "processed").increment();
+    }
+
+    private void handleDisputeClosed(Payment payment, JsonNode objectNode, String eventId) {
+        if (payment.getStatus() != PaymentStatus.DISPUTED) {
+            log.debug("Webhook dispute closed idempotent no-op: payment {} not DISPUTED (status={})",
+                payment.getId(), payment.getStatus());
+            return;
+        }
+
+        String status = textValue(objectNode, "status");
+        long amountCents = longValue(objectNode, "amount");
+        if (amountCents <= 0) {
+            amountCents = payment.getCapturedCents();
+        }
+
+        if ("won".equals(status)) {
+            ledgerService.recordDoubleEntry(payment.getId(), amountCents,
+                "dispute_hold", "merchant_payable", "DISPUTE_REVERSAL",
+                referenceId(eventId, payment), "Dispute won — reversal (webhook)");
+
+            if (payment.getRefundedCents() >= payment.getCapturedCents()) {
+                payment.setStatus(PaymentStatus.REFUNDED);
+            } else if (payment.getRefundedCents() > 0) {
+                payment.setStatus(PaymentStatus.PARTIALLY_REFUNDED);
+            } else {
+                payment.setStatus(PaymentStatus.CAPTURED);
+            }
+            Payment saved = paymentRepository.save(payment);
+
+            publishDisputeWonOutbox(saved, amountCents);
+
+            auditLogService.logSafely(null,
+                "WEBHOOK_DISPUTE_WON",
+                "Payment",
+                saved.getId().toString(),
+                Map.of("orderId", saved.getOrderId(),
+                    "amountCents", amountCents,
+                    "revertedStatus", saved.getStatus().name(),
+                    "currency", saved.getCurrency()));
+
+            log.info("Dispute won for payment {}, reverted to {}", saved.getId(), saved.getStatus());
+            meterRegistry.counter("payment.webhook.dispute_close", "outcome", "won").increment();
+        } else {
+            // Lost — dispute_hold money goes to customer
+            ledgerService.recordDoubleEntry(payment.getId(), amountCents,
+                "dispute_hold", "customer_receivable", "DISPUTE_LOSS",
+                referenceId(eventId, payment), "Dispute lost (webhook)");
+
+            // Keep status as DISPUTED — it is terminal for lost disputes
+            Payment saved = paymentRepository.save(payment);
+
+            publishDisputeLostOutbox(saved, amountCents);
+
+            auditLogService.logSafely(null,
+                "WEBHOOK_DISPUTE_LOST",
+                "Payment",
+                saved.getId().toString(),
+                Map.of("orderId", saved.getOrderId(),
+                    "amountCents", amountCents,
+                    "currency", saved.getCurrency()));
+
+            log.info("Dispute lost for payment {}, remains DISPUTED", saved.getId());
+            meterRegistry.counter("payment.webhook.dispute_close", "outcome", "lost").increment();
+        }
+    }
+
+    private void publishDisputeCreatedOutbox(Payment payment, long disputeAmountCents, String reason) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("disputeAmountCents", disputeAmountCents);
+        payload.put("currency", payment.getCurrency());
+        payload.put("reason", reason != null ? reason : "");
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentDisputed", payload);
+    }
+
+    private void publishDisputeWonOutbox(Payment payment, long amountCents) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("amountCents", amountCents);
+        payload.put("currency", payment.getCurrency());
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentDisputeWon", payload);
+    }
+
+    private void publishDisputeLostOutbox(Payment payment, long amountCents) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", payment.getOrderId());
+        payload.put("paymentId", payment.getId());
+        payload.put("amountCents", amountCents);
+        payload.put("currency", payment.getCurrency());
+        outboxService.publish("Payment", payment.getId().toString(), "PaymentDisputeLost", payload);
+    }
 
     private void publishCaptureOutbox(Payment payment, long capturedCents) {
         Map<String, Object> payload = new LinkedHashMap<>();

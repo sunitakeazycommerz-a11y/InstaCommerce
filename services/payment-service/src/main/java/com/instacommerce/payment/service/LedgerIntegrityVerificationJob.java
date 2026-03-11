@@ -35,6 +35,8 @@ import org.springframework.stereotype.Component;
  *   <li>Captured terminal payments ({@code CAPTURED}, {@code PARTIALLY_REFUNDED},
  *       {@code REFUNDED}) with partial capture have released authorization residue
  *       via {@code PARTIAL_CAPTURE_RELEASE}</li>
+ *   <li>VOIDED payments have no unreleased authorization holds
+ *       (VOID credits match AUTHORIZATION debits)</li>
  * </ol>
  * <p>
  * This job never mutates data. It is feature-flagged behind
@@ -91,33 +93,65 @@ public class LedgerIntegrityVerificationJob {
 
     private void doVerify() {
         Instant since = Instant.now().minusSeconds(lookbackMinutes * 60L);
-        List<UUID> paymentIds = ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(
-            since, PageRequest.ofSize(batchSize));
+        int totalChecked = 0;
+        int totalDrift = 0;
+        int pageNumber = 0;
+        // Safety cap to prevent runaway execution (e.g., 50 pages × 100 = 5000 payments max)
+        int maxPages = 50;
 
-        if (paymentIds.isEmpty()) {
+        while (pageNumber < maxPages) {
+            List<UUID> paymentIds = ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(
+                since, PageRequest.of(pageNumber, batchSize));
+
+            if (paymentIds.isEmpty()) {
+                break;
+            }
+
+            if (pageNumber == 0) {
+                log.info("Ledger integrity verification: starting verification for ledger activity since {}", since);
+            }
+
+            for (UUID paymentId : paymentIds) {
+                try {
+                    if (verifyPayment(paymentId)) {
+                        totalDrift++;
+                    }
+                } catch (Exception ex) {
+                    counter("ledger.verification.errors", "EXCEPTION").increment();
+                    log.error("Ledger integrity verification: unexpected error for paymentId={}",
+                        paymentId, ex);
+                }
+            }
+
+            totalChecked += paymentIds.size();
+
+            // If we got fewer results than the batch size, there are no more pages
+            if (paymentIds.size() < batchSize) {
+                break;
+            }
+
+            pageNumber++;
+        }
+
+        if (totalChecked == 0) {
             return;
         }
 
-        log.info("Ledger integrity verification: checking {} payment(s) with ledger activity since {}",
-            paymentIds.size(), since);
-        counter("ledger.verification.checked", "total").increment(paymentIds.size());
+        counter("ledger.verification.checked", "total").increment(totalChecked);
 
-        int driftCount = 0;
-        for (UUID paymentId : paymentIds) {
-            try {
-                if (verifyPayment(paymentId)) {
-                    driftCount++;
-                }
-            } catch (Exception ex) {
-                counter("ledger.verification.errors", "EXCEPTION").increment();
-                log.error("Ledger integrity verification: unexpected error for paymentId={}",
-                    paymentId, ex);
-            }
+        if (totalDrift > 0) {
+            log.warn("Ledger integrity verification: drift detected in {} of {} payment(s) across {} page(s)",
+                totalDrift, totalChecked, pageNumber + 1);
+        } else {
+            log.info("Ledger integrity verification: {} payment(s) checked across {} page(s), no drift detected",
+                totalChecked, pageNumber + 1);
         }
 
-        if (driftCount > 0) {
-            log.warn("Ledger integrity verification: drift detected in {} of {} payment(s)",
-                driftCount, paymentIds.size());
+        if (pageNumber >= maxPages) {
+            log.warn("Ledger integrity verification: hit max page cap ({} pages, {} payments checked). "
+                + "Some payments may be unverified. Consider increasing batch size or frequency.",
+                maxPages, totalChecked);
+            counter("ledger.verification.errors", "MAX_PAGES_REACHED").increment();
         }
     }
 
@@ -201,6 +235,19 @@ public class LedgerIntegrityVerificationJob {
                         authResidue, partialCaptureReleaseCredit, unreleased);
                     driftDetected = true;
                 }
+            }
+        }
+
+        // Rule 6: VOIDED payments should not have unreleased authorization holds
+        if (payment.getStatus() == PaymentStatus.VOIDED) {
+            long authDebit = sumByRefTypeAndEntryType(summaries, REF_TYPE_AUTHORIZATION, ENTRY_TYPE_DEBIT);
+            long voidCredit = sumByRefTypeAndEntryType(summaries, REF_TYPE_VOID, ENTRY_TYPE_CREDIT);
+            if (authDebit > 0 && voidCredit < authDebit) {
+                counter("ledger.verification.drift", "VOIDED_AUTH_HOLD_UNRELEASED").increment();
+                log.warn("Ledger integrity verification: VOIDED payment has unreleased authorization hold "
+                        + "for paymentId={} (authDebit={}¢, voidCredit={}¢, unreleasedHold={}¢)",
+                    paymentId, authDebit, voidCredit, authDebit - voidCredit);
+                driftDetected = true;
             }
         }
 

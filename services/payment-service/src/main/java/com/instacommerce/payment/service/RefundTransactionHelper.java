@@ -166,6 +166,12 @@ public class RefundTransactionHelper {
             if (updated == 0) {
                 log.info("Refund {} modified concurrently, skipping markRefundFailed — concurrent write wins",
                     refundId);
+            } else {
+                auditLogService.logSafely(null,
+                    "REFUND_GATEWAY_FAILED",
+                    "Refund",
+                    r.getId().toString(),
+                    Map.of("paymentId", r.getPaymentId()));
             }
         });
     }
