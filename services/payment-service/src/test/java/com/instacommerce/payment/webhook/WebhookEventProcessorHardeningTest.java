@@ -635,4 +635,149 @@ class WebhookEventProcessorHardeningTest {
                 .isEqualTo("Payment failed during VOID_PENDING");
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 5. Wave 12 — Partial capture: authorization remainder release
+    // ═══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Wave 12: Partial capture releases uncaptured authorization remainder")
+    class PartialCaptureReleaseWave12 {
+
+        @Test
+        @DisplayName("partial capture records CAPTURE for captured amount and PARTIAL_CAPTURE_RELEASE for remainder")
+        void partialCapture_recordsCaptureAndReleasesRemainder() {
+            Payment p = paymentInStatus(PaymentStatus.AUTHORIZED, 10000);
+            stubPaymentLookupWithSave(p);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.succeeded", PSP_REF,
+                captureObjectNode(7000), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.CAPTURED);
+            assertThat(p.getCapturedCents()).isEqualTo(7000);
+
+            // CAPTURE for the captured delta
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(7000L),
+                eq("authorization_hold"), eq("merchant_payable"),
+                eq("CAPTURE"), eq(p.getId().toString()),
+                eq("Capture (webhook)"));
+
+            // PARTIAL_CAPTURE_RELEASE for the uncaptured remainder
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(3000L),
+                eq("authorization_hold"), eq("customer_receivable"),
+                eq("PARTIAL_CAPTURE_RELEASE"), eq(p.getId().toString()),
+                eq("Partial capture remainder release (webhook)"));
+
+            assertThat(meterRegistry.counter(
+                "payment.webhook.capture", "outcome", "partial_capture_released").count())
+                .isEqualTo(1.0);
+            assertThat(meterRegistry.counter(
+                "payment.webhook.capture", "outcome", "processed").count())
+                .isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("full capture does NOT emit PARTIAL_CAPTURE_RELEASE")
+        void fullCapture_noPartialRelease() {
+            Payment p = paymentInStatus(PaymentStatus.AUTHORIZED, 5000);
+            stubPaymentLookupWithSave(p);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.succeeded", PSP_REF,
+                captureObjectNode(5000), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.CAPTURED);
+            assertThat(p.getCapturedCents()).isEqualTo(5000);
+
+            // Only CAPTURE ledger entry, no PARTIAL_CAPTURE_RELEASE
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(5000L),
+                eq("authorization_hold"), eq("merchant_payable"),
+                eq("CAPTURE"), eq(p.getId().toString()),
+                eq("Capture (webhook)"));
+
+            // Verify recordDoubleEntry was called exactly once (only CAPTURE)
+            verify(ledgerService, never()).recordDoubleEntry(
+                any(), any(long.class),
+                any(), any(),
+                eq("PARTIAL_CAPTURE_RELEASE"), any(),
+                any());
+
+            assertThat(meterRegistry.counter(
+                "payment.webhook.capture", "outcome", "partial_capture_released").count())
+                .isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("already-CAPTURED payment returns early — no duplicate CAPTURE or PARTIAL_CAPTURE_RELEASE")
+        void alreadyCaptured_idempotentSkip() {
+            Payment p = paymentInStatus(PaymentStatus.CAPTURED, 10000);
+            p.setCapturedCents(7000); // Previously partially captured
+            stubPaymentLookup(p);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.succeeded", PSP_REF,
+                captureObjectNode(7000), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.CAPTURED);
+            verify(paymentRepository, never()).save(any());
+            verifyNoInteractions(ledgerService, outboxService);
+        }
+
+        @Test
+        @DisplayName("partial capture from CAPTURE_PENDING also releases remainder")
+        void partialCapture_fromCapturePending() {
+            Payment p = paymentInStatus(PaymentStatus.CAPTURE_PENDING, 8000);
+            stubPaymentLookupWithSave(p);
+
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.succeeded", PSP_REF,
+                captureObjectNode(5000), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.CAPTURED);
+            assertThat(p.getCapturedCents()).isEqualTo(5000);
+
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(5000L),
+                eq("authorization_hold"), eq("merchant_payable"),
+                eq("CAPTURE"), eq(p.getId().toString()),
+                eq("Capture (webhook)"));
+
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(3000L),
+                eq("authorization_hold"), eq("customer_receivable"),
+                eq("PARTIAL_CAPTURE_RELEASE"), eq(p.getId().toString()),
+                eq("Partial capture remainder release (webhook)"));
+        }
+
+        @Test
+        @DisplayName("capture with no amount_received falls back to full amount — no remainder release")
+        void captureNoAmount_fallsBackToFull_noRelease() {
+            Payment p = paymentInStatus(PaymentStatus.AUTHORIZED, 6000);
+            stubPaymentLookupWithSave(p);
+
+            // objectNode without amount_received or amount fields
+            processorCaptureVoidOutboxOff.processEvent(
+                EVENT_ID, "payment_intent.succeeded", PSP_REF,
+                emptyObjectNode(), null);
+
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.CAPTURED);
+            assertThat(p.getCapturedCents()).isEqualTo(6000);
+
+            verify(ledgerService).recordDoubleEntry(
+                eq(p.getId()), eq(6000L),
+                eq("authorization_hold"), eq("merchant_payable"),
+                eq("CAPTURE"), eq(p.getId().toString()),
+                eq("Capture (webhook)"));
+
+            verify(ledgerService, never()).recordDoubleEntry(
+                any(), any(long.class),
+                any(), any(),
+                eq("PARTIAL_CAPTURE_RELEASE"), any(),
+                any());
+        }
+    }
 }

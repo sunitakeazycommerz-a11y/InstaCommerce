@@ -430,4 +430,140 @@ class LedgerIntegrityVerificationJobTest {
             assertThat(counterValue("ledger.verification.drift", "FAILED_AUTH_HOLD_UNRELEASED")).isZero();
         }
     }
+
+    // --- Partial capture auth residue unreleased ---
+
+    @Nested
+    @DisplayName("PARTIAL_CAPTURE_AUTH_RESIDUE_UNRELEASED drift")
+    class PartialCaptureAuthResidueUnreleased {
+
+        @Test
+        @DisplayName("No drift when partial capture residue is fully covered by PARTIAL_CAPTURE_RELEASE")
+        void capturedPayment_residueFullyReleased_noDrift() {
+            UUID paymentId = UUID.randomUUID();
+            // Authorized 10000¢, captured only 7000¢ → residue 3000¢
+            Payment p = payment(/* capturedCents= */ 7000, /* refundedCents= */ 0, PaymentStatus.CAPTURED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000),
+                summary("CAPTURE", "DEBIT", 7000),
+                summary("CAPTURE", "CREDIT", 7000),
+                summary("PARTIAL_CAPTURE_RELEASE", "DEBIT", 3000),
+                summary("PARTIAL_CAPTURE_RELEASE", "CREDIT", 3000)
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "PARTIAL_CAPTURE_AUTH_RESIDUE_UNRELEASED")).isZero();
+            assertThat(counterValue("ledger.verification.drift", "DEBIT_CREDIT_MISMATCH")).isZero();
+            assertThat(counterValue("ledger.verification.drift", "CAPTURE_MISMATCH")).isZero();
+        }
+
+        @Test
+        @DisplayName("No drift for PARTIALLY_REFUNDED payment with residue fully released")
+        void partiallyRefundedPayment_residueFullyReleased_noDrift() {
+            UUID paymentId = UUID.randomUUID();
+            // Authorized 10000¢, captured 7000¢, refunded 2000¢ → auth residue 3000¢
+            Payment p = payment(/* capturedCents= */ 7000, /* refundedCents= */ 2000,
+                PaymentStatus.PARTIALLY_REFUNDED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000),
+                summary("CAPTURE", "DEBIT", 7000),
+                summary("CAPTURE", "CREDIT", 7000),
+                summary("PARTIAL_CAPTURE_RELEASE", "DEBIT", 3000),
+                summary("PARTIAL_CAPTURE_RELEASE", "CREDIT", 3000),
+                summary("REFUND", "DEBIT", 2000),
+                summary("REFUND", "CREDIT", 2000)
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "PARTIAL_CAPTURE_AUTH_RESIDUE_UNRELEASED")).isZero();
+            assertThat(counterValue("ledger.verification.drift", "REFUND_MISMATCH")).isZero();
+        }
+
+        @Test
+        @DisplayName("No drift for REFUNDED payment with residue fully released")
+        void refundedPayment_residueFullyReleased_noDrift() {
+            UUID paymentId = UUID.randomUUID();
+            // Authorized 10000¢, captured 6000¢, fully refunded 6000¢ → auth residue 4000¢
+            Payment p = payment(/* capturedCents= */ 6000, /* refundedCents= */ 6000,
+                PaymentStatus.REFUNDED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000),
+                summary("CAPTURE", "DEBIT", 6000),
+                summary("CAPTURE", "CREDIT", 6000),
+                summary("PARTIAL_CAPTURE_RELEASE", "DEBIT", 4000),
+                summary("PARTIAL_CAPTURE_RELEASE", "CREDIT", 4000),
+                summary("REFUND", "DEBIT", 6000),
+                summary("REFUND", "CREDIT", 6000)
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "PARTIAL_CAPTURE_AUTH_RESIDUE_UNRELEASED")).isZero();
+        }
+
+        @Test
+        @DisplayName("Drift detected when captured terminal payment has no PARTIAL_CAPTURE_RELEASE")
+        void capturedPayment_noRelease_driftDetected() {
+            UUID paymentId = UUID.randomUUID();
+            // Authorized 10000¢, captured only 7000¢ → residue 3000¢, no release
+            Payment p = payment(/* capturedCents= */ 7000, /* refundedCents= */ 0, PaymentStatus.CAPTURED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000),
+                summary("CAPTURE", "DEBIT", 7000),
+                summary("CAPTURE", "CREDIT", 7000)
+                // No PARTIAL_CAPTURE_RELEASE → 3000¢ auth residue unreleased
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "PARTIAL_CAPTURE_AUTH_RESIDUE_UNRELEASED"))
+                .isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("Full capture passes without requiring PARTIAL_CAPTURE_RELEASE")
+        void fullCapture_noPartialCaptureRelease_noDrift() {
+            UUID paymentId = UUID.randomUUID();
+            // Full capture: capturedCents == amountCents → no auth residue
+            Payment p = payment(/* capturedCents= */ 10000, /* refundedCents= */ 0, PaymentStatus.CAPTURED);
+
+            when(ledgerEntryRepository.findDistinctPaymentIdsWithEntriesSince(any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(paymentId));
+            when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(p));
+            when(ledgerEntryRepository.sumByPaymentIdGrouped(paymentId)).thenReturn(List.of(
+                summary("AUTHORIZATION", "DEBIT", 10000),
+                summary("AUTHORIZATION", "CREDIT", 10000),
+                summary("CAPTURE", "DEBIT", 10000),
+                summary("CAPTURE", "CREDIT", 10000)
+                // No PARTIAL_CAPTURE_RELEASE needed for full capture
+            ));
+
+            job.verifyLedgerIntegrity();
+
+            assertThat(counterValue("ledger.verification.drift", "PARTIAL_CAPTURE_AUTH_RESIDUE_UNRELEASED")).isZero();
+            assertThat(counterValue("ledger.verification.drift", "DEBIT_CREDIT_MISMATCH")).isZero();
+        }
+    }
 }

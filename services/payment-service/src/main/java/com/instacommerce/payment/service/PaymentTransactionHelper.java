@@ -143,6 +143,13 @@ public class PaymentTransactionHelper {
         Payment saved = paymentRepository.save(payment);
         ledgerService.recordDoubleEntry(saved.getId(), capturedCents,
             "authorization_hold", "merchant_payable", "CAPTURE", saved.getId().toString(), "Capture");
+        long uncapturedCents = saved.getAmountCents() - capturedCents;
+        if (uncapturedCents > 0) {
+            ledgerService.recordDoubleEntry(saved.getId(), uncapturedCents,
+                "authorization_hold", "customer_receivable",
+                "PARTIAL_CAPTURE_RELEASE", saved.getId().toString(),
+                "Release uncaptured authorization remainder");
+        }
         outboxService.publish("Payment", saved.getId().toString(), "PaymentCaptured",
             Map.of("orderId", saved.getOrderId(),
                 "paymentId", saved.getId(),
@@ -250,6 +257,13 @@ public class PaymentTransactionHelper {
         ledgerService.recordDoubleEntry(saved.getId(), capturedCents,
             "authorization_hold", "merchant_payable", "CAPTURE", saved.getId().toString(),
             "Capture (recovery reconciliation)");
+        long uncapturedCents = saved.getAmountCents() - capturedCents;
+        if (uncapturedCents > 0) {
+            ledgerService.recordDoubleEntry(saved.getId(), uncapturedCents,
+                "authorization_hold", "customer_receivable",
+                "PARTIAL_CAPTURE_RELEASE", saved.getId().toString(),
+                "Release uncaptured authorization remainder (recovery reconciliation)");
+        }
         outboxService.publish("Payment", saved.getId().toString(), "PaymentAuthorized",
             Map.of("orderId", saved.getOrderId(),
                 "paymentId", saved.getId(),
