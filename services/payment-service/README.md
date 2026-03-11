@@ -186,7 +186,8 @@ sequenceDiagram
 
         alt payment_intent.succeeded
             Handler->>DB: UPDATE payment → CAPTURED
-            Handler->>Ledger: DEBIT authorization_hold / CREDIT merchant_payable
+            Handler->>Ledger: DEBIT authorization_hold / CREDIT merchant_payable (captured amount)
+            Handler->>Ledger: DEBIT authorization_hold / CREDIT customer_receivable (uncaptured remainder, if partial)
         else payment_intent.canceled
             Handler->>DB: UPDATE payment → VOIDED
             Handler->>Ledger: DEBIT authorization_hold / CREDIT customer_receivable
@@ -228,6 +229,10 @@ flowchart LR
         C1[DEBIT authorization_hold] -->|captured| C2[CREDIT merchant_payable]
     end
 
+    subgraph Partial Capture Release
+        PC1[DEBIT authorization_hold] -->|uncaptured remainder| PC2[CREDIT customer_receivable]
+    end
+
     subgraph Void
         V1[DEBIT authorization_hold] -->|amount| V2[CREDIT customer_receivable]
     end
@@ -244,9 +249,12 @@ flowchart LR
 | Event | Debit Account | Credit Account | Reference Type |
 |---|---|---|---|
 | Authorization | `customer_receivable` | `authorization_hold` | `AUTHORIZATION` |
-| Capture | `authorization_hold` | `merchant_payable` | `CAPTURE` |
+| Capture (captured amount) | `authorization_hold` | `merchant_payable` | `CAPTURE` |
+| Partial Capture Release (uncaptured remainder) | `authorization_hold` | `customer_receivable` | `PARTIAL_CAPTURE_RELEASE` |
 | Void | `authorization_hold` | `customer_receivable` | `VOID` |
 | Refund | `merchant_payable` | `customer_receivable` | `REFUND` |
+
+**Partial capture semantics:** When `captureAmountCents < authorizedAmountCents`, two ledger entry pairs are created atomically: a `CAPTURE` pair moves the captured amount from `authorization_hold` to `merchant_payable`, and a `PARTIAL_CAPTURE_RELEASE` pair releases the uncaptured remainder from `authorization_hold` to `customer_receivable`. This ensures `authorization_hold` is fully drained to zero after every capture regardless of whether it is full or partial. For full captures (`captureAmountCents == authorizedAmountCents`), only the `CAPTURE` pair is written. This dual-pair behavior is consistent across the synchronous capture path, webhook-driven capture completion, and stale pending recovery.
 
 All ledger writes run within `Propagation.MANDATORY` — they must participate in the caller's transaction, ensuring atomicity with the payment state change.
 
@@ -343,7 +351,7 @@ flowchart TD
     D -- No --> F[Insert into processed_webhook_events]
     F --> G[Lookup payment by pspReference]
     G --> H{Event type?}
-    H -- payment_intent.succeeded --> I[Set CAPTURED + ledger entries]
+    H -- payment_intent.succeeded --> I[Set CAPTURED + capture ledger + partial-capture release if remainder]
     H -- payment_intent.canceled --> J[Set VOIDED + ledger entries]
     H -- charge.refunded --> K[Update refundedCents + ledger entries]
     H -- payment_intent.payment_failed --> L[Set FAILED + release hold if present + publish PaymentFailed]
@@ -690,7 +698,7 @@ Payments can become stuck when the process crashes or the network fails between 
 | Stuck State | Recovery Action | Success Outcome | Failure Outcome |
 |---|---|---|---|
 | `AUTHORIZE_PENDING` | Query Stripe for PaymentIntent status | Transition to `AUTHORIZED` or `FAILED` based on PSP state | Mark `FAILED` after threshold; log for manual review |
-| `CAPTURE_PENDING` | Query Stripe for capture confirmation | Transition to `CAPTURED` or revert to `AUTHORIZED` | Revert to `AUTHORIZED`; operator investigates |
+| `CAPTURE_PENDING` | Query Stripe for capture confirmation | Transition to `CAPTURED` with capture + partial-capture-release ledger entries (same dual-pair semantics as the sync path) | Revert to `AUTHORIZED`; operator investigates |
 | `VOID_PENDING` | Query Stripe for cancellation confirmation | Transition to `VOIDED` or revert to `AUTHORIZED` | Revert to `AUTHORIZED`; operator investigates |
 
 Each recovery attempt follows the same idempotency and ledger-consistency guarantees as the normal payment flows. ShedLock ensures only one instance runs the job across the replica set.

@@ -9,8 +9,10 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -30,6 +32,9 @@ import org.springframework.stereotype.Component;
  *   <li>Refund ledger totals align with {@code payment.refundedCents}</li>
  *   <li>Capture ledger totals align with {@code payment.capturedCents}</li>
  *   <li>FAILED payments have no unreleased authorization holds</li>
+ *   <li>Captured terminal payments ({@code CAPTURED}, {@code PARTIALLY_REFUNDED},
+ *       {@code REFUNDED}) with partial capture have released authorization residue
+ *       via {@code PARTIAL_CAPTURE_RELEASE}</li>
  * </ol>
  * <p>
  * This job never mutates data. It is feature-flagged behind
@@ -46,9 +51,13 @@ public class LedgerIntegrityVerificationJob {
     private static final String REF_TYPE_CAPTURE = "CAPTURE";
     private static final String REF_TYPE_FAILURE_RELEASE = "FAILURE_RELEASE";
     private static final String REF_TYPE_REFUND = "REFUND";
+    private static final String REF_TYPE_PARTIAL_CAPTURE_RELEASE = "PARTIAL_CAPTURE_RELEASE";
     private static final String REF_TYPE_VOID = "VOID";
     private static final String ENTRY_TYPE_DEBIT = "DEBIT";
     private static final String ENTRY_TYPE_CREDIT = "CREDIT";
+
+    private static final Set<PaymentStatus> CAPTURED_TERMINAL_STATES = EnumSet.of(
+        PaymentStatus.CAPTURED, PaymentStatus.PARTIALLY_REFUNDED, PaymentStatus.REFUNDED);
 
     private final LedgerEntryRepository ledgerEntryRepository;
     private final PaymentRepository paymentRepository;
@@ -172,6 +181,26 @@ public class LedgerIntegrityVerificationJob {
                         + "for paymentId={} (authDebit={}¢, releaseCredit={}¢, unreleasedHold={}¢)",
                     paymentId, authDebit, releaseCredit, authDebit - releaseCredit);
                 driftDetected = true;
+            }
+        }
+
+        // Rule 5: Captured terminal payments with partial capture should have released auth residue
+        if (CAPTURED_TERMINAL_STATES.contains(payment.getStatus())) {
+            long authResidue = payment.getAmountCents() - payment.getCapturedCents();
+            if (authResidue > 0) {
+                long partialCaptureReleaseCredit = sumByRefTypeAndEntryType(
+                    summaries, REF_TYPE_PARTIAL_CAPTURE_RELEASE, ENTRY_TYPE_CREDIT);
+                if (partialCaptureReleaseCredit < authResidue) {
+                    long unreleased = authResidue - partialCaptureReleaseCredit;
+                    counter("ledger.verification.drift", "PARTIAL_CAPTURE_AUTH_RESIDUE_UNRELEASED").increment();
+                    log.warn("Ledger integrity verification: captured terminal payment has unreleased "
+                            + "authorization residue after partial capture for paymentId={} "
+                            + "(amountCents={}¢, capturedCents={}¢, authResidue={}¢, "
+                            + "partialCaptureReleaseCredit={}¢, unreleasedResidue={}¢)",
+                        paymentId, payment.getAmountCents(), payment.getCapturedCents(),
+                        authResidue, partialCaptureReleaseCredit, unreleased);
+                    driftDetected = true;
+                }
             }
         }
 

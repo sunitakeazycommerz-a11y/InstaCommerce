@@ -196,6 +196,18 @@ public class WebhookEventProcessor {
                 "authorization_hold", "merchant_payable", "CAPTURE",
                 saved.getId().toString(), "Capture (webhook)");
         }
+        // Release uncaptured authorization remainder for partial captures.
+        // Uses PARTIAL_CAPTURE_RELEASE referenceType with payment ID so
+        // LedgerService dedup prevents duplicates on webhook retries.
+        long remainder = saved.getAmountCents() - capturedAmount;
+        if (remainder > 0) {
+            ledgerService.recordDoubleEntry(saved.getId(), remainder,
+                "authorization_hold", "customer_receivable", "PARTIAL_CAPTURE_RELEASE",
+                saved.getId().toString(), "Partial capture remainder release (webhook)");
+            log.info("Released {} cents authorization remainder for partially captured payment {}",
+                remainder, saved.getId());
+            meterRegistry.counter("payment.webhook.capture", "outcome", "partial_capture_released").increment();
+        }
         if (captureVoidOutboxEnabled) {
             publishCaptureOutbox(saved, capturedAmount);
             meterRegistry.counter("payment.webhook.capture", "outcome", "outbox_published").increment();
