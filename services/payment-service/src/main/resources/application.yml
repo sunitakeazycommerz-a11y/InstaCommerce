@@ -146,7 +146,6 @@ resilience4j:
           - java.util.concurrent.TimeoutException
           - com.instacommerce.payment.exception.PaymentGatewayTransientException
         ignoreExceptions:
-          - com.instacommerce.payment.exception.PaymentGatewayException
           - com.instacommerce.payment.exception.PaymentDeclinedException
   timelimiter:
     instances:

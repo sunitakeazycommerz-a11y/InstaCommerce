@@ -36,6 +36,7 @@ jobs:
       changed_services: ${{ steps.set-matrix.outputs.changed_services }}
       go_services: ${{ steps.set-go-matrix.outputs.go_services }}
       changed_go_services: ${{ steps.set-go-matrix.outputs.changed_go_services }}
+      cloud_publish_configured: ${{ steps.check-cloud-creds.outputs.configured }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -143,6 +144,23 @@ jobs:
           changed_go_services_json=$(jq -cn '$ARGS.positional' --args "${changed_go_services[@]}")
           echo "go_services=$go_services_json" >> "$GITHUB_OUTPUT"
           echo "changed_go_services=$changed_go_services_json" >> "$GITHUB_OUTPUT"
+      - name: Check cloud publish credentials
+        id: check-cloud-creds
+        run: |
+          if [[ -n "$WIP" && -n "$SA" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            if [[ "$GITHUB_REF" == "refs/heads/main" || "$GITHUB_REF" == "refs/heads/master" ]]; then
+              echo "::notice::Cloud publish credentials are configured. Image push and deploy-dev will proceed."
+            fi
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            if [[ "$GITHUB_REF" == "refs/heads/main" || "$GITHUB_REF" == "refs/heads/master" ]]; then
+              echo "::warning::Cloud publish credentials (GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT) are not configured. Artifact Registry push and deploy-dev will be skipped. Set these as repository secrets or variables to enable publishing."
+            fi
+          fi
+        env:
+          WIP: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER || vars.GCP_WORKLOAD_IDENTITY_PROVIDER || '' }}
+          SA: ${{ secrets.GCP_SERVICE_ACCOUNT || vars.GCP_SERVICE_ACCOUNT || '' }}
 
   security-scan:
     runs-on: ubuntu-latest
@@ -278,16 +296,16 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '1'
       - name: Authenticate to Google Cloud
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER || vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT || vars.GCP_SERVICE_ACCOUNT }}
       - name: Configure Docker auth
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
       - name: Push to Artifact Registry
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         run: docker push ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
 
   go-build-test:
@@ -325,7 +343,11 @@ jobs:
 
   deploy-dev:
     needs: [detect-changes, security-scan, build-test, go-build-test]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.actor != 'github-actions[bot]'
+    if: >-
+      github.event_name == 'push'
+      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      && github.actor != 'github-actions[bot]'
+      && needs.detect-changes.outputs.cloud_publish_configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
