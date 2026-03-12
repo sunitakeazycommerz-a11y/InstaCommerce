@@ -36,6 +36,8 @@ jobs:
       changed_services: ${{ steps.set-matrix.outputs.changed_services }}
       go_services: ${{ steps.set-go-matrix.outputs.go_services }}
       changed_go_services: ${{ steps.set-go-matrix.outputs.changed_go_services }}
+      go_docker_services: ${{ steps.set-go-matrix.outputs.go_docker_services }}
+      changed_go_docker_services: ${{ steps.set-go-matrix.outputs.changed_go_docker_services }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -117,10 +119,13 @@ jobs:
       - id: set-go-matrix
         run: |
           all_go_services=(go-shared cdc-consumer-service dispatch-optimizer-service location-ingestion-service outbox-relay-service payment-webhook-service reconciliation-engine stream-processor-service)
+          all_go_docker_services=(cdc-consumer-service dispatch-optimizer-service location-ingestion-service outbox-relay-service payment-webhook-service reconciliation-engine stream-processor-service)
           changed_go_services=()
+          changed_go_docker_services=()
 
           if [[ "${{ steps.filter.outputs.go-shared }}" == "true" ]]; then
             changed_go_services=("${all_go_services[@]}")
+            changed_go_docker_services=("${all_go_docker_services[@]}")
           else
             [[ "${{ steps.filter.outputs.cdc-consumer-service }}" == "true" ]] && changed_go_services+=("cdc-consumer-service")
             [[ "${{ steps.filter.outputs.dispatch-optimizer-service }}" == "true" ]] && changed_go_services+=("dispatch-optimizer-service")
@@ -129,20 +134,35 @@ jobs:
             [[ "${{ steps.filter.outputs.payment-webhook-service }}" == "true" ]] && changed_go_services+=("payment-webhook-service")
             [[ "${{ steps.filter.outputs.reconciliation-engine }}" == "true" ]] && changed_go_services+=("reconciliation-engine")
             [[ "${{ steps.filter.outputs.stream-processor-service }}" == "true" ]] && changed_go_services+=("stream-processor-service")
+
+            [[ "${{ steps.filter.outputs.cdc-consumer-service }}" == "true" ]] && changed_go_docker_services+=("cdc-consumer-service")
+            [[ "${{ steps.filter.outputs.dispatch-optimizer-service }}" == "true" ]] && changed_go_docker_services+=("dispatch-optimizer-service")
+            [[ "${{ steps.filter.outputs.location-ingestion-service }}" == "true" ]] && changed_go_docker_services+=("location-ingestion-service")
+            [[ "${{ steps.filter.outputs.outbox-relay-service }}" == "true" ]] && changed_go_docker_services+=("outbox-relay-service")
+            [[ "${{ steps.filter.outputs.payment-webhook-service }}" == "true" ]] && changed_go_docker_services+=("payment-webhook-service")
+            [[ "${{ steps.filter.outputs.reconciliation-engine }}" == "true" ]] && changed_go_docker_services+=("reconciliation-engine")
+            [[ "${{ steps.filter.outputs.stream-processor-service }}" == "true" ]] && changed_go_docker_services+=("stream-processor-service")
           fi
 
           if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then
             go_services=("${all_go_services[@]}")
+            go_docker_services=("${all_go_docker_services[@]}")
           elif [ ${#changed_go_services[@]} -eq 0 ]; then
             go_services=()
+            go_docker_services=()
           else
             go_services=("${changed_go_services[@]}")
+            go_docker_services=("${changed_go_docker_services[@]}")
           fi
 
           go_services_json=$(jq -cn '$ARGS.positional' --args "${go_services[@]}")
           changed_go_services_json=$(jq -cn '$ARGS.positional' --args "${changed_go_services[@]}")
+          go_docker_services_json=$(jq -cn '$ARGS.positional' --args "${go_docker_services[@]}")
+          changed_go_docker_services_json=$(jq -cn '$ARGS.positional' --args "${changed_go_docker_services[@]}")
           echo "go_services=$go_services_json" >> "$GITHUB_OUTPUT"
           echo "changed_go_services=$changed_go_services_json" >> "$GITHUB_OUTPUT"
+          echo "go_docker_services=$go_docker_services_json" >> "$GITHUB_OUTPUT"
+          echo "changed_go_docker_services=$changed_go_docker_services_json" >> "$GITHUB_OUTPUT"
 
   security-scan:
     runs-on: ubuntu-latest
@@ -323,9 +343,56 @@ jobs:
         working-directory: services/${{ matrix.service }}
         run: go build ./...
 
+  go-docker-build:
+    needs: [detect-changes, go-build-test]
+    if: needs.detect-changes.outputs.go_docker_services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.go_docker_services) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
+            services/${{ matrix.service }}
+      - name: Scan image vulnerabilities
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: aquasecurity/trivy-action@0.34.2
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+      - name: Authenticate to Google Cloud
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Configure Docker auth
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+      - name: Push to Artifact Registry
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: docker push ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
+
   deploy-dev:
-    needs: [detect-changes, security-scan, build-test, go-build-test]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.actor != 'github-actions[bot]'
+    needs: [detect-changes, security-scan, build-test, go-build-test, go-docker-build]
+    if: >-
+      !cancelled() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
