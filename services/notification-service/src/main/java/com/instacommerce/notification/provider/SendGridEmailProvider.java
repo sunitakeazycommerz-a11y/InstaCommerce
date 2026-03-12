@@ -11,10 +11,10 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 
 @Component
 @Profile("prod")
@@ -25,11 +25,11 @@ public class SendGridEmailProvider implements NotificationProvider {
     private final RestTemplate restTemplate;
     private final NotificationProperties notificationProperties;
 
-    public SendGridEmailProvider(RestTemplateBuilder builder, NotificationProperties notificationProperties) {
-        this.restTemplate = builder
-            .setConnectTimeout(java.time.Duration.ofSeconds(2))
-            .setReadTimeout(java.time.Duration.ofSeconds(5))
-            .build();
+    public SendGridEmailProvider(NotificationProperties notificationProperties) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(java.time.Duration.ofSeconds(2));
+        requestFactory.setReadTimeout(java.time.Duration.ofSeconds(5));
+        this.restTemplate = new RestTemplate(requestFactory);
         this.notificationProperties = notificationProperties;
     }
 

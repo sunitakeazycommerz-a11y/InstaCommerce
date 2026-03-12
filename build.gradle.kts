@@ -33,9 +33,12 @@ subprojects {
             mavenBom("io.grpc:grpc-bom:1.75.0")
         }
         dependencies {
-            dependency("com.fasterxml.jackson.core:jackson-annotations:2.18.6")
+            dependency("com.fasterxml.jackson.core:jackson-annotations:2.21")
             dependency("com.fasterxml.jackson.core:jackson-core:2.18.6")
             dependency("com.fasterxml.jackson.core:jackson-databind:2.18.6")
+            dependency("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.18.6")
+            dependency("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.18.6")
+            dependency("com.fasterxml.jackson.module:jackson-module-parameter-names:2.18.6")
             dependency("com.google.protobuf:protobuf-java:4.32.0")
             dependency("com.google.protobuf:protobuf-java-util:4.32.0")
             dependency("at.yawk.lz4:lz4-java:1.10.1")

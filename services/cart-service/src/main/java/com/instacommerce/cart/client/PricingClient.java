@@ -2,12 +2,13 @@ package com.instacommerce.cart.client;
 
 import com.instacommerce.cart.exception.ApiException;
 import com.instacommerce.cart.security.InternalServiceAuthInterceptor;
+import java.time.Duration;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
@@ -21,16 +22,17 @@ public class PricingClient {
     private static final Logger log = LoggerFactory.getLogger(PricingClient.class);
 
     private final RestTemplate restTemplate;
+    private final String baseUrl;
 
-    public PricingClient(RestTemplateBuilder builder,
+    public PricingClient(@Value("${pricing-service.base-url:http://pricing-service:8087}") String baseUrl,
                          @Value("${internal.service.name:${spring.application.name}}") String serviceName,
                          @Value("${internal.service.token:dev-internal-token-change-in-prod}") String serviceToken) {
-        this.restTemplate = builder
-                .rootUri("http://pricing-service:8087")
-                .setConnectTimeout(java.time.Duration.ofMillis(2000))
-                .setReadTimeout(java.time.Duration.ofMillis(3000))
-                .additionalInterceptors(new InternalServiceAuthInterceptor(serviceName, serviceToken))
-                .build();
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(2000));
+        requestFactory.setReadTimeout(Duration.ofMillis(3000));
+        this.restTemplate = new RestTemplate(requestFactory);
+        this.restTemplate.getInterceptors().add(new InternalServiceAuthInterceptor(serviceName, serviceToken));
+        this.baseUrl = baseUrl;
     }
 
     /**
@@ -43,7 +45,7 @@ public class PricingClient {
     public PriceResponse getPrice(UUID productId) {
         try {
             PriceResponse response = restTemplate.getForObject(
-                    "/api/v1/prices/{productId}", PriceResponse.class, productId);
+                    baseUrl + "/api/v1/prices/{productId}", PriceResponse.class, productId);
             if (response == null) {
                 throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
                         "Pricing service returned null for product: " + productId);
