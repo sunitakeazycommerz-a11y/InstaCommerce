@@ -820,6 +820,51 @@ The webhook-driven payload now satisfies the `PaymentRefunded` contract. Its `re
 
 ---
 
+## Webhook Kafka Consumer
+
+### What It Does
+
+When `PAYMENT_WEBHOOK_KAFKA_CONSUMER_ENABLED` is `true`, the `PaymentWebhookEventConsumer` subscribes to the `payment.webhooks` Kafka topic produced by the Go `payment-webhook-service`. Each record is deserialized into a `WebhookTransportEvent` and forwarded through the `WebhookKafkaBridge`, which validates the transport envelope and passes the raw PSP payload to the existing Stripe `WebhookEventHandler`.
+
+This replaces the need for direct HTTP webhook forwarding from the Go service to payment-service, enabling decoupled, replay-safe webhook delivery via Kafka.
+
+### Consumer Behavior
+
+| Condition | Behavior | Offset committed? |
+|---|---|---|
+| Valid Stripe v2+ event with `raw_psp_payload` | Forwarded to `WebhookEventHandler` | Yes |
+| Unsupported PSP (e.g. razorpay) | Logged at INFO, skipped | Yes |
+| `schema_version` < 2 | Logged at WARN, skipped | Yes |
+| Missing `raw_psp_payload` | Logged at WARN, skipped | Yes |
+| Missing required envelope fields (`id`, `psp`, `event_type`) | Logged at WARN, skipped | Yes |
+| JSON deserialization failure | Propagated to error handler → retries then DLT | After DLT publish |
+| `WebhookEventHandler` throws | Propagated to error handler → retries then DLT | After DLT publish |
+
+Safe-skip results commit the offset normally and do not route to the dead-letter topic, because they are structurally unprocessable and retrying would be pointless.
+
+### Consumer Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PAYMENT_WEBHOOK_KAFKA_CONSUMER_ENABLED` | `false` | Feature gate — set to `true` to activate the consumer |
+| `PAYMENT_WEBHOOK_KAFKA_CONSUMER_TOPIC` | `payment.webhooks` | Kafka topic to consume |
+| `PAYMENT_WEBHOOK_KAFKA_CONSUMER_GROUP` | `payment-service-webhook` | Kafka consumer group ID |
+
+The consumer is **off by default** in base and production Helm values.
+
+### Error Handling
+
+The shared Kafka error handler (`KafkaConfig`) is activated when either this consumer or the OrderCancelled consumer is enabled. It retries failed records up to 3 times with a 1-second backoff, then publishes to a `<topic>.DLT` dead-letter topic. `JsonProcessingException` and `IllegalArgumentException` are not retried.
+
+### Rollout
+
+1. **Enable in dev** — set `PAYMENT_WEBHOOK_KAFKA_CONSUMER_ENABLED: "true"` in `values-dev.yaml`. Verify that webhook events from the Go `payment-webhook-service` are consumed and forwarded to the Stripe handler.
+2. **Enable in prod** — flip `PAYMENT_WEBHOOK_KAFKA_CONSUMER_ENABLED` to `"true"` in `values-prod.yaml` once dev validation is complete.
+3. **Rollback** — set the flag back to `"false"` and redeploy. The consumer stops processing new events; Kafka consumer offsets are retained, so re-enabling will resume from the last committed offset.
+4. **Monitoring** — watch for: consumer lag on the `payment.webhooks` topic, growth in `payment.webhooks.DLT`, Stripe webhook processing errors, and handler latency.
+
+---
+
 ## Known Limitations
 
 - the OrderCancelled consumer does not yet handle partial-capture scenarios where only a subset of the authorized amount was captured; it issues a full refund of `capturedCents − refundedCents`
