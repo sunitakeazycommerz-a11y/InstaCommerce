@@ -208,8 +208,10 @@ classDiagram
         +AmountCents int64
         +Currency string
         +Status string
-        +RawPayload []byte
         +ReceivedAt time.Time
+        +Version int
+        +RawPSPPayload json.RawMessage
+        +RawPayload []byte
     }
 
     DedupeStore <|.. inMemoryDedupe
@@ -357,6 +359,10 @@ side.
 Published to topic `payment.webhooks` with `event.ID` as the Kafka message key (ensures
 per-event ordering within a partition).
 
+**Schema version 2** (current) — additive extension of v1. The `schema_version` and
+`raw_psp_payload` fields are absent in legacy v1 messages, so existing consumers that do
+not reference them are unaffected.
+
 ```json
 {
   "id": "evt_1234",
@@ -367,9 +373,16 @@ per-event ordering within a partition).
   "amount_cents": 4999,
   "currency": "usd",
   "status": "succeeded",
-  "received_at": "2025-01-15T10:30:00Z"
+  "received_at": "2025-01-15T10:30:00Z",
+  "schema_version": 2,
+  "raw_psp_payload": { "id": "evt_1234", "type": "payment_intent.succeeded", "data": { "..." : "..." } }
 }
 ```
+
+| Field | Since | Description |
+|---|---|---|
+| `schema_version` | v2 | Integer; absent / 0 in v1 messages. Consumers can branch on this. |
+| `raw_psp_payload` | v2 | Verbatim JSON body received from the PSP, embedded as-is (not base64). Use this when canonical fields are too lossy (e.g. refund evidence, dispute metadata). Absent if the payload could not be captured. |
 
 **Kafka headers** injected per message:
 - `event_id` — PSP event identifier
@@ -407,7 +420,8 @@ payment-webhook-service/
 │   ├── verify.go           # SignatureVerifier interface + StripeVerifier, RazorpayVerifier,
 │   │                       # PhonePeVerifier implementations
 │   ├── dedup.go            # IdempotencyStore — in-memory TTL map with maxSize eviction
-│   └── metrics.go          # WebhookMetrics — Prometheus counters/histograms per PSP
+│   ├── metrics.go          # WebhookMetrics — Prometheus counters/histograms per PSP
+│   └── webhook_transport_test.go  # Transport contract tests for Kafka event envelope
 ├── Dockerfile              # Multi-stage build: golang:1.22-alpine → alpine:3.20, non-root user
 ├── go.mod                  # Go 1.23, module: github.com/instacommerce/payment-webhook-service
 └── go.sum

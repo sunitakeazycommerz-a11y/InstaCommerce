@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// SchemaVersion is the current version of the Kafka transport envelope.
+// Bump when fields are added so consumers can branch on capability.
+const SchemaVersion = 2
+
 // PSPType identifies a payment service provider.
 type PSPType string
 
@@ -31,6 +35,7 @@ const maxWebhookBody = 1 << 20
 // WebhookEvent is the canonical, PSP-agnostic representation of a payment
 // webhook event that is published to Kafka for downstream consumers.
 type WebhookEvent struct {
+	// --- v1 fields (always present) ---
 	ID          string    `json:"id"`
 	PSP         PSPType   `json:"psp"`
 	EventType   string    `json:"event_type"`   // e.g. payment.captured, payment.failed, refund.processed
@@ -39,8 +44,22 @@ type WebhookEvent struct {
 	AmountCents int64     `json:"amount_cents"`
 	Currency    string    `json:"currency"`
 	Status      string    `json:"status"`
-	RawPayload  []byte    `json:"-"`
 	ReceivedAt  time.Time `json:"received_at"`
+
+	// --- v2 fields (additive, backward-compatible) ---
+
+	// Version indicates the schema version of this event envelope.
+	// Absent (zero) in v1 messages; set to SchemaVersion for v2+.
+	Version int `json:"schema_version,omitempty"`
+
+	// RawPSPPayload is the verbatim JSON body received from the PSP,
+	// embedded as-is (no base64). Consumers that need exact PSP semantics
+	// (e.g. refund evidence, dispute fields) should prefer this over the
+	// lossy canonical fields above.
+	RawPSPPayload json.RawMessage `json:"raw_psp_payload,omitempty"`
+
+	// RawPayload is kept for internal use only (not serialised to Kafka).
+	RawPayload []byte `json:"-"`
 }
 
 // KafkaProducer abstracts Kafka message publishing so that the handler can be
@@ -218,9 +237,11 @@ func (h *WebhookHandler) parseEvent(psp PSPType, payload []byte) (WebhookEvent, 
 	}
 
 	event := WebhookEvent{
-		PSP:        psp,
-		RawPayload: payload,
-		ReceivedAt: time.Now().UTC(),
+		PSP:           psp,
+		RawPayload:    payload,
+		RawPSPPayload: json.RawMessage(payload),
+		Version:       SchemaVersion,
+		ReceivedAt:    time.Now().UTC(),
 	}
 
 	switch psp {
