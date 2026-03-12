@@ -780,6 +780,7 @@ docker-compose up -d  # starts pg, kafka, etc.
 ./gradlew :services:rider-fleet-service:bootRun
 
 # Docker build
+./gradlew :services:rider-fleet-service:bootJar
 docker build -t rider-fleet-service services/rider-fleet-service/
 docker run -p 8091:8091 \
   -e RIDER_DB_URL=jdbc:postgresql://host.docker.internal:5432/rider_fleet \

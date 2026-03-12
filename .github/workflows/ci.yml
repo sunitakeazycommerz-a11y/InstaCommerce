@@ -64,6 +64,10 @@ jobs:
             config-feature-flag-service: 'services/config-feature-flag-service/**'
             mobile-bff-service: 'services/mobile-bff-service/**'
             admin-gateway-service: 'services/admin-gateway-service/**'
+            java-shared:
+              - 'build.gradle.kts'
+              - 'settings.gradle.kts'
+              - 'gradle/**'
             go-shared: 'services/go-shared/**'
             cdc-consumer-service: 'services/cdc-consumer-service/**'
             dispatch-optimizer-service: 'services/dispatch-optimizer-service/**'
@@ -96,6 +100,9 @@ jobs:
           [[ "${{ steps.filter.outputs.config-feature-flag-service }}" == "true" ]] && changed_services+=("config-feature-flag-service")
           [[ "${{ steps.filter.outputs.mobile-bff-service }}" == "true" ]] && changed_services+=("mobile-bff-service")
           [[ "${{ steps.filter.outputs.admin-gateway-service }}" == "true" ]] && changed_services+=("admin-gateway-service")
+          if [[ "${{ steps.filter.outputs.java-shared }}" == "true" ]]; then
+            changed_services=("${all_services[@]}")
+          fi
           if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then
             services=("${all_services[@]}")
           elif [ ${#changed_services[@]} -eq 0 ]; then

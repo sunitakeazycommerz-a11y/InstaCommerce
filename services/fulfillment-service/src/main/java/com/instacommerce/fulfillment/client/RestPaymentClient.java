@@ -7,7 +7,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
@@ -20,14 +20,14 @@ public class RestPaymentClient implements PaymentClient {
     private final RestTemplate restTemplate;
     private final String baseUrl;
 
-    public RestPaymentClient(RestTemplateBuilder builder, FulfillmentProperties fulfillmentProperties,
+    public RestPaymentClient(FulfillmentProperties fulfillmentProperties,
                              @Value("${internal.service.name:${spring.application.name}}") String serviceName,
                              @Value("${internal.service.token:dev-internal-token-change-in-prod}") String serviceToken) {
-        this.restTemplate = builder
-            .setConnectTimeout(Duration.ofSeconds(5))
-            .setReadTimeout(Duration.ofSeconds(10))
-            .additionalInterceptors(new InternalServiceAuthInterceptor(serviceName, serviceToken))
-            .build();
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofSeconds(5));
+        requestFactory.setReadTimeout(Duration.ofSeconds(10));
+        this.restTemplate = new RestTemplate(requestFactory);
+        this.restTemplate.getInterceptors().add(new InternalServiceAuthInterceptor(serviceName, serviceToken));
         this.baseUrl = fulfillmentProperties.getClients().getPayment().getBaseUrl();
     }
 

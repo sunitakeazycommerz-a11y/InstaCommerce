@@ -6,12 +6,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -26,11 +26,11 @@ public class TwilioSmsProvider implements NotificationProvider {
     private final RestTemplate restTemplate;
     private final NotificationProperties notificationProperties;
 
-    public TwilioSmsProvider(RestTemplateBuilder builder, NotificationProperties notificationProperties) {
-        this.restTemplate = builder
-            .setConnectTimeout(java.time.Duration.ofSeconds(2))
-            .setReadTimeout(java.time.Duration.ofSeconds(5))
-            .build();
+    public TwilioSmsProvider(NotificationProperties notificationProperties) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(java.time.Duration.ofSeconds(2));
+        requestFactory.setReadTimeout(java.time.Duration.ofSeconds(5));
+        this.restTemplate = new RestTemplate(requestFactory);
         this.notificationProperties = notificationProperties;
     }
 

@@ -10,7 +10,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
@@ -22,14 +22,14 @@ public class RestOrderLookupClient implements OrderLookupClient {
     private final RestTemplate restTemplate;
     private final String baseUrl;
 
-    public RestOrderLookupClient(RestTemplateBuilder builder, NotificationProperties notificationProperties,
+    public RestOrderLookupClient(NotificationProperties notificationProperties,
                                  @Value("${internal.service.name:${spring.application.name}}") String serviceName,
                                  @Value("${internal.service.token:dev-internal-token-change-in-prod}") String serviceToken) {
-        this.restTemplate = builder
-            .setConnectTimeout(Duration.ofSeconds(3))
-            .setReadTimeout(Duration.ofSeconds(5))
-            .additionalInterceptors(new InternalServiceAuthInterceptor(serviceName, serviceToken))
-            .build();
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofSeconds(3));
+        requestFactory.setReadTimeout(Duration.ofSeconds(5));
+        this.restTemplate = new RestTemplate(requestFactory);
+        this.restTemplate.getInterceptors().add(new InternalServiceAuthInterceptor(serviceName, serviceToken));
         this.baseUrl = notificationProperties.getOrder().getBaseUrl();
     }
 
