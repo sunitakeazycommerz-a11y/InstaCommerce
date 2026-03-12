@@ -70,7 +70,7 @@ class PaymentGatewayResilienceTest {
             .waitDuration(Duration.ofMillis(10))
             .retryExceptions(IOException.class, TimeoutException.class,
                 PaymentGatewayTransientException.class)
-            .ignoreExceptions(PaymentGatewayException.class, PaymentDeclinedException.class)
+            .ignoreExceptions(PaymentDeclinedException.class)
             .build();
         retry = Retry.of("paymentGateway", retryConfig);
     }
@@ -178,6 +178,28 @@ class PaymentGatewayResilienceTest {
     }
 
     @Test
+    @DisplayName("Retry retries on PaymentGatewayTransientException")
+    void retry_retriesOnTransientPspException() throws Throwable {
+        AtomicInteger attempts = new AtomicInteger(0);
+
+        io.github.resilience4j.core.functions.CheckedSupplier<GatewayAuthResult> supplier = () -> {
+            int attempt = attempts.incrementAndGet();
+            if (attempt < 3) {
+                throw new PaymentGatewayTransientException("Connection reset",
+                    new IOException("Connection reset"));
+            }
+            return GatewayAuthResult.success("pi_" + attempt);
+        };
+
+        io.github.resilience4j.core.functions.CheckedSupplier<GatewayAuthResult> decorated =
+            Retry.decorateCheckedSupplier(retry, supplier);
+
+        GatewayAuthResult result = decorated.get();
+        assertThat(result.success()).isTrue();
+        assertThat(attempts.get()).isEqualTo(3); // 2 transient failures + 1 success
+    }
+
+    @Test
     @DisplayName("Retry does not retry on PaymentGatewayException (PSP business error)")
     void retry_doesNotRetryOnBusinessException() {
         AtomicInteger attempts = new AtomicInteger(0);
@@ -191,6 +213,24 @@ class PaymentGatewayResilienceTest {
 
         assertThatThrownBy(decorated::get)
             .isInstanceOf(PaymentGatewayException.class);
+
+        assertThat(attempts.get()).isEqualTo(1); // no retry
+    }
+
+    @Test
+    @DisplayName("Retry does not retry on PaymentDeclinedException")
+    void retry_doesNotRetryOnDeclinedException() {
+        AtomicInteger attempts = new AtomicInteger(0);
+
+        Supplier<GatewayAuthResult> supplier = () -> {
+            attempts.incrementAndGet();
+            throw new PaymentDeclinedException("Insufficient funds");
+        };
+
+        Supplier<GatewayAuthResult> decorated = Retry.decorateSupplier(retry, supplier);
+
+        assertThatThrownBy(decorated::get)
+            .isInstanceOf(PaymentDeclinedException.class);
 
         assertThat(attempts.get()).isEqualTo(1); // no retry
     }
