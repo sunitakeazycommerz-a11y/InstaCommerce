@@ -49,6 +49,9 @@ payment:
   webhook:
     refund-outbox-enabled: ${PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED:true}
     capture-void-outbox-enabled: ${PAYMENT_WEBHOOK_CAPTURE_VOID_OUTBOX_ENABLED:true}
+    kafka-consumer-enabled: ${PAYMENT_WEBHOOK_KAFKA_CONSUMER_ENABLED:false}
+    kafka-consumer-topic: ${PAYMENT_WEBHOOK_KAFKA_CONSUMER_TOPIC:payment.webhooks}
+    kafka-consumer-group: ${PAYMENT_WEBHOOK_KAFKA_CONSUMER_GROUP:payment-service-webhook}
   recovery:
     stale-pending-enabled: ${PAYMENT_STALE_PENDING_RECOVERY_ENABLED:true}
     stale-pending-cron: ${PAYMENT_STALE_PENDING_RECOVERY_CRON:0 */5 * * * *}
