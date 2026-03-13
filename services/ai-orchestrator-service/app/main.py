@@ -1275,6 +1275,9 @@ async def lifespan(app_instance: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.state.tracer = init_telemetry(app)
 
+from app.auth import InternalServiceAuthMiddleware
+app.add_middleware(InternalServiceAuthMiddleware)
+
 
 def _extract_client_ip(request: Request) -> str:
     if settings.agent_trust_forwarded_for:

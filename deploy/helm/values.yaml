@@ -331,6 +331,7 @@ services:
     env:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8100"
+      INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
     hpa:
       minReplicas: 2
       maxReplicas: 8
@@ -348,6 +349,7 @@ services:
     env:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8101"
+      INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
     hpa:
       minReplicas: 2
       maxReplicas: 6
