@@ -39,7 +39,7 @@ order:
     issuer: ${ORDER_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${ORDER_JWT_PUBLIC_KEY}}
   checkout:
-    direct-saga-enabled: ${ORDER_CHECKOUT_DIRECT_SAGA_ENABLED:true}
+    direct-saga-enabled: ${ORDER_CHECKOUT_DIRECT_SAGA_ENABLED:false}
   choreography:
     fulfillment-consumer-enabled: ${ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED:false}
     fulfillment-topic: ${ORDER_CHOREOGRAPHY_FULFILLMENT_TOPIC:fulfillment.events}

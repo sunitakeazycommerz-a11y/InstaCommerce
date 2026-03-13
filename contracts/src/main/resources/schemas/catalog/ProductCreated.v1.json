@@ -2,11 +2,21 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ProductCreated",
   "type": "object",
-  "required": ["productId", "name", "sku", "createdAt"],
+  "required": ["productId", "name", "sku", "priceCents", "active"],
   "properties": {
     "productId": { "type": "string", "format": "uuid" },
-    "name": { "type": "string" },
     "sku": { "type": "string" },
-    "createdAt": { "type": "string", "format": "date-time" }
+    "name": { "type": "string" },
+    "slug": { "type": "string" },
+    "description": { "type": ["string", "null"] },
+    "categoryId": { "type": ["string", "null"], "format": "uuid" },
+    "category": { "type": ["string", "null"] },
+    "brand": { "type": ["string", "null"] },
+    "priceCents": { "type": "integer" },
+    "imageUrl": { "type": ["string", "null"], "format": "uri" },
+    "inStock": { "type": "boolean" },
+    "storeId": { "type": ["string", "null"], "format": "uuid" },
+    "active": { "type": "boolean" },
+    "updatedAt": { "type": ["string", "null"], "format": "date-time" }
   }
 }

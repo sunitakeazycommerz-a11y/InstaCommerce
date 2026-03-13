@@ -10,6 +10,7 @@ import com.instacommerce.order.dto.request.CartItem;
 import com.instacommerce.order.dto.request.CheckoutRequest;
 import com.instacommerce.order.exception.ApiException;
 import com.instacommerce.order.service.RateLimitService;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -36,7 +37,8 @@ class CheckoutControllerTest {
             workflowClientProvider,
             new TemporalProperties(),
             orderProperties,
-            rateLimitService);
+            rateLimitService,
+            new SimpleMeterRegistry());
         UUID userId = UUID.randomUUID();
         CheckoutRequest request = new CheckoutRequest(
             userId,

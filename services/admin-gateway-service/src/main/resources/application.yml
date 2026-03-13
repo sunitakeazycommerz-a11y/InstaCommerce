@@ -46,6 +46,11 @@ management:
     readinessstate:
       enabled: true
 
+admin-gateway:
+  jwt:
+    public-key: ${JWT_PUBLIC_KEY:#{null}}
+    issuer: ${JWT_ISSUER:instacommerce-identity}
+
 internal:
   service:
     name: ${spring.application.name}

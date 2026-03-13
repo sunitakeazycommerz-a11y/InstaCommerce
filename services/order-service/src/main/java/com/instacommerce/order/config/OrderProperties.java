@@ -71,8 +71,13 @@ public class OrderProperties {
         }
     }
 
+    /**
+     * @deprecated Checkout authority has moved to checkout-orchestrator-service (ADR-001).
+     * This configuration exists only for rollback safety. Do not re-enable without principal approval.
+     */
+    @Deprecated(since = "wave-22", forRemoval = true)
     public static class Checkout {
-        private boolean directSagaEnabled = true;
+        private boolean directSagaEnabled = false;
 
         public boolean isDirectSagaEnabled() {
             return directSagaEnabled;

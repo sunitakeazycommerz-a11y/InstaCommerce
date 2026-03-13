@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -31,6 +32,15 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleApiException(ApiException ex, HttpServletRequest request) {
         return ResponseEntity.status(ex.getStatus())
             .body(buildError(ex.getCode(), ex.getMessage(), List.of(), request));
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(OptimisticLockingFailureException ex,
+                                                               HttpServletRequest request) {
+        log.warn("Optimistic lock conflict on {} {}", request.getMethod(), request.getRequestURI(), ex);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(buildError("CONCURRENT_MODIFICATION",
+                "Resource was modified by another request, please retry", List.of(), request));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

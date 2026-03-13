@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.catalog.domain.model.OutboxEvent;
 import com.instacommerce.catalog.domain.model.Product;
+import com.instacommerce.catalog.domain.model.ProductImage;
 import com.instacommerce.catalog.event.ProductChangedEvent;
 import com.instacommerce.catalog.repository.OutboxEventRepository;
 import org.springframework.stereotype.Service;
@@ -28,13 +29,32 @@ public class OutboxService {
             product.getName(),
             product.getSlug(),
             product.getCategory() != null ? product.getCategory().getId() : null,
-            product.isActive());
+            product.isActive(),
+            product.getDescription(),
+            product.getBrand(),
+            product.getCategory() != null ? product.getCategory().getName() : null,
+            product.getBasePriceCents(),
+            resolvePrimaryImageUrl(product),
+            product.isActive(),
+            product.getStoreId(),
+            product.getUpdatedAt());
         OutboxEvent outboxEvent = new OutboxEvent();
         outboxEvent.setAggregateType("Product");
         outboxEvent.setAggregateId(product.getId().toString());
         outboxEvent.setEventType(eventType);
         outboxEvent.setPayload(writePayload(event));
         outboxEventRepository.save(outboxEvent);
+    }
+
+    private String resolvePrimaryImageUrl(Product product) {
+        if (product.getImages() == null || product.getImages().isEmpty()) {
+            return null;
+        }
+        return product.getImages().stream()
+            .filter(ProductImage::isPrimary)
+            .map(ProductImage::getUrl)
+            .findFirst()
+            .orElseGet(() -> product.getImages().get(0).getUrl());
     }
 
     private String writePayload(ProductChangedEvent event) {

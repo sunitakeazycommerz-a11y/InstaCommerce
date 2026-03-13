@@ -127,11 +127,8 @@ public class ReservationService {
 
     @Transactional
     public void confirm(UUID reservationId) {
-        Reservation reservation = reservationRepository.findById(reservationId)
+        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> new ReservationNotFoundException(reservationId));
-        if (reservation.getStatus() == ReservationStatus.CONFIRMED) {
-            return;
-        }
         if (reservation.getStatus() != ReservationStatus.PENDING) {
             throw new ReservationStateException(reservationId, reservation.getStatus(), "confirm");
         }
@@ -163,6 +160,7 @@ public class ReservationService {
             .toList();
         Map<String, Object> eventPayload = new LinkedHashMap<>();
         eventPayload.put("reservationId", reservationId.toString());
+        eventPayload.put("orderId", reservation.getIdempotencyKey());
         eventPayload.put("items", itemsList);
         eventPayload.put("confirmedAt", Instant.now().toString());
         outboxService.publish("Reservation", reservationId.toString(),
@@ -171,18 +169,15 @@ public class ReservationService {
 
     @Transactional
     public void cancel(UUID reservationId) {
-        Reservation reservation = reservationRepository.findById(reservationId)
+        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> new ReservationNotFoundException(reservationId));
-        if (reservation.getStatus() == ReservationStatus.CANCELLED
-            || reservation.getStatus() == ReservationStatus.EXPIRED) {
-            return;
-        }
-        if (reservation.getStatus() == ReservationStatus.CONFIRMED) {
-            throw new ReservationStateException(reservationId, reservation.getStatus(), "cancel");
-        }
-        if (reservation.getExpiresAt().isBefore(Instant.now())) {
+        if (reservation.getStatus() == ReservationStatus.PENDING
+            && reservation.getExpiresAt().isBefore(Instant.now())) {
             expireReservation(reservation);
-            return;
+            throw new ReservationExpiredException(reservationId);
+        }
+        if (reservation.getStatus() != ReservationStatus.PENDING) {
+            throw new ReservationStateException(reservationId, reservation.getStatus(), "cancel");
         }
         releaseReserved(reservation);
         reservation.setStatus(ReservationStatus.CANCELLED);
@@ -194,7 +189,7 @@ public class ReservationService {
 
     @Transactional
     public void expireReservation(UUID reservationId) {
-        Reservation reservation = reservationRepository.findById(reservationId)
+        Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> new ReservationNotFoundException(reservationId));
         if (reservation.getStatus() != ReservationStatus.PENDING) {
             return;
@@ -221,6 +216,7 @@ public class ReservationService {
             .toList();
         Map<String, Object> eventPayload = new LinkedHashMap<>();
         eventPayload.put("reservationId", reservation.getId().toString());
+        eventPayload.put("orderId", reservation.getIdempotencyKey());
         eventPayload.put("items", itemsList);
         eventPayload.put("releasedAt", Instant.now().toString());
         eventPayload.put("reason", reservation.getStatus().name());
