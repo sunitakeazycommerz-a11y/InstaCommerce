@@ -12,6 +12,8 @@ import java.security.Principal;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -28,13 +30,18 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/admin/flags")
 public class AdminFlagController {
 
+    private static final Logger log = LoggerFactory.getLogger(AdminFlagController.class);
+
     private final FlagManagementService flagManagementService;
     private final FlagOverrideService flagOverrideService;
+    private final FlagChangeStreamController flagChangeStreamController;
 
     public AdminFlagController(FlagManagementService flagManagementService,
-                               FlagOverrideService flagOverrideService) {
+                               FlagOverrideService flagOverrideService,
+                               FlagChangeStreamController flagChangeStreamController) {
         this.flagManagementService = flagManagementService;
         this.flagOverrideService = flagOverrideService;
+        this.flagChangeStreamController = flagChangeStreamController;
     }
 
     @PostMapping
@@ -106,5 +113,13 @@ public class AdminFlagController {
         String changedBy = principal != null ? principal.getName() : "system";
         flagOverrideService.removeOverride(key, userId, changedBy);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/emergency-stop/{flagKey}")
+    public ResponseEntity<Void> emergencyStop(@PathVariable String flagKey) {
+        log.warn("flags.emergency_stop triggered for flag={}", flagKey);
+        flagManagementService.forceDisable(flagKey);
+        flagChangeStreamController.broadcast(flagKey, false);
+        return ResponseEntity.ok().build();
     }
 }
