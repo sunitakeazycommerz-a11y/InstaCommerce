@@ -79,9 +79,9 @@ public class PricingController {
                 request.subtotalCents(),
                 request.discountCents());
 
-        QuoteValidationResponse response = new QuoteValidationResponse(result.valid(), result.reason());
+        QuoteValidationResponse response = new QuoteValidationResponse(result.isValid(), result.reason());
 
-        if (result.valid()) {
+        if (result.isValid()) {
             return ResponseEntity.ok(response);
         }
         return ResponseEntity.status(409).body(response);

@@ -118,7 +118,7 @@ public class QuoteTokenService {
     public record QuoteResult(UUID quoteId, String quoteToken) {
     }
 
-    public record ValidationResult(boolean valid, String reason) {
+    public record ValidationResult(boolean isValid, String reason) {
         public static ValidationResult valid() {
             return new ValidationResult(true, null);
         }
