@@ -1,5 +1,6 @@
 package com.instacommerce.order.service;
 
+import com.instacommerce.order.client.PricingQuoteClient;
 import com.instacommerce.order.domain.model.Order;
 import com.instacommerce.order.domain.model.OrderItem;
 import com.instacommerce.order.domain.model.OrderStatus;
@@ -37,15 +38,18 @@ public class OrderService {
     private final OrderStatusHistoryRepository statusHistoryRepository;
     private final OutboxService outboxService;
     private final AuditLogService auditLogService;
+    private final PricingQuoteClient pricingQuoteClient;
 
     public OrderService(OrderRepository orderRepository,
                         OrderStatusHistoryRepository statusHistoryRepository,
                         OutboxService outboxService,
-                        AuditLogService auditLogService) {
+                        AuditLogService auditLogService,
+                        PricingQuoteClient pricingQuoteClient) {
         this.orderRepository = orderRepository;
         this.statusHistoryRepository = statusHistoryRepository;
         this.outboxService = outboxService;
         this.auditLogService = auditLogService;
+        this.pricingQuoteClient = pricingQuoteClient;
     }
 
     @Transactional
@@ -53,6 +57,14 @@ public class OrderService {
         Optional<Order> existing = orderRepository.findByIdempotencyKey(command.getIdempotencyKey());
         if (existing.isPresent()) {
             return existing.get().getId().toString();
+        }
+        if (command.getQuoteId() != null && command.getQuoteToken() != null) {
+            boolean quoteValid = pricingQuoteClient.validateQuote(
+                command.getQuoteId(), command.getQuoteToken(),
+                command.getTotalCents(), command.getSubtotalCents(), command.getDiscountCents());
+            if (!quoteValid) {
+                throw new IllegalStateException("Price quote validation failed for quoteId=" + command.getQuoteId());
+            }
         }
         Order order = new Order();
         order.setUserId(command.getUserId());
@@ -67,6 +79,9 @@ public class OrderService {
         order.setPaymentId(command.getPaymentId());
         order.setIdempotencyKey(command.getIdempotencyKey());
         order.setDeliveryAddress(command.getDeliveryAddress());
+        if (command.getQuoteId() != null) {
+            order.setQuoteId(command.getQuoteId());
+        }
 
         List<OrderItem> items = new ArrayList<>();
         for (CartItem item : command.getItems()) {

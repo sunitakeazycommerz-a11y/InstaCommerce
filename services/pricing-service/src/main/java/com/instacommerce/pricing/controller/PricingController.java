@@ -1,12 +1,15 @@
 package com.instacommerce.pricing.controller;
 
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
+import com.instacommerce.pricing.dto.request.QuoteValidationRequest;
 import com.instacommerce.pricing.dto.request.RedeemCouponRequest;
 import com.instacommerce.pricing.dto.request.UnredeemCouponRequest;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
+import com.instacommerce.pricing.dto.response.QuoteValidationResponse;
 import com.instacommerce.pricing.service.CouponService;
 import com.instacommerce.pricing.service.PricingService;
+import com.instacommerce.pricing.service.QuoteTokenService;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -25,10 +28,14 @@ public class PricingController {
 
     private final PricingService pricingService;
     private final CouponService couponService;
+    private final QuoteTokenService quoteTokenService;
 
-    public PricingController(PricingService pricingService, CouponService couponService) {
+    public PricingController(PricingService pricingService,
+                             CouponService couponService,
+                             QuoteTokenService quoteTokenService) {
         this.pricingService = pricingService;
         this.couponService = couponService;
+        this.quoteTokenService = quoteTokenService;
     }
 
     @PostMapping("/calculate")
@@ -59,5 +66,24 @@ public class PricingController {
     public ResponseEntity<Void> unredeemCoupon(@Valid @RequestBody UnredeemCouponRequest request) {
         couponService.unredeemCoupon(request.code(), request.userId(), request.orderId());
         return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/quotes/validate")
+    @RateLimiter(name = "pricingLimiter")
+    public ResponseEntity<QuoteValidationResponse> validateQuote(
+            @Valid @RequestBody QuoteValidationRequest request) {
+        QuoteTokenService.ValidationResult result = quoteTokenService.validate(
+                request.quoteId(),
+                request.quoteToken(),
+                request.totalCents(),
+                request.subtotalCents(),
+                request.discountCents());
+
+        QuoteValidationResponse response = new QuoteValidationResponse(result.valid(), result.reason());
+
+        if (result.valid()) {
+            return ResponseEntity.ok(response);
+        }
+        return ResponseEntity.status(409).body(response);
     }
 }

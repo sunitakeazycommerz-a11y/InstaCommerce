@@ -179,7 +179,9 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 reservationResult.reservationId(),
                 paymentResult.paymentId(),
                 request.deliveryAddressId(),
-                request.paymentMethodId()
+                request.paymentMethodId(),
+                pricingResult.quoteId(),
+                pricingResult.quoteToken()
             );
             OrderCreationResult orderResult = orderActivity.createOrder(orderRequest);
             saga.addCompensation(orderActivity::cancelOrder, orderResult.orderId());

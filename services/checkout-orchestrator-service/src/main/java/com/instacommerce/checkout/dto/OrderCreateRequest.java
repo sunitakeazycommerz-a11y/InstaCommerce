@@ -15,5 +15,7 @@ public record OrderCreateRequest(
     String reservationId,
     String paymentId,
     String deliveryAddressId,
-    String paymentMethodId
+    String paymentMethodId,
+    String quoteId,
+    String quoteToken
 ) {}
