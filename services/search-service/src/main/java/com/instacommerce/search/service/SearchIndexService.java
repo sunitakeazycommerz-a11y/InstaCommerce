@@ -52,4 +52,16 @@ public class SearchIndexService {
         log.info("Deleting search document for productId={}", productId);
         searchDocumentRepository.deleteByProductId(productId);
     }
+
+    @Transactional
+    @CacheEvict(value = {"searchResults", "autocomplete"}, allEntries = true)
+    public void updateStockStatus(UUID productId, boolean inStock) {
+        searchDocumentRepository.findByProductId(productId).ifPresent(doc -> {
+            if (doc.isInStock() != inStock) {
+                doc.setInStock(inStock);
+                searchDocumentRepository.save(doc);
+                log.info("Updated stock status for productId={} to inStock={}", productId, inStock);
+            }
+        });
+    }
 }
