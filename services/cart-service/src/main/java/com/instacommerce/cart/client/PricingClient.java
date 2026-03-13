@@ -26,7 +26,7 @@ public class PricingClient {
 
     public PricingClient(@Value("${pricing-service.base-url:http://pricing-service:8087}") String baseUrl,
                          @Value("${internal.service.name:${spring.application.name}}") String serviceName,
-                         @Value("${internal.service.token:dev-internal-token-change-in-prod}") String serviceToken) {
+                         @Value("${internal.service.token}") String serviceToken) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofMillis(2000));
         requestFactory.setReadTimeout(Duration.ofMillis(3000));

@@ -17,6 +17,9 @@ public record AuditEventResponse(
     String ipAddress,
     String userAgent,
     String correlationId,
+    Long sequenceNumber,
+    String eventHash,
+    String previousHash,
     Instant createdAt
 ) {
 }

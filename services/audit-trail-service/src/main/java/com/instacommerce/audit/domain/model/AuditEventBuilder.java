@@ -18,6 +18,9 @@ public class AuditEventBuilder {
     String ipAddress;
     String userAgent;
     String correlationId;
+    Long sequenceNumber;
+    String eventHash;
+    String previousHash;
     Instant createdAt;
 
     AuditEventBuilder() {
@@ -82,6 +85,10 @@ public class AuditEventBuilder {
         this.correlationId = correlationId;
         return this;
     }
+
+    public AuditEventBuilder sequenceNumber(Long sequenceNumber) { this.sequenceNumber = sequenceNumber; return this; }
+    public AuditEventBuilder eventHash(String eventHash) { this.eventHash = eventHash; return this; }
+    public AuditEventBuilder previousHash(String previousHash) { this.previousHash = previousHash; return this; }
 
     public AuditEventBuilder createdAt(Instant createdAt) {
         this.createdAt = createdAt;

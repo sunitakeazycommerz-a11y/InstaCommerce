@@ -69,6 +69,20 @@ variable "secrets" {
     "sendgrid-api-key",
     "twilio-auth-token",
     "jwt-private-key",
-    "jwt-public-key"
+    "jwt-public-key",
+    "internal-service-token-shared",
+    "internal-svc-token-identity",
+    "internal-svc-token-order",
+    "internal-svc-token-payment",
+    "internal-svc-token-inventory",
+    "internal-svc-token-fulfillment",
+    "internal-svc-token-cart",
+    "internal-svc-token-pricing",
+    "internal-svc-token-notification",
+    "internal-svc-token-checkout",
+    "internal-svc-token-rider-fleet",
+    "internal-svc-token-wallet",
+    "internal-svc-token-ai-inference",
+    "internal-svc-token-ai-orchestrator"
   ]
 }

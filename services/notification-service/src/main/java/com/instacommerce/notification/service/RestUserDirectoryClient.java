@@ -23,7 +23,7 @@ public class RestUserDirectoryClient implements UserDirectoryClient {
 
     public RestUserDirectoryClient(NotificationProperties notificationProperties,
                                    @Value("${internal.service.name:${spring.application.name}}") String serviceName,
-                                   @Value("${internal.service.token:dev-internal-token-change-in-prod}") String serviceToken) {
+                                   @Value("${internal.service.token}") String serviceToken) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofSeconds(3));
         requestFactory.setReadTimeout(Duration.ofSeconds(5));

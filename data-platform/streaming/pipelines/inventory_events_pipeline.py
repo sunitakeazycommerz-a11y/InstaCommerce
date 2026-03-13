@@ -13,10 +13,13 @@ import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.io.kafka import ReadFromKafka
 from apache_beam.io.gcp.bigquery import WriteToBigQuery
-from apache_beam.transforms.window import FixedWindows
+from apache_beam.transforms.window import FixedWindows, TimestampedValue, Duration
+from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, AccumulationMode, AfterCount
 import json
 import logging
+import time
 from datetime import datetime
+from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +80,15 @@ class InventoryEventParser(beam.DoFn):
             }
             if not parsed["sku_id"] or not parsed["store_id"]:
                 raise ValueError("Missing skuId or storeId")
-            yield parsed
+            event_time_str = event.get("eventTime")
+            if event_time_str:
+                try:
+                    event_ts = isoparse(event_time_str).timestamp()
+                except (ValueError, TypeError):
+                    event_ts = time.time()
+            else:
+                event_ts = time.time()
+            yield TimestampedValue(parsed, event_ts)
         except Exception as e:
             logger.warning("Failed to parse inventory event: %s", e)
             yield beam.pvalue.TaggedOutput(
@@ -198,7 +209,15 @@ def build_pipeline(options):
         # 5-minute inventory velocity per SKU/store
         (
             events
-            | "Window5Min" >> beam.WindowInto(FixedWindows(300))
+            | "Window5Min" >> beam.WindowInto(
+                FixedWindows(300),
+                trigger=AfterWatermark(
+                    early=AfterProcessingTime(30),
+                    late=AfterCount(1),
+                ),
+                allowed_lateness=Duration(seconds=600),
+                accumulation_mode=AccumulationMode.ACCUMULATING,
+            )
             | "KeyBySkuStore"
             >> beam.Map(lambda e: ((e["sku_id"], e["store_id"]), e))
             | "AggregateVelocity"

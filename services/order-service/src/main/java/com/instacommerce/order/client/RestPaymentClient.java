@@ -17,7 +17,7 @@ public class RestPaymentClient implements PaymentClient {
 
     public RestPaymentClient(RestClient.Builder builder, OrderProperties orderProperties,
                              @Value("${internal.service.name:${spring.application.name}}") String serviceName,
-                             @Value("${internal.service.token:dev-internal-token-change-in-prod}") String serviceToken) {
+                             @Value("${internal.service.token}") String serviceToken) {
         this.restClient = builder
             .requestFactory(clientHttpRequestFactory(Duration.ofSeconds(2), Duration.ofSeconds(10)))
             .requestInterceptor(new InternalServiceAuthInterceptor(serviceName, serviceToken))

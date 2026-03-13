@@ -14,10 +14,13 @@ import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.io.kafka import ReadFromKafka
 from apache_beam.io.gcp.bigquery import WriteToBigQuery
-from apache_beam.transforms.window import Sessions
+from apache_beam.transforms.window import Sessions, TimestampedValue, Duration
+from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, AccumulationMode, AfterCount
 import json
 import logging
+import time
 from datetime import datetime
+from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +77,15 @@ class CartEventParser(beam.DoFn):
             }
             if not parsed["cart_id"] or not parsed["user_id"]:
                 raise ValueError("Missing cartId or userId")
-            yield parsed
+            event_time_str = event.get("eventTime")
+            if event_time_str:
+                try:
+                    event_ts = isoparse(event_time_str).timestamp()
+                except (ValueError, TypeError):
+                    event_ts = time.time()
+            else:
+                event_ts = time.time()
+            yield TimestampedValue(parsed, event_ts)
         except Exception as e:
             logger.warning("Failed to parse cart event: %s", e)
             yield beam.pvalue.TaggedOutput(
@@ -242,7 +253,15 @@ def build_pipeline(options):
             events
             | "KeyByUser" >> beam.Map(lambda e: (e["user_id"], e))
             | "SessionWindow"
-            >> beam.WindowInto(Sessions(pipeline_options.session_gap_seconds))
+            >> beam.WindowInto(
+                Sessions(pipeline_options.session_gap_seconds),
+                trigger=AfterWatermark(
+                    early=AfterProcessingTime(30),
+                    late=AfterCount(1),
+                ),
+                allowed_lateness=Duration(seconds=900),
+                accumulation_mode=AccumulationMode.ACCUMULATING,
+            )
             | "AggregateSession" >> beam.CombinePerKey(CartSessionAggregator())
             | "ExtractSessionValues" >> beam.Values()
         )
@@ -252,14 +271,30 @@ def build_pipeline(options):
             events
             | "KeyByUserForZone" >> beam.Map(lambda e: (e["user_id"], e))
             | "SessionWindowForZone"
-            >> beam.WindowInto(Sessions(pipeline_options.session_gap_seconds))
+            >> beam.WindowInto(
+                Sessions(pipeline_options.session_gap_seconds),
+                trigger=AfterWatermark(
+                    early=AfterProcessingTime(30),
+                    late=AfterCount(1),
+                ),
+                allowed_lateness=Duration(seconds=900),
+                accumulation_mode=AccumulationMode.ACCUMULATING,
+            )
             | "AggregateSessionForZone"
             >> beam.CombinePerKey(CartSessionAggregator())
             | "AttachZone"
             >> beam.Map(
                 lambda kv: (kv[1].get("zone_id", "UNKNOWN"), kv[1])
             )
-            | "RewindowFixed" >> beam.WindowInto(beam.transforms.window.FixedWindows(60))
+            | "RewindowFixed" >> beam.WindowInto(
+                beam.transforms.window.FixedWindows(60),
+                trigger=AfterWatermark(
+                    early=AfterProcessingTime(30),
+                    late=AfterCount(1),
+                ),
+                allowed_lateness=Duration(seconds=900),
+                accumulation_mode=AccumulationMode.ACCUMULATING,
+            )
             | "AbandonmentPerZone"
             >> beam.CombinePerKey(AbandonmentRateAggregator())
             | "FormatAbandonment" >> beam.Map(format_abandonment_row)

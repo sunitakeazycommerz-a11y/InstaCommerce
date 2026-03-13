@@ -37,7 +37,7 @@ public class NotificationDlqPublisher {
         );
         try {
             String body = objectMapper.writeValueAsString(payload);
-            kafkaTemplate.send(notificationProperties.getDlqTopic(), request.eventId(), body);
+            kafkaTemplate.send(notificationProperties.getDltTopic(), request.eventId(), body);
         } catch (JsonProcessingException ex) {
             logger.warn("Failed to serialize notification DLQ payload", ex);
         }

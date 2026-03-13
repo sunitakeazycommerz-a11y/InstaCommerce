@@ -1,0 +1,87 @@
+# InstaCommerce Error Budget Policy
+# Defines SLO targets, budget windows, and escalation actions.
+
+slo_definitions:
+  tier_0:
+    services:
+      - identity-service
+      - checkout-orchestrator-service
+      - payment-service
+    availability_target: 0.999
+    latency_target_p99_ms: 500
+    budget_window_days: 30
+    budget_minutes: 43.2
+
+  tier_1:
+    services:
+      - order-service
+      - inventory-service
+      - fulfillment-service
+      - cart-service
+      - pricing-service
+      - rider-fleet-service
+      - routing-eta-service
+    availability_target: 0.995
+    latency_target_p99_ms: 1000
+    budget_window_days: 30
+    budget_minutes: 216
+
+  tier_2:
+    services:
+      - catalog-service
+      - search-service
+      - notification-service
+      - wallet-loyalty-service
+      - fraud-detection-service
+      - warehouse-service
+      - config-feature-flag-service
+      - audit-trail-service
+      - ai-orchestrator-service
+      - ai-inference-service
+    availability_target: 0.99
+    latency_target_p99_ms: 2000
+    budget_window_days: 30
+    budget_minutes: 432
+
+escalation_policy:
+  budget_remaining_75_to_100_pct:
+    action: normal_development
+    deploy_allowed: true
+    change_class_limit: R4
+
+  budget_remaining_50_to_75_pct:
+    action: heightened_awareness
+    deploy_allowed: true
+    change_class_limit: R3
+    notification: slack_channel_alerts
+
+  budget_remaining_25_to_50_pct:
+    action: reduced_risk
+    deploy_allowed: true
+    change_class_limit: R2
+    notification: slack_channel_incidents
+    review_required: true
+
+  budget_remaining_0_to_25_pct:
+    action: freeze
+    deploy_allowed: false
+    change_class_limit: R0
+    notification: pagerduty_escalation
+    review_required: true
+    exec_briefing: weekly
+
+alert_routing:
+  page:
+    destinations:
+      - pagerduty_service: instacommerce-critical
+      - slack_channel: "#incidents"
+    response_sla_minutes: 5
+  ticket:
+    destinations:
+      - jira_project: IC
+      - slack_channel: "#alerts"
+    response_sla_minutes: 60
+  notification:
+    destinations:
+      - slack_channel: "#alerts"
+    response_sla_minutes: 480

@@ -21,7 +21,7 @@ public class DomainEventConsumer {
     private final AuditIngestionService ingestionService;
     private final ObjectMapper objectMapper;
     private final KafkaTemplate<String, String> kafkaTemplate;
-    private final String dlqTopic;
+    private final String dltTopic;
 
     public DomainEventConsumer(AuditIngestionService ingestionService,
                                ObjectMapper objectMapper,
@@ -30,7 +30,7 @@ public class DomainEventConsumer {
         this.ingestionService = ingestionService;
         this.objectMapper = objectMapper;
         this.kafkaTemplate = kafkaTemplate;
-        this.dlqTopic = env.getProperty("audit.dlq-topic", "audit.dlq");
+        this.dltTopic = env.getProperty("audit.dlt-topic", "audit.DLT");
     }
 
     @KafkaListener(
@@ -63,7 +63,7 @@ public class DomainEventConsumer {
         } catch (Exception ex) {
             log.error("Failed to process domain event from topic={} offset={} partition={}: {}",
                     record.topic(), record.offset(), record.partition(), ex.getMessage(), ex);
-            sendToDlq(record);
+            sendToDlt(record);
         }
     }
 
@@ -119,12 +119,12 @@ public class DomainEventConsumer {
         return service + "-service";
     }
 
-    private void sendToDlq(ConsumerRecord<String, String> record) {
+    private void sendToDlt(ConsumerRecord<String, String> record) {
         try {
-            kafkaTemplate.send(dlqTopic, record.key(), record.value());
-            log.warn("Sent failed event to DLQ: topic={} offset={}", record.topic(), record.offset());
+            kafkaTemplate.send(dltTopic, record.key(), record.value());
+            log.warn("Sent failed event to DLT: topic={} offset={}", record.topic(), record.offset());
         } catch (Exception ex) {
-            log.error("Failed to send event to DLQ: topic={} offset={}", record.topic(), record.offset(), ex);
+            log.error("Failed to send event to DLT: topic={} offset={}", record.topic(), record.offset(), ex);
         }
     }
 }

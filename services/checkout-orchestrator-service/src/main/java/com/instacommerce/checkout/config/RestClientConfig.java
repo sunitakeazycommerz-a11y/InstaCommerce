@@ -16,7 +16,7 @@ public class RestClientConfig {
     @Value("${internal.service.name:${spring.application.name}}")
     private String serviceName;
 
-    @Value("${internal.service.token:dev-internal-token-change-in-prod}")
+    @Value("${internal.service.token}")
     private String serviceToken;
 
     @Bean("cartRestTemplate")

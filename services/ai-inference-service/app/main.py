@@ -702,6 +702,9 @@ async def lifespan(app_instance: FastAPI):
 
 app = FastAPI(title="AI Inference Service", version="1.1.0", lifespan=lifespan)
 
+from app.auth import InternalServiceAuthMiddleware
+app.add_middleware(InternalServiceAuthMiddleware)
+
 
 @app.get("/metrics")
 def metrics() -> Response:

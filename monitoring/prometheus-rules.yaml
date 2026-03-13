@@ -1,5 +1,234 @@
+# InstaCommerce Prometheus Rules
+# SLI recording rules, multi-window burn-rate alerts, and operational alerts.
+
 groups:
-  - name: instacommerce-slos
+  # ──────────────────────────────────────────────
+  # Section 1: SLI Recording Rules
+  # ──────────────────────────────────────────────
+  - name: instacommerce-sli-recording
+    interval: 30s
+    rules:
+      # Availability SLI: ratio of successful (non-5xx) requests
+      - record: sli:http_availability:rate5m
+        expr: |
+          1 - (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) by (service)
+            /
+            sum(rate(http_server_requests_seconds_count[5m])) by (service)
+          )
+
+      - record: sli:http_availability:rate30m
+        expr: |
+          1 - (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[30m])) by (service)
+            /
+            sum(rate(http_server_requests_seconds_count[30m])) by (service)
+          )
+
+      - record: sli:http_availability:rate1h
+        expr: |
+          1 - (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[1h])) by (service)
+            /
+            sum(rate(http_server_requests_seconds_count[1h])) by (service)
+          )
+
+      - record: sli:http_availability:rate6h
+        expr: |
+          1 - (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[6h])) by (service)
+            /
+            sum(rate(http_server_requests_seconds_count[6h])) by (service)
+          )
+
+      # Latency SLI: ratio of requests completing within threshold
+      - record: sli:http_latency:rate5m
+        expr: |
+          sum(rate(http_server_requests_seconds_bucket{le="0.5"}[5m])) by (service)
+          /
+          sum(rate(http_server_requests_seconds_count[5m])) by (service)
+
+      - record: sli:http_latency:rate1h
+        expr: |
+          sum(rate(http_server_requests_seconds_bucket{le="0.5"}[1h])) by (service)
+          /
+          sum(rate(http_server_requests_seconds_count[1h])) by (service)
+
+      # Kafka consumer lag SLI
+      - record: sli:kafka_consumer_lag:max5m
+        expr: max(kafka_consumer_records_lag_max) by (group)
+
+  # ──────────────────────────────────────────────
+  # Section 2: Multi-Window Burn-Rate Alerts
+  # Google SRE Book multiwindow, multi-burn-rate model
+  # ──────────────────────────────────────────────
+  - name: instacommerce-burn-rate-alerts
+    rules:
+      # ── Tier 0 (identity, checkout, payment): SLO 99.9% availability ──
+
+      # 14.4x burn rate over 1h (5m window) -- budget exhausted in ~5h
+      - alert: BurnRate_Tier0_Critical
+        expr: |
+          (
+            1 - sli:http_availability:rate5m{service=~"identity-service|checkout-orchestrator-service|payment-service"}
+          ) > (14.4 * 0.001)
+          and
+          (
+            1 - sli:http_availability:rate1h{service=~"identity-service|checkout-orchestrator-service|payment-service"}
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+          tier: "0"
+          slo: "99.9"
+        annotations:
+          summary: "{{ $labels.service }} burning error budget at 14.4x rate"
+          description: "{{ $labels.service }} 5m error rate {{ $value | humanizePercentage }} exceeds 14.4x burn rate for 99.9% SLO. Budget exhaustion in ~5 hours."
+          runbook_url: "https://runbooks.instacommerce.internal/slo/tier0-burn-rate"
+
+      # 6x burn rate over 6h (30m window) -- budget exhausted in ~12h
+      - alert: BurnRate_Tier0_High
+        expr: |
+          (
+            1 - sli:http_availability:rate30m{service=~"identity-service|checkout-orchestrator-service|payment-service"}
+          ) > (6 * 0.001)
+          and
+          (
+            1 - sli:http_availability:rate6h{service=~"identity-service|checkout-orchestrator-service|payment-service"}
+          ) > (6 * 0.001)
+        for: 5m
+        labels:
+          severity: page
+          tier: "0"
+          slo: "99.9"
+        annotations:
+          summary: "{{ $labels.service }} sustained error budget burn at 6x rate"
+          description: "{{ $labels.service }} 30m error rate exceeds 6x burn rate for 99.9% SLO. Budget exhaustion in ~12 hours."
+
+      # 3x burn rate over 1d (1h window) -- budget exhausted in ~2.5 days
+      - alert: BurnRate_Tier0_Medium
+        expr: |
+          (
+            1 - sli:http_availability:rate1h{service=~"identity-service|checkout-orchestrator-service|payment-service"}
+          ) > (3 * 0.001)
+        for: 30m
+        labels:
+          severity: ticket
+          tier: "0"
+          slo: "99.9"
+        annotations:
+          summary: "{{ $labels.service }} error budget burn at 3x rate over 1h"
+          description: "{{ $labels.service }} 1h error rate exceeds 3x burn rate for 99.9% SLO. Budget exhaustion in ~2.5 days."
+
+      # ── Tier 1 (order, inventory, fulfillment, cart, pricing, rider-fleet, routing-eta): SLO 99.5% ──
+
+      # 14.4x burn rate over 1h (5m window)
+      - alert: BurnRate_Tier1_Critical
+        expr: |
+          (
+            1 - sli:http_availability:rate5m{service=~"order-service|inventory-service|fulfillment-service|cart-service|pricing-service|rider-fleet-service|routing-eta-service"}
+          ) > (14.4 * 0.005)
+          and
+          (
+            1 - sli:http_availability:rate1h{service=~"order-service|inventory-service|fulfillment-service|cart-service|pricing-service|rider-fleet-service|routing-eta-service"}
+          ) > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+          tier: "1"
+          slo: "99.5"
+        annotations:
+          summary: "{{ $labels.service }} burning error budget at 14.4x rate"
+          description: "{{ $labels.service }} 5m error rate exceeds 14.4x burn rate for 99.5% SLO."
+
+      # 6x burn rate over 6h (30m window)
+      - alert: BurnRate_Tier1_High
+        expr: |
+          (
+            1 - sli:http_availability:rate30m{service=~"order-service|inventory-service|fulfillment-service|cart-service|pricing-service|rider-fleet-service|routing-eta-service"}
+          ) > (6 * 0.005)
+          and
+          (
+            1 - sli:http_availability:rate6h{service=~"order-service|inventory-service|fulfillment-service|cart-service|pricing-service|rider-fleet-service|routing-eta-service"}
+          ) > (6 * 0.005)
+        for: 5m
+        labels:
+          severity: page
+          tier: "1"
+          slo: "99.5"
+        annotations:
+          summary: "{{ $labels.service }} sustained error budget burn at 6x rate"
+          description: "{{ $labels.service }} 30m error rate exceeds 6x burn rate for 99.5% SLO. Budget exhaustion in ~12 hours."
+
+      # ── Tier 2 (catalog, search, notification, wallet, fraud, warehouse, config, audit, AI): SLO 99% ──
+
+      # 14.4x burn rate over 1h (5m window)
+      - alert: BurnRate_Tier2_Critical
+        expr: |
+          (
+            1 - sli:http_availability:rate5m{service=~"catalog-service|search-service|notification-service|wallet-loyalty-service|fraud-detection-service|warehouse-service|config-feature-flag-service|audit-trail-service|ai-orchestrator-service|ai-inference-service"}
+          ) > (14.4 * 0.01)
+          and
+          (
+            1 - sli:http_availability:rate1h{service=~"catalog-service|search-service|notification-service|wallet-loyalty-service|fraud-detection-service|warehouse-service|config-feature-flag-service|audit-trail-service|ai-orchestrator-service|ai-inference-service"}
+          ) > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+          tier: "2"
+          slo: "99"
+        annotations:
+          summary: "{{ $labels.service }} burning error budget at 14.4x rate"
+          description: "{{ $labels.service }} 5m error rate exceeds 14.4x burn rate for 99% SLO."
+
+      # 6x burn rate over 6h (30m window)
+      - alert: BurnRate_Tier2_High
+        expr: |
+          (
+            1 - sli:http_availability:rate30m{service=~"catalog-service|search-service|notification-service|wallet-loyalty-service|fraud-detection-service|warehouse-service|config-feature-flag-service|audit-trail-service|ai-orchestrator-service|ai-inference-service"}
+          ) > (6 * 0.01)
+          and
+          (
+            1 - sli:http_availability:rate6h{service=~"catalog-service|search-service|notification-service|wallet-loyalty-service|fraud-detection-service|warehouse-service|config-feature-flag-service|audit-trail-service|ai-orchestrator-service|ai-inference-service"}
+          ) > (6 * 0.01)
+        for: 5m
+        labels:
+          severity: ticket
+          tier: "2"
+          slo: "99"
+        annotations:
+          summary: "{{ $labels.service }} sustained error budget burn at 6x rate"
+          description: "{{ $labels.service }} 30m error rate exceeds 6x burn rate for 99% SLO. Budget exhaustion in ~12 hours."
+
+      # ── Latency burn-rate: P99 > 500ms for Tier 0 services ──
+      - alert: LatencyBurnRate_Tier0_Critical
+        expr: |
+          (1 - sli:http_latency:rate5m{service=~"identity-service|checkout-orchestrator-service|payment-service"}) > (14.4 * 0.001)
+          and
+          (1 - sli:http_latency:rate1h{service=~"identity-service|checkout-orchestrator-service|payment-service"}) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+          tier: "0"
+        annotations:
+          summary: "{{ $labels.service }} latency SLO burn rate critical"
+          description: "{{ $labels.service }} latency SLI 5m rate exceeds 14.4x burn rate. Requests completing within 500ms threshold are dropping fast."
+
+      # ── Kafka consumer lag burn rate ──
+      - alert: KafkaLagBurnRate_Critical
+        expr: |
+          sli:kafka_consumer_lag:max5m > 10000
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Consumer group {{ $labels.group }} lag exceeds 10k, possible data loss"
+          description: "Kafka consumer group {{ $labels.group }} has a lag exceeding 10,000 records. Investigate consumer throughput and partition assignment."
+
+  # ──────────────────────────────────────────────
+  # Section 3: Operational Alerts (existing)
+  # ──────────────────────────────────────────────
+  - name: instacommerce-operational-alerts
     rules:
       - alert: HighErrorRate
         expr: |
@@ -12,6 +241,9 @@ groups:
           severity: critical
         annotations:
           summary: "{{ $labels.service }} error rate is {{ $value | humanizePercentage }}"
+          description: "{{ $labels.service }} has an HTTP 5xx error rate above 1% for 5 minutes."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/high-error-rate"
+
       - alert: HighLatency
         expr: |
           histogram_quantile(0.99,
@@ -20,17 +252,36 @@ groups:
         for: 5m
         labels:
           severity: warning
+        annotations:
+          summary: "{{ $labels.service }} P99 latency above 500ms on {{ $labels.uri }}"
+          description: "{{ $labels.service }} endpoint {{ $labels.uri }} P99 latency is {{ $value }}s, exceeding 500ms threshold."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/high-latency"
+
       - alert: KafkaConsumerLag
         expr: kafka_consumer_records_lag_max > 1000
         for: 10m
         labels:
           severity: warning
+        annotations:
+          summary: "Kafka consumer group {{ $labels.group }} lag is {{ $value }}"
+          description: "Consumer group {{ $labels.group }} lag has exceeded 1,000 records for 10 minutes."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/kafka-consumer-lag"
+
       - alert: FrequentPodRestarts
         expr: increase(kube_pod_container_status_restarts_total[30m]) > 3
         labels:
           severity: critical
+        annotations:
+          summary: "Pod {{ $labels.pod }} restarted {{ $value }} times in 30m"
+          description: "Container {{ $labels.container }} in pod {{ $labels.pod }} has restarted more than 3 times in the last 30 minutes."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/frequent-pod-restarts"
+
       - alert: DatabaseHighCPU
         expr: cloudsql_database_cpu_utilization > 0.8
         for: 10m
         labels:
           severity: warning
+        annotations:
+          summary: "Database {{ $labels.database_id }} CPU utilization above 80%"
+          description: "Cloud SQL instance {{ $labels.database_id }} CPU utilization is {{ $value | humanizePercentage }} for 10 minutes."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/database-high-cpu"
