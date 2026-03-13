@@ -2,12 +2,13 @@
 // for InstaCommerce Go services.
 //
 // All inter-service HTTP calls must include X-Internal-Service and X-Internal-Token
-// headers. This middleware validates those headers against the expected token
-// configured via the INTERNAL_SERVICE_TOKEN environment variable.
+// headers. This middleware validates those headers against per-service tokens
+// (preferred) or the shared token (fallback during migration, see ADR-010).
 package auth
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -24,23 +25,27 @@ const (
 // by checking the X-Internal-Service and X-Internal-Token headers.
 // Paths in skipPaths (e.g. /health, /metrics) bypass authentication.
 type InternalAuthMiddleware struct {
-	expectedToken string
-	serviceName   string
-	logger        *slog.Logger
-	skipPaths     map[string]bool
+	expectedToken  string
+	allowedCallers map[string]string // callerName -> token
+	serviceName    string
+	logger         *slog.Logger
+	skipPaths      map[string]bool
 }
 
 // NewInternalAuthMiddleware creates a middleware instance configured from
 // environment variables:
-//   - INTERNAL_SERVICE_TOKEN: the shared secret all services must present
+//   - INTERNAL_SERVICE_TOKEN: the shared secret (fallback during migration)
 //   - INTERNAL_SERVICE_NAME: the name of this service (used in logs)
+//   - INTERNAL_SERVICE_ALLOWED_CALLERS: JSON map of {callerName: token} for
+//     per-service token validation (takes precedence over shared token)
 //
 // Health and metrics endpoints are excluded from authentication by default.
 func NewInternalAuthMiddleware(logger *slog.Logger) *InternalAuthMiddleware {
-	return &InternalAuthMiddleware{
-		expectedToken: os.Getenv("INTERNAL_SERVICE_TOKEN"),
-		serviceName:   os.Getenv("INTERNAL_SERVICE_NAME"),
-		logger:        logger,
+	m := &InternalAuthMiddleware{
+		expectedToken:  os.Getenv("INTERNAL_SERVICE_TOKEN"),
+		allowedCallers: make(map[string]string),
+		serviceName:    os.Getenv("INTERNAL_SERVICE_NAME"),
+		logger:         logger,
 		skipPaths: map[string]bool{
 			"/health":       true,
 			"/health/ready": true,
@@ -48,6 +53,15 @@ func NewInternalAuthMiddleware(logger *slog.Logger) *InternalAuthMiddleware {
 			"/metrics":      true,
 		},
 	}
+
+	// Parse per-service tokens from JSON env var
+	if callersJSON := os.Getenv("INTERNAL_SERVICE_ALLOWED_CALLERS"); callersJSON != "" {
+		if err := json.Unmarshal([]byte(callersJSON), &m.allowedCallers); err != nil {
+			logger.Warn("failed to parse INTERNAL_SERVICE_ALLOWED_CALLERS", slog.String("error", err.Error()))
+		}
+	}
+
+	return m
 }
 
 // Wrap returns an http.Handler that enforces internal authentication.
@@ -74,8 +88,7 @@ func (m *InternalAuthMiddleware) Wrap(next http.Handler) http.Handler {
 			return
 		}
 
-		// Constant-time comparison to prevent timing attacks.
-		if subtle.ConstantTimeCompare([]byte(token), []byte(m.expectedToken)) != 1 {
+		if !m.isValidToken(callingService, token) {
 			m.logger.Warn("invalid service token",
 				slog.String("path", r.URL.Path),
 				slog.String("remote_addr", r.RemoteAddr),
@@ -92,4 +105,15 @@ func (m *InternalAuthMiddleware) Wrap(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isValidToken checks per-service tokens first, then falls back to the shared
+// token during migration.
+func (m *InternalAuthMiddleware) isValidToken(callingService, token string) bool {
+	// Per-service token takes precedence
+	if perServiceToken, ok := m.allowedCallers[callingService]; ok {
+		return subtle.ConstantTimeCompare([]byte(token), []byte(perServiceToken)) == 1
+	}
+	// Fall back to shared token during migration
+	return subtle.ConstantTimeCompare([]byte(token), []byte(m.expectedToken)) == 1
 }
