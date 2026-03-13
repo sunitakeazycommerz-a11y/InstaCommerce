@@ -1,7 +1,6 @@
 package com.instacommerce.riderfleet.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.instacommerce.riderfleet.exception.DuplicateAssignmentException;
 import com.instacommerce.riderfleet.service.RiderAssignmentService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -22,25 +21,19 @@ public class FulfillmentEventConsumer {
     }
 
     @KafkaListener(topics = "fulfillment.events", groupId = "rider-fleet-service")
-    public void onFulfillmentEvent(ConsumerRecord<String, String> record) {
-        try {
-            EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
-            if ("OrderPacked".equals(envelope.eventType())) {
-                FulfillmentEventPayload payload = objectMapper.treeToValue(
-                    envelope.payload(), FulfillmentEventPayload.class);
-                if (payload.pickupLat() == null || payload.pickupLng() == null) {
-                    logger.warn("OrderPacked event for order={} missing pickup coordinates, skipping assignment",
-                        payload.orderId());
-                    return;
-                }
-                riderAssignmentService.assignRider(
-                    payload.orderId(), payload.storeId(), payload.pickupLat(), payload.pickupLng());
-                logger.info("Rider assigned for packed order={}", payload.orderId());
+    public void onFulfillmentEvent(ConsumerRecord<String, String> record) throws Exception {
+        EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
+        if ("OrderPacked".equals(envelope.eventType())) {
+            FulfillmentEventPayload payload = objectMapper.treeToValue(
+                envelope.payload(), FulfillmentEventPayload.class);
+            if (payload.pickupLat() == null || payload.pickupLng() == null) {
+                logger.warn("OrderPacked event for order={} missing pickup coordinates, skipping assignment",
+                    payload.orderId());
+                return;
             }
-        } catch (DuplicateAssignmentException ex) {
-            logger.warn("Duplicate rider assignment for key={}: {}", record.key(), ex.getMessage());
-        } catch (Exception ex) {
-            logger.error("Failed to process fulfillment event key={}", record.key(), ex);
+            riderAssignmentService.assignRider(
+                payload.orderId(), payload.storeId(), payload.pickupLat(), payload.pickupLng());
+            logger.info("Rider assigned for packed order={}", payload.orderId());
         }
     }
 }

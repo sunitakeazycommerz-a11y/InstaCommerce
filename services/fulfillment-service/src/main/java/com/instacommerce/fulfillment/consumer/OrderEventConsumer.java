@@ -21,15 +21,12 @@ public class OrderEventConsumer {
     }
 
     @KafkaListener(topics = "orders.events", groupId = "fulfillment-service")
-    public void onOrderEvent(ConsumerRecord<String, String> record) {
-        try {
-            OrderEvent event = objectMapper.readValue(record.value(), OrderEvent.class);
-            if ("OrderPlaced".equals(event.eventType())) {
-                OrderPlacedPayload payload = objectMapper.treeToValue(event.payload(), OrderPlacedPayload.class);
-                pickService.createPickTask(payload);
-            }
-        } catch (Exception ex) {
-            logger.error("Failed to process order event", ex);
+    public void onOrderEvent(ConsumerRecord<String, String> record) throws Exception {
+        OrderEvent event = objectMapper.readValue(record.value(), OrderEvent.class);
+        if ("OrderPlaced".equals(event.eventType())) {
+            OrderPlacedPayload payload = objectMapper.treeToValue(event.payload(), OrderPlacedPayload.class);
+            pickService.createPickTask(payload);
+            logger.info("Pick task created for order event key={}", record.key());
         }
     }
 }
