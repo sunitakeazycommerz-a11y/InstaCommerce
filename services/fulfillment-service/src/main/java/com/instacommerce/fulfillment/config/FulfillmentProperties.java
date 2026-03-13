@@ -55,6 +55,7 @@ public class FulfillmentProperties {
         private final Service order = new Service();
         private final Service payment = new Service();
         private final Service inventory = new Service();
+        private final Service warehouse = new Service();
 
         public Service getOrder() {
             return order;
@@ -66,6 +67,10 @@ public class FulfillmentProperties {
 
         public Service getInventory() {
             return inventory;
+        }
+
+        public Service getWarehouse() {
+            return warehouse;
         }
     }
 
