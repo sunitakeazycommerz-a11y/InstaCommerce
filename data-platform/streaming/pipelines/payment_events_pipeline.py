@@ -13,11 +13,14 @@ import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.io.kafka import ReadFromKafka
 from apache_beam.io.gcp.bigquery import WriteToBigQuery
-from apache_beam.transforms.window import FixedWindows
+from apache_beam.transforms.window import FixedWindows, TimestampedValue, Duration
+from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, AccumulationMode, AfterCount
 import json
 import logging
 import statistics
+import time
 from datetime import datetime
+from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +69,15 @@ class PaymentEventParser(beam.DoFn):
             }
             if not parsed["payment_id"]:
                 raise ValueError("Missing paymentId")
-            yield parsed
+            event_time_str = event.get("eventTime")
+            if event_time_str:
+                try:
+                    event_ts = isoparse(event_time_str).timestamp()
+                except (ValueError, TypeError):
+                    event_ts = time.time()
+            else:
+                event_ts = time.time()
+            yield TimestampedValue(parsed, event_ts)
         except Exception as e:
             logger.warning("Failed to parse payment event: %s", e)
             yield beam.pvalue.TaggedOutput(
@@ -174,7 +185,15 @@ def build_pipeline(options):
         # 1-minute payment success rate per method
         (
             events
-            | "Window1Min" >> beam.WindowInto(FixedWindows(60))
+            | "Window1Min" >> beam.WindowInto(
+                FixedWindows(60),
+                trigger=AfterWatermark(
+                    early=AfterProcessingTime(30),
+                    late=AfterCount(1),
+                ),
+                allowed_lateness=Duration(seconds=300),
+                accumulation_mode=AccumulationMode.ACCUMULATING,
+            )
             | "KeyByMethod" >> beam.Map(lambda e: (e["method"], e))
             | "AggregatePerMethod"
             >> beam.CombinePerKey(PaymentSuccessRateAggregator())

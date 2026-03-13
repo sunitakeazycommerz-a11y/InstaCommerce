@@ -7,11 +7,13 @@ import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.io.kafka import ReadFromKafka
 from apache_beam.io.gcp.bigquery import WriteToBigQuery
-from apache_beam.transforms.window import FixedWindows, SlidingWindows
-from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, AccumulationMode
+from apache_beam.transforms.window import FixedWindows, SlidingWindows, TimestampedValue, Duration
+from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, AccumulationMode, AfterCount
 import json
 import logging
+import time
 from datetime import datetime
+from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +71,15 @@ class OrderEventParser(beam.DoFn):
             }
             if not parsed["order_id"]:
                 raise ValueError("Missing order_id in event")
-            yield parsed
+            event_time_str = event.get("eventTime")
+            if event_time_str:
+                try:
+                    event_ts = isoparse(event_time_str).timestamp()
+                except (ValueError, TypeError):
+                    event_ts = time.time()
+            else:
+                event_ts = time.time()
+            yield TimestampedValue(parsed, event_ts)
         except Exception as e:
             logger.warning("Failed to parse order event: %s", e)
             yield beam.pvalue.TaggedOutput(
@@ -207,7 +217,15 @@ def build_pipeline(options):
         # --- 1-minute order volume (fixed window) ---
         (
             events
-            | "Window1Min" >> beam.WindowInto(FixedWindows(60))
+            | "Window1Min" >> beam.WindowInto(
+                FixedWindows(60),
+                trigger=AfterWatermark(
+                    early=AfterProcessingTime(30),
+                    late=AfterCount(1),
+                ),
+                allowed_lateness=Duration(seconds=300),
+                accumulation_mode=AccumulationMode.ACCUMULATING,
+            )
             | "KeyByStore" >> beam.Map(lambda e: (e["store_id"], e))
             | "CountPerStore" >> beam.CombinePerKey(OrderVolumeAggregator())
             | "FormatVolume" >> beam.Map(format_volume_row)
@@ -225,7 +243,15 @@ def build_pipeline(options):
             events
             | "FilterDelivered"
             >> beam.Filter(lambda e: e["event_type"] == "ORDER_DELIVERED")
-            | "Window30MinSliding" >> beam.WindowInto(SlidingWindows(1800, 60))
+            | "Window30MinSliding" >> beam.WindowInto(
+                SlidingWindows(1800, 60),
+                trigger=AfterWatermark(
+                    early=AfterProcessingTime(30),
+                    late=AfterCount(1),
+                ),
+                allowed_lateness=Duration(seconds=300),
+                accumulation_mode=AccumulationMode.ACCUMULATING,
+            )
             | "KeyByZone" >> beam.Map(lambda e: (e["zone_id"], e))
             | "SLAPerZone" >> beam.CombinePerKey(SLAComplianceAggregator())
             | "FormatSLA" >> beam.Map(format_sla_row)
