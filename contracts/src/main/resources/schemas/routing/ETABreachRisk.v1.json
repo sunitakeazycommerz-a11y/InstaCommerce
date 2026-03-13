@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ETABreachRisk",
+  "description": "Published when a delivery ETA exceeds SLA threshold with high breach probability",
+  "type": "object",
+  "required": ["deliveryId", "orderId", "riderId", "currentEtaMinutes", "slaMinutes", "breachProbability"],
+  "properties": {
+    "deliveryId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "orderId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "riderId": {
+      "type": "string"
+    },
+    "currentEtaMinutes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "etaLowMinutes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "etaHighMinutes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "slaMinutes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "breachProbability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -3,12 +3,16 @@ package com.instacommerce.routing.service;
 import com.instacommerce.routing.domain.model.Delivery;
 import com.instacommerce.routing.domain.model.DeliveryStatus;
 import com.instacommerce.routing.dto.response.DeliveryResponse;
+import com.instacommerce.routing.dto.response.ETAEstimate;
+import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.exception.DeliveryNotFoundException;
 import com.instacommerce.routing.exception.InvalidDeliveryStateException;
 import com.instacommerce.routing.repository.DeliveryRepository;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,17 +23,22 @@ import org.springframework.transaction.annotation.Transactional;
 public class DeliveryService {
 
     private static final Logger log = LoggerFactory.getLogger(DeliveryService.class);
+    private static final Set<DeliveryStatus> ACTIVE_STATUSES = Set.of(
+        DeliveryStatus.RIDER_ASSIGNED, DeliveryStatus.PICKED_UP, DeliveryStatus.EN_ROUTE);
 
     private final DeliveryRepository deliveryRepository;
     private final ETAService etaService;
     private final OutboxService outboxService;
+    private final RoutingProperties routingProperties;
 
     public DeliveryService(DeliveryRepository deliveryRepository,
                            ETAService etaService,
-                           OutboxService outboxService) {
+                           OutboxService outboxService,
+                           RoutingProperties routingProperties) {
         this.deliveryRepository = deliveryRepository;
         this.etaService = etaService;
         this.outboxService = outboxService;
+        this.routingProperties = routingProperties;
     }
 
     @Transactional
@@ -41,7 +50,7 @@ public class DeliveryService {
             log.info("Delivery already exists for order {}", orderId);
             return toResponse(existing.get());
         }
-        var eta = etaService.calculateETA(
+        var eta = etaService.calculateETAWithConfidence(
             pickupLat.doubleValue(), pickupLng.doubleValue(),
             dropoffLat.doubleValue(), dropoffLng.doubleValue());
 
@@ -53,7 +62,10 @@ public class DeliveryService {
         delivery.setPickupLng(pickupLng);
         delivery.setDropoffLat(dropoffLat);
         delivery.setDropoffLng(dropoffLng);
-        delivery.setEstimatedMinutes(eta.estimatedMinutes());
+        delivery.setEstimatedMinutes(eta.etaMinutes());
+        delivery.setEtaLowMinutes(eta.etaLowMinutes());
+        delivery.setEtaHighMinutes(eta.etaHighMinutes());
+        delivery.setLastEtaUpdatedAt(eta.calculatedAt());
         delivery.setDistanceKm(eta.distanceKm());
         if (riderId != null) {
             delivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
@@ -111,6 +123,40 @@ public class DeliveryService {
             "DELIVERY_COMPLETED", toResponse(delivery));
 
         return toResponse(delivery);
+    }
+
+    @Transactional
+    public void updateETA(UUID deliveryId, ETAEstimate estimate) {
+        Delivery delivery = deliveryRepository.findById(deliveryId)
+            .orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
+
+        if (!ACTIVE_STATUSES.contains(delivery.getStatus())) {
+            return;
+        }
+
+        delivery.setEstimatedMinutes(estimate.etaMinutes());
+        delivery.setEtaLowMinutes(estimate.etaLowMinutes());
+        delivery.setEtaHighMinutes(estimate.etaHighMinutes());
+        delivery.setLastEtaUpdatedAt(estimate.calculatedAt());
+        delivery = deliveryRepository.save(delivery);
+
+        double threshold = routingProperties.getBreach().getBreachAlertThreshold();
+        if (estimate.breachProbability() > threshold) {
+            log.warn("ETA breach risk for delivery {}: probability={}, eta={}min, sla={}min",
+                deliveryId, estimate.breachProbability(), estimate.etaMinutes(),
+                routingProperties.getBreach().getSlaThresholdMinutes());
+
+            outboxService.publish("Delivery", deliveryId.toString(),
+                "ETA_BREACH_RISK", Map.of(
+                    "deliveryId", deliveryId.toString(),
+                    "orderId", delivery.getOrderId().toString(),
+                    "riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "",
+                    "currentEtaMinutes", estimate.etaMinutes(),
+                    "etaLowMinutes", estimate.etaLowMinutes(),
+                    "etaHighMinutes", estimate.etaHighMinutes(),
+                    "slaMinutes", routingProperties.getBreach().getSlaThresholdMinutes(),
+                    "breachProbability", estimate.breachProbability()));
+        }
     }
 
     @Transactional(readOnly = true)

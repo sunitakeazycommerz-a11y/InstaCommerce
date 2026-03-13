@@ -54,6 +54,15 @@ public class Delivery {
     @Column(name = "actual_minutes")
     private Integer actualMinutes;
 
+    @Column(name = "eta_low_minutes")
+    private Integer etaLowMinutes;
+
+    @Column(name = "eta_high_minutes")
+    private Integer etaHighMinutes;
+
+    @Column(name = "last_eta_updated_at")
+    private Instant lastEtaUpdatedAt;
+
     @Column(name = "distance_km", precision = 8, scale = 3)
     private BigDecimal distanceKm;
 
@@ -172,6 +181,30 @@ public class Delivery {
 
     public void setActualMinutes(Integer actualMinutes) {
         this.actualMinutes = actualMinutes;
+    }
+
+    public Integer getEtaLowMinutes() {
+        return etaLowMinutes;
+    }
+
+    public void setEtaLowMinutes(Integer etaLowMinutes) {
+        this.etaLowMinutes = etaLowMinutes;
+    }
+
+    public Integer getEtaHighMinutes() {
+        return etaHighMinutes;
+    }
+
+    public void setEtaHighMinutes(Integer etaHighMinutes) {
+        this.etaHighMinutes = etaHighMinutes;
+    }
+
+    public Instant getLastEtaUpdatedAt() {
+        return lastEtaUpdatedAt;
+    }
+
+    public void setLastEtaUpdatedAt(Instant lastEtaUpdatedAt) {
+        this.lastEtaUpdatedAt = lastEtaUpdatedAt;
     }
 
     public BigDecimal getDistanceKm() {

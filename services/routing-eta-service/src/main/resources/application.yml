@@ -49,6 +49,13 @@ routing:
     road-distance-multiplier: ${ETA_ROAD_DISTANCE_MULTIPLIER:1.4}
     peak-speed-multiplier: ${ETA_PEAK_SPEED_MULTIPLIER:0.6}
     night-speed-multiplier: ${ETA_NIGHT_SPEED_MULTIPLIER:1.2}
+  breach:
+    sla-threshold-minutes: ${ETA_SLA_THRESHOLD_MINUTES:30}
+    breach-alert-threshold: ${ETA_BREACH_ALERT_THRESHOLD:0.7}
+    eta-recalc-min-delta-minutes: ${ETA_RECALC_MIN_DELTA:2}
+    eta-low-multiplier: ${ETA_LOW_MULTIPLIER:0.8}
+    eta-high-multiplier: ${ETA_HIGH_MULTIPLIER:1.3}
+    recalc-on-location-update-enabled: ${ETA_RECALC_ON_LOCATION_ENABLED:true}
 
 google:
   maps:

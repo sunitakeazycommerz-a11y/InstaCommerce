@@ -1,6 +1,7 @@
 package com.instacommerce.routing.service;
 
 import com.instacommerce.routing.config.RoutingProperties;
+import com.instacommerce.routing.dto.response.ETAEstimate;
 import com.instacommerce.routing.dto.response.ETAResponse;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -53,6 +54,30 @@ public class ETAService {
             estimatedMinutes,
             BigDecimal.valueOf(roadDistanceKm).setScale(3, RoundingMode.HALF_UP),
             calculatedAt);
+    }
+
+    public ETAEstimate calculateETAWithConfidence(double fromLat, double fromLng,
+                                                   double toLat, double toLng) {
+        Instant calculatedAt = Instant.now();
+        double straightLineKm = haversineDistance(fromLat, fromLng, toLat, toLng);
+        double roadDistanceKm = straightLineKm * routingProperties.getEta().getRoadDistanceMultiplier();
+        double avgSpeedKmh = adjustedSpeedKmh(calculatedAt);
+        int prepTimeMinutes = routingProperties.getEta().getPreparationTimeMinutes();
+
+        double travelMinutes = (roadDistanceKm / avgSpeedKmh) * 60.0;
+        int etaMinutes = (int) Math.ceil(travelMinutes) + prepTimeMinutes;
+
+        var breach = routingProperties.getBreach();
+        int etaLow = Math.max(1, (int) Math.round(etaMinutes * breach.getEtaLowMultiplier()));
+        int etaHigh = (int) Math.round(etaMinutes * breach.getEtaHighMultiplier());
+
+        double slaMinutes = breach.getSlaThresholdMinutes();
+        double breachProbability = 1.0 / (1.0 + Math.exp(-5.0 * (etaMinutes - slaMinutes) / slaMinutes));
+
+        return new ETAEstimate(
+            etaMinutes, etaLow, etaHigh,
+            BigDecimal.valueOf(roadDistanceKm).setScale(3, RoundingMode.HALF_UP),
+            breachProbability, calculatedAt);
     }
 
     /**
