@@ -50,6 +50,26 @@ rider-fleet:
     stuck-threshold-minutes: ${RIDER_RECOVERY_STUCK_THRESHOLD_MINUTES:60}
     batch-size: ${RIDER_RECOVERY_BATCH_SIZE:50}
     stuck-rider-cron: ${RIDER_RECOVERY_STUCK_CRON:0 */10 * * * *}
+  dispatch:
+    optimizer-enabled: ${RIDER_DISPATCH_OPTIMIZER_ENABLED:false}
+    optimizer-base-url: ${RIDER_DISPATCH_OPTIMIZER_URL:http://dispatch-optimizer-service:8102}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      dispatchOptimizer:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 5
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        recordExceptions:
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+          - org.springframework.web.client.RestClientException
 
 management:
   tracing:
