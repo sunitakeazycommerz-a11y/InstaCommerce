@@ -53,8 +53,11 @@ What becomes easier or harder as a result of this decision?
 | [ADR-001](001-checkout-authority.md) | Checkout Authority Consolidation | Accepted | 2026-03-13 |
 | [ADR-002](002-dispatch-authority.md) | Dispatch Authority Consolidation | Accepted | 2026-03-13 |
 | [ADR-003](003-kafka-dlt-naming.md) | Kafka DLT Naming Convention | Accepted | 2026-03-13 |
-| ADR-004 | *(Reserved -- Event Envelope Standard)* | -- | -- |
+| [ADR-004](004-event-envelope.md) | Event Envelope Standard | Accepted | 2026-03-13 |
 | [ADR-005](005-durable-idempotency.md) | Durable Idempotency Standard | Accepted | 2026-03-13 |
+| [ADR-006](006-internal-service-auth.md) | Internal Service Authentication Hardening | Accepted | 2026-03-13 |
+| [ADR-007](007-python-ci-standard.md) | Python Service CI Standard | Accepted | 2026-03-13 |
+| [ADR-008](008-dispatch-optimizer-integration.md) | Dispatch Optimizer Integration Pattern | Accepted | 2026-03-13 |
 
 ## Process
 
