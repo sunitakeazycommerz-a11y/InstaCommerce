@@ -22,7 +22,8 @@ public class SearchIndexService {
     @Transactional
     @CacheEvict(value = {"searchResults", "autocomplete"}, allEntries = true)
     public void upsertDocument(UUID productId, String name, String description, String brand,
-                               String category, long priceCents, String imageUrl, boolean inStock) {
+                               String category, long priceCents, String imageUrl, boolean inStock,
+                               UUID storeId) {
         log.info("Upserting search document for productId={}", productId);
         searchDocumentRepository.findByProductId(productId).ifPresentOrElse(
                 existing -> {
@@ -33,12 +34,13 @@ public class SearchIndexService {
                     existing.setPriceCents(priceCents);
                     existing.setImageUrl(imageUrl);
                     existing.setInStock(inStock);
+                    existing.setStoreId(storeId);
                     searchDocumentRepository.save(existing);
                     log.debug("Updated search document for productId={}", productId);
                 },
                 () -> {
                     SearchDocument doc = new SearchDocument(productId, name, description, brand,
-                            category, priceCents, imageUrl, inStock);
+                            category, priceCents, imageUrl, inStock, storeId);
                     searchDocumentRepository.save(doc);
                     log.debug("Created search document for productId={}", productId);
                 });

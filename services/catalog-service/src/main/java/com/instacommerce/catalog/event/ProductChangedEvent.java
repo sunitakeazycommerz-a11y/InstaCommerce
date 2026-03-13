@@ -1,5 +1,6 @@
 package com.instacommerce.catalog.event;
 
+import java.time.Instant;
 import java.util.UUID;
 
 public record ProductChangedEvent(
@@ -8,6 +9,14 @@ public record ProductChangedEvent(
     String name,
     String slug,
     UUID categoryId,
-    boolean active
+    boolean active,
+    String description,
+    String brand,
+    String category,
+    long priceCents,
+    String imageUrl,
+    boolean inStock,
+    UUID storeId,
+    Instant updatedAt
 ) {
 }

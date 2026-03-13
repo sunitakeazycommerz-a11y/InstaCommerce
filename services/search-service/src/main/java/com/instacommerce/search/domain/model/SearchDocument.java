@@ -41,6 +41,9 @@ public class SearchDocument {
     @Column(name = "in_stock", nullable = false)
     private boolean inStock = true;
 
+    @Column(name = "store_id")
+    private UUID storeId;
+
     @Column(name = "search_vector", insertable = false, updatable = false)
     private String searchVector;
 
@@ -54,7 +57,8 @@ public class SearchDocument {
     }
 
     public SearchDocument(UUID productId, String name, String description, String brand,
-                          String category, long priceCents, String imageUrl, boolean inStock) {
+                          String category, long priceCents, String imageUrl, boolean inStock,
+                          UUID storeId) {
         this.productId = productId;
         this.name = name;
         this.description = description;
@@ -63,6 +67,7 @@ public class SearchDocument {
         this.priceCents = priceCents;
         this.imageUrl = imageUrl;
         this.inStock = inStock;
+        this.storeId = storeId;
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
     }
@@ -129,6 +134,14 @@ public class SearchDocument {
 
     public void setInStock(boolean inStock) {
         this.inStock = inStock;
+    }
+
+    public UUID getStoreId() {
+        return storeId;
+    }
+
+    public void setStoreId(UUID storeId) {
+        this.storeId = storeId;
     }
 
     public Instant getCreatedAt() {

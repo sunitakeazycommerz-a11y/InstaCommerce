@@ -54,6 +54,9 @@ public class Product {
     @Column(name = "weight_grams")
     private Integer weightGrams;
 
+    @Column(name = "store_id")
+    private UUID storeId;
+
     @Column(name = "is_active")
     private boolean isActive = true;
 
@@ -188,6 +191,14 @@ public class Product {
 
     public void setWeightGrams(Integer weightGrams) {
         this.weightGrams = weightGrams;
+    }
+
+    public UUID getStoreId() {
+        return storeId;
+    }
+
+    public void setStoreId(UUID storeId) {
+        this.storeId = storeId;
     }
 
     public boolean isActive() {
