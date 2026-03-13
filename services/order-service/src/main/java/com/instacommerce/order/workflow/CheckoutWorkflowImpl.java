@@ -20,6 +20,12 @@ import io.temporal.workflow.Workflow;
 import java.time.Duration;
 import java.util.UUID;
 
+/**
+ * @deprecated Checkout authority moved to checkout-orchestrator-service (ADR-001).
+ * This implementation remains only for rollback safety behind the
+ * {@code order.checkout.direct-saga-enabled} feature flag. Do not extend.
+ */
+@Deprecated(since = "wave-22", forRemoval = true)
 public class CheckoutWorkflowImpl implements CheckoutWorkflow {
     private String currentStatus = "STARTED";
 

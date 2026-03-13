@@ -13,7 +13,7 @@ import org.springframework.context.annotation.Configuration;
     prefix = "order.checkout",
     name = "direct-saga-enabled",
     havingValue = "true",
-    matchIfMissing = true)
+    matchIfMissing = false)
 public class TemporalConfig {
     @Bean
     public WorkflowServiceStubs workflowServiceStubs(TemporalProperties properties) {
