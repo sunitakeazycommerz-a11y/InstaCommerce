@@ -40,6 +40,10 @@ pricing:
   jwt:
     issuer: ${PRICING_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${PRICING_JWT_PUBLIC_KEY}}
+  quote:
+    hmac-secret: ${sm://pricing-quote-hmac-secret:${PRICING_QUOTE_HMAC_SECRET:dev-hmac-secret-change-in-prod}}
+    ttl-seconds: ${PRICING_QUOTE_TTL_SECONDS:300}
+    validation-enabled: ${PRICING_QUOTE_VALIDATION_ENABLED:true}
 
 resilience4j:
   ratelimiter:

@@ -68,6 +68,9 @@ public class Order {
     @Column(name = "delivery_address", columnDefinition = "text")
     private String deliveryAddress;
 
+    @Column(name = "quote_id")
+    private UUID quoteId;
+
     @Column(name = "created_at")
     private Instant createdAt;
 
@@ -213,6 +216,14 @@ public class Order {
 
     public void setDeliveryAddress(String deliveryAddress) {
         this.deliveryAddress = deliveryAddress;
+    }
+
+    public UUID getQuoteId() {
+        return quoteId;
+    }
+
+    public void setQuoteId(UUID quoteId) {
+        this.quoteId = quoteId;
     }
 
     public Instant getCreatedAt() {

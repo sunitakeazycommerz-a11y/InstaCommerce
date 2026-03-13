@@ -50,7 +50,11 @@ What becomes easier or harder as a result of this decision?
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| *None yet -- ADR-001 will be created by Track A (checkout authority)* | | | |
+| [ADR-001](001-checkout-authority.md) | Checkout Authority Consolidation | Accepted | 2026-03-13 |
+| [ADR-002](002-dispatch-authority.md) | Dispatch Authority Consolidation | Accepted | 2026-03-13 |
+| [ADR-003](003-kafka-dlt-naming.md) | Kafka DLT Naming Convention | Accepted | 2026-03-13 |
+| ADR-004 | *(Reserved -- Event Envelope Standard)* | -- | -- |
+| [ADR-005](005-durable-idempotency.md) | Durable Idempotency Standard | Accepted | 2026-03-13 |
 
 ## Process
 

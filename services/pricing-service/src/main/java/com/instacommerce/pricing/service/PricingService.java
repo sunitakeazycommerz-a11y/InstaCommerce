@@ -27,13 +27,16 @@ public class PricingService {
     private final PriceRuleRepository priceRuleRepository;
     private final PromotionService promotionService;
     private final CouponService couponService;
+    private final QuoteTokenService quoteTokenService;
 
     public PricingService(PriceRuleRepository priceRuleRepository,
                           PromotionService promotionService,
-                          CouponService couponService) {
+                          CouponService couponService,
+                          QuoteTokenService quoteTokenService) {
         this.priceRuleRepository = priceRuleRepository;
         this.promotionService = promotionService;
         this.couponService = couponService;
+        this.quoteTokenService = quoteTokenService;
     }
 
     @Cacheable(value = "productPrices", key = "#productId")
@@ -45,7 +48,7 @@ public class PricingService {
         return applyMultiplier(rule.getBasePriceCents(), rule.getMultiplier());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PriceCalculationResponse calculateCartPrice(PriceCalculationRequest request) {
         Instant now = Instant.now();
         List<PricedItem> pricedItems = new ArrayList<>();
@@ -98,13 +101,28 @@ public class PricingService {
 
         log.info("Cart pricing calculated: subtotal={}, discount={}, total={}", subtotalCents, totalDiscount, totalCents);
 
+        PriceCalculationResponse intermediateResponse = new PriceCalculationResponse(
+                pricedItems,
+                subtotalCents,
+                totalDiscount,
+                totalCents,
+                appliedPromotions,
+                appliedCoupon,
+                null,
+                null);
+
+        QuoteTokenService.QuoteResult quoteResult = quoteTokenService.issueQuote(
+                request.userId(), intermediateResponse, appliedCoupon);
+
         return new PriceCalculationResponse(
                 pricedItems,
                 subtotalCents,
                 totalDiscount,
                 totalCents,
                 appliedPromotions,
-                appliedCoupon);
+                appliedCoupon,
+                quoteResult.quoteId(),
+                quoteResult.quoteToken());
     }
 
     private long applyMultiplier(long basePriceCents, BigDecimal multiplier) {

@@ -45,6 +45,7 @@ public class OrderProperties {
         private final Service inventory = new Service();
         private final Service payment = new Service();
         private final Service cart = new Service();
+        private final Service pricing = new Service();
 
         public Service getInventory() {
             return inventory;
@@ -56,6 +57,10 @@ public class OrderProperties {
 
         public Service getCart() {
             return cart;
+        }
+
+        public Service getPricing() {
+            return pricing;
         }
     }
 

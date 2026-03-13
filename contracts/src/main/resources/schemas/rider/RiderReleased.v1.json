@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RiderReleased",
+  "type": "object",
+  "required": ["riderId", "reason", "previousStatus", "releasedAt"],
+  "properties": {
+    "riderId": { "type": "string", "format": "uuid" },
+    "reason": { "type": "string" },
+    "previousStatus": { "type": "string" },
+    "releasedAt": { "type": "string", "format": "date-time" }
+  }
+}

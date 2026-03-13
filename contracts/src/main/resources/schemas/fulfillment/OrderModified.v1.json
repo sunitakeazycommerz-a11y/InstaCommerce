@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OrderModified",
+  "type": "object",
+  "required": ["orderId", "productId", "missingQty", "refundCents"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "productId": { "type": "string", "format": "uuid" },
+    "missingQty": { "type": "integer", "minimum": 1 },
+    "refundCents": { "type": "integer", "minimum": 0 }
+  }
+}

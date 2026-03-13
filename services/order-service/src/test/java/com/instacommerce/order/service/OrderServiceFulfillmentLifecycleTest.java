@@ -37,13 +37,16 @@ class OrderServiceFulfillmentLifecycleTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private com.instacommerce.order.client.PricingQuoteClient pricingQuoteClient;
+
     private OrderService orderService;
     private UUID orderId;
     private Order order;
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, statusHistoryRepository, outboxService, auditLogService);
+        orderService = new OrderService(orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient);
         orderId = UUID.randomUUID();
         order = new Order();
         order.setId(orderId);

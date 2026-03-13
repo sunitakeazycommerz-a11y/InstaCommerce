@@ -5,5 +5,7 @@ public record PricingResult(
     long discountCents,
     long deliveryFeeCents,
     long totalCents,
-    String currency
+    String currency,
+    String quoteId,
+    String quoteToken
 ) {}

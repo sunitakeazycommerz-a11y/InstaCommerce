@@ -9,6 +9,8 @@ public record PriceCalculationResponse(
     long discountCents,
     long totalCents,
     List<String> appliedPromotions,
-    String appliedCoupon
+    String appliedCoupon,
+    UUID quoteId,
+    String quoteToken
 ) {
 }

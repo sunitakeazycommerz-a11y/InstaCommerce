@@ -17,6 +17,8 @@ public final class CreateOrderCommand {
     private final UUID paymentId;
     private final String idempotencyKey;
     private final String deliveryAddress;
+    private final UUID quoteId;
+    private final String quoteToken;
 
     private CreateOrderCommand(Builder builder) {
         this.userId = builder.userId;
@@ -31,6 +33,8 @@ public final class CreateOrderCommand {
         this.paymentId = builder.paymentId;
         this.idempotencyKey = builder.idempotencyKey;
         this.deliveryAddress = builder.deliveryAddress;
+        this.quoteId = builder.quoteId;
+        this.quoteToken = builder.quoteToken;
     }
 
     public static Builder builder() {
@@ -85,6 +89,14 @@ public final class CreateOrderCommand {
         return deliveryAddress;
     }
 
+    public UUID getQuoteId() {
+        return quoteId;
+    }
+
+    public String getQuoteToken() {
+        return quoteToken;
+    }
+
     public static final class Builder {
         private UUID userId;
         private String storeId;
@@ -98,6 +110,8 @@ public final class CreateOrderCommand {
         private UUID paymentId;
         private String idempotencyKey;
         private String deliveryAddress;
+        private UUID quoteId;
+        private String quoteToken;
 
         public Builder userId(UUID userId) {
             this.userId = userId;
@@ -156,6 +170,16 @@ public final class CreateOrderCommand {
 
         public Builder deliveryAddress(String deliveryAddress) {
             this.deliveryAddress = deliveryAddress;
+            return this;
+        }
+
+        public Builder quoteId(UUID quoteId) {
+            this.quoteId = quoteId;
+            return this;
+        }
+
+        public Builder quoteToken(String quoteToken) {
+            this.quoteToken = quoteToken;
             return this;
         }
 

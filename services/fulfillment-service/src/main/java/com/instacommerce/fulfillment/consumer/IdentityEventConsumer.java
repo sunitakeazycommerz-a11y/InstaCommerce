@@ -22,21 +22,17 @@ public class IdentityEventConsumer {
     }
 
     @KafkaListener(topics = "identity.events", groupId = "fulfillment-service-erasure")
-    public void onIdentityEvent(ConsumerRecord<String, String> record) {
-        try {
-            EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
-            if (!"UserErased".equals(envelope.eventType())) {
-                return;
-            }
-            UserErasedEvent event = objectMapper.treeToValue(envelope.payload(), UserErasedEvent.class);
-            if (event.userId() == null) {
-                logger.warn("UserErased event missing userId");
-                return;
-            }
-            Instant erasedAt = event.erasedAt() == null ? Instant.now() : event.erasedAt();
-            userErasureService.anonymizeUser(event.userId(), erasedAt);
-        } catch (Exception ex) {
-            logger.error("Failed to process identity event", ex);
+    public void onIdentityEvent(ConsumerRecord<String, String> record) throws Exception {
+        EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
+        if (!"UserErased".equals(envelope.eventType())) {
+            return;
         }
+        UserErasedEvent event = objectMapper.treeToValue(envelope.payload(), UserErasedEvent.class);
+        if (event.userId() == null) {
+            throw new IllegalArgumentException("UserErased event missing userId, key=" + record.key());
+        }
+        Instant erasedAt = event.erasedAt() == null ? Instant.now() : event.erasedAt();
+        userErasureService.anonymizeUser(event.userId(), erasedAt);
+        logger.info("User erasure completed for identity event key={}", record.key());
     }
 }

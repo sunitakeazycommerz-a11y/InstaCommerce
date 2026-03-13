@@ -51,6 +51,8 @@ order:
       base-url: ${CART_SERVICE_URL:http://localhost:8084}
     payment:
       base-url: ${PAYMENT_SERVICE_URL:http://localhost:8086}
+    pricing:
+      base-url: ${PRICING_SERVICE_URL:http://localhost:8087}
 
 temporal:
   service-address: "${TEMPORAL_HOST:localhost}:7233"
