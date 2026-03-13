@@ -45,6 +45,11 @@ rider-fleet:
     public-key: ${sm://jwt-rsa-public-key:${RIDER_JWT_PUBLIC_KEY}}
   assignment:
     default-radius-km: ${RIDER_ASSIGNMENT_RADIUS_KM:5.0}
+  recovery:
+    stuck-rider-enabled: ${RIDER_RECOVERY_STUCK_ENABLED:false}
+    stuck-threshold-minutes: ${RIDER_RECOVERY_STUCK_THRESHOLD_MINUTES:60}
+    batch-size: ${RIDER_RECOVERY_BATCH_SIZE:50}
+    stuck-rider-cron: ${RIDER_RECOVERY_STUCK_CRON:0 */10 * * * *}
 
 management:
   tracing:
