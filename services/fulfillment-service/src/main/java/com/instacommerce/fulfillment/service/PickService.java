@@ -1,5 +1,6 @@
 package com.instacommerce.fulfillment.service;
 
+import com.instacommerce.fulfillment.config.FulfillmentProperties;
 import com.instacommerce.fulfillment.consumer.OrderPlacedItem;
 import com.instacommerce.fulfillment.consumer.OrderPlacedPayload;
 import com.instacommerce.fulfillment.domain.model.PickItem;
@@ -20,6 +21,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -37,19 +39,25 @@ public class PickService {
     private final DeliveryService deliveryService;
     private final OutboxService outboxService;
     private final ApplicationEventPublisher eventPublisher;
+    private final FulfillmentProperties fulfillmentProperties;
+    private final MeterRegistry meterRegistry;
 
     public PickService(PickTaskRepository pickTaskRepository,
                        PickItemRepository pickItemRepository,
                        SubstitutionService substitutionService,
                        DeliveryService deliveryService,
                        OutboxService outboxService,
-                       ApplicationEventPublisher eventPublisher) {
+                       ApplicationEventPublisher eventPublisher,
+                       FulfillmentProperties fulfillmentProperties,
+                       MeterRegistry meterRegistry) {
         this.pickTaskRepository = pickTaskRepository;
         this.pickItemRepository = pickItemRepository;
         this.substitutionService = substitutionService;
         this.deliveryService = deliveryService;
         this.outboxService = outboxService;
         this.eventPublisher = eventPublisher;
+        this.fulfillmentProperties = fulfillmentProperties;
+        this.meterRegistry = meterRegistry;
     }
 
     @Transactional
@@ -235,10 +243,17 @@ public class PickService {
                 "packedAt", task.getCompletedAt(),
                 "note", note == null ? "" : note
             ));
-        deliveryService.assignRider(task)
-            .ifPresentOrElse(
-                delivery -> logger.info("Assigned rider {} for order {}", delivery.riderId(), task.getOrderId()),
-                () -> logger.warn("Order {} packed without rider assignment", task.getOrderId()));
+        if (fulfillmentProperties.getDispatch().isInlineAssignmentEnabled()) {
+            meterRegistry.counter("fulfillment.dispatch.inline_assignment.invoked").increment();
+            logger.warn("Inline rider assignment invoked for order {} (deprecated per ADR-002). "
+                + "Migrate to rider-fleet-service event-driven dispatch.", task.getOrderId());
+            deliveryService.assignRider(task)
+                .ifPresentOrElse(
+                    delivery -> logger.info("Assigned rider {} for order {}", delivery.riderId(), task.getOrderId()),
+                    () -> logger.warn("Order {} packed without inline rider assignment", task.getOrderId()));
+        } else {
+            meterRegistry.counter("fulfillment.dispatch.inline_assignment.skipped").increment();
+        }
     }
 
     private PickItem toPickItem(PickTask task, OrderPlacedItem item) {

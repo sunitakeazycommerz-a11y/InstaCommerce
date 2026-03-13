@@ -6,6 +6,7 @@ import com.instacommerce.fulfillment.repository.RiderRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Deprecated(since = "wave-23", forRemoval = true)
 @Service
 public class RiderAssignmentService {
     private final RiderRepository riderRepository;

@@ -60,6 +60,7 @@ public class DeliveryService {
         this.fulfillmentProperties = fulfillmentProperties;
     }
 
+    @Deprecated(since = "wave-23", forRemoval = true)
     @Transactional
     public Optional<DeliveryResponse> assignRider(PickTask task) {
         Optional<Delivery> existing = deliveryRepository.findByOrderId(task.getOrderId());

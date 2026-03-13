@@ -11,6 +11,7 @@ import com.instacommerce.checkout.dto.PaymentAuthResult;
 import com.instacommerce.checkout.dto.PricingRequest;
 import com.instacommerce.checkout.dto.PricingResult;
 import com.instacommerce.checkout.workflow.activity.CartActivity;
+import com.instacommerce.checkout.workflow.activity.CouponActivity;
 import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
@@ -87,6 +88,20 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 .setInitialInterval(Duration.ofSeconds(1))
                 .setMaximumAttempts(3)
                 .setBackoffCoefficient(2.0)
+                .build())
+            .build());
+
+    private final CouponActivity couponActivity = Workflow.newActivityStub(
+        CouponActivity.class,
+        ActivityOptions.newBuilder()
+            .setStartToCloseTimeout(Duration.ofSeconds(10))
+            .setRetryOptions(RetryOptions.newBuilder()
+                .setInitialInterval(Duration.ofSeconds(1))
+                .setMaximumAttempts(3)
+                .setBackoffCoefficient(2.0)
+                .setDoNotRetry(
+                    "com.instacommerce.pricing.exception.InvalidCouponException",
+                    "com.instacommerce.pricing.exception.CouponNotFoundException")
                 .build())
             .build());
 
@@ -168,6 +183,22 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             );
             OrderCreationResult orderResult = orderActivity.createOrder(orderRequest);
             saga.addCompensation(orderActivity::cancelOrder, orderResult.orderId());
+
+            // Step 5.5: Redeem coupon (if applicable)
+            if (request.couponCode() != null && !request.couponCode().isBlank()
+                    && pricingResult.discountCents() > 0) {
+                currentStatus = "REDEEMING_COUPON";
+                couponActivity.redeemCoupon(
+                    request.couponCode(),
+                    request.userId(),
+                    orderResult.orderId(),
+                    pricingResult.discountCents());
+                saga.addCompensation(
+                    couponActivity::unredeemCoupon,
+                    request.couponCode(),
+                    request.userId(),
+                    orderResult.orderId());
+            }
 
             // Step 6: Confirm inventory reservation + capture payment
             currentStatus = "CONFIRMING";
