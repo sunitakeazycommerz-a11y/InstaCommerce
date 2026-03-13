@@ -37,6 +37,7 @@ jobs:
       go_services: ${{ steps.set-go-matrix.outputs.go_services }}
       changed_go_services: ${{ steps.set-go-matrix.outputs.changed_go_services }}
       cloud_publish_configured: ${{ steps.check-cloud-creds.outputs.configured }}
+      contracts_changed: ${{ steps.filter.outputs.contracts }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -65,6 +66,9 @@ jobs:
             config-feature-flag-service: 'services/config-feature-flag-service/**'
             mobile-bff-service: 'services/mobile-bff-service/**'
             admin-gateway-service: 'services/admin-gateway-service/**'
+            contracts:
+              - 'contracts/src/**'
+              - 'contracts/build.gradle.kts'
             java-shared:
               - 'build.gradle.kts'
               - 'settings.gradle.kts'
@@ -341,8 +345,53 @@ jobs:
         working-directory: services/${{ matrix.service }}
         run: go build ./...
 
+  contract-validation:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.contracts_changed == 'true' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'gradle'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+      - name: Build contracts (proto + schemas)
+        run: ./gradlew :contracts:build --no-daemon
+      - name: Validate JSON event schemas
+        run: |
+          echo "Validating all JSON schema files are well-formed..."
+          find contracts/src/main/resources/schemas -name '*.json' -print0 | while IFS= read -r -d '' file; do
+            if ! python3 -m json.tool "$file" > /dev/null 2>&1; then
+              echo "INVALID JSON: $file"
+              exit 1
+            fi
+          done
+          echo "All JSON schema files are valid."
+      - name: Check for breaking proto changes
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Checking for proto field removals or type changes against base branch..."
+          git diff origin/${{ github.base_ref }}...HEAD -- contracts/src/main/proto/ > /tmp/proto-diff.txt || true
+          if grep -qE '^\-\s+(required|optional|repeated)?\s*(string|int32|int64|bool|bytes|double|float|message|enum)\s+' /tmp/proto-diff.txt 2>/dev/null; then
+            echo "::warning::Potential breaking change detected in proto files. Review the diff carefully."
+            echo "--- Proto diff ---"
+            cat /tmp/proto-diff.txt
+          else
+            echo "No breaking proto field removals detected."
+          fi
+
   deploy-dev:
-    needs: [detect-changes, security-scan, build-test, go-build-test]
+    needs: [detect-changes, security-scan, build-test, go-build-test, contract-validation]
     if: >-
       github.event_name == 'push'
       && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')

@@ -99,6 +99,13 @@ istio:
       jwtRules:
         - issuer: instacommerce-identity
           jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json
+    - name: admin-gateway-service-jwt
+      selector:
+        app: admin-gateway-service
+      jwtRules:
+        - issuer: instacommerce-identity
+          jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json
+          forwardOriginalToken: true
   authorizationPolicies:
     - name: payment-service-internal
       selector:
@@ -112,6 +119,11 @@ istio:
       principals:
         - cluster.local/ns/{{ .Release.Namespace }}/sa/order-service
         - cluster.local/ns/{{ .Release.Namespace }}/sa/fulfillment-service
+    - name: admin-gateway-deny-unauthenticated
+      selector:
+        app: admin-gateway-service
+      principals:
+        - cluster.local/ns/{{ .Release.Namespace }}/sa/istio-ingressgateway
 
 services:
   identity-service:

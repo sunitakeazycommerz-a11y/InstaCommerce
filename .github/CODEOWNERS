@@ -1,0 +1,116 @@
+# =============================================================================
+# InstaCommerce CODEOWNERS
+# =============================================================================
+# Each line is a file pattern followed by one or more owners.
+# Order matters: later rules override earlier ones.
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Default / catch-all
+# ---------------------------------------------------------------------------
+*                                               @instacommerce/platform
+
+# ---------------------------------------------------------------------------
+# Root build & config files
+# ---------------------------------------------------------------------------
+/build.gradle.kts                               @instacommerce/platform
+/settings.gradle.kts                            @instacommerce/platform
+/gradle/                                        @instacommerce/platform
+/gradlew                                        @instacommerce/platform
+/gradlew.bat                                    @instacommerce/platform
+/docker-compose.yml                             @instacommerce/platform @instacommerce/sre
+
+# ---------------------------------------------------------------------------
+# CI / CD & GitHub configuration
+# ---------------------------------------------------------------------------
+/.github/                                       @instacommerce/platform @instacommerce/sre
+/.github/workflows/                             @instacommerce/platform @instacommerce/sre
+/.github/CODEOWNERS                             @instacommerce/platform
+
+# ---------------------------------------------------------------------------
+# Contracts (proto + event schemas) -- cross-team, requires platform review
+# ---------------------------------------------------------------------------
+/contracts/                                     @instacommerce/platform
+
+# ---------------------------------------------------------------------------
+# Deploy / Helm / Infrastructure
+# ---------------------------------------------------------------------------
+/deploy/                                        @instacommerce/sre
+/infra/                                         @instacommerce/sre
+/argocd/                                        @instacommerce/sre
+/monitoring/                                    @instacommerce/sre
+
+# ---------------------------------------------------------------------------
+# Identity cluster
+# ---------------------------------------------------------------------------
+/services/identity-service/                     @instacommerce/identity
+/services/admin-gateway-service/                @instacommerce/identity @instacommerce/platform
+
+# ---------------------------------------------------------------------------
+# Search & Catalog cluster
+# ---------------------------------------------------------------------------
+/services/catalog-service/                      @instacommerce/search-catalog
+/services/search-service/                       @instacommerce/search-catalog
+/services/pricing-service/                      @instacommerce/search-catalog
+
+# ---------------------------------------------------------------------------
+# Order & Checkout cluster
+# ---------------------------------------------------------------------------
+/services/order-service/                        @instacommerce/platform
+/services/cart-service/                         @instacommerce/platform
+/services/checkout-orchestrator-service/        @instacommerce/platform
+/services/inventory-service/                    @instacommerce/platform
+
+# ---------------------------------------------------------------------------
+# Payments cluster
+# ---------------------------------------------------------------------------
+/services/payment-service/                      @instacommerce/payments
+/services/payment-webhook-service/              @instacommerce/payments
+/services/wallet-loyalty-service/               @instacommerce/payments
+/services/reconciliation-engine/                @instacommerce/payments
+
+# ---------------------------------------------------------------------------
+# Logistics / Fulfillment cluster
+# ---------------------------------------------------------------------------
+/services/fulfillment-service/                  @instacommerce/logistics
+/services/warehouse-service/                    @instacommerce/logistics
+/services/rider-fleet-service/                  @instacommerce/logistics
+/services/routing-eta-service/                  @instacommerce/logistics
+/services/dispatch-optimizer-service/           @instacommerce/logistics
+/services/location-ingestion-service/           @instacommerce/logistics
+
+# ---------------------------------------------------------------------------
+# Engagement cluster
+# ---------------------------------------------------------------------------
+/services/notification-service/                 @instacommerce/engagement
+/services/mobile-bff-service/                   @instacommerce/engagement
+
+# ---------------------------------------------------------------------------
+# Platform infrastructure services
+# ---------------------------------------------------------------------------
+/services/audit-trail-service/                  @instacommerce/platform
+/services/fraud-detection-service/              @instacommerce/platform @instacommerce/payments
+/services/config-feature-flag-service/          @instacommerce/platform
+/services/cdc-consumer-service/                 @instacommerce/platform
+/services/outbox-relay-service/                 @instacommerce/platform
+/services/stream-processor-service/             @instacommerce/platform
+/services/go-shared/                            @instacommerce/platform
+
+# ---------------------------------------------------------------------------
+# AI services
+# ---------------------------------------------------------------------------
+/services/ai-orchestrator-service/              @instacommerce/data-ml
+/services/ai-inference-service/                 @instacommerce/data-ml
+
+# ---------------------------------------------------------------------------
+# Data platform & ML
+# ---------------------------------------------------------------------------
+/data-platform/                                 @instacommerce/data-ml
+/data-platform-jobs/                            @instacommerce/data-ml
+/ml/                                            @instacommerce/data-ml
+
+# ---------------------------------------------------------------------------
+# Documentation
+# ---------------------------------------------------------------------------
+/docs/                                          @instacommerce/platform
