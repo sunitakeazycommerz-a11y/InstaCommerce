@@ -1,0 +1,30 @@
+{{- if .Values.istio.denyDefault.enabled }}
+{{- range $name, $policy := .Values.istio.servicePolicies }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-{{ $name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  action: ALLOW
+  rules:
+    {{- range $policy.allowFrom }}
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/{{ $.Release.Namespace }}/sa/{{ . }}"
+    {{- end }}
+    {{- if $policy.allowPaths }}
+    - to:
+        - operation:
+            paths:
+              {{- range $policy.allowPaths }}
+              - {{ . | quote }}
+              {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}
