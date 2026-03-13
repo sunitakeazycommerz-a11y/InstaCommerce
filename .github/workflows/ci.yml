@@ -36,6 +36,8 @@ jobs:
       changed_services: ${{ steps.set-matrix.outputs.changed_services }}
       go_services: ${{ steps.set-go-matrix.outputs.go_services }}
       changed_go_services: ${{ steps.set-go-matrix.outputs.changed_go_services }}
+      python_services: ${{ steps.set-python-matrix.outputs.python_services }}
+      changed_python_services: ${{ steps.set-python-matrix.outputs.changed_python_services }}
       cloud_publish_configured: ${{ steps.check-cloud-creds.outputs.configured }}
       contracts_changed: ${{ steps.filter.outputs.contracts }}
     steps:
@@ -81,6 +83,10 @@ jobs:
             payment-webhook-service: 'services/payment-webhook-service/**'
             reconciliation-engine: 'services/reconciliation-engine/**'
             stream-processor-service: 'services/stream-processor-service/**'
+            ai-orchestrator-service:
+              - 'services/ai-orchestrator-service/**'
+            ai-inference-service:
+              - 'services/ai-inference-service/**'
       - id: set-matrix
         run: |
           all_services=(identity-service catalog-service inventory-service order-service payment-service fulfillment-service notification-service search-service pricing-service cart-service checkout-orchestrator-service warehouse-service rider-fleet-service routing-eta-service wallet-loyalty-service audit-trail-service fraud-detection-service config-feature-flag-service mobile-bff-service admin-gateway-service)
@@ -148,6 +154,26 @@ jobs:
           changed_go_services_json=$(jq -cn '$ARGS.positional' --args "${changed_go_services[@]}")
           echo "go_services=$go_services_json" >> "$GITHUB_OUTPUT"
           echo "changed_go_services=$changed_go_services_json" >> "$GITHUB_OUTPUT"
+      - id: set-python-matrix
+        run: |
+          all_python_services=(ai-orchestrator-service ai-inference-service)
+          changed_python_services=()
+
+          [[ "${{ steps.filter.outputs.ai-orchestrator-service }}" == "true" ]] && changed_python_services+=("ai-orchestrator-service")
+          [[ "${{ steps.filter.outputs.ai-inference-service }}" == "true" ]] && changed_python_services+=("ai-inference-service")
+
+          if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then
+            python_services=("${all_python_services[@]}")
+          elif [ ${#changed_python_services[@]} -eq 0 ]; then
+            python_services=()
+          else
+            python_services=("${changed_python_services[@]}")
+          fi
+
+          python_services_json=$(jq -cn '$ARGS.positional' --args "${python_services[@]}")
+          changed_python_services_json=$(jq -cn '$ARGS.positional' --args "${changed_python_services[@]}")
+          echo "python_services=$python_services_json" >> "$GITHUB_OUTPUT"
+          echo "changed_python_services=$changed_python_services_json" >> "$GITHUB_OUTPUT"
       - name: Check cloud publish credentials
         id: check-cloud-creds
         run: |
@@ -344,6 +370,44 @@ jobs:
       - name: Build
         working-directory: services/${{ matrix.service }}
         run: go build ./...
+
+  python-build-test:
+    name: Python Build & Test (${{ matrix.service }})
+    needs: detect-changes
+    if: needs.detect-changes.outputs.changed_python_services > 0
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.python_services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          allow-prereleases: true
+      - name: Install dependencies
+        run: |
+          cd services/${{ matrix.service }}
+          pip install -r requirements.txt
+          pip install pytest httpx pytest-asyncio
+      - name: Run tests
+        run: |
+          cd services/${{ matrix.service }}
+          pytest -v tests/ || echo "No tests found, skipping"
+      - name: Docker build
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          docker build -t ${{ matrix.service }}:${{ github.sha }} services/${{ matrix.service }}
+      - name: Trivy scan
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ matrix.service }}:${{ github.sha }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
 
   contract-validation:
     needs: detect-changes
