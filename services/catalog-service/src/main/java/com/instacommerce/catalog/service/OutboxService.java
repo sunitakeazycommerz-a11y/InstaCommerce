@@ -9,6 +9,7 @@ import com.instacommerce.catalog.event.ProductChangedEvent;
 import com.instacommerce.catalog.repository.OutboxEventRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
+import org.slf4j.MDC;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -43,6 +44,7 @@ public class OutboxService {
         outboxEvent.setAggregateId(product.getId().toString());
         outboxEvent.setEventType(eventType);
         outboxEvent.setPayload(writePayload(event));
+        outboxEvent.setCorrelationId(resolveCorrelationId(null));
         outboxEventRepository.save(outboxEvent);
     }
 
@@ -57,9 +59,45 @@ public class OutboxService {
             .orElseGet(() -> product.getImages().get(0).getUrl());
     }
 
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publish(String aggregateType, String aggregateId, String eventType, Object payload) {
+        publish(aggregateType, aggregateId, eventType, payload, null);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void publish(String aggregateType, String aggregateId, String eventType,
+                        Object payload, String correlationId) {
+        OutboxEvent outboxEvent = new OutboxEvent();
+        outboxEvent.setAggregateType(aggregateType);
+        outboxEvent.setAggregateId(aggregateId);
+        outboxEvent.setEventType(eventType);
+        outboxEvent.setPayload(writePayload(payload));
+        outboxEvent.setCorrelationId(resolveCorrelationId(correlationId));
+        outboxEventRepository.save(outboxEvent);
+    }
+
+    private String resolveCorrelationId(String explicit) {
+        if (explicit != null && !explicit.isBlank()) {
+            return explicit;
+        }
+        String fromMdc = MDC.get("correlationId");
+        if (fromMdc != null && !fromMdc.isBlank()) {
+            return fromMdc;
+        }
+        return MDC.get("X-Correlation-ID");
+    }
+
     private String writePayload(ProductChangedEvent event) {
         try {
             return objectMapper.writeValueAsString(event);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to serialize outbox event", ex);
+        }
+    }
+
+    private String writePayload(Object payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Failed to serialize outbox event", ex);
         }
