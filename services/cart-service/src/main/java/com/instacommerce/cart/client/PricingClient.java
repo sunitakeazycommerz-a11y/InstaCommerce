@@ -45,7 +45,7 @@ public class PricingClient {
     public PriceResponse getPrice(UUID productId) {
         try {
             PriceResponse response = restTemplate.getForObject(
-                    baseUrl + "/api/v1/prices/{productId}", PriceResponse.class, productId);
+                    baseUrl + "/pricing/products/{productId}", PriceResponse.class, productId);
             if (response == null) {
                 throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
                         "Pricing service returned null for product: " + productId);

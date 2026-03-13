@@ -20,6 +20,6 @@ public class PricingActivityImpl implements PricingActivity {
     @Override
     public PricingResult calculatePrice(PricingRequest request) {
         log.info("Calculating price for user={}", request.userId());
-        return restTemplate.postForObject("/api/pricing/calculate", request, PricingResult.class);
+        return restTemplate.postForObject("/pricing/calculate", request, PricingResult.class);
     }
 }
