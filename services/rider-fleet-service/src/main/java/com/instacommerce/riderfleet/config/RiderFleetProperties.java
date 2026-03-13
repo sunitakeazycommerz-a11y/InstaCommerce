@@ -7,6 +7,7 @@ public class RiderFleetProperties {
     private final Jwt jwt = new Jwt();
     private final Assignment assignment = new Assignment();
     private final Recovery recovery = new Recovery();
+    private final Dispatch dispatch = new Dispatch();
 
     public Jwt getJwt() {
         return jwt;
@@ -18,6 +19,10 @@ public class RiderFleetProperties {
 
     public Recovery getRecovery() {
         return recovery;
+    }
+
+    public Dispatch getDispatch() {
+        return dispatch;
     }
 
     public static class Jwt {
@@ -89,6 +94,27 @@ public class RiderFleetProperties {
 
         public void setStuckRiderCron(String stuckRiderCron) {
             this.stuckRiderCron = stuckRiderCron;
+        }
+    }
+
+    public static class Dispatch {
+        private boolean optimizerEnabled = false;
+        private String optimizerBaseUrl = "http://dispatch-optimizer-service:8102";
+
+        public boolean isOptimizerEnabled() {
+            return optimizerEnabled;
+        }
+
+        public void setOptimizerEnabled(boolean optimizerEnabled) {
+            this.optimizerEnabled = optimizerEnabled;
+        }
+
+        public String getOptimizerBaseUrl() {
+            return optimizerBaseUrl;
+        }
+
+        public void setOptimizerBaseUrl(String optimizerBaseUrl) {
+            this.optimizerBaseUrl = optimizerBaseUrl;
         }
     }
 }

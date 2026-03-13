@@ -54,4 +54,4 @@ admin-gateway:
 internal:
   service:
     name: ${spring.application.name}
-    token: ${INTERNAL_SERVICE_TOKEN:dev-internal-token-change-in-prod}
+    token: ${INTERNAL_SERVICE_TOKEN}
