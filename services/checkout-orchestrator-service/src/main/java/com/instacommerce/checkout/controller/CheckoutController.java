@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.checkout.domain.CheckoutIdempotencyKey;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
-import com.instacommerce.checkout.dto.ErrorDetail;
 import com.instacommerce.checkout.exception.CheckoutException;
 import com.instacommerce.checkout.repository.CheckoutIdempotencyKeyRepository;
 import com.instacommerce.checkout.workflow.CheckoutWorkflow;
@@ -16,8 +15,6 @@ import io.temporal.client.WorkflowOptions;
 import jakarta.validation.Valid;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -100,7 +97,16 @@ public class CheckoutController {
         try {
             result = workflow.checkout(request);
         } catch (WorkflowExecutionAlreadyStarted ex) {
-            throw buildDuplicateCheckoutException(workflowId, ex);
+            log.warn("Duplicate checkout workflow detected, returning existing workflowId={}", workflowId);
+            String existingStatus = "UNKNOWN";
+            try {
+                CheckoutWorkflow existingWorkflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
+                existingStatus = existingWorkflow.getStatus();
+            } catch (WorkflowException statusEx) {
+                log.warn("Failed to query existing checkout workflow status workflowId={}", workflowId, statusEx);
+            }
+            return ResponseEntity.accepted().body(
+                new CheckoutResponse(null, "CHECKOUT_ALREADY_IN_PROGRESS: " + existingStatus, 0, 0));
         }
 
         // Persist idempotency key with response for durable duplicate detection
@@ -117,27 +123,6 @@ public class CheckoutController {
         CheckoutWorkflow workflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
         String status = workflow.getStatus();
         return ResponseEntity.ok(Map.of("workflowId", workflowId, "status", status));
-    }
-
-    private CheckoutException buildDuplicateCheckoutException(String workflowId, WorkflowExecutionAlreadyStarted cause) {
-        String statusPath = "/checkout/" + workflowId + "/status";
-        List<ErrorDetail> details = new ArrayList<>();
-        details.add(new ErrorDetail("workflowId", workflowId));
-        try {
-            CheckoutWorkflow existingWorkflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
-            details.add(new ErrorDetail("status", existingWorkflow.getStatus()));
-        } catch (WorkflowException statusLookupFailure) {
-            log.warn("Failed to query live checkout workflow status workflowId={}", workflowId, statusLookupFailure);
-            details.add(new ErrorDetail("statusLookupError", statusLookupFailure.getClass().getSimpleName()));
-        }
-        details.add(new ErrorDetail("statusPath", statusPath));
-        return new CheckoutException(
-            "CHECKOUT_ALREADY_IN_PROGRESS",
-            "Checkout already in progress for this idempotency key. Query " + statusPath + " for live status.",
-            HttpStatus.CONFLICT,
-            details,
-            cause
-        );
     }
 
     private String serializeResponse(CheckoutResponse response) {

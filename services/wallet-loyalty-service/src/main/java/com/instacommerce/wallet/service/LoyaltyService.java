@@ -45,7 +45,7 @@ public class LoyaltyService {
 
     @Transactional
     public LoyaltyResponse earnPoints(UUID userId, String orderId, long orderTotalCents) {
-        LoyaltyAccount account = accountRepository.findByUserId(userId)
+        LoyaltyAccount account = accountRepository.findByUserIdForUpdate(userId)
             .orElseGet(() -> createAccount(userId));
 
         int pointsPerRupee = walletProperties.getLoyalty().getPointsPerRupee();
@@ -79,7 +79,7 @@ public class LoyaltyService {
 
     @Transactional
     public LoyaltyResponse redeemPoints(UUID userId, int points) {
-        LoyaltyAccount account = accountRepository.findByUserId(userId)
+        LoyaltyAccount account = accountRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "LOYALTY_ACCOUNT_NOT_FOUND",
                 "Loyalty account not found for user: " + userId));
 

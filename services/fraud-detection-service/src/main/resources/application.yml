@@ -42,6 +42,7 @@ spring:
     type: caffeine
 
 fraud:
+  operational-mode: ${FRAUD_OPERATIONAL_MODE:AUTO_BLOCK}
   jwt:
     issuer: ${FRAUD_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${FRAUD_JWT_PUBLIC_KEY}}
