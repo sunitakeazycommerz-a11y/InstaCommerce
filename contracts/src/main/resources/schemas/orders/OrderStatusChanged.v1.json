@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OrderStatusChanged",
+  "type": "object",
+  "required": ["orderId", "from", "to"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "from": { "type": "string" },
+    "to": { "type": "string" }
+  }
+}
