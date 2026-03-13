@@ -10,7 +10,7 @@ public class NotificationProperties {
     private final Order order = new Order();
     private final Delivery delivery = new Delivery();
     private final Retry retry = new Retry();
-    private String dlqTopic = "notifications.dlq";
+    private String dltTopic = "notifications.DLT";
 
     public Providers getProviders() {
         return providers;
@@ -32,12 +32,12 @@ public class NotificationProperties {
         return retry;
     }
 
-    public String getDlqTopic() {
-        return dlqTopic;
+    public String getDltTopic() {
+        return dltTopic;
     }
 
-    public void setDlqTopic(String dlqTopic) {
-        this.dlqTopic = dlqTopic;
+    public void setDltTopic(String dltTopic) {
+        this.dltTopic = dltTopic;
     }
 
     public static class Providers {

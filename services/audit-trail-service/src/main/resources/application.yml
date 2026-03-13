@@ -52,7 +52,7 @@ audit:
   partition:
     retention-days: ${AUDIT_PARTITION_RETENTION_DAYS:365}
     future-months: ${AUDIT_PARTITION_FUTURE_MONTHS:3}
-  dlq-topic: ${AUDIT_DLQ_TOPIC:audit.dlq}
+  dlt-topic: ${AUDIT_DLT_TOPIC:audit.DLT}
 
 management:
   tracing:
