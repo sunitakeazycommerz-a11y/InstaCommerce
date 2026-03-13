@@ -2,6 +2,7 @@ package com.instacommerce.audit.repository;
 
 import com.instacommerce.audit.domain.model.AuditEvent;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -28,4 +29,9 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, UUID>,
             Pageable pageable);
 
     Page<AuditEvent> findByEventType(String eventType, Pageable pageable);
+
+    @Query("SELECT a FROM AuditEvent a WHERE a.sequenceNumber IS NOT NULL " +
+           "AND (:from IS NULL OR a.createdAt >= :from) " +
+           "AND (:to IS NULL OR a.createdAt < :to) ORDER BY a.sequenceNumber ASC")
+    List<AuditEvent> findChainedEvents(@Param("from") Instant from, @Param("to") Instant to, Pageable pageable);
 }

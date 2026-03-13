@@ -55,6 +55,15 @@ public class AuditEvent {
     @Column(name = "correlation_id", length = 64, updatable = false)
     private String correlationId;
 
+    @Column(name = "sequence_number", updatable = false)
+    private Long sequenceNumber;
+
+    @Column(name = "event_hash", length = 64, updatable = false)
+    private String eventHash;
+
+    @Column(name = "previous_hash", length = 64, updatable = false)
+    private String previousHash;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -74,6 +83,9 @@ public class AuditEvent {
         this.ipAddress = builder.ipAddress;
         this.userAgent = builder.userAgent;
         this.correlationId = builder.correlationId;
+        this.sequenceNumber = builder.sequenceNumber;
+        this.eventHash = builder.eventHash;
+        this.previousHash = builder.previousHash;
         this.createdAt = builder.createdAt != null ? builder.createdAt : Instant.now();
     }
 
@@ -128,6 +140,10 @@ public class AuditEvent {
     public String getCorrelationId() {
         return correlationId;
     }
+
+    public Long getSequenceNumber() { return sequenceNumber; }
+    public String getEventHash() { return eventHash; }
+    public String getPreviousHash() { return previousHash; }
 
     public Instant getCreatedAt() {
         return createdAt;
