@@ -200,13 +200,28 @@ class ModelRegistry:
     # ------------------------------------------------------------------
 
     def status(self) -> Dict[str, Any]:
-        """Aggregate health status of all registered models."""
+        """Aggregate health status of all registered models.
+
+        Each model entry now includes an ``integrity_verified`` flag
+        that indicates whether the model's artifacts passed SHA-256
+        checksum verification at load time.
+        """
+        from pathlib import Path
+
+        from .integrity import CHECKSUM_FILENAME
+
         model_status: Dict[str, Any] = {}
         for name, predictor in self._models.items():
             entry = predictor.health()
             entry["killed"] = self.is_killed(name)
             entry["has_shadow"] = name in self._shadow
             entry["ab_routing"] = self._ab_routing.get(name)
+            # Integrity: check whether a CHECKSUMS.sha256 manifest exists
+            checksums_present = (predictor.model_dir / CHECKSUM_FILENAME).exists()
+            entry["integrity_checksums_present"] = checksums_present
+            entry["integrity_verified"] = (
+                checksums_present and predictor.status != ModelStatus.FAILED
+            )
             model_status[name] = entry
 
         return {

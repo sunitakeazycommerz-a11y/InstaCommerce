@@ -73,7 +73,19 @@ class BasePredictor(ABC):
         Returns ``True`` if the model loaded successfully.  On failure the
         predictor enters ``DEGRADED`` status and all subsequent ``predict``
         calls should delegate to ``rule_based_fallback``.
+
+        Before loading, verifies the integrity of model artifacts using
+        SHA-256 checksums when a CHECKSUMS.sha256 manifest is present.
         """
+        # Verify artifact integrity before loading
+        if not self._verify_integrity(self.model_dir):
+            logger.error(
+                "Model integrity check failed, refusing to load",
+                extra={"model": self.model_name, "dir": str(self.model_dir)},
+            )
+            self.status = ModelStatus.FAILED
+            return False
+
         try:
             start = time.monotonic()
             self._load_model(version)
@@ -95,6 +107,11 @@ class BasePredictor(ABC):
             )
             self.status = ModelStatus.DEGRADED
             return False
+
+    def _verify_integrity(self, model_dir: Path) -> bool:
+        """Verify model artifact checksums before loading."""
+        from ml.serving.integrity import verify_model_integrity
+        return verify_model_integrity(model_dir, self.metadata.name)
 
     def health(self) -> Dict[str, Any]:
         """Return a lightweight health-check payload."""
