@@ -8,6 +8,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.instacommerce.fulfillment.client.StoreCoordinates;
+import com.instacommerce.fulfillment.client.WarehouseClient;
 import com.instacommerce.fulfillment.config.FulfillmentProperties;
 import com.instacommerce.fulfillment.domain.model.PickItem;
 import com.instacommerce.fulfillment.domain.model.PickItemStatus;
@@ -17,13 +19,17 @@ import com.instacommerce.fulfillment.dto.response.DeliveryResponse;
 import com.instacommerce.fulfillment.repository.PickItemRepository;
 import com.instacommerce.fulfillment.repository.PickTaskRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -49,6 +55,12 @@ class PickServiceDispatchTest {
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
+    @Mock
+    private WarehouseClient warehouseClient;
+
+    @Captor
+    private ArgumentCaptor<Map<String, Object>> payloadCaptor;
+
     private FulfillmentProperties fulfillmentProperties;
     private SimpleMeterRegistry meterRegistry;
 
@@ -56,6 +68,8 @@ class PickServiceDispatchTest {
     void setUp() {
         fulfillmentProperties = new FulfillmentProperties();
         meterRegistry = new SimpleMeterRegistry();
+        when(warehouseClient.getStoreCoordinates(anyString()))
+            .thenReturn(new StoreCoordinates(new BigDecimal("12.9716"), new BigDecimal("77.5946")));
     }
 
     @Test
@@ -63,7 +77,7 @@ class PickServiceDispatchTest {
         PickService pickService = new PickService(
             pickTaskRepository, pickItemRepository, substitutionService,
             deliveryService, outboxService, eventPublisher,
-            fulfillmentProperties, meterRegistry);
+            fulfillmentProperties, meterRegistry, warehouseClient);
 
         PickTask task = buildCompletableTask();
         when(pickTaskRepository.findByOrderId(task.getOrderId())).thenReturn(Optional.of(task));
@@ -73,7 +87,10 @@ class PickServiceDispatchTest {
         pickService.markPacked(task.getOrderId(), UUID.randomUUID(), "test-note");
 
         verify(outboxService).publish(eq("Fulfillment"), eq(task.getOrderId().toString()),
-            eq("OrderPacked"), any());
+            eq("OrderPacked"), payloadCaptor.capture());
+        Map<String, Object> payload = payloadCaptor.getValue();
+        assertThat(payload).containsEntry("pickupLat", new BigDecimal("12.9716"));
+        assertThat(payload).containsEntry("pickupLng", new BigDecimal("77.5946"));
         verify(deliveryService, never()).assignRider(any(PickTask.class));
         assertThat(skippedCount()).isOne();
         assertThat(invokedCount()).isZero();
@@ -85,7 +102,7 @@ class PickServiceDispatchTest {
         PickService pickService = new PickService(
             pickTaskRepository, pickItemRepository, substitutionService,
             deliveryService, outboxService, eventPublisher,
-            fulfillmentProperties, meterRegistry);
+            fulfillmentProperties, meterRegistry, warehouseClient);
 
         PickTask task = buildCompletableTask();
         when(pickTaskRepository.findByOrderId(task.getOrderId())).thenReturn(Optional.of(task));
@@ -98,7 +115,10 @@ class PickServiceDispatchTest {
         pickService.markPacked(task.getOrderId(), UUID.randomUUID(), "test-note");
 
         verify(outboxService).publish(eq("Fulfillment"), eq(task.getOrderId().toString()),
-            eq("OrderPacked"), any());
+            eq("OrderPacked"), payloadCaptor.capture());
+        Map<String, Object> payload = payloadCaptor.getValue();
+        assertThat(payload).containsEntry("pickupLat", new BigDecimal("12.9716"));
+        assertThat(payload).containsEntry("pickupLng", new BigDecimal("77.5946"));
         verify(deliveryService).assignRider(any(PickTask.class));
         assertThat(invokedCount()).isOne();
         assertThat(skippedCount()).isZero();

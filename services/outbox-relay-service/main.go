@@ -88,6 +88,9 @@ type outboxEvent struct {
 	EventType     string
 	Payload       []byte
 	CreatedAt     time.Time
+	SourceService string
+	CorrelationID string
+	SchemaVersion string
 }
 
 type errorResponse struct {
@@ -408,7 +411,10 @@ func newRelayMetrics(meter metric.Meter) (relayMetrics, error) {
 
 func newRelayService(cfg Config, logger *slog.Logger, db *pgxpool.Pool, producer sarama.SyncProducer, kafkaConfig *sarama.Config, tracer trace.Tracer, metrics relayMetrics) (*relayService, error) {
 	table := pgx.Identifier{cfg.OutboxTable}.Sanitize()
-	selectSQL := fmt.Sprintf(`SELECT id::text, aggregate_type, aggregate_id, event_type, payload, created_at
+	selectSQL := fmt.Sprintf(`SELECT id::text, aggregate_type, aggregate_id, event_type, payload, created_at,
+    COALESCE(source_service, '') AS source_service,
+    COALESCE(correlation_id, '') AS correlation_id,
+    COALESCE(schema_version, 'v1') AS schema_version
 FROM %s
 WHERE sent = false
 ORDER BY created_at
@@ -481,7 +487,7 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 	events := make([]outboxEvent, 0, s.cfg.BatchSize)
 	for rows.Next() {
 		var evt outboxEvent
-		if err := rows.Scan(&evt.ID, &evt.AggregateType, &evt.AggregateID, &evt.EventType, &evt.Payload, &evt.CreatedAt); err != nil {
+		if err := rows.Scan(&evt.ID, &evt.AggregateType, &evt.AggregateID, &evt.EventType, &evt.Payload, &evt.CreatedAt, &evt.SourceService, &evt.CorrelationID, &evt.SchemaVersion); err != nil {
 			span.RecordError(err)
 			return s.fail(ctx, err)
 		}
@@ -525,6 +531,8 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 				{Key: []byte("event_type"), Value: []byte(evt.EventType)},
 				{Key: []byte("aggregate_type"), Value: []byte(evt.AggregateType)},
 				{Key: []byte("schema_version"), Value: []byte("v1")},
+				{Key: []byte("source_service"), Value: []byte(evt.SourceService)},
+				{Key: []byte("correlation_id"), Value: []byte(evt.CorrelationID)},
 			},
 		}
 
@@ -782,15 +790,24 @@ func buildEventMessage(evt outboxEvent) []byte {
 		return evt.Payload
 	}
 
+	schemaVersion := evt.SchemaVersion
+	if schemaVersion == "" {
+		schemaVersion = "v1"
+	}
+
 	envelope := map[string]any{
-		"id":            evt.ID,
-		"eventId":       evt.ID,
-		"aggregateType": evt.AggregateType,
-		"aggregateId":   evt.AggregateID,
-		"eventType":     evt.EventType,
-		"eventTime":     evt.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"schemaVersion": "v1",
-		"payload":       payload,
+		"id":             evt.ID,
+		"eventId":        evt.ID,
+		"aggregateType":  evt.AggregateType,
+		"aggregateId":    evt.AggregateID,
+		"eventType":      evt.EventType,
+		"eventTime":      evt.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"schemaVersion":  schemaVersion,
+		"source_service": evt.SourceService,
+		"payload":        payload,
+	}
+	if evt.CorrelationID != "" {
+		envelope["correlation_id"] = evt.CorrelationID
 	}
 	if payloadMap, ok := payload.(map[string]any); ok {
 		for key, value := range payloadMap {

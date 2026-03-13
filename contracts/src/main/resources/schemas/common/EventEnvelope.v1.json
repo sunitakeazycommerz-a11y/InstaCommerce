@@ -9,6 +9,7 @@
     "aggregateId",
     "eventTime",
     "schemaVersion",
+    "source_service",
     "payload"
   ],
   "properties": {
@@ -19,6 +20,8 @@
     "aggregateId": { "type": "string" },
     "eventTime": { "type": "string", "format": "date-time" },
     "schemaVersion": { "type": "string", "const": "v1" },
+    "source_service": { "type": "string", "minLength": 1 },
+    "correlation_id": { "type": "string" },
     "payload": {
       "type": [
         "object",

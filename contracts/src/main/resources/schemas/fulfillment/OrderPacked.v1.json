@@ -7,6 +7,8 @@
     "orderId": { "type": "string", "format": "uuid" },
     "userId": { "type": "string", "format": "uuid" },
     "storeId": { "type": "string" },
-    "packedAt": { "type": "string", "format": "date-time" }
+    "packedAt": { "type": "string", "format": "date-time" },
+    "pickupLat": { "type": "number", "description": "Latitude of the pickup store location" },
+    "pickupLng": { "type": "number", "description": "Longitude of the pickup store location" }
   }
 }

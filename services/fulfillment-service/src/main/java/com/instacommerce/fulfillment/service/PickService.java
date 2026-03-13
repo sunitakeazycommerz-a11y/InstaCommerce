@@ -1,5 +1,7 @@
 package com.instacommerce.fulfillment.service;
 
+import com.instacommerce.fulfillment.client.StoreCoordinates;
+import com.instacommerce.fulfillment.client.WarehouseClient;
 import com.instacommerce.fulfillment.config.FulfillmentProperties;
 import com.instacommerce.fulfillment.consumer.OrderPlacedItem;
 import com.instacommerce.fulfillment.consumer.OrderPlacedPayload;
@@ -18,7 +20,9 @@ import com.instacommerce.fulfillment.exception.PickTaskNotFoundException;
 import com.instacommerce.fulfillment.repository.PickItemRepository;
 import com.instacommerce.fulfillment.repository.PickTaskRepository;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -41,6 +45,7 @@ public class PickService {
     private final ApplicationEventPublisher eventPublisher;
     private final FulfillmentProperties fulfillmentProperties;
     private final MeterRegistry meterRegistry;
+    private final WarehouseClient warehouseClient;
 
     public PickService(PickTaskRepository pickTaskRepository,
                        PickItemRepository pickItemRepository,
@@ -49,7 +54,8 @@ public class PickService {
                        OutboxService outboxService,
                        ApplicationEventPublisher eventPublisher,
                        FulfillmentProperties fulfillmentProperties,
-                       MeterRegistry meterRegistry) {
+                       MeterRegistry meterRegistry,
+                       WarehouseClient warehouseClient) {
         this.pickTaskRepository = pickTaskRepository;
         this.pickItemRepository = pickItemRepository;
         this.substitutionService = substitutionService;
@@ -58,6 +64,7 @@ public class PickService {
         this.eventPublisher = eventPublisher;
         this.fulfillmentProperties = fulfillmentProperties;
         this.meterRegistry = meterRegistry;
+        this.warehouseClient = warehouseClient;
     }
 
     @Transactional
@@ -235,14 +242,21 @@ public class PickService {
 
     private void publishPacked(PickTask task, String note) {
         eventPublisher.publishEvent(new OrderStatusUpdateEvent(task.getOrderId(), "PACKED", "order-packed"));
-        outboxService.publish("Fulfillment", task.getOrderId().toString(), "OrderPacked",
-            java.util.Map.of(
-                "orderId", task.getOrderId(),
-                "userId", task.getUserId(),
-                "storeId", task.getStoreId(),
-                "packedAt", task.getCompletedAt(),
-                "note", note == null ? "" : note
-            ));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", task.getOrderId());
+        payload.put("userId", task.getUserId());
+        payload.put("storeId", task.getStoreId());
+        payload.put("packedAt", task.getCompletedAt());
+        payload.put("note", note == null ? "" : note);
+        StoreCoordinates coords = warehouseClient.getStoreCoordinates(task.getStoreId().toString());
+        if (coords != null) {
+            payload.put("pickupLat", coords.latitude());
+            payload.put("pickupLng", coords.longitude());
+        } else {
+            logger.warn("Could not resolve pickup coordinates for store {} (order {})",
+                    task.getStoreId(), task.getOrderId());
+        }
+        outboxService.publish("Fulfillment", task.getOrderId().toString(), "OrderPacked", payload);
         if (fulfillmentProperties.getDispatch().isInlineAssignmentEnabled()) {
             meterRegistry.counter("fulfillment.dispatch.inline_assignment.invoked").increment();
             logger.warn("Inline rider assignment invoked for order {} (deprecated per ADR-002). "
