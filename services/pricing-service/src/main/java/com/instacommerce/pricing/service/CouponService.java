@@ -108,8 +108,26 @@ public class CouponService {
         // Increment counter atomically
         coupon.setTotalRedeemed(coupon.getTotalRedeemed() + 1);
         couponRepository.save(coupon);
+        promotionService.recordPromotionUsage(coupon.getPromotion().getId());
 
         log.info("Redeemed coupon code={} userId={} orderId={} discount={}", code, userId, orderId, discountCents);
+    }
+
+    @Transactional
+    public void unredeemCoupon(String code, UUID userId, UUID orderId) {
+        Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)
+                .orElseThrow(() -> new CouponNotFoundException(code));
+
+        couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(coupon.getId(), userId, orderId)
+                .ifPresent(redemption -> {
+                    couponRedemptionRepository.delete(redemption);
+                    if (coupon.getTotalRedeemed() > 0) {
+                        coupon.setTotalRedeemed(coupon.getTotalRedeemed() - 1);
+                        couponRepository.save(coupon);
+                    }
+                    promotionService.rollbackPromotionUsage(coupon.getPromotion().getId());
+                    log.info("Un-redeemed coupon code={} userId={} orderId={}", code, userId, orderId);
+                });
     }
 
     @Transactional

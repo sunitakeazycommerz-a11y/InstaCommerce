@@ -1,8 +1,11 @@
 package com.instacommerce.pricing.controller;
 
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
+import com.instacommerce.pricing.dto.request.RedeemCouponRequest;
+import com.instacommerce.pricing.dto.request.UnredeemCouponRequest;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
+import com.instacommerce.pricing.service.CouponService;
 import com.instacommerce.pricing.service.PricingService;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
@@ -21,9 +24,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class PricingController {
 
     private final PricingService pricingService;
+    private final CouponService couponService;
 
-    public PricingController(PricingService pricingService) {
+    public PricingController(PricingService pricingService, CouponService couponService) {
         this.pricingService = pricingService;
+        this.couponService = couponService;
     }
 
     @PostMapping("/calculate")
@@ -40,5 +45,19 @@ public class PricingController {
         long priceCents = pricingService.calculatePrice(id);
         PricedItem item = new PricedItem(id, priceCents, 1, priceCents);
         return ResponseEntity.ok(item);
+    }
+
+    @PostMapping("/coupons/redeem")
+    @RateLimiter(name = "pricingLimiter")
+    public ResponseEntity<Void> redeemCoupon(@Valid @RequestBody RedeemCouponRequest request) {
+        couponService.redeemCoupon(request.code(), request.userId(), request.orderId(), request.discountCents());
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/coupons/unredeem")
+    @RateLimiter(name = "pricingLimiter")
+    public ResponseEntity<Void> unredeemCoupon(@Valid @RequestBody UnredeemCouponRequest request) {
+        couponService.unredeemCoupon(request.code(), request.userId(), request.orderId());
+        return ResponseEntity.ok().build();
     }
 }

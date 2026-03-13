@@ -108,6 +108,23 @@ public class PromotionService {
 
     @CacheEvict(value = "activePromotions", allEntries = true)
     @Transactional
+    public boolean recordPromotionUsage(UUID promotionId) {
+        int updated = promotionRepository.incrementUsage(promotionId);
+        if (updated == 0) {
+            log.warn("Promotion usage increment failed (limit reached or not found): {}", promotionId);
+            return false;
+        }
+        return true;
+    }
+
+    @CacheEvict(value = "activePromotions", allEntries = true)
+    @Transactional
+    public void rollbackPromotionUsage(UUID promotionId) {
+        promotionRepository.decrementUsage(promotionId);
+    }
+
+    @CacheEvict(value = "activePromotions", allEntries = true)
+    @Transactional
     public void delete(UUID id) {
         Promotion p = promotionRepository.findById(id)
                 .orElseThrow(() -> new PromotionNotFoundException(id.toString()));
