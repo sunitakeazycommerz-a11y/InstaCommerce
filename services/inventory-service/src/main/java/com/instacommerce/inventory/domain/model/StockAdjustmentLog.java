@@ -20,8 +20,8 @@ public class StockAdjustmentLog {
     @Column(name = "product_id", nullable = false)
     private UUID productId;
 
-    @Column(name = "store_id", nullable = false)
-    private String storeId;
+    @Column(name = "store_id", nullable = false, columnDefinition = "uuid")
+    private UUID storeId;
 
     @Column(name = "delta", nullable = false)
     private int delta;
@@ -61,11 +61,11 @@ public class StockAdjustmentLog {
         this.productId = productId;
     }
 
-    public String getStoreId() {
+    public UUID getStoreId() {
         return storeId;
     }
 
-    public void setStoreId(String storeId) {
+    public void setStoreId(UUID storeId) {
         this.storeId = storeId;
     }
 

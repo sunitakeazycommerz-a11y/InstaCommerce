@@ -22,8 +22,8 @@ public class StockItem {
     @Column(name = "product_id", nullable = false)
     private UUID productId;
 
-    @Column(name = "store_id", nullable = false)
-    private String storeId;
+    @Column(name = "store_id", nullable = false, columnDefinition = "uuid")
+    private UUID storeId;
 
     @Column(name = "on_hand", nullable = false)
     private int onHand;
@@ -65,11 +65,11 @@ public class StockItem {
         this.productId = productId;
     }
 
-    public String getStoreId() {
+    public UUID getStoreId() {
         return storeId;
     }
 
-    public void setStoreId(String storeId) {
+    public void setStoreId(UUID storeId) {
         this.storeId = storeId;
     }
 
