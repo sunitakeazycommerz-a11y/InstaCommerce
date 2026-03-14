@@ -78,7 +78,7 @@ public class LoyaltyService {
     }
 
     @Transactional
-    public LoyaltyResponse redeemPoints(UUID userId, int points) {
+    public LoyaltyResponse redeemPoints(UUID userId, int points, String orderId) {
         LoyaltyAccount account = accountRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "LOYALTY_ACCOUNT_NOT_FOUND",
                 "Loyalty account not found for user: " + userId));
@@ -96,8 +96,12 @@ public class LoyaltyService {
         txn.setType(LoyaltyTransaction.Type.REDEEM);
         txn.setPoints(points);
         txn.setReferenceType("REDEMPTION");
-        txn.setReferenceId(UUID.randomUUID().toString());
-        transactionRepository.save(txn);
+        txn.setReferenceId(orderId);
+        try {
+            transactionRepository.save(txn);
+        } catch (DataIntegrityViolationException ex) {
+            throw new DuplicateTransactionException("Transaction already exists for ref=REDEMPTION/" + orderId);
+        }
 
         log.info("Redeemed {} points for user={}", points, userId);
         outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed", txn.getId());

@@ -9,6 +9,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.util.UUID;
 
 @Entity
@@ -40,6 +41,9 @@ public class Coupon {
 
     @Column(nullable = false)
     private boolean active = true;
+
+    @Version
+    private long version;
 
     public UUID getId() {
         return id;
@@ -103,5 +107,13 @@ public class Coupon {
 
     public void setActive(boolean active) {
         this.active = active;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
     }
 }
