@@ -8,7 +8,7 @@ import java.util.UUID;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record StockAdjustRequest(
     @NotNull UUID productId,
-    @NotBlank String storeId,
+    @NotNull UUID storeId,
     @NotNull Integer delta,
     @NotBlank String reason,
     String referenceId

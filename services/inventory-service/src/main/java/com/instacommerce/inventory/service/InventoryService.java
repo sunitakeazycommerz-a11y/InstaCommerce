@@ -100,7 +100,7 @@ public class InventoryService {
         log.setActorId(actorId);
         stockAdjustmentLogRepository.save(log);
         Map<String, Object> details = new LinkedHashMap<>();
-        details.put("storeId", request.storeId());
+        details.put("storeId", request.storeId().toString());
         details.put("delta", request.delta());
         details.put("reason", request.reason());
         if (request.referenceId() != null) {
@@ -114,7 +114,7 @@ public class InventoryService {
 
         Map<String, Object> eventPayload = new LinkedHashMap<>();
         eventPayload.put("productId", request.productId().toString());
-        eventPayload.put("storeId", request.storeId());
+        eventPayload.put("storeId", request.storeId().toString());
         eventPayload.put("delta", request.delta());
         eventPayload.put("reason", request.reason());
         eventPayload.put("newOnHand", updatedOnHand);
@@ -169,7 +169,7 @@ public class InventoryService {
         stockAdjustmentLogRepository.saveAll(logs);
 
         Map<String, Object> details = new LinkedHashMap<>();
-        details.put("storeId", request.storeId());
+        details.put("storeId", request.storeId().toString());
         details.put("reason", request.reason());
         details.put("itemCount", sortedItems.size());
         if (request.referenceId() != null) {
@@ -184,7 +184,7 @@ public class InventoryService {
             })
             .toList();
         details.put("items", itemDetails);
-        String entityId = request.referenceId() != null ? request.referenceId() : request.storeId();
+        String entityId = request.referenceId() != null ? request.referenceId() : request.storeId().toString();
         auditLogService.log(actorId, "STOCK_ADJUSTED_BATCH", "StockAdjustmentBatch", entityId, details);
 
         List<StockCheckItemResponse> responses = new ArrayList<>();
@@ -192,7 +192,7 @@ public class InventoryService {
             StockItem stock = lockedStock.get(item.productId());
             Map<String, Object> eventPayload = new LinkedHashMap<>();
             eventPayload.put("productId", item.productId().toString());
-            eventPayload.put("storeId", request.storeId());
+            eventPayload.put("storeId", request.storeId().toString());
             eventPayload.put("delta", item.delta());
             eventPayload.put("reason", request.reason());
             if (request.referenceId() != null) {
@@ -211,13 +211,13 @@ public class InventoryService {
         return new StockCheckResponse(responses);
     }
 
-    void checkLowStock(StockItem stock, String storeId) {
+    void checkLowStock(StockItem stock, UUID storeId) {
         int available = stock.getOnHand() - stock.getReserved();
         int threshold = inventoryProperties.getLowStockThreshold();
         if (available <= threshold) {
             Map<String, Object> alertPayload = new LinkedHashMap<>();
             alertPayload.put("productId", stock.getProductId().toString());
-            alertPayload.put("warehouseId", storeId);
+            alertPayload.put("warehouseId", storeId.toString());
             alertPayload.put("currentQuantity", available);
             alertPayload.put("threshold", threshold);
             alertPayload.put("detectedAt", Instant.now().toString());
@@ -242,7 +242,7 @@ public class InventoryService {
         }
     }
 
-    private StockItem lockStockItem(UUID productId, String storeId) {
+    private StockItem lockStockItem(UUID productId, UUID storeId) {
         try {
             return entityManager.createQuery(
                     "SELECT s FROM StockItem s WHERE s.productId = :pid AND s.storeId = :sid",

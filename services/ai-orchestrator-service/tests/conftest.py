@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("AI_ORCHESTRATOR_LOG_LEVEL", "WARNING")
 os.environ.setdefault("AI_ORCHESTRATOR_OTEL_ENABLED", "false")
+os.environ.setdefault("AI_ORCHESTRATOR_AUDIT_ENABLED", "false")
 
 import pytest
 from httpx import ASGITransport, AsyncClient

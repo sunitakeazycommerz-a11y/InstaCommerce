@@ -1,7 +1,7 @@
 package com.instacommerce.checkout.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -12,8 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.checkout.domain.CheckoutIdempotencyKey;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
-import com.instacommerce.checkout.dto.ErrorDetail;
-import com.instacommerce.checkout.exception.CheckoutException;
+
 import com.instacommerce.checkout.repository.CheckoutIdempotencyKeyRepository;
 import com.instacommerce.checkout.workflow.CheckoutWorkflow;
 import io.temporal.api.common.v1.WorkflowExecution;
@@ -77,7 +76,7 @@ class CheckoutControllerTest {
     }
 
     @Test
-    void surfacesConflictWithLiveWorkflowStatusWhenWorkflowAlreadyExists() {
+    void returnsAcceptedWithStatusWhenWorkflowAlreadyExists() {
         CheckoutRequest request = request();
         String workflowId = "checkout-user-123-idem-123";
         when(idempotencyKeyRepository.findByIdempotencyKey("idem-123")).thenReturn(Optional.empty());
@@ -90,18 +89,12 @@ class CheckoutControllerTest {
         when(workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId)).thenReturn(existingWorkflow);
         when(existingWorkflow.getStatus()).thenReturn("AUTHORIZING_PAYMENT");
 
-        CheckoutException ex = assertThrows(
-            CheckoutException.class,
-            () -> controller.initiateCheckout(request, "user-123", "idem-123")
-        );
+        ResponseEntity<CheckoutResponse> response = controller.initiateCheckout(request, "user-123", "idem-123");
 
-        assertThat(ex.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(ex.getCode()).isEqualTo("CHECKOUT_ALREADY_IN_PROGRESS");
-        assertThat(ex.getDetails()).containsExactly(
-            new ErrorDetail("workflowId", workflowId),
-            new ErrorDetail("status", "AUTHORIZING_PAYMENT"),
-            new ErrorDetail("statusPath", "/checkout/" + workflowId + "/status")
-        );
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).contains("CHECKOUT_ALREADY_IN_PROGRESS");
+        assertThat(response.getBody().status()).contains("AUTHORIZING_PAYMENT");
     }
 
     @Test

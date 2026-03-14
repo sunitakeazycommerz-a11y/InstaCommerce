@@ -57,3 +57,8 @@ class Settings(BaseSettings):
     llm_api_url: Optional[AnyHttpUrl] = None
     llm_api_key: Optional[str] = None
     llm_model: Optional[str] = None
+
+    # Kafka / audit publishing
+    kafka_bootstrap_servers: str = "localhost:9092"
+    audit_enabled: bool = True
+    audit_topic: str = "ai-orchestrator.events"

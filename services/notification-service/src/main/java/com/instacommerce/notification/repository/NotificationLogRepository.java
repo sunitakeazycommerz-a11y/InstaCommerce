@@ -15,8 +15,8 @@ public interface NotificationLogRepository extends JpaRepository<NotificationLog
     Optional<NotificationLog> findByEventIdAndChannel(String eventId, NotificationChannel channel);
 
     @Modifying
-    @Query("update NotificationLog log set log.recipient = :recipient where log.userId = :userId")
-    int anonymizeByUserId(@Param("userId") UUID userId, @Param("recipient") String recipient);
+    @Query("update NotificationLog log set log.recipient = :redacted, log.subject = :redacted, log.body = :redacted where log.userId = :userId")
+    int anonymizeByUserId(@Param("userId") UUID userId, @Param("redacted") String redacted);
 
     @Query(value = """
         SELECT * FROM notification_log

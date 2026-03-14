@@ -7,7 +7,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface StockItemRepository extends JpaRepository<StockItem, UUID> {
-    Optional<StockItem> findByProductIdAndStoreId(UUID productId, String storeId);
+    Optional<StockItem> findByProductIdAndStoreId(UUID productId, UUID storeId);
 
-    List<StockItem> findByStoreIdAndProductIdIn(String storeId, List<UUID> productIds);
+    List<StockItem> findByStoreIdAndProductIdIn(UUID storeId, List<UUID> productIds);
 }

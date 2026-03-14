@@ -85,6 +85,8 @@ type metrics struct {
 }
 
 type DedupeStore interface {
+	Check(ctx context.Context, eventID string) (bool, error)
+	Set(ctx context.Context, eventID string) error
 	CheckAndSet(ctx context.Context, eventID string) (bool, error)
 	Remove(ctx context.Context, eventID string) error
 	Close() error
@@ -104,20 +106,14 @@ type redisDedupe struct {
 	timeout time.Duration
 }
 
-type publishRequest struct {
-	message     kafka.Message
-	spanContext trace.SpanContext
-	eventID     string
-	eventType   string
-}
-
 type webhookHandler struct {
-	cfg       Config
-	logger    *slog.Logger
-	metrics   *metrics
-	dedupe    DedupeStore
-	publishCh chan<- publishRequest
-	tracer    trace.Tracer
+	cfg            Config
+	logger         *slog.Logger
+	metrics        *metrics
+	dedupe         DedupeStore
+	writer         *kafka.Writer
+	publishTimeout time.Duration
+	tracer         trace.Tracer
 }
 
 type readiness struct {
@@ -186,20 +182,9 @@ func main() {
 			Topic:        cfg.KafkaTopic,
 			Balancer:     &kafka.LeastBytes{},
 			RequiredAcks: int(kafka.RequireOne),
-			Async:        true,
+			Async:        false,
 			BatchTimeout: 5 * time.Millisecond,
 		})
-	}
-
-	var publishCh chan publishRequest
-	var publishWg sync.WaitGroup
-	if writer != nil {
-		publishCh = make(chan publishRequest, cfg.PublishQueueSize)
-		publishWg.Add(1)
-		go func() {
-			defer publishWg.Done()
-			runPublisher(writer, publishCh, metrics, logger, otel.Tracer("payment-webhook-service"), cfg.PublishTimeout)
-		}()
 	}
 
 	ready := readiness{
@@ -210,12 +195,13 @@ func main() {
 	}
 
 	handler := &webhookHandler{
-		cfg:       cfg,
-		logger:    logger,
-		metrics:   metrics,
-		dedupe:    dedupe,
-		publishCh: publishCh,
-		tracer:    otel.Tracer("payment-webhook-service"),
+		cfg:            cfg,
+		logger:         logger,
+		metrics:        metrics,
+		dedupe:         dedupe,
+		writer:         writer,
+		publishTimeout: cfg.PublishTimeout,
+		tracer:         otel.Tracer("payment-webhook-service"),
 	}
 
 	mux := http.NewServeMux()
@@ -260,11 +246,6 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("server shutdown failed", "error", err)
-	}
-
-	if publishCh != nil {
-		close(publishCh)
-		waitWithTimeout(&publishWg, cfg.ShutdownTimeout, logger)
 	}
 
 	if writer != nil {
@@ -457,6 +438,23 @@ func newInMemoryDedupe(ttl, cleanupInterval time.Duration) *inMemoryDedupe {
 	return store
 }
 
+func (d *inMemoryDedupe) Check(_ context.Context, eventID string) (bool, error) {
+	now := time.Now()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if exp, ok := d.entries[eventID]; ok && exp.After(now) {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (d *inMemoryDedupe) Set(_ context.Context, eventID string) error {
+	d.mu.Lock()
+	d.entries[eventID] = time.Now().Add(d.ttl)
+	d.mu.Unlock()
+	return nil
+}
+
 func (d *inMemoryDedupe) CheckAndSet(_ context.Context, eventID string) (bool, error) {
 	now := time.Now()
 	d.mu.Lock()
@@ -522,6 +520,22 @@ func newRedisDedupe(cfg Config) (*redisDedupe, error) {
 	}, nil
 }
 
+func (d *redisDedupe) Check(ctx context.Context, eventID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, d.timeout)
+	defer cancel()
+	n, err := d.client.Exists(ctx, d.prefix+eventID).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (d *redisDedupe) Set(ctx context.Context, eventID string) error {
+	ctx, cancel := context.WithTimeout(ctx, d.timeout)
+	defer cancel()
+	return d.client.Set(ctx, d.prefix+eventID, "1", d.ttl).Err()
+}
+
 func (d *redisDedupe) CheckAndSet(ctx context.Context, eventID string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()
@@ -558,7 +572,7 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, "webhook secret not configured")
 		return
 	}
-	if h.cfg.RequireKafka && h.publishCh == nil {
+	if h.cfg.RequireKafka && h.writer == nil {
 		status = http.StatusServiceUnavailable
 		writeError(w, status, "kafka not configured")
 		return
@@ -605,14 +619,14 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	isNew, err := h.dedupe.CheckAndSet(ctx, event.ID)
+	isDuplicate, err := h.dedupe.Check(ctx, event.ID)
 	if err != nil {
 		status = http.StatusServiceUnavailable
 		h.metrics.dedupeErrors.Inc()
 		writeError(w, status, "dedupe unavailable")
 		return
 	}
-	if !isNew {
+	if isDuplicate {
 		status = http.StatusOK
 		h.metrics.dedupeDuplicates.Inc()
 		writeJSON(w, status, statusResponse{Status: "duplicate", EventID: event.ID, Duplicate: true})
@@ -625,56 +639,42 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	otel.GetTextMapPropagator().Inject(ctx, kafkaHeaderCarrier{headers: &headers})
 
-	req := publishRequest{
-		message: kafka.Message{
-			Key:     []byte(event.ID),
-			Value:   payload,
-			Time:    time.Now().UTC(),
-			Headers: headers,
-		},
-		spanContext: trace.SpanContextFromContext(ctx),
-		eventID:     event.ID,
-		eventType:   eventType,
+	msg := kafka.Message{
+		Key:     []byte(event.ID),
+		Value:   payload,
+		Time:    time.Now().UTC(),
+		Headers: headers,
 	}
 
-	select {
-	case h.publishCh <- req:
-		h.metrics.publishEnqueued.Inc()
-		h.metrics.queueDepth.Set(float64(len(h.publishCh)))
-		status = http.StatusAccepted
-		writeJSON(w, status, statusResponse{Status: "accepted", EventID: event.ID})
-		loggerWithTrace(ctx, h.logger).Info("webhook accepted", "event_id", event.ID, "event_type", eventType)
-	default:
-		_ = h.dedupe.Remove(ctx, event.ID)
-		h.metrics.publishDropped.Inc()
+	publishCtx, publishCancel := context.WithTimeout(ctx, h.publishTimeout)
+	defer publishCancel()
+	_, span := h.tracer.Start(publishCtx, "kafka.publish", trace.WithAttributes(
+		attribute.String("messaging.system", "kafka"),
+		attribute.String("messaging.destination", h.writer.Topic),
+		attribute.String("messaging.operation", "publish"),
+		attribute.String("event.id", event.ID),
+		attribute.String("event.type", eventType),
+	))
+	publishErr := h.writer.WriteMessages(publishCtx, msg)
+	span.End()
+
+	if publishErr != nil {
+		h.metrics.publishErrors.Inc()
 		status = http.StatusServiceUnavailable
-		writeError(w, status, "publish queue full")
-		loggerWithTrace(ctx, h.logger).Warn("publish queue full", "event_id", event.ID)
+		writeError(w, status, "failed to publish event")
+		loggerWithTrace(ctx, h.logger).Error("failed to publish to kafka", "error", publishErr, "event_id", event.ID)
+		return
 	}
-}
+	h.metrics.publishSuccess.Inc()
 
-func runPublisher(writer *kafka.Writer, publishCh <-chan publishRequest, metrics *metrics, logger *slog.Logger, tracer trace.Tracer, timeout time.Duration) {
-	for req := range publishCh {
-		metrics.queueDepth.Set(float64(len(publishCh)))
-		ctx := trace.ContextWithSpanContext(context.Background(), req.spanContext)
-		ctx, span := tracer.Start(ctx, "kafka.publish", trace.WithAttributes(
-			attribute.String("messaging.system", "kafka"),
-			attribute.String("messaging.destination", writer.Topic),
-			attribute.String("messaging.operation", "publish"),
-			attribute.String("event.id", req.eventID),
-			attribute.String("event.type", req.eventType),
-		))
-		publishCtx, cancel := context.WithTimeout(ctx, timeout)
-		err := writer.WriteMessages(publishCtx, req.message)
-		cancel()
-		if err != nil {
-			metrics.publishErrors.Inc()
-			loggerWithTrace(ctx, logger).Error("failed to publish to kafka", "error", err, "event_id", req.eventID)
-		} else {
-			metrics.publishSuccess.Inc()
-		}
-		span.End()
+	if err := h.dedupe.Set(ctx, event.ID); err != nil {
+		h.metrics.dedupeErrors.Inc()
+		loggerWithTrace(ctx, h.logger).Warn("failed to set dedupe after publish", "error", err, "event_id", event.ID)
 	}
+
+	status = http.StatusAccepted
+	writeJSON(w, status, statusResponse{Status: "accepted", EventID: event.ID})
+	loggerWithTrace(ctx, h.logger).Info("webhook accepted", "event_id", event.ID, "event_type", eventType)
 }
 
 func (r readiness) handleReady(w http.ResponseWriter, req *http.Request) {

@@ -22,6 +22,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 
+	"github.com/instacommerce/stream-processor-service/dedup"
 	"github.com/instacommerce/stream-processor-service/processor"
 )
 
@@ -64,6 +65,9 @@ func main() {
 	})
 	defer rdb.Close()
 
+	// Initialise deduplication checker
+	deduper := dedup.NewChecker(rdb, logger)
+
 	// Initialise processors
 	orderMetrics := processor.NewOrderMetrics()
 	slaMonitor := processor.NewSLAMonitor(0.90, logger)
@@ -88,10 +92,10 @@ func main() {
 		return orderProc.Process(ctx, event)
 	}
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "order.events", handleOrderEvent)
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "orders.events", handleOrderEvent)
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "order.events", deduper, handleOrderEvent)
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "orders.events", deduper, handleOrderEvent)
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "rider.events", func(ctx context.Context, msg kafka.Message) error {
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "rider.events", deduper, func(ctx context.Context, msg kafka.Message) error {
 		var event processor.RiderEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			return fmt.Errorf("unmarshal rider event: %w", err)
@@ -99,7 +103,7 @@ func main() {
 		return riderProc.ProcessRiderEvent(ctx, event)
 	})
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "rider.location.updates", func(ctx context.Context, msg kafka.Message) error {
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "rider.location.updates", deduper, func(ctx context.Context, msg kafka.Message) error {
 		var update processor.LocationUpdate
 		if err := json.Unmarshal(msg.Value, &update); err != nil {
 			return fmt.Errorf("unmarshal location update: %w", err)
@@ -115,10 +119,10 @@ func main() {
 		return paymentProc.Process(ctx, event)
 	}
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payment.events", handlePaymentEvent)
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payments.events", handlePaymentEvent)
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payment.events", deduper, handlePaymentEvent)
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payments.events", deduper, handlePaymentEvent)
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "inventory.events", func(ctx context.Context, msg kafka.Message) error {
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "inventory.events", deduper, func(ctx context.Context, msg kafka.Message) error {
 		var event processor.InventoryEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			return fmt.Errorf("unmarshal inventory event: %w", err)
@@ -168,7 +172,8 @@ func main() {
 }
 
 // startConsumer launches a goroutine that reads from a Kafka topic and calls handler for each message.
-func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, brokers []string, groupID, topic string, handler func(context.Context, kafka.Message) error) {
+// Duplicate messages (identified by topic:partition:offset) are skipped but their offsets are still committed.
+func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, brokers []string, groupID, topic string, deduper *dedup.Checker, handler func(context.Context, kafka.Message) error) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:        brokers,
 		GroupID:        groupID,
@@ -199,6 +204,20 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 				}
 				logger.Error("fetch message error", "topic", topic, "error", err)
 				time.Sleep(time.Second)
+				continue
+			}
+
+			// Skip duplicate messages but commit their offsets to advance the consumer.
+			if dup, err := deduper.IsDuplicate(ctx, msg.Topic, msg.Partition, msg.Offset); err != nil {
+				logger.Warn("dedup check failed, processing anyway",
+					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
+			} else if dup {
+				logger.Debug("skipping duplicate message",
+					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset)
+				if err := reader.CommitMessages(ctx, msg); err != nil && !errors.Is(err, context.Canceled) {
+					logger.Error("commit duplicate offset error",
+						"topic", msg.Topic, "offset", msg.Offset, "error", err)
+				}
 				continue
 			}
 

@@ -235,13 +235,13 @@ public class ReservationService {
         }
     }
 
-    private void checkLowStock(StockItem stock, String storeId) {
+    private void checkLowStock(StockItem stock, UUID storeId) {
         int available = stock.getOnHand() - stock.getReserved();
         int threshold = inventoryProperties.getLowStockThreshold();
         if (available <= threshold) {
             Map<String, Object> alertPayload = new LinkedHashMap<>();
             alertPayload.put("productId", stock.getProductId().toString());
-            alertPayload.put("warehouseId", storeId);
+            alertPayload.put("warehouseId", storeId.toString());
             alertPayload.put("currentQuantity", available);
             alertPayload.put("threshold", threshold);
             alertPayload.put("detectedAt", Instant.now().toString());
@@ -250,7 +250,7 @@ public class ReservationService {
         }
     }
 
-    private StockItem lockStockItem(UUID productId, String storeId) {
+    private StockItem lockStockItem(UUID productId, UUID storeId) {
         try {
             return entityManager.createQuery(
                     "SELECT s FROM StockItem s WHERE s.productId = :pid AND s.storeId = :sid",

@@ -50,7 +50,8 @@ public class DomainEventConsumer {
                     "promotion.events",
                     "customer-support.events",
                     "returns.events",
-                    "warehouse.events"
+                    "warehouse.events",
+                    "ai-orchestrator.events"
             },
             groupId = "${spring.kafka.consumer.group-id}",
             concurrency = "3"

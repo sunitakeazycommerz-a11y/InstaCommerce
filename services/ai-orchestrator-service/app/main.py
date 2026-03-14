@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
+from app.audit import AuditEventPublisher, NoOpAuditPublisher
 from app.config import Settings
 from app.guardrails.rate_limiter import TokenBucketRateLimiter
 
@@ -333,6 +334,9 @@ class ToolExecutionContext:
     breakers: CircuitBreakerRegistry
     request_id: str
     tracer: Any
+    audit_publisher: Optional[Any] = None
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -343,6 +347,7 @@ class ExecutionResources:
     guardrails: ToolGuardrails
     breakers: CircuitBreakerRegistry
     tracer: Any
+    audit_publisher: Optional[Any] = None
 
 
 class RetrievalProvider:
@@ -735,6 +740,20 @@ async def execute_tool_call(
         status_code=result.status_code,
         duration_ms=duration_ms,
     )
+    if context.audit_publisher:
+        try:
+            await context.audit_publisher.publish_tool_executed(
+                request_id=context.request_id,
+                user_id=context.user_id,
+                session_id=context.session_id,
+                tool_name=name,
+                success=result.success,
+                error=result.error,
+                duration_ms=duration_ms,
+                status_code=result.status_code,
+            )
+        except Exception:
+            logger.debug("audit.tool_executed.publish_failed", exc_info=True)
     return result
 
 
@@ -779,6 +798,7 @@ def build_resources(app_instance: FastAPI) -> ExecutionResources:
         guardrails=app_instance.state.guardrails,
         breakers=app_instance.state.breakers,
         tracer=app_instance.state.tracer,
+        audit_publisher=getattr(app_instance.state, "audit_publisher", None),
     )
 
 
@@ -789,6 +809,7 @@ def build_tool_context(resources: ExecutionResources, budget: ToolBudget, reques
         breakers=resources.breakers,
         request_id=request_id,
         tracer=resources.tracer,
+        audit_publisher=resources.audit_publisher,
     )
 
 
@@ -926,6 +947,8 @@ def assist_build_response(state: State) -> Dict[str, Any]:
         tool_calls=len(state.get("tool_calls", [])),
         tool_results=len(state.get("tool_results", [])),
     )
+    state["_audit_intent"] = state["intent"]
+    state["_audit_mode"] = state["mode"]
     return {"response": response}
 
 
@@ -1047,6 +1070,8 @@ def substitute_build_response(state: State) -> Dict[str, Any]:
         tool_calls=len(state.get("tool_calls", [])),
         tool_results=len(state.get("tool_results", [])),
     )
+    state["_audit_intent"] = state["intent"]
+    state["_audit_mode"] = state["mode"]
     return {"response": response}
 
 
@@ -1166,6 +1191,8 @@ def recommend_build_response(state: State) -> Dict[str, Any]:
         tool_calls=len(state.get("tool_calls", [])),
         tool_results=len(state.get("tool_results", [])),
     )
+    state["_audit_intent"] = state["intent"]
+    state["_audit_mode"] = state["mode"]
     return {"response": response}
 
 
@@ -1251,6 +1278,17 @@ async def lifespan(app_instance: FastAPI):
         failure_threshold=settings.tool_circuit_breaker_failures,
         reset_timeout=settings.tool_circuit_breaker_reset_seconds,
     )
+    # Audit event publisher
+    if settings.audit_enabled:
+        audit_publisher = AuditEventPublisher(
+            bootstrap_servers=settings.kafka_bootstrap_servers,
+            topic=settings.audit_topic,
+        )
+    else:
+        audit_publisher = NoOpAuditPublisher()
+    await audit_publisher.start()
+    set_audit_publisher(audit_publisher)
+    app_instance.state.audit_publisher = audit_publisher
     app_instance.state.clients = clients
     app_instance.state.llm = llm_client
     app_instance.state.retriever = retriever
@@ -1268,6 +1306,7 @@ async def lifespan(app_instance: FastAPI):
     try:
         yield
     finally:
+        await audit_publisher.stop()
         await clients.close()
         await llm_client.close()
 
@@ -1276,7 +1315,9 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.state.tracer = init_telemetry(app)
 
 from app.auth import InternalServiceAuthMiddleware
+from app.api.handlers import router as v2_router, set_audit_publisher
 app.add_middleware(InternalServiceAuthMiddleware)
+app.include_router(v2_router)
 
 
 def _extract_client_ip(request: Request) -> str:
@@ -1392,12 +1433,58 @@ async def liveness() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+async def _publish_v1_audit_events(
+    result: State,
+    request_obj: Any,
+    resources: ExecutionResources,
+) -> None:
+    """Fire-and-forget audit publishing for v1 graph endpoints."""
+    publisher = resources.audit_publisher
+    if publisher is None:
+        return
+    try:
+        request_id = result.get("request_id", "")
+        user_id = str(getattr(request_obj, "user_id", "") or "")
+        session_id = str(getattr(request_obj, "session_id", "") or "") or None
+        intent = result.get("_audit_intent") or result.get("intent", "unknown")
+        mode = result.get("_audit_mode") or result.get("mode", "fallback")
+        tool_calls = result.get("tool_calls", [])
+        tool_results = result.get("tool_results", [])
+        resp = result.get("response")
+        message_len = len(getattr(resp, "message", "") or "") if resp else 0
+
+        await publisher.publish_intent_classified(
+            request_id=request_id,
+            user_id=user_id or None,
+            session_id=session_id,
+            intent=intent,
+            confidence=0.0,
+            mode=mode,
+            query_length=len(getattr(request_obj, "query", "") or ""),
+        )
+
+        await publisher.publish_response_generated(
+            request_id=request_id,
+            user_id=user_id or None,
+            session_id=session_id,
+            intent=intent,
+            mode=mode,
+            tool_calls_count=len(tool_calls),
+            tool_results_count=len(tool_results),
+            escalated=False,
+            response_length=message_len,
+        )
+    except Exception:
+        logger.debug("audit.v1_publish_failed", exc_info=True)
+
+
 @app.post("/agent/assist", response_model=AssistResponse)
 async def assist(request: AssistRequest) -> AssistResponse:
     resources = build_resources(app)
     budget = ToolBudget(resources.guardrails.max_calls, resources.guardrails.max_total_seconds)
     state = {"request": request, "resources": resources, "budget": budget}
     result = await ASSIST_GRAPH.ainvoke(state)
+    await _publish_v1_audit_events(result, request, resources)
     return result["response"]
 
 
@@ -1407,6 +1494,7 @@ async def substitute(request: SubstituteRequest) -> SubstituteResponse:
     budget = ToolBudget(resources.guardrails.max_calls, resources.guardrails.max_total_seconds)
     state = {"request": request, "resources": resources, "budget": budget}
     result = await SUBSTITUTE_GRAPH.ainvoke(state)
+    await _publish_v1_audit_events(result, request, resources)
     return result["response"]
 
 
@@ -1416,4 +1504,5 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
     budget = ToolBudget(resources.guardrails.max_calls, resources.guardrails.max_total_seconds)
     state = {"request": request, "resources": resources, "budget": budget}
     result = await RECOMMEND_GRAPH.ainvoke(state)
+    await _publish_v1_audit_events(result, request, resources)
     return result["response"]

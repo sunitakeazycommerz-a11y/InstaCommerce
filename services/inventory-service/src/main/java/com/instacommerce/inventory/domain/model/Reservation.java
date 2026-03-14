@@ -29,8 +29,8 @@ public class Reservation {
     @Column(name = "idempotency_key", nullable = false)
     private String idempotencyKey;
 
-    @Column(name = "store_id", nullable = false)
-    private String storeId;
+    @Column(name = "store_id", nullable = false, columnDefinition = "uuid")
+    private UUID storeId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -83,11 +83,11 @@ public class Reservation {
         this.idempotencyKey = idempotencyKey;
     }
 
-    public String getStoreId() {
+    public UUID getStoreId() {
         return storeId;
     }
 
-    public void setStoreId(String storeId) {
+    public void setStoreId(UUID storeId) {
         this.storeId = storeId;
     }
 
