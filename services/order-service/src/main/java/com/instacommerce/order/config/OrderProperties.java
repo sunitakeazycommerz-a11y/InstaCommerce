@@ -6,7 +6,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class OrderProperties {
     private final Jwt jwt = new Jwt();
     private final Clients clients = new Clients();
-    private final Checkout checkout = new Checkout();
 
     public Jwt getJwt() {
         return jwt;
@@ -14,10 +13,6 @@ public class OrderProperties {
 
     public Clients getClients() {
         return clients;
-    }
-
-    public Checkout getCheckout() {
-        return checkout;
     }
 
     public static class Jwt {
@@ -73,23 +68,6 @@ public class OrderProperties {
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
-        }
-    }
-
-    /**
-     * @deprecated Checkout authority has moved to checkout-orchestrator-service (ADR-001).
-     * This configuration exists only for rollback safety. Do not re-enable without principal approval.
-     */
-    @Deprecated(since = "wave-22", forRemoval = true)
-    public static class Checkout {
-        private boolean directSagaEnabled = false;
-
-        public boolean isDirectSagaEnabled() {
-            return directSagaEnabled;
-        }
-
-        public void setDirectSagaEnabled(boolean directSagaEnabled) {
-            this.directSagaEnabled = directSagaEnabled;
         }
     }
 }

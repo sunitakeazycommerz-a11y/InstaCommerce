@@ -38,8 +38,6 @@ order:
   jwt:
     issuer: ${ORDER_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${ORDER_JWT_PUBLIC_KEY}}
-  checkout:
-    direct-saga-enabled: ${ORDER_CHECKOUT_DIRECT_SAGA_ENABLED:false}
   choreography:
     fulfillment-consumer-enabled: ${ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED:false}
     fulfillment-topic: ${ORDER_CHOREOGRAPHY_FULFILLMENT_TOPIC:fulfillment.events}
@@ -54,18 +52,9 @@ order:
     pricing:
       base-url: ${PRICING_SERVICE_URL:http://localhost:8087}
 
-temporal:
-  service-address: "${TEMPORAL_HOST:localhost}:7233"
-  namespace: ${TEMPORAL_NAMESPACE:instacommerce}
-  task-queue: ${TEMPORAL_TASK_QUEUE:CHECKOUT_TASK_QUEUE}
-
 resilience4j:
   ratelimiter:
-    instances:
-      checkoutLimiter:
-        limitForPeriod: 10
-        limitRefreshPeriod: 60s
-        timeoutDuration: 0s
+    instances: {}
 
 management:
   tracing:
