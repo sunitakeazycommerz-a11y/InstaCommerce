@@ -40,7 +40,8 @@ public class FlagOverrideService {
     @Transactional
     @Caching(evict = {
         @CacheEvict(value = "flags", key = "#flagKey"),
-        @CacheEvict(value = "flag-overrides", key = "#flagKey + ':' + #request.userId()")
+        @CacheEvict(value = "flag-overrides", key = "#flagKey + ':' + #request.userId()"),
+        @CacheEvict(value = "flag-overrides-bulk", allEntries = true)
     })
     public FlagOverride addOverride(String flagKey, AddOverrideRequest request, String changedBy) {
         FeatureFlag flag = flagRepository.findByKey(flagKey)
@@ -73,7 +74,8 @@ public class FlagOverrideService {
     @Transactional
     @Caching(evict = {
         @CacheEvict(value = "flags", key = "#flagKey"),
-        @CacheEvict(value = "flag-overrides", key = "#flagKey + ':' + #userId")
+        @CacheEvict(value = "flag-overrides", key = "#flagKey + ':' + #userId"),
+        @CacheEvict(value = "flag-overrides-bulk", allEntries = true)
     })
     public void removeOverride(String flagKey, UUID userId, String changedBy) {
         FeatureFlag flag = flagRepository.findByKey(flagKey)
@@ -97,6 +99,7 @@ public class FlagOverrideService {
         return overrideRepository.findActiveByFlagIdAndUserId(flagId, userId, Instant.now());
     }
 
+    @Cacheable(value = "flag-overrides-bulk", key = "#flagIds.hashCode() + ':' + #userId")
     public Map<UUID, FlagOverride> findActiveOverridesByFlagIds(List<UUID> flagIds, UUID userId) {
         if (flagIds.isEmpty()) {
             return Map.of();

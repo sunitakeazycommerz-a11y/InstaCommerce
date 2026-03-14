@@ -8,7 +8,9 @@ The envelope format mirrors the convention used by all other InstaCommerce
 domain services (see DomainEventConsumer in audit-trail-service):
 
     {
+        "eventId": "<uuid>",
         "eventType": "AI_INTENT_CLASSIFIED",
+        "schemaVersion": "1.0",
         "userId": "<uuid | null>",
         "actorType": "SYSTEM",
         "aggregateType": "ai_session",
@@ -74,7 +76,9 @@ def _build_envelope(
     and ``payload``.
     """
     return {
+        "eventId": str(uuid4()),
         "eventType": event_type,
+        "schemaVersion": "1.0",
         "userId": user_id,
         "actorType": "SYSTEM",
         "aggregateType": "ai_session",
