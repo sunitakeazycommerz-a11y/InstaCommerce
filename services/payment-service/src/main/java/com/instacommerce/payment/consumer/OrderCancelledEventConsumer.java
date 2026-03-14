@@ -1,6 +1,7 @@
 package com.instacommerce.payment.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.dto.request.RefundRequest;
@@ -52,7 +53,7 @@ public class OrderCancelledEventConsumer {
     }
 
     @KafkaListener(
-        topics = "${payment.choreography.order-cancelled-topic:orders.events}",
+        topics = "${payment.choreography.order-cancelled-topic:" + TopicNames.ORDERS_EVENTS + "}",
         groupId = "${payment.choreography.order-cancelled-consumer-group:payment-service-order-cancelled}",
         properties = "auto.offset.reset=earliest")
     public void onOrderEvent(ConsumerRecord<String, String> record) throws Exception {

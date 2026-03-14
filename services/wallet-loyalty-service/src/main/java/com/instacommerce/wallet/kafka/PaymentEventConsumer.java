@@ -3,6 +3,7 @@ package com.instacommerce.wallet.kafka;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.wallet.client.OrderLookupClient;
 import com.instacommerce.wallet.client.OrderSnapshot;
 import com.instacommerce.wallet.domain.model.WalletTransaction.ReferenceType;
@@ -36,7 +37,7 @@ public class PaymentEventConsumer {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = {"payment.events", "payments.events"}, groupId = "wallet-loyalty-service")
+    @KafkaListener(topics = TopicNames.PAYMENTS_EVENTS, groupId = "wallet-loyalty-service")
     public void consume(String message) throws JsonProcessingException {
         JsonNode event = objectMapper.readTree(message);
         String eventType = event.path("eventType").asText();

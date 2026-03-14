@@ -2,6 +2,7 @@ package com.instacommerce.wallet.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.wallet.domain.model.WalletTransaction.ReferenceType;
 import com.instacommerce.wallet.service.LoyaltyService;
 import com.instacommerce.wallet.service.WalletService;
@@ -25,7 +26,7 @@ public class OrderEventConsumer {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = {"order.events", "orders.events"}, groupId = "wallet-loyalty-service")
+    @KafkaListener(topics = TopicNames.ORDERS_EVENTS, groupId = "wallet-loyalty-service")
     public void consume(String message) {
         try {
             JsonNode event = objectMapper.readTree(message);
