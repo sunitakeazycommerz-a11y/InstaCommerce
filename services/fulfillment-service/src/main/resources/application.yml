@@ -50,8 +50,6 @@ fulfillment:
     order-status-callback-enabled: ${FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED:true}
   delivery:
     default-eta-minutes: ${FULFILLMENT_DEFAULT_ETA_MINUTES:15}
-  dispatch:
-    inline-assignment-enabled: ${FULFILLMENT_DISPATCH_INLINE_ASSIGNMENT_ENABLED:false}
 
 management:
   tracing:
