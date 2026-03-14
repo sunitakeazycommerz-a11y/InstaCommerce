@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.audit import AuditEventPublisher
 from app.config import Settings
 from app.graph.graph import build_graph
 from app.graph.state import AgentState, IntentType, RiskLevel
@@ -28,6 +29,7 @@ router = APIRouter(prefix="/v2", tags=["agent-v2"])
 _settings: Optional[Settings] = None
 _tool_registry: Optional[ToolRegistry] = None
 _compiled_graph: Any = None
+_audit_publisher: Optional[AuditEventPublisher] = None
 
 
 def _get_settings() -> Settings:
@@ -54,6 +56,16 @@ async def _get_graph() -> Any:
             tool_registry=registry,
         )
     return _compiled_graph
+
+
+def set_audit_publisher(publisher: AuditEventPublisher) -> None:
+    """Set the module-level audit publisher (called from lifespan)."""
+    global _audit_publisher
+    _audit_publisher = publisher
+
+
+def _get_audit_publisher() -> Optional[AuditEventPublisher]:
+    return _audit_publisher
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +142,45 @@ async def invoke_agent(request: AgentRequest) -> AgentResponse:
                 "escalated": result.needs_escalation,
             },
         )
+
+        # Publish audit events (fire-and-forget)
+        publisher = _get_audit_publisher()
+        if publisher is not None:
+            try:
+                await publisher.publish_intent_classified(
+                    request_id=result.request_id,
+                    user_id=request.user_id,
+                    session_id=request.session_id,
+                    intent=result.intent.value,
+                    confidence=result.intent_confidence,
+                    risk_level=result.risk_level.value,
+                    query_length=len(request.query),
+                )
+                if result.needs_escalation:
+                    await publisher.publish_escalation_triggered(
+                        request_id=result.request_id,
+                        user_id=request.user_id,
+                        session_id=request.session_id,
+                        reason=result.escalation_reason or "unknown",
+                        intent=result.intent.value,
+                        risk_level=result.risk_level.value,
+                    )
+                await publisher.publish_agent_invoked(
+                    request_id=result.request_id,
+                    user_id=request.user_id,
+                    session_id=request.session_id,
+                    intent=result.intent.value,
+                    intent_confidence=result.intent_confidence,
+                    risk_level=result.risk_level.value,
+                    escalated=result.needs_escalation,
+                    escalation_reason=result.escalation_reason,
+                    tool_results_count=len(result.tool_results),
+                    total_cost_usd=result.total_cost_usd,
+                    elapsed_ms=elapsed_ms,
+                    errors=result.errors,
+                )
+            except Exception:
+                logger.debug("audit.v2_publish_failed", exc_info=True)
 
         return AgentResponse(
             request_id=result.request_id,
