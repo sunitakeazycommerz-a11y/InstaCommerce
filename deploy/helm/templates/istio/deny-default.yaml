@@ -1,0 +1,11 @@
+{{- if .Values.istio.denyDefault.enabled }}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-default
+  namespace: {{ .Release.Namespace }}
+spec:
+  {}
+  # Empty spec = DENY all traffic in the namespace
+  # Explicit ALLOW policies per service override this default
+{{- end }}

@@ -1,5 +1,6 @@
 package com.instacommerce.featureflag.service;
 
+import com.instacommerce.featureflag.controller.FlagChangeStreamController;
 import com.instacommerce.featureflag.domain.model.FeatureFlag;
 import com.instacommerce.featureflag.domain.model.FlagAuditLog;
 import com.instacommerce.featureflag.dto.request.CreateFlagRequest;
@@ -10,6 +11,9 @@ import com.instacommerce.featureflag.repository.FlagAuditLogRepository;
 import com.instacommerce.featureflag.repository.FeatureFlagRepository;
 import java.util.List;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -18,13 +22,21 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class FlagManagementService {
 
+    private static final Logger log = LoggerFactory.getLogger(FlagManagementService.class);
+
     private final FeatureFlagRepository flagRepository;
     private final FlagAuditLogRepository auditLogRepository;
+    private final FlagChangeStreamController flagChangeStreamController;
+    private final CacheManager cacheManager;
 
     public FlagManagementService(FeatureFlagRepository flagRepository,
-                                 FlagAuditLogRepository auditLogRepository) {
+                                 FlagAuditLogRepository auditLogRepository,
+                                 FlagChangeStreamController flagChangeStreamController,
+                                 CacheManager cacheManager) {
         this.flagRepository = flagRepository;
         this.auditLogRepository = auditLogRepository;
+        this.flagChangeStreamController = flagChangeStreamController;
+        this.cacheManager = cacheManager;
     }
 
     @Transactional
@@ -96,6 +108,7 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "UPDATED", oldValue,
                 flagSummary(flag), changedBy));
 
+        flagChangeStreamController.broadcast(key, flag.isEnabled());
         return toResponse(flag);
     }
 
@@ -110,6 +123,7 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "ENABLED",
                 String.valueOf(oldEnabled), "true", changedBy));
 
+        flagChangeStreamController.broadcast(key, true);
         return toResponse(flag);
     }
 
@@ -124,6 +138,7 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "DISABLED",
                 String.valueOf(oldEnabled), "false", changedBy));
 
+        flagChangeStreamController.broadcast(key, false);
         return toResponse(flag);
     }
 
@@ -143,7 +158,26 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "UPDATED",
                 String.valueOf(oldPercentage), String.valueOf(percentage), changedBy));
 
+        flagChangeStreamController.broadcast(key, percentage);
         return toResponse(flag);
+    }
+
+    @Transactional
+    public void forceDisable(String flagKey) {
+        FeatureFlag flag = findByKeyOrThrow(flagKey);
+        boolean oldEnabled = flag.isEnabled();
+        flag.setEnabled(false);
+        flagRepository.save(flag);
+
+        // Bypass cache: directly evict to ensure immediate propagation
+        if (cacheManager.getCache("flags") != null) {
+            cacheManager.getCache("flags").evict(flagKey);
+        }
+
+        auditLogRepository.save(new FlagAuditLog(flag.getId(), "EMERGENCY_STOP",
+                String.valueOf(oldEnabled), "false", "system"));
+
+        log.warn("flags.force_disable flag={} previous_state={}", flagKey, oldEnabled);
     }
 
     public FlagResponse getFlag(String key) {

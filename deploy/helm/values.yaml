@@ -124,6 +124,105 @@ istio:
         app: admin-gateway-service
       principals:
         - cluster.local/ns/{{ .Release.Namespace }}/sa/istio-ingressgateway
+  denyDefault:
+    enabled: true
+  servicePolicies:
+    identity-service:
+      allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
+        - checkout-orchestrator-service
+    checkout-orchestrator-service:
+      allowFrom:
+        - mobile-bff-service
+        - order-service
+    order-service:
+      allowFrom:
+        - checkout-orchestrator-service
+        - fulfillment-service
+        - notification-service
+        - wallet-loyalty-service
+    payment-service:
+      allowFrom:
+        - checkout-orchestrator-service
+        - fulfillment-service
+        - order-service
+    inventory-service:
+      allowFrom:
+        - order-service
+        - fulfillment-service
+        - checkout-orchestrator-service
+        - search-service
+    cart-service:
+      allowFrom:
+        - mobile-bff-service
+        - checkout-orchestrator-service
+        - order-service
+    pricing-service:
+      allowFrom:
+        - cart-service
+        - order-service
+        - checkout-orchestrator-service
+    catalog-service:
+      allowFrom:
+        - mobile-bff-service
+        - search-service
+    search-service:
+      allowFrom:
+        - mobile-bff-service
+        - catalog-service
+    fulfillment-service:
+      allowFrom:
+        - checkout-orchestrator-service
+        - rider-fleet-service
+        - warehouse-service
+    rider-fleet-service:
+      allowFrom:
+        - fulfillment-service
+        - dispatch-optimizer-service
+    warehouse-service:
+      allowFrom:
+        - fulfillment-service
+        - inventory-service
+    notification-service:
+      allowFrom:
+        - order-service
+        - payment-service
+        - fulfillment-service
+        - identity-service
+    wallet-loyalty-service:
+      allowFrom:
+        - order-service
+        - checkout-orchestrator-service
+    fraud-detection-service:
+      allowFrom:
+        - checkout-orchestrator-service
+        - payment-service
+    ai-orchestrator-service:
+      allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
+    ai-inference-service:
+      allowFrom:
+        - ai-orchestrator-service
+        - routing-eta-service
+    config-feature-flag-service:
+      allowFrom:
+        - checkout-orchestrator-service
+        - fulfillment-service
+        - rider-fleet-service
+        - fraud-detection-service
+        - pricing-service
+    audit-trail-service:
+      allowFrom:
+        - identity-service
+        - order-service
+        - payment-service
+        - fulfillment-service
+    routing-eta-service:
+      allowFrom:
+        - fulfillment-service
+        - rider-fleet-service
 
 services:
   identity-service:

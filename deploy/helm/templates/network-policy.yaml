@@ -1,35 +1,38 @@
 {{- if .Values.networkPolicy.enabled }}
-{{- range $name, $svc := .Values.services }}
+{{- range $name, $policy := .Values.istio.servicePolicies }}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ $name }}-netpol
+  name: {{ $name }}-ingress
+  namespace: {{ $.Release.Namespace }}
 spec:
   podSelector:
     matchLabels:
       app: {{ $name }}
   policyTypes:
     - Ingress
-    - Egress
   ingress:
+    {{- range $policy.allowFrom }}
     - from:
-        - podSelector: {}
-      ports:
-        - protocol: TCP
-          port: {{ $svc.port | default 8080 }}
-  egress:
-    - to:
-        - podSelector: {}
-    - to:
-        - namespaceSelector: {}
-          podSelector:
+        - podSelector:
             matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
----
+              app: {{ . }}
+    {{- end }}
+    # Always allow Prometheus scraping and health probes
+    - ports:
+        - port: metrics
+          protocol: TCP
 {{- end }}
+---
+# Default deny for pods not covered by specific policies
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ $.Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
 {{- end }}

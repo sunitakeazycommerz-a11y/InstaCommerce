@@ -136,8 +136,8 @@ class InjectionDetector:
                 return True, _ROLE_CONFIDENCE, role_reason
 
         except Exception:
-            logger.exception("Injection detection failed — allowing request")
-            return False, 0.0, "detection_error"
+            logger.exception("Injection detection failed — blocking request (fail-closed)")
+            return True, 1.0, "detection_error_fail_closed"
 
         return False, 0.0, "clean"
 

@@ -385,6 +385,32 @@ def linear_score(features: Dict[str, float], weights: Dict[str, float], bias: fl
     return bias + sum(contributions.values()), contributions
 
 
+def init_telemetry(app_instance: FastAPI) -> Optional[Any]:
+    otel_enabled = parse_bool(os.getenv("AI_INFERENCE_OTEL_ENABLED"), True)
+    if not otel_enabled:
+        return None
+    try:
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except ImportError:
+        logger.warning("OpenTelemetry instrumentation unavailable")
+        return None
+
+    service_name = os.getenv("AI_INFERENCE_OTEL_SERVICE_NAME", "ai-inference-service")
+    resource = Resource.create({"service.name": service_name})
+    provider = TracerProvider(resource=resource)
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+    exporter = OTLPSpanExporter(endpoint=endpoint) if endpoint else OTLPSpanExporter()
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    FastAPIInstrumentor.instrument_app(app_instance)
+    return trace.get_tracer("ai-inference-service")
+
+
 def safe_sigmoid(value: float) -> float:
     if value >= 50:
         return 1.0
@@ -704,6 +730,8 @@ app = FastAPI(title="AI Inference Service", version="1.1.0", lifespan=lifespan)
 
 from app.auth import InternalServiceAuthMiddleware
 app.add_middleware(InternalServiceAuthMiddleware)
+
+app.state.tracer = init_telemetry(app)
 
 
 @app.get("/metrics")

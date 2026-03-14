@@ -2,6 +2,7 @@ package com.instacommerce.notification.provider;
 
 import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.notification.domain.model.NotificationChannel;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import org.slf4j.Logger;
@@ -40,6 +41,7 @@ public class TwilioSmsProvider implements NotificationProvider {
     }
 
     @Override
+    @CircuitBreaker(name = "smsProvider", fallbackMethod = "smsFallback")
     public String send(NotificationSendRequest request) {
         NotificationProperties.Twilio twilio = notificationProperties.getProviders().getTwilio();
         if (isBlank(twilio.getAccountSid()) || isBlank(twilio.getAuthToken()) || isBlank(twilio.getFromNumber())) {
@@ -69,6 +71,11 @@ public class TwilioSmsProvider implements NotificationProvider {
         } catch (Exception ex) {
             throw new ProviderTemporaryException("Twilio request failed", ex);
         }
+    }
+
+    private String smsFallback(NotificationSendRequest request, Exception ex) {
+        logger.warn("notification.circuit_breaker_open provider=sms recipient={}", request.recipient(), ex);
+        throw new ProviderTemporaryException("SMS provider circuit breaker open", ex);
     }
 
     private boolean isBlank(String value) {

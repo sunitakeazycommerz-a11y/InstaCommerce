@@ -1,5 +1,6 @@
 package com.instacommerce.fraud.service;
 
+import com.instacommerce.fraud.config.FraudOperationalMode;
 import com.instacommerce.fraud.domain.model.FraudAction;
 import com.instacommerce.fraud.domain.model.FraudRule;
 import com.instacommerce.fraud.domain.model.FraudSignal;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +30,9 @@ public class FraudScoringService {
     private final BlocklistService blocklistService;
     private final OutboxService outboxService;
 
+    @Value("${fraud.operational-mode:AUTO_BLOCK}")
+    private String operationalModeStr;
+
     public FraudScoringService(FraudRuleRepository fraudRuleRepository,
                                FraudSignalRepository fraudSignalRepository,
                                RuleEvaluationService ruleEvaluationService,
@@ -40,8 +45,23 @@ public class FraudScoringService {
         this.outboxService = outboxService;
     }
 
+    private FraudOperationalMode getOperationalMode() {
+        try {
+            return FraudOperationalMode.valueOf(operationalModeStr);
+        } catch (IllegalArgumentException e) {
+            return FraudOperationalMode.AUTO_BLOCK;
+        }
+    }
+
     @Transactional
     public FraudCheckResponse scoreTransaction(FraudCheckRequest request) {
+        FraudOperationalMode mode = getOperationalMode();
+        if (mode == FraudOperationalMode.PASS_THROUGH) {
+            log.warn("fraud.pass_through_mode active -- allowing transaction without scoring");
+            return new FraudCheckResponse(0, RiskLevel.LOW.name(), FraudAction.ALLOW.name(),
+                    List.of(), null);
+        }
+
         // Fast-path: check blocklists first
         if (isAnyEntityBlocked(request)) {
             return persistAndRespond(request, 100, RiskLevel.CRITICAL, FraudAction.BLOCK,
@@ -71,6 +91,17 @@ public class FraudScoringService {
         RiskLevel riskLevel = RiskLevel.fromScore(clampedScore);
         FraudAction finalAction = FraudAction.escalate(
                 FraudAction.fromRiskLevel(riskLevel), highestAction);
+
+        if (mode == FraudOperationalMode.SHADOW) {
+            log.info("fraud.shadow_mode score={} -- would have {}", clampedScore,
+                    finalAction != FraudAction.ALLOW ? "BLOCKED" : "ALLOWED");
+            return new FraudCheckResponse(0, RiskLevel.LOW.name(), FraudAction.ALLOW.name(),
+                    List.of(), null);
+        }
+        if (mode == FraudOperationalMode.MANUAL_REVIEW) {
+            log.info("fraud.manual_review_mode score={}", clampedScore);
+            return persistAndRespond(request, clampedScore, riskLevel, FraudAction.REVIEW, triggeredRules);
+        }
 
         return persistAndRespond(request, clampedScore, riskLevel, finalAction, triggeredRules);
     }

@@ -2,6 +2,7 @@ package com.instacommerce.notification.provider;
 
 import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.notification.domain.model.NotificationChannel;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import java.util.HashMap;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -39,6 +40,7 @@ public class SendGridEmailProvider implements NotificationProvider {
     }
 
     @Override
+    @CircuitBreaker(name = "emailProvider", fallbackMethod = "emailFallback")
     public String send(NotificationSendRequest request) {
         String apiKey = notificationProperties.getProviders().getSendgrid().getApiKey();
         String fromEmail = notificationProperties.getProviders().getSendgrid().getFromEmail();
@@ -78,5 +80,10 @@ public class SendGridEmailProvider implements NotificationProvider {
         } catch (Exception ex) {
             throw new ProviderTemporaryException("SendGrid request failed", ex);
         }
+    }
+
+    private String emailFallback(NotificationSendRequest request, Exception ex) {
+        logger.warn("notification.circuit_breaker_open provider=email recipient={}", request.recipient(), ex);
+        throw new ProviderTemporaryException("Email provider circuit breaker open", ex);
     }
 }
