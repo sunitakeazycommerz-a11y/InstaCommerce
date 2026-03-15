@@ -286,6 +286,10 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql:///order_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       ORDER_CHECKOUT_DIRECT_SAGA_ENABLED: "true"
       ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED: "false"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8080"
+      CART_SERVICE_URL: "http://cart-service:8088"
+      PAYMENT_SERVICE_URL: "http://payment-service:8080"
+      PRICING_SERVICE_URL: "http://pricing-service:8087"
     hpa:
       minReplicas: 2
       maxReplicas: 10
@@ -327,6 +331,10 @@ services:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///fulfillment_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "true"
+      ORDER_SERVICE_URL: "http://order-service:8080"
+      PAYMENT_SERVICE_URL: "http://payment-service:8080"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8080"
+      WAREHOUSE_SERVICE_URL: "http://warehouse-service:8090"
     hpa:
       minReplicas: 2
       maxReplicas: 5
@@ -413,6 +421,11 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8089"
       TEMPORAL_SERVICE_ADDRESS: temporal:7233
+      CART_SERVICE_URL: "http://cart-service:8088"
+      PRICING_SERVICE_URL: "http://pricing-service:8087"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8080"
+      PAYMENT_SERVICE_URL: "http://payment-service:8080"
+      ORDER_SERVICE_URL: "http://order-service:8080"
     hpa:
       minReplicas: 2
       maxReplicas: 10
@@ -486,6 +499,74 @@ services:
       minReplicas: 2
       maxReplicas: 6
       targetCPU: 70
+
+  outbox-relay-order:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${ORDER_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "1s"
+      BATCH_SIZE: "100"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-payment:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${PAYMENT_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "1s"
+      BATCH_SIZE: "100"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-cart:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${CART_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "2s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-fulfillment:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${FULFILLMENT_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "1s"
+      BATCH_SIZE: "100"
+      HEALTH_PORT: "8103"
 
   cdc-consumer:
     replicas: 2
