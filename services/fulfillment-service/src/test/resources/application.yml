@@ -1,0 +1,54 @@
+spring:
+  config:
+    import: "optional:classpath:application-test-noop.properties"
+  flyway:
+    postgresql:
+      transactional-lock: false
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  kafka:
+    bootstrap-servers: localhost:9092
+
+fulfillment:
+  jwt:
+    issuer: instacommerce-identity
+    public-key: |
+      -----BEGIN PUBLIC KEY-----
+      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwLQ9ItN2Ynh6wOZ43vBR
+      +mwBiITyLugZCLnF20z7D/g17KhgeM3D6JfexegX/Gtekt+Oha2/1KcSAwRwsDZZ
+      7CU8gYFWb+TKwrWTJd8efMlhUxeTQvIS3DlOxw5QuWh6wB5FsOmMchqehTGtOcB6
+      VQ6yqNwfq4RZtb8LdK0mOyGGSZT8xVCVVL1Z8XNPqveKauyJmedzKTUyssWLdJe3
+      QyXUggGR9rdcanfBjapvguHFhoxeXfqW+CxU7ilk1KuNGcj9VDhx92OKugJAjrPY
+      FsFZ2LlcpTlxCUPsAOoqdi0mM4dK+HH7mKgMwza36AipDi1tWhlzFMqTRG9MjZw8
+      WQIDAQAB
+      -----END PUBLIC KEY-----
+  clients:
+    order:
+      base-url: http://localhost:8085
+    payment:
+      base-url: http://localhost:8086
+    inventory:
+      base-url: http://localhost:8083
+    warehouse:
+      base-url: http://localhost:8088
+  choreography:
+    order-status-callback-enabled: false
+
+internal:
+  service:
+    name: fulfillment-service
+    token: test-internal-service-token
+
+management:
+  endpoints:
+    access:
+      default: read-only
+    web:
+      exposure:
+        include: health,info,prometheus,metrics

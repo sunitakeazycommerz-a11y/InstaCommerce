@@ -14,6 +14,9 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -70,6 +73,8 @@ public class RiderService {
             .collect(Collectors.toList());
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public RiderResponse activateRider(UUID riderId) {
         Rider rider = riderRepository.findById(riderId)
@@ -85,6 +90,8 @@ public class RiderService {
         return toResponse(rider);
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public RiderResponse suspendRider(UUID riderId) {
         Rider rider = riderRepository.findById(riderId)
@@ -105,6 +112,8 @@ public class RiderService {
         return toResponse(rider);
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public RiderResponse onboardRider(UUID riderId) {
         Rider rider = riderRepository.findById(riderId)

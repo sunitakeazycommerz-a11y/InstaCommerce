@@ -14,6 +14,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,6 +46,8 @@ public class LoyaltyService {
         return toResponse(account);
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public LoyaltyResponse earnPoints(UUID userId, String orderId, long orderTotalCents) {
         LoyaltyAccount account = accountRepository.findByUserIdForUpdate(userId)
@@ -77,6 +82,8 @@ public class LoyaltyService {
         return toResponse(account);
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public LoyaltyResponse redeemPoints(UUID userId, int points, String orderId) {
         LoyaltyAccount account = accountRepository.findByUserIdForUpdate(userId)

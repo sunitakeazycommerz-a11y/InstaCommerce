@@ -1,7 +1,10 @@
 package com.instacommerce.fulfillment.client;
 
 import com.instacommerce.fulfillment.config.FulfillmentProperties;
+import com.instacommerce.fulfillment.exception.ServiceUnavailableException;
 import com.instacommerce.fulfillment.security.InternalServiceAuthInterceptor;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -9,8 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestTemplate;
 
 @Component
@@ -32,16 +33,17 @@ public class RestPaymentClient implements PaymentClient {
     }
 
     @Override
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "refundFallback")
+    @Retry(name = "paymentService")
     public void refund(UUID paymentId, long amountCents, String reason, String idempotencyKey) {
         RefundRequest request = new RefundRequest(amountCents, reason, idempotencyKey);
-        try {
-            restTemplate.postForObject(baseUrl + "/payments/" + paymentId + "/refund", request, Object.class);
-        } catch (HttpClientErrorException | HttpServerErrorException ex) {
-            logger.error("Refund HTTP error for payment {} amount {}: {} {}",
-                paymentId, amountCents, ex.getStatusCode(), ex.getMessage());
-        } catch (Exception ex) {
-            logger.error("Refund call failed for payment {} amount {}: {}",
-                paymentId, amountCents, ex.getMessage());
-        }
+        restTemplate.postForObject(baseUrl + "/payments/" + paymentId + "/refund", request, Object.class);
+    }
+
+    private void refundFallback(UUID paymentId, long amountCents, String reason, String idempotencyKey, Exception e) {
+        logger.warn("Circuit breaker fallback for paymentService refund paymentId={} amount={}: {}",
+                paymentId, amountCents, e.getMessage());
+        throw new ServiceUnavailableException("paymentService",
+                "Payment service unavailable for refund paymentId=" + paymentId, e);
     }
 }

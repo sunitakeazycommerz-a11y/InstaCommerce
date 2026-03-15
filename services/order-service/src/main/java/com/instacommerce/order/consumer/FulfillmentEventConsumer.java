@@ -1,6 +1,7 @@
 package com.instacommerce.order.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.order.domain.model.OrderStatus;
 import com.instacommerce.order.service.OrderService;
 import java.util.UUID;

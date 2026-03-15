@@ -2,6 +2,8 @@ package com.instacommerce.notification.service;
 
 import com.instacommerce.notification.config.InternalServiceAuthInterceptor;
 import com.instacommerce.notification.config.NotificationProperties;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
@@ -10,8 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.ResourceAccessException;
-import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 @Component
@@ -33,22 +33,21 @@ public class RestUserDirectoryClient implements UserDirectoryClient {
     }
 
     @Override
+    @CircuitBreaker(name = "identityService", fallbackMethod = "findUserFallback")
+    @Retry(name = "identityService")
     public Optional<UserContact> findUser(UUID userId) {
-        try {
-            IdentityUserResponse response = restTemplate.getForObject(
-                baseUrl + "/admin/users/" + userId, IdentityUserResponse.class);
-            if (response == null || response.id() == null) {
-                return Optional.empty();
-            }
-            String name = buildName(response.firstName(), response.lastName());
-            return Optional.of(new UserContact(response.id(), response.email(), response.phone(), name, null));
-        } catch (ResourceAccessException ex) {
-            logger.error("Identity-service unreachable while fetching user {}: {}", userId, ex.getMessage());
-            return Optional.empty();
-        } catch (RestClientException ex) {
-            logger.warn("Failed to fetch user contact for {}", userId, ex);
+        IdentityUserResponse response = restTemplate.getForObject(
+            baseUrl + "/admin/users/" + userId, IdentityUserResponse.class);
+        if (response == null || response.id() == null) {
             return Optional.empty();
         }
+        String name = buildName(response.firstName(), response.lastName());
+        return Optional.of(new UserContact(response.id(), response.email(), response.phone(), name, null));
+    }
+
+    private Optional<UserContact> findUserFallback(UUID userId, Exception e) {
+        logger.warn("Circuit breaker fallback for identityService findUser userId={}: {}", userId, e.getMessage());
+        return Optional.empty();
     }
 
     private static String buildName(String firstName, String lastName) {

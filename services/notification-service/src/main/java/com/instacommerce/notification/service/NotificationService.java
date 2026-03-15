@@ -2,7 +2,7 @@ package com.instacommerce.notification.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.instacommerce.notification.config.NotificationProperties;
-import com.instacommerce.notification.consumer.EventEnvelope;
+import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.notification.domain.model.NotificationChannel;
 import com.instacommerce.notification.domain.model.NotificationLog;
 import com.instacommerce.notification.domain.model.NotificationStatus;

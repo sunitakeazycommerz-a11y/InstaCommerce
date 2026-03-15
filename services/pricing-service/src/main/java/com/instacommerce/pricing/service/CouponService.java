@@ -18,6 +18,9 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -76,6 +79,8 @@ public class CouponService {
         return new CouponValidationResult(discount, code);
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public void redeemCoupon(String code, UUID userId, UUID orderId, long discountCents) {
         Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)
@@ -113,6 +118,8 @@ public class CouponService {
         log.info("Redeemed coupon code={} userId={} orderId={} discount={}", code, userId, orderId, discountCents);
     }
 
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public void unredeemCoupon(String code, UUID userId, UUID orderId) {
         Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)

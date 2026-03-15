@@ -2,6 +2,8 @@ package com.instacommerce.cart.client;
 
 import com.instacommerce.cart.exception.ApiException;
 import com.instacommerce.cart.security.InternalServiceAuthInterceptor;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -42,20 +44,22 @@ public class PricingClient {
      * @return the pricing response containing the authoritative unit price
      * @throws ApiException if pricing-service is unavailable or returns an error
      */
+    @CircuitBreaker(name = "pricingService", fallbackMethod = "getPriceFallback")
+    @Retry(name = "pricingService")
     public PriceResponse getPrice(UUID productId) {
-        try {
-            PriceResponse response = restTemplate.getForObject(
-                    baseUrl + "/pricing/products/{productId}", PriceResponse.class, productId);
-            if (response == null) {
-                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
-                        "Pricing service returned null for product: " + productId);
-            }
-            return response;
-        } catch (RestClientException ex) {
-            log.error("Failed to fetch price for product={}: {}", productId, ex.getMessage());
+        PriceResponse response = restTemplate.getForObject(
+                baseUrl + "/pricing/products/{productId}", PriceResponse.class, productId);
+        if (response == null) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
-                    "Unable to verify product price. Please try again later.");
+                    "Pricing service returned null for product: " + productId);
         }
+        return response;
+    }
+
+    private PriceResponse getPriceFallback(UUID productId, Exception e) {
+        log.warn("Circuit breaker fallback for pricingService getPrice productId={}: {}", productId, e.getMessage());
+        throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
+                "Unable to verify product price. Please try again later.");
     }
 
     /**

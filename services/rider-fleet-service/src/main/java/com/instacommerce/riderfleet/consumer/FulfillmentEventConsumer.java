@@ -1,6 +1,7 @@
 package com.instacommerce.riderfleet.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.riderfleet.service.RiderAssignmentService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
