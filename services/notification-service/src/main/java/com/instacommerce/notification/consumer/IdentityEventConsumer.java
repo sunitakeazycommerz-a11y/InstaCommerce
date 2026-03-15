@@ -1,6 +1,7 @@
 package com.instacommerce.notification.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.notification.service.UserErasureService;
 import java.time.Instant;

@@ -2,8 +2,8 @@ package com.instacommerce.contracts.events;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Instant;
-import java.util.Map;
 
 /**
  * Canonical event envelope that wraps every domain event published on Kafka.
@@ -37,5 +37,5 @@ public record EventEnvelope(
         @JsonAlias("correlation_id")
         String correlationId,
 
-        Map<String, Object> payload
+        JsonNode payload
 ) {}

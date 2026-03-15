@@ -1,6 +1,7 @@
 package com.instacommerce.pricing.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.pricing.domain.PriceRule;
 import com.instacommerce.pricing.repository.PriceRuleRepository;

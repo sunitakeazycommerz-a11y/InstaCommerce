@@ -2,6 +2,7 @@ package com.instacommerce.fraud.consumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.fraud.service.VelocityService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
