@@ -1,6 +1,8 @@
 package com.instacommerce.wallet.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -42,6 +44,8 @@ public class RestOrderLookupClient implements OrderLookupClient {
     }
 
     @Override
+    @CircuitBreaker(name = "orderService", fallbackMethod = "findOrderFallback")
+    @Retry(name = "orderService")
     public Optional<OrderSnapshot> findOrder(UUID orderId) {
         try {
             OrderResponse response = restClient.get()
@@ -62,6 +66,11 @@ public class RestOrderLookupClient implements OrderLookupClient {
             log.info("Order {} not found in order-service (404)", orderId);
             return Optional.empty();
         }
+    }
+
+    private Optional<OrderSnapshot> findOrderFallback(UUID orderId, Exception e) {
+        log.warn("Circuit breaker fallback for orderService findOrder orderId={}: {}", orderId, e.getMessage());
+        return Optional.empty();
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

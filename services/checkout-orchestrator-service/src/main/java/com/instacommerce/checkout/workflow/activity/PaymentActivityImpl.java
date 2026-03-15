@@ -1,6 +1,8 @@
 package com.instacommerce.checkout.workflow.activity;
 
 import com.instacommerce.checkout.dto.PaymentAuthResult;
+import com.instacommerce.checkout.exception.ServiceUnavailableException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.temporal.activity.Activity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +22,7 @@ public class PaymentActivityImpl implements PaymentActivity {
     }
 
     @Override
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "authorizePaymentFallback")
     public PaymentAuthResult authorizePayment(long amountCents, String paymentMethodId, String idempotencyKey) {
         String resolvedKey = resolveIdempotencyKey(idempotencyKey);
         log.info("Authorizing payment amount={} paymentMethod={} idempotencyKey={}", amountCents, paymentMethodId, resolvedKey);
@@ -29,6 +32,7 @@ public class PaymentActivityImpl implements PaymentActivity {
     }
 
     @Override
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "capturePaymentFallback")
     public void capturePayment(String paymentId, String idempotencyKey) {
         String resolvedKey = resolveIdempotencyKey(idempotencyKey);
         log.info("Capturing payment={} idempotencyKey={}", paymentId, resolvedKey);
@@ -37,6 +41,7 @@ public class PaymentActivityImpl implements PaymentActivity {
     }
 
     @Override
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "voidPaymentFallback")
     public void voidPayment(String paymentId, String idempotencyKey) {
         String resolvedKey = resolveIdempotencyKey(idempotencyKey);
         log.info("Voiding payment={} idempotencyKey={}", paymentId, resolvedKey);
@@ -45,6 +50,7 @@ public class PaymentActivityImpl implements PaymentActivity {
     }
 
     @Override
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "refundPaymentFallback")
     public void refundPayment(String paymentId, long amountCents, String idempotencyKey) {
         String resolvedKey = resolveIdempotencyKey(idempotencyKey);
         log.info("Refunding payment={} amountCents={} idempotencyKey={}", paymentId, amountCents, resolvedKey);
@@ -54,6 +60,35 @@ public class PaymentActivityImpl implements PaymentActivity {
                 "reason", "CHECKOUT_COMPENSATION",
                 "idempotencyKey", resolvedKey
             ), Void.class, paymentId);
+    }
+
+    private PaymentAuthResult authorizePaymentFallback(long amountCents, String paymentMethodId,
+                                                        String idempotencyKey, Exception e) {
+        log.warn("Circuit breaker fallback for paymentService authorizePayment amount={}: {}",
+                amountCents, e.getMessage());
+        throw new ServiceUnavailableException("paymentService",
+                "Payment service unavailable for authorizePayment", e);
+    }
+
+    private void capturePaymentFallback(String paymentId, String idempotencyKey, Exception e) {
+        log.warn("Circuit breaker fallback for paymentService capturePayment paymentId={}: {}",
+                paymentId, e.getMessage());
+        throw new ServiceUnavailableException("paymentService",
+                "Payment service unavailable for capturePayment paymentId=" + paymentId, e);
+    }
+
+    private void voidPaymentFallback(String paymentId, String idempotencyKey, Exception e) {
+        log.warn("Circuit breaker fallback for paymentService voidPayment paymentId={}: {}",
+                paymentId, e.getMessage());
+        throw new ServiceUnavailableException("paymentService",
+                "Payment service unavailable for voidPayment paymentId=" + paymentId, e);
+    }
+
+    private void refundPaymentFallback(String paymentId, long amountCents, String idempotencyKey, Exception e) {
+        log.warn("Circuit breaker fallback for paymentService refundPayment paymentId={}: {}",
+                paymentId, e.getMessage());
+        throw new ServiceUnavailableException("paymentService",
+                "Payment service unavailable for refundPayment paymentId=" + paymentId, e);
     }
 
     private String resolveIdempotencyKey(String providedKey) {

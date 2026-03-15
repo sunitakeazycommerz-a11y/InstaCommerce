@@ -1,6 +1,8 @@
 package com.instacommerce.wallet.client;
 
 import com.instacommerce.wallet.exception.ApiException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,7 +10,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientException;
 
 /**
  * Client for the payment-service. Verifies payment transactions
@@ -38,22 +39,25 @@ public class PaymentClient {
      * @return the payment verification response
      * @throws ApiException if payment-service is unavailable or returns an error
      */
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "verifyPaymentFallback")
+    @Retry(name = "paymentService")
     public PaymentResponse verifyPayment(String paymentReference) {
-        try {
-            PaymentResponse response = restClient.get()
-                    .uri("/api/v1/payments/{paymentReference}", paymentReference)
-                    .retrieve()
-                    .body(PaymentResponse.class);
-            if (response == null) {
-                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PAYMENT_SERVICE_UNAVAILABLE",
-                        "Payment service returned null for reference: " + paymentReference);
-            }
-            return response;
-        } catch (RestClientException ex) {
-            log.error("Failed to verify payment reference={}: {}", paymentReference, ex.getMessage());
+        PaymentResponse response = restClient.get()
+                .uri("/api/v1/payments/{paymentReference}", paymentReference)
+                .retrieve()
+                .body(PaymentResponse.class);
+        if (response == null) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PAYMENT_SERVICE_UNAVAILABLE",
-                    "Unable to verify payment. Please try again later.");
+                    "Payment service returned null for reference: " + paymentReference);
         }
+        return response;
+    }
+
+    private PaymentResponse verifyPaymentFallback(String paymentReference, Exception e) {
+        log.warn("Circuit breaker fallback for paymentService verifyPayment reference={}: {}",
+                paymentReference, e.getMessage());
+        throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PAYMENT_SERVICE_UNAVAILABLE",
+                "Unable to verify payment. Please try again later.");
     }
 
     /**

@@ -18,6 +18,7 @@ dependencies {
     implementation("io.micrometer:micrometer-registry-otlp")
     implementation("net.logstash.logback:logstash-logback-encoder:7.4")
     implementation("io.temporal:temporal-sdk:1.22.3")
+    implementation("io.github.resilience4j:resilience4j-spring-boot3:2.2.0")
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
     runtimeOnly("org.postgresql:postgresql")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.5")

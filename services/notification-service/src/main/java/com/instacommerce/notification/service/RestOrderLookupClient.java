@@ -3,6 +3,8 @@ package com.instacommerce.notification.service;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.instacommerce.notification.config.InternalServiceAuthInterceptor;
 import com.instacommerce.notification.config.NotificationProperties;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -12,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 @Component
@@ -34,24 +35,26 @@ public class RestOrderLookupClient implements OrderLookupClient {
     }
 
     @Override
+    @CircuitBreaker(name = "orderService", fallbackMethod = "findOrderFallback")
+    @Retry(name = "orderService")
     public Optional<OrderSnapshot> findOrder(UUID orderId) {
-        try {
-            OrderResponse response = restTemplate.getForObject(
-                baseUrl + "/admin/orders/" + orderId, OrderResponse.class);
-            if (response == null || response.id() == null) {
-                return Optional.empty();
-            }
-            return Optional.of(new OrderSnapshot(
-                response.id(),
-                response.userId(),
-                response.totalCents(),
-                response.currency(),
-                response.status(),
-                response.createdAt()));
-        } catch (RestClientException ex) {
-            logger.warn("Failed to fetch order snapshot for {}", orderId, ex);
+        OrderResponse response = restTemplate.getForObject(
+            baseUrl + "/admin/orders/" + orderId, OrderResponse.class);
+        if (response == null || response.id() == null) {
             return Optional.empty();
         }
+        return Optional.of(new OrderSnapshot(
+            response.id(),
+            response.userId(),
+            response.totalCents(),
+            response.currency(),
+            response.status(),
+            response.createdAt()));
+    }
+
+    private Optional<OrderSnapshot> findOrderFallback(UUID orderId, Exception e) {
+        logger.warn("Circuit breaker fallback for orderService findOrder orderId={}: {}", orderId, e.getMessage());
+        return Optional.empty();
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
