@@ -1,6 +1,7 @@
 package com.instacommerce.pricing.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.pricing.domain.PriceRule;
 import com.instacommerce.pricing.repository.PriceRuleRepository;
 import java.math.BigDecimal;
@@ -24,7 +25,7 @@ public class CatalogEventConsumer {
         this.priceRuleRepository = priceRuleRepository;
     }
 
-    @KafkaListener(topics = "catalog.events", groupId = "pricing-service-catalog")
+    @KafkaListener(topics = TopicNames.CATALOG_EVENTS, groupId = "pricing-service-catalog")
     @Transactional
     public void onCatalogEvent(ConsumerRecord<String, String> record) {
         try {

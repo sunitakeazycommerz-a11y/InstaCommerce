@@ -2,6 +2,7 @@ package com.instacommerce.routing.consumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.routing.service.DeliveryService;
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -23,7 +24,7 @@ public class RiderEventConsumer {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = "rider.events", groupId = "routing-eta-service")
+    @KafkaListener(topics = TopicNames.RIDER_EVENTS, groupId = "routing-eta-service")
     public void handleRiderEvent(String message) {
         try {
             JsonNode event = objectMapper.readTree(message);

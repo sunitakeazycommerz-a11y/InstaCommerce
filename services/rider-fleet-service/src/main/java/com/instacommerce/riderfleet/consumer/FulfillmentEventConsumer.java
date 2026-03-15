@@ -1,6 +1,7 @@
 package com.instacommerce.riderfleet.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.riderfleet.service.RiderAssignmentService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -20,7 +21,7 @@ public class FulfillmentEventConsumer {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = "fulfillment.events", groupId = "rider-fleet-service")
+    @KafkaListener(topics = TopicNames.FULFILLMENT_EVENTS, groupId = "rider-fleet-service")
     public void onFulfillmentEvent(ConsumerRecord<String, String> record) throws Exception {
         EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
         if ("OrderPacked".equals(envelope.eventType())) {

@@ -1,5 +1,6 @@
 package com.instacommerce.search.kafka;
 
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.search.service.SearchIndexService;
 import java.util.Map;
 import java.util.UUID;
@@ -18,7 +19,7 @@ public class CatalogEventConsumer {
         this.searchIndexService = searchIndexService;
     }
 
-    @KafkaListener(topics = "catalog.events", groupId = "search-service")
+    @KafkaListener(topics = TopicNames.CATALOG_EVENTS, groupId = "search-service")
     @SuppressWarnings("unchecked")
     public void handleCatalogEvent(Map<String, Object> envelope) {
         String eventType = (String) envelope.get("eventType");
