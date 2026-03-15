@@ -11,18 +11,18 @@ publishes fulfillment lifecycle events via the transactional outbox pattern.
 
 ## 1. Service Role & Boundaries
 
-**Owns:** pick tasks, pick items, deliveries, riders (legacy), outbox events, audit log.
+**Owns:** pick tasks, pick items, deliveries, outbox events, audit log.
 
 **Does not own:** order lifecycle, payment processing, inventory levels, rider
 fleet management, dispatch optimization, ETA computation, live GPS tracking.
 
 The service sits between the order domain (`order-service`) and the logistics
 layer (`rider-fleet-service`, `routing-eta-service`). It is the **sole authority**
-for pick/pack state and the current (legacy) authority for simple rider
-assignment; the iter-3 architecture review
-([`docs/reviews/iter3/services/fulfillment-logistics.md`](../../docs/reviews/iter3/services/fulfillment-logistics.md))
-designates `rider-fleet-service` as the target single assignment authority, with
-this service's `RiderAssignmentService` to be deprecated.
+for pick/pack state. Rider assignment is delegated to `rider-fleet-service` as
+the single assignment authority, per the iter-3 architecture review
+([`docs/reviews/iter3/services/fulfillment-logistics.md`](../../docs/reviews/iter3/services/fulfillment-logistics.md)).
+The legacy `RiderAssignmentService` and inline dispatch code were removed in
+Wave 30 Track D.
 
 | Boundary | Upstream | Downstream |
 |----------|----------|------------|
@@ -145,7 +145,7 @@ flowchart LR
 | Controller | `AdminFulfillmentController` | Admin rider & dispatch management (`/admin/fulfillment`), audit-logged |
 | Service | `PickService` | Pick task creation, item picking, packing state transitions, auto-complete detection |
 | Service | `DeliveryService` | Rider assignment (admin + auto), dispatch, delivery confirmation, tracking timeline |
-| Service | `RiderAssignmentService` | FIFO rider selection per store via `SELECT … FOR UPDATE SKIP LOCKED` |
+| Service | ~~`RiderAssignmentService`~~ | **Removed in Wave 30 Track D.** Previously handled FIFO rider selection per store. Rider assignment is now handled by `rider-fleet-service` |
 | Service | `SubstitutionService` | 2-phase missing-item handling — transactional outbox write + post-commit inventory release & payment refund |
 | Service | `OutboxService` | Transactional outbox writes (`Propagation.MANDATORY` — must join caller's TX) |
 | Service | `OutboxCleanupJob` | ShedLock-guarded cron (`0 0 */6 * * *`) — purges sent events older than 7 days |
@@ -197,9 +197,6 @@ classDiagram
         +handleMissingItem(task, item, missingQty)
         +releaseStockAndRefund(event)
     }
-    class RiderAssignmentService {
-        +assignRider(storeId) Rider
-    }
     class OutboxService {
         +publish(aggregateType, aggregateId, eventType, payload)
     }
@@ -220,7 +217,6 @@ classDiagram
     PickService --> SubstitutionService
     PickService --> DeliveryService
     PickService --> OutboxService
-    DeliveryService --> RiderAssignmentService
     DeliveryService --> OutboxService
     SubstitutionService --> OutboxService
     OrderEventConsumer --> PickService
@@ -298,12 +294,18 @@ not roll back the outbox event.
 
 ### 5.4 Rider Assignment Sequence
 
+> **Note:** The legacy `RiderAssignmentService` (FIFO auto-assignment within
+> this service) was removed in Wave 30 Track D. Rider assignment is now handled
+> externally by `rider-fleet-service`. The admin manual-assignment path via
+> `DeliveryService.assignRider(orderId, riderId, etaMinutes)` remains, but
+> auto-assignment after packing is delegated to `rider-fleet-service` via the
+> `OrderPacked` event on `fulfillment.events`.
+
 ```mermaid
 sequenceDiagram
     participant Admin
     participant AdminCtrl as AdminFulfillmentController
     participant DS as DeliveryService
-    participant RAS as RiderAssignmentService
     participant RiderRepo as RiderRepository
     participant DeliveryRepo as DeliveryRepository
     participant Outbox as OutboxService
@@ -326,11 +328,7 @@ sequenceDiagram
     EventBus->>Listener: handleOrderStatusUpdate(...)
     Listener->>OrderClient: updateStatus(orderId, "OUT_FOR_DELIVERY")
 
-    Note over DS,RAS: Auto-assignment path (after packing)
-    DS->>RAS: assignRider(storeId)
-    RAS->>RiderRepo: findNextAvailableForStore(storeId)<br/>FOR UPDATE SKIP LOCKED
-    RiderRepo-->>RAS: Rider (FIFO by last dispatch)
-    RAS-->>DS: Rider
+    Note over DS: Auto-assignment after packing is now handled by<br/>rider-fleet-service consuming OrderPacked from fulfillment.events
 ```
 
 ### 5.5 Event Contract Summary
@@ -816,10 +814,11 @@ broader coverage has not yet been written.
 4. **Fire-and-forget HTTP side effects:** `RestInventoryClient` and
    `RestPaymentClient` calls in the substitution phase-2 flow are not retried
    on failure — inventory drift and missed refunds require manual reconciliation.
-5. **Legacy rider assignment:** `RiderAssignmentService` uses FIFO-by-last-dispatch
-   selection. The iter-3 architecture review recommends migrating to
-   `rider-fleet-service` with composite scoring (distance + idle time + rating),
-   GPS-aware assignment, and pre-pack rider staging.
+5. **~~Legacy rider assignment~~ (Resolved — Wave 30 Track D):** The legacy
+   `RiderAssignmentService` with FIFO-by-last-dispatch selection has been removed.
+   Rider assignment is now delegated to `rider-fleet-service`, which the iter-3
+   architecture review recommends enhancing with composite scoring (distance +
+   idle time + rating), GPS-aware assignment, and pre-pack rider staging.
 6. **No per-segment SLA metrics:** State transitions emit high-level events but
    no `confirm_to_pick_ms`, `pick_to_pack_ms`, `pack_to_dispatch_ms`, or
    `dispatch_to_deliver_ms` timers for SLA segment visibility.
@@ -842,7 +841,7 @@ Swiggy Instamart). Key grounded gaps:
 | Dimension | This Service (Current) | India Operator Pattern | Gap Source |
 |-----------|----------------------|----------------------|------------|
 | Rider assignment trigger | Post-pack (`OrderPacked`) | Pre-pack (`OrderConfirmed`) — rider staged before pack completes | +3–6 min `pack_to_dispatch` latency |
-| Assignment algorithm | FIFO by last dispatch, store-scoped | Composite score (distance + idle + rating + load) via optimizer | No GPS, no scoring |
+| Assignment algorithm | Delegated to `rider-fleet-service` (legacy FIFO removed in Wave 30 Track D) | Composite score (distance + idle + rating + load) via optimizer | `rider-fleet-service` scoring not yet composite |
 | Availability freshness | Direct DB query (row lock) | Redis with 5–10s GPS refresh | This service's row lock is correct but rider-fleet's 60s Caffeine cache (separate service) is stale |
 | SLA segment tracking | No per-segment metrics | Per-segment timers with breach alerting | No operational visibility into which segment breaches SLA |
 | Pick location hints | Items have name + SKU only | Aisle/shelf/bin location for dark store pickers | Missing warehouse topology |
