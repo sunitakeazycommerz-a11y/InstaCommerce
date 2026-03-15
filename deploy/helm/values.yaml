@@ -568,6 +568,159 @@ services:
       BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
+  outbox-relay-inventory:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${INVENTORY_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "2s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-identity:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${IDENTITY_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "5s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-catalog:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${CATALOG_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "5s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-rider-fleet:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${RIDER_FLEET_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "1s"
+      BATCH_SIZE: "100"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-warehouse:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${WAREHOUSE_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "5s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-pricing:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${PRICING_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "5s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-wallet-loyalty:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${WALLET_LOYALTY_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "2s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-fraud-detection:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${FRAUD_DETECTION_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "5s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
+  outbox-relay-routing-eta:
+    image: instacommerce/outbox-relay-service
+    port: 8103
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8103"
+      DATABASE_URL: "${ROUTING_ETA_DB_URL}"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      POLL_INTERVAL: "2s"
+      BATCH_SIZE: "50"
+      HEALTH_PORT: "8103"
+
   cdc-consumer:
     replicas: 2
     image: cdc-consumer
@@ -631,6 +784,21 @@ services:
       minReplicas: 2
       maxReplicas: 6
       targetCPU: 70
+
+  stream-processor:
+    image: instacommerce/stream-processor-service
+    port: 8108
+    replicas: 1
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 1000m, memory: 1024Mi }
+    env:
+      SERVER_PORT: "8108"
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      REDIS_URL: "${REDIS_URL}"
+      HEALTH_PORT: "8108"
 
   warehouse-service:
     replicas: 2

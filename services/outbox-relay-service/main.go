@@ -49,6 +49,7 @@ type Config struct {
 	KafkaBrokers    []string
 	KafkaTopic      string
 	KafkaClientID   string
+	DLQTopic        string
 	ShutdownTimeout time.Duration
 	ReadyTimeout    time.Duration
 	OTelServiceName string
@@ -65,6 +66,7 @@ type telemetry struct {
 type relayMetrics struct {
 	relayed  metric.Int64Counter
 	failures metric.Int64Counter
+	dlq      metric.Int64Counter
 	lag      metric.Float64Histogram
 }
 
@@ -282,6 +284,7 @@ func loadConfig() (Config, error) {
 		KafkaBrokers:    brokers,
 		KafkaTopic:      envOrDefault("OUTBOX_TOPIC", ""),
 		KafkaClientID:   envOrDefault("KAFKA_CLIENT_ID", "outbox-relay-service"),
+		DLQTopic:        envOrDefault("DLQ_TOPIC", "outbox.relay.dlq"),
 		ShutdownTimeout: shutdownTimeout,
 		ReadyTimeout:    readyTimeout,
 		OTelServiceName: envOrDefault("OTEL_SERVICE_NAME", "outbox-relay-service"),
@@ -398,6 +401,13 @@ func newRelayMetrics(meter metric.Meter) (relayMetrics, error) {
 	if err != nil {
 		return relayMetrics{}, err
 	}
+	dlq, err := meter.Int64Counter(
+		"outbox.relay.dlq.count",
+		metric.WithDescription("Number of outbox events sent to dead-letter queue."),
+	)
+	if err != nil {
+		return relayMetrics{}, err
+	}
 	lag, err := meter.Float64Histogram(
 		"outbox.relay.lag.seconds",
 		metric.WithDescription("Lag between outbox event creation and relay."),
@@ -406,7 +416,7 @@ func newRelayMetrics(meter metric.Meter) (relayMetrics, error) {
 	if err != nil {
 		return relayMetrics{}, err
 	}
-	return relayMetrics{relayed: relayed, failures: failures, lag: lag}, nil
+	return relayMetrics{relayed: relayed, failures: failures, dlq: dlq, lag: lag}, nil
 }
 
 func newRelayService(cfg Config, logger *slog.Logger, db *pgxpool.Pool, producer sarama.SyncProducer, kafkaConfig *sarama.Config, tracer trace.Tracer, metrics relayMetrics) (*relayService, error) {
@@ -539,10 +549,43 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 		if _, _, err := s.producer.SendMessage(message); err != nil {
 			s.metrics.failures.Add(msgCtx, 1)
 			msgSpan.RecordError(err)
-			msgSpan.End()
-			sendErr = err
 			s.logger.Error("failed to publish message", "error", err, "event_id", evt.ID, "topic", topic)
-			break
+
+			// Attempt DLQ fallback to unblock the pipeline
+			dlqValue := buildDLQMessage(evt, topic, err)
+			dlqMessage := &sarama.ProducerMessage{
+				Topic: s.cfg.DLQTopic,
+				Key:   sarama.StringEncoder(evt.AggregateID),
+				Value: sarama.ByteEncoder(dlqValue),
+				Headers: []sarama.RecordHeader{
+					{Key: []byte("event_id"), Value: []byte(evt.ID)},
+					{Key: []byte("original_topic"), Value: []byte(topic)},
+					{Key: []byte("event_type"), Value: []byte(evt.EventType)},
+					{Key: []byte("aggregate_type"), Value: []byte(evt.AggregateType)},
+					{Key: []byte("dlq_reason"), Value: []byte(err.Error())},
+				},
+			}
+
+			if _, _, dlqErr := s.producer.SendMessage(dlqMessage); dlqErr != nil {
+				// DLQ also failed — cannot make progress; break to retry next poll
+				s.logger.Error("failed to publish to DLQ, pipeline stalled",
+					"error", dlqErr, "event_id", evt.ID, "dlq_topic", s.cfg.DLQTopic)
+				msgSpan.End()
+				sendErr = err
+				break
+			}
+
+			// DLQ succeeded — mark event as sent to unblock the pipeline
+			s.metrics.dlq.Add(msgCtx, 1)
+			s.logger.Warn("event sent to DLQ after primary produce failure",
+				"event_id", evt.ID, "topic", topic, "dlq_topic", s.cfg.DLQTopic)
+			msgSpan.End()
+
+			if _, err := tx.Exec(ctx, s.updateSQL, evt.ID); err != nil {
+				span.RecordError(err)
+				return s.fail(ctx, err)
+			}
+			continue
 		}
 
 		lag := time.Since(evt.CreatedAt).Seconds()
@@ -818,6 +861,30 @@ func buildEventMessage(evt outboxEvent) []byte {
 	}
 
 	bytes, err := json.Marshal(envelope)
+	if err != nil {
+		return evt.Payload
+	}
+	return bytes
+}
+
+func buildDLQMessage(evt outboxEvent, targetTopic string, produceErr error) []byte {
+	var payload any
+	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
+		payload = string(evt.Payload)
+	}
+
+	dlqEnvelope := map[string]any{
+		"eventId":       evt.ID,
+		"originalTopic": targetTopic,
+		"error":         produceErr.Error(),
+		"timestamp":     time.Now().UTC().Format(time.RFC3339Nano),
+		"aggregateType": evt.AggregateType,
+		"aggregateId":   evt.AggregateID,
+		"eventType":     evt.EventType,
+		"payload":       payload,
+	}
+
+	bytes, err := json.Marshal(dlqEnvelope)
 	if err != nil {
 		return evt.Payload
 	}

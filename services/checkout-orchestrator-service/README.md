@@ -54,7 +54,7 @@
 
 This service is a **pure orchestrator**: it holds no domain state beyond the idempotency cache. It delegates every domain operation to downstream services via synchronous REST calls wrapped as Temporal activities. Domain events (e.g., `OrderCreated`, `PaymentCaptured`, `StockReserved`) are published by the downstream services via their own outbox → Debezium → Kafka pipelines; this service does not publish events.
 
-> **⚠️ Dual-saga defect (active):** `order-service` contains a separate `CheckoutWorkflowImpl` on task queue `CHECKOUT_TASK_QUEUE` that accepts client-supplied prices, bypassing `pricing-service`. That path is a P1 correctness defect — see the [transactional-core review](../../docs/reviews/iter3/services/transactional-core.md) §1. This service (`checkout-orchestrator-service`) is the **authoritative** checkout path.
+> **Dual-saga defect (resolved — Wave 30 Track E):** `order-service` previously contained a separate `CheckoutWorkflowImpl` on task queue `CHECKOUT_TASK_QUEUE` that accepted client-supplied prices, bypassing `pricing-service`. That path was a P1 correctness defect — see the [transactional-core review](../../docs/reviews/iter3/services/transactional-core.md) section 1. The legacy checkout code (22 files) was removed in Wave 30 Track E. This service (`checkout-orchestrator-service`) is now the **sole** checkout path.
 
 ---
 
@@ -839,7 +839,7 @@ Step 7 (`clearCart`) swallows exceptions. A stale cart after successful checkout
 | 2 | Thin test coverage — only controller-level tests exist; no workflow replay, integration, contract, E2E, or load suite for a Tier 0 money-path service | Critical | [testing-quality §Tier 0](../../docs/reviews/iter3/platform/testing-quality-governance.md) |
 | 3 | Payment idempotency key can exceed downstream `VARCHAR(64)` column width | Medium | [transactional-core §3.3](../../docs/reviews/iter3/services/transactional-core.md) |
 | 4 | No pricing lock/quote-token — race window between pricing and order creation | Medium | [transactional-core §2](../../docs/reviews/iter3/services/transactional-core.md) |
-| 5 | Dual checkout saga in `order-service` accepts client-supplied prices (P1 defect) | Critical | [transactional-core §1.1](../../docs/reviews/iter3/services/transactional-core.md) |
+| 5 | ~~Dual checkout saga in `order-service` accepts client-supplied prices (P1 defect)~~ **Resolved in Wave 30 Track E** — legacy checkout code (22 files) removed from `order-service` | ~~Critical~~ Fixed | [transactional-core §1.1](../../docs/reviews/iter3/services/transactional-core.md) |
 | 6 | Helm/Istio rollout prerequisites are still manual: service URLs are not chart-wired and mesh auth allow-lists do not yet mention `checkout-orchestrator-service` | High | Review of `deploy/helm/values.yaml` and this service's `application.yml` |
 | 7 | Temporal SDK metrics (`temporal_workflow_*`) not wired to Micrometer | Low | [observability-sre §SLO-13](../../docs/reviews/iter3/platform/observability-sre.md) |
 | 8 | Compensation failure (void/refund) is swallowed as warn log — no alert, no dead-letter | Medium | Source: `CheckoutWorkflowImpl.compensatePayment()` |

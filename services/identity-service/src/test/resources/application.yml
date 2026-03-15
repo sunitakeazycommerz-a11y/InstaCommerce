@@ -1,0 +1,70 @@
+spring:
+  config:
+    import: "optional:classpath:application-test-noop.properties"
+  flyway:
+    postgresql:
+      transactional-lock: false
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+
+identity:
+  jwt:
+    issuer: instacommerce-identity
+    public-key: |
+      -----BEGIN PUBLIC KEY-----
+      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtHpjRkHa1/cijtGMc/qu
+      wfMvT0qyh4QnIcymi61SnAvnEXu4g/LWFqVd0DjC8vXDzr9wTAR3qr0tCvcaWRpI
+      BOAtvVJ++mBxrnyTasmhXt7HpBJuaMF7RheBzKlV1Iv3w70Iel0EiaUOMRrFNOLq
+      XMcmB4+gqXGolcGFFZXwVrF5bhMP/+m61yPcbMyplcFEAMFUuQNojzfzsZQvs7tS
+      NF/KReJmDIyPAbVF7fktKLKPKBmw06Wn8Ga+mKOxN6z2TCg9gw28TPmja/e3WP/c
+      BEwVx6O3uufxLHbsboqWWAfhRXh056L4ItzEBEJccDCoVStqFHiFrVph0dU/8yMQ
+      RwIDAQAB
+      -----END PUBLIC KEY-----
+    private-key: |
+      -----BEGIN PRIVATE KEY-----
+      MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC0emNGQdrX9yKO
+      0Yxz+q7B8y9PSrKHhCchzKaLrVKcC+cRe7iD8tYWpV3QOMLy9cPOv3BMBHeqvS0K
+      9xpZGkgE4C29Un76YHGufJNqyaFe3sekEm5owXtGF4HMqVXUi/fDvQh6XQSJpQ4x
+      GsU04upcxyYHj6CpcaiVwYUVlfBWsXluEw//6brXI9xszKmVwUQAwVS5A2iPN/Ox
+      lC+zu1I0X8pF4mYMjI8BtUXt+S0oso8oGbDTpafwZr6Yo7E3rPZMKD2DDbxM+aNr
+      97dY/9wETBXHo7e65/EsduxuipZYB+FFeHTnovgi3MQEQlxwMKhVK2oUeIWtWmHR
+      1T/zIxBHAgMBAAECggEADgR5ecdQpOMpgyKMavpRS3gaDb8Kqb2JFTYiHgl6t+sG
+      vz6260ICVc+clI5sDyx+e6w2dSOzBbGxchS/g6R9Fn/bnZpENCnRz+XAxL5fXbvQ
+      5ryVvbuABHF79TZBF9k9MliYHs+NtCvRM91/6/vPNyCH+CC0L6Tycps4EnVLAvie
+      sldcZwqyNMoyMKLawT+M7smoQH/rVyBqdcnP7hYAZ+4hXQhC+AnD5qPPcrE48OZP
+      bxbLv4+jln+zQszc+aIp24OgbD04Vjs+l8WMx+9010dT61F0MSARhY18qfydokAT
+      v5Z3hYc/PBEOClvGDpxuX99IJoVFr/SHHY7ec8tTDQKBgQDmXgwL1CC8BIteNGCd
+      FkdRxl3s/pgnWQGNGDRCVhB1dWq7Z8c/Cr8A0Pg/NfbwVMxeN+YkvVvtV2vHGynj
+      fatxDf75XFvmv3RuwVAr5RSEf88d87ToG0NBz03odBxnNNii9HYnf39faGjFePA+
+      VSV79UjX+vkIwEup0dv+E+dmBQKBgQDIj0HuQ9H8QiaL+cEzT4X5UbP22rT1d9cm
+      Vug6JtfTHkTmeV8F1QN7JHkXueC16RXG2aRJii+Eyzmxu9DwchrkzrRHhOczHfmC
+      RJpKNOpSdasaHKve13bAbquOmHh60YXuk6/O0cZDvhFqIBr3lkMgBU7KtLs760/C
+      yI9UzJPC2wKBgGYFgJA8gcLCwHYX/DGVjEBK+Y3bssa6RFWYQoyeUOuz9HDKpRLm
+      T3CtG0PjQlltNJUFbIcY1X1nGfQzs3lsTmDjMeh9XrXyVD44nqjR6yRC9hbtt1CT
+      wlWC2Z34zhtm7Ao++ZTEgkRemQfbZ4oza0Zaesgr/d5CS0AKEMOVTQWBAoGAZrCT
+      PYAUQGlOe1VCCxeorWOcFcUd6qGV09ejyEKjN0HEXY2/jajnw2GFbxSJbhsOP2ao
+      q87JTeEQhWR5MuP5yTXdMNFn39B1NLITnfNCFz6QgSo1BkCkWRtRVA3Vgm1Nej68
+      QdU/AuiK2h/eLu8NJ5QQJ9IqHB/8EuvGF9E3xwkCgYAK6ENXbZ0dKbISpAR2moqy
+      YlUJx3G/h4gz+5E/011IoTwPIc4vPRB1tcpx2XumNT86XVLgpjQpG+fs/gAE4uP1
+      bAP4Hy8ZVrtnGYPkBr43VbWgU3SPGDOh7iGl+P018roRbVGdMfx4gyGFSLrFeI98
+      QGBfpBUSrCgpwSl5ygmIEw==
+      -----END PRIVATE KEY-----
+
+internal:
+  service:
+    name: identity-service
+    token: test-internal-service-token
+
+management:
+  endpoints:
+    access:
+      default: read-only
+    web:
+      exposure:
+        include: health,info,prometheus,metrics

@@ -1,0 +1,43 @@
+spring:
+  config:
+    import: "optional:classpath:application-test-noop.properties"
+  flyway:
+    postgresql:
+      transactional-lock: false
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  kafka:
+    bootstrap-servers: localhost:9092
+
+cart:
+  jwt:
+    issuer: instacommerce-identity
+    public-key: |
+      -----BEGIN PUBLIC KEY-----
+      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtHpjRkHa1/cijtGMc/qu
+      wfMvT0qyh4QnIcymi61SnAvnEXu4g/LWFqVd0DjC8vXDzr9wTAR3qr0tCvcaWRpI
+      BOAtvVJ++mBxrnyTasmhXt7HpBJuaMF7RheBzKlV1Iv3w70Iel0EiaUOMRrFNOLq
+      XMcmB4+gqXGolcGFFZXwVrF5bhMP/+m61yPcbMyplcFEAMFUuQNojzfzsZQvs7tS
+      NF/KReJmDIyPAbVF7fktKLKPKBmw06Wn8Ga+mKOxN6z2TCg9gw28TPmja/e3WP/c
+      BEwVx6O3uufxLHbsboqWWAfhRXh056L4ItzEBEJccDCoVStqFHiFrVph0dU/8yMQ
+      RwIDAQAB
+      -----END PUBLIC KEY-----
+
+internal:
+  service:
+    name: cart-service
+    token: test-internal-service-token
+
+management:
+  endpoints:
+    access:
+      default: read-only
+    web:
+      exposure:
+        include: health,info,prometheus,metrics

@@ -39,6 +39,10 @@ public final class TopicNames {
     public static final String RIDER_LOCATION_UPDATES = "rider.location.updates";
     public static final String PAYMENT_WEBHOOKS       = "payment.webhooks";
 
+    // ── Outbox relay ───────────────────────────────────────────────────
+
+    public static final String OUTBOX_RELAY_DLQ       = "outbox.relay.dlq";
+
     // ── Dead-letter topics ──────────────────────────────────────────────
 
     public static final String DLT_SUFFIX = ".DLT";
