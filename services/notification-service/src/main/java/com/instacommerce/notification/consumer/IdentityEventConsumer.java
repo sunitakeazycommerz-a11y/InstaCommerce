@@ -1,6 +1,7 @@
 package com.instacommerce.notification.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.notification.service.UserErasureService;
 import java.time.Instant;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -21,7 +22,7 @@ public class IdentityEventConsumer {
         this.userErasureService = userErasureService;
     }
 
-    @KafkaListener(topics = "identity.events", groupId = "notification-service", concurrency = "3")
+    @KafkaListener(topics = TopicNames.IDENTITY_EVENTS, groupId = "notification-service", concurrency = "3")
     public void onIdentityEvent(ConsumerRecord<String, String> record) {
         try {
             EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);

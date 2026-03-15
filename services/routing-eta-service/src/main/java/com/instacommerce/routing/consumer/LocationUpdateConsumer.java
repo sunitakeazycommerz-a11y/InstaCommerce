@@ -2,6 +2,7 @@ package com.instacommerce.routing.consumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.domain.model.Delivery;
 import com.instacommerce.routing.domain.model.DeliveryStatus;
@@ -47,7 +48,7 @@ public class LocationUpdateConsumer {
         this.routingProperties = routingProperties;
     }
 
-    @KafkaListener(topics = "rider.location.updates", groupId = "routing-eta-service",
+    @KafkaListener(topics = TopicNames.RIDER_LOCATION_UPDATES, groupId = "routing-eta-service",
         concurrency = "3")
     public void handleLocationUpdate(String message) {
         try {

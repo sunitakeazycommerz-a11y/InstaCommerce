@@ -1,6 +1,7 @@
 package com.instacommerce.fulfillment.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.fulfillment.service.UserErasureService;
 import java.time.Instant;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -21,7 +22,7 @@ public class IdentityEventConsumer {
         this.userErasureService = userErasureService;
     }
 
-    @KafkaListener(topics = "identity.events", groupId = "fulfillment-service-erasure")
+    @KafkaListener(topics = TopicNames.IDENTITY_EVENTS, groupId = "fulfillment-service-erasure")
     public void onIdentityEvent(ConsumerRecord<String, String> record) throws Exception {
         EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
         if (!"UserErased".equals(envelope.eventType())) {

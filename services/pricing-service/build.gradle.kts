@@ -24,6 +24,7 @@ dependencies {
     implementation("net.javacrumbs.shedlock:shedlock-spring:5.10.2")
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.2")
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
+    implementation(project(":contracts"))
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.5")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.5")
 

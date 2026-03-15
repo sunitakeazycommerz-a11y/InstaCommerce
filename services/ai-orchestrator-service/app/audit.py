@@ -79,6 +79,7 @@ def _build_envelope(
         "eventId": str(uuid4()),
         "eventType": event_type,
         "schemaVersion": "1.0",
+        "sourceService": "ai-orchestrator-service",
         "userId": user_id,
         "actorType": "SYSTEM",
         "aggregateType": "ai_session",

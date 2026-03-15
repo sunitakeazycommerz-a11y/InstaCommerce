@@ -99,7 +99,7 @@ public class FlagOverrideService {
         return overrideRepository.findActiveByFlagIdAndUserId(flagId, userId, Instant.now());
     }
 
-    @Cacheable(value = "flag-overrides-bulk", key = "#flagIds.hashCode() + ':' + #userId")
+    @Cacheable(value = "flag-overrides-bulk", key = "#flagIds.stream().map(T(String)::valueOf).sorted().collect(T(java.util.stream.Collectors).joining(',')) + ':' + #userId")
     public Map<UUID, FlagOverride> findActiveOverridesByFlagIds(List<UUID> flagIds, UUID userId) {
         if (flagIds.isEmpty()) {
             return Map.of();
