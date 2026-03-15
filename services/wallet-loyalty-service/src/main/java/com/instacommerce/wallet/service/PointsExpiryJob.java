@@ -77,13 +77,16 @@ public class PointsExpiryJob {
         }
 
         int totalExpired = 0;
-        while (remainingBalance > 0) {
+        int safetyLimit = 1000;
+        int iterations = 0;
+        while (remainingBalance > 0 && iterations++ < safetyLimit) {
             List<LoyaltyTransaction> expirable = transactionRepository.findExpirableEarnTransactions(
                 accountId, cutoff, PageRequest.of(0, TRANSACTION_BATCH_SIZE));
             if (expirable.isEmpty()) {
                 break;
             }
 
+            boolean madeProgress = false;
             for (LoyaltyTransaction earnTxn : expirable) {
                 if (remainingBalance <= 0) {
                     break;
@@ -104,7 +107,17 @@ public class PointsExpiryJob {
 
                 remainingBalance -= pointsToExpire;
                 totalExpired += pointsToExpire;
+                madeProgress = true;
             }
+
+            if (!madeProgress) {
+                log.warn("No progress in expiry loop for userId={}, remainingBalance={}",
+                    account.getUserId(), remainingBalance);
+                break;
+            }
+        }
+        if (iterations >= safetyLimit) {
+            log.error("Safety limit reached in expiry loop for userId={}", account.getUserId());
         }
 
         if (totalExpired > 0) {
