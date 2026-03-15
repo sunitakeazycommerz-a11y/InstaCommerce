@@ -22,7 +22,6 @@ dependencies {
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
     implementation("net.javacrumbs.shedlock:shedlock-spring:5.12.0")
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.12.0")
-    implementation("io.temporal:temporal-sdk:1.24.2")
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
     implementation(project(":contracts"))
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.5")
