@@ -12,8 +12,8 @@ import java.util.UUID;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Slice;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -52,9 +52,9 @@ public class PointsExpiryJob {
 
         int totalExpired = 0;
         int page = 0;
-        Page<LoyaltyAccount> batch;
+        Slice<LoyaltyAccount> batch;
         do {
-            batch = accountRepository.findAll(PageRequest.of(page, ACCOUNT_BATCH_SIZE));
+            batch = accountRepository.findAllBy(PageRequest.of(page, ACCOUNT_BATCH_SIZE));
             for (LoyaltyAccount account : batch) {
                 Integer expired = transactionTemplate.execute(
                     status -> expireAccountPoints(account.getId(), cutoff));

@@ -8,7 +8,6 @@ public class FulfillmentProperties {
     private final Clients clients = new Clients();
     private final Delivery delivery = new Delivery();
     private final Choreography choreography = new Choreography();
-    private final Dispatch dispatch = new Dispatch();
 
     public Jwt getJwt() {
         return jwt;
@@ -24,10 +23,6 @@ public class FulfillmentProperties {
 
     public Choreography getChoreography() {
         return choreography;
-    }
-
-    public Dispatch getDispatch() {
-        return dispatch;
     }
 
     public static class Jwt {
@@ -107,18 +102,6 @@ public class FulfillmentProperties {
 
         public void setOrderStatusCallbackEnabled(boolean orderStatusCallbackEnabled) {
             this.orderStatusCallbackEnabled = orderStatusCallbackEnabled;
-        }
-    }
-
-    public static class Dispatch {
-        private boolean inlineAssignmentEnabled = false;
-
-        public boolean isInlineAssignmentEnabled() {
-            return inlineAssignmentEnabled;
-        }
-
-        public void setInlineAssignmentEnabled(boolean inlineAssignmentEnabled) {
-            this.inlineAssignmentEnabled = inlineAssignmentEnabled;
         }
     }
 }

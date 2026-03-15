@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.audit.dto.AuditEventRequest;
 import com.instacommerce.audit.service.AuditIngestionService;
+import com.instacommerce.contracts.topics.TopicNames;
 import java.util.Map;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -35,23 +36,24 @@ public class DomainEventConsumer {
 
     @KafkaListener(
             topics = {
-                    "identity.events",
-                    "catalog.events",
-                    "order.events",
-                    "orders.events",
-                    "payment.events",
-                    "payments.events",
-                    "inventory.events",
-                    "fulfillment.events",
-                    "rider.events",
-                    "notification.events",
-                    "search.events",
-                    "pricing.events",
-                    "promotion.events",
-                    "customer-support.events",
-                    "returns.events",
-                    "warehouse.events",
-                    "ai-orchestrator.events"
+                    TopicNames.IDENTITY_EVENTS,
+                    TopicNames.CATALOG_EVENTS,
+                    TopicNames.ORDERS_EVENTS,
+                    TopicNames.PAYMENTS_EVENTS,
+                    TopicNames.INVENTORY_EVENTS,
+                    TopicNames.FULFILLMENT_EVENTS,
+                    TopicNames.RIDER_EVENTS,
+                    TopicNames.NOTIFICATION_EVENTS,
+                    TopicNames.SEARCH_EVENTS,
+                    TopicNames.PRICING_EVENTS,
+                    TopicNames.PROMOTION_EVENTS,
+                    TopicNames.CUSTOMER_SUPPORT_EVENTS,
+                    TopicNames.RETURNS_EVENTS,
+                    TopicNames.WAREHOUSE_EVENTS,
+                    TopicNames.AI_ORCHESTRATOR_EVENTS,
+                    TopicNames.RECONCILIATION_EVENTS,
+                    TopicNames.WALLET_EVENTS,
+                    TopicNames.FRAUD_EVENTS
             },
             groupId = "${spring.kafka.consumer.group-id}",
             concurrency = "3"

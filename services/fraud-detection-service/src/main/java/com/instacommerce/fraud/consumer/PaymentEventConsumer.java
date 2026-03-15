@@ -2,6 +2,7 @@ package com.instacommerce.fraud.consumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.fraud.service.VelocityService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -22,7 +23,7 @@ public class PaymentEventConsumer {
         this.velocityService = velocityService;
     }
 
-    @KafkaListener(topics = {"payment.events", "payments.events"}, groupId = "fraud-detection-payments")
+    @KafkaListener(topics = TopicNames.PAYMENTS_EVENTS, groupId = "fraud-detection-payments")
     public void onPaymentEvent(ConsumerRecord<String, String> record) {
         try {
             EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);

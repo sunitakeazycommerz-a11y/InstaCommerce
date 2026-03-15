@@ -1,6 +1,7 @@
 package com.instacommerce.notification.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.notification.service.NotificationService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -20,7 +21,7 @@ public class OrderEventConsumer {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = "orders.events", groupId = "notification-service", concurrency = "3")
+    @KafkaListener(topics = TopicNames.ORDERS_EVENTS, groupId = "notification-service", concurrency = "3")
     public void onOrderEvent(ConsumerRecord<String, String> record) {
         handle(record);
     }

@@ -32,6 +32,6 @@ public class LoyaltyController {
     public ResponseEntity<LoyaltyResponse> redeemPoints(Authentication auth,
                                                          @Valid @RequestBody RedeemPointsRequest request) {
         UUID userId = UUID.fromString(auth.getName());
-        return ResponseEntity.ok(loyaltyService.redeemPoints(userId, request.points()));
+        return ResponseEntity.ok(loyaltyService.redeemPoints(userId, request.points(), request.orderId()));
     }
 }

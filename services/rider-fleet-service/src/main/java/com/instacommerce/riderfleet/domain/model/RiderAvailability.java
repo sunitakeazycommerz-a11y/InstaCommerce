@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -36,6 +37,9 @@ public class RiderAvailability {
 
     @Column(name = "last_updated")
     private Instant lastUpdated;
+
+    @Version
+    private long version;
 
     @PrePersist
     void prePersist() {
@@ -103,5 +107,13 @@ public class RiderAvailability {
 
     public void setLastUpdated(Instant lastUpdated) {
         this.lastUpdated = lastUpdated;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
     }
 }

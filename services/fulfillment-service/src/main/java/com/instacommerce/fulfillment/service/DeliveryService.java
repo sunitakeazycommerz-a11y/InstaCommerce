@@ -24,7 +24,6 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,7 +38,6 @@ public class DeliveryService {
     private final DeliveryRepository deliveryRepository;
     private final PickTaskRepository pickTaskRepository;
     private final RiderRepository riderRepository;
-    private final RiderAssignmentService riderAssignmentService;
     private final ApplicationEventPublisher eventPublisher;
     private final OutboxService outboxService;
     private final FulfillmentProperties fulfillmentProperties;
@@ -47,39 +45,15 @@ public class DeliveryService {
     public DeliveryService(DeliveryRepository deliveryRepository,
                            PickTaskRepository pickTaskRepository,
                            RiderRepository riderRepository,
-                           RiderAssignmentService riderAssignmentService,
                            ApplicationEventPublisher eventPublisher,
                            OutboxService outboxService,
                            FulfillmentProperties fulfillmentProperties) {
         this.deliveryRepository = deliveryRepository;
         this.pickTaskRepository = pickTaskRepository;
         this.riderRepository = riderRepository;
-        this.riderAssignmentService = riderAssignmentService;
         this.eventPublisher = eventPublisher;
         this.outboxService = outboxService;
         this.fulfillmentProperties = fulfillmentProperties;
-    }
-
-    @Deprecated(since = "wave-23", forRemoval = true)
-    @Transactional
-    public Optional<DeliveryResponse> assignRider(PickTask task) {
-        Optional<Delivery> existing = deliveryRepository.findByOrderId(task.getOrderId());
-        if (existing.isPresent() && existing.get().getStatus() != DeliveryStatus.FAILED) {
-            return Optional.of(FulfillmentMapper.toDeliveryResponse(existing.get()));
-        }
-        Rider rider;
-        try {
-            rider = riderAssignmentService.assignRider(task.getStoreId());
-        } catch (NoAvailableRiderException ex) {
-            logger.warn("No available rider for store {}", task.getStoreId());
-            return Optional.empty();
-        }
-        rider.setAvailable(false);
-        riderRepository.save(rider);
-
-        Delivery saved = assignDelivery(existing.orElse(null), task.getOrderId(), rider,
-            fulfillmentProperties.getDelivery().getDefaultEtaMinutes(), task.getUserId());
-        return Optional.of(FulfillmentMapper.toDeliveryResponse(saved));
     }
 
     @Transactional
