@@ -8,7 +8,8 @@ dependencies {
     implementation("io.grpc:grpc-stub:1.79.0")
     implementation("io.grpc:grpc-netty-shaded:1.79.0")
     implementation("javax.annotation:javax.annotation-api:1.3.2")
-    implementation("com.fasterxml.jackson.core:jackson-annotations:2.18.3")
+    implementation("com.fasterxml.jackson.core:jackson-annotations:2.18.6")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.18.6")
 }
 
 sourceSets {
