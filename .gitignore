@@ -266,3 +266,10 @@ gradle.properties
 # Local task runners
 .gradle.kts.bak
 WAVE*_TOKENS.txt
+
+# ============================================================================
+# CLAUDE COPILOT SESSION & WORKTREES
+# ============================================================================
+
+# Claude Copilot worktrees (local development only)
+.claude/worktrees/
