@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
+
+	"reconciliation-engine/pkg/cdc"
 )
 
 const (
@@ -54,6 +57,15 @@ type Config struct {
 	KafkaBrokers            []string
 	KafkaTopic              string
 	KafkaClientID           string
+	CDCEnabled              bool        // Enable CDC consumer
+	CDCTopics               []string    // Topics to consume from (e.g., reconciliation.cdc)
+	CDCGroupID              string      // Consumer group for CDC
+	CDCMinBytes             int
+	CDCMaxBytes             int
+	CDCMaxWait              time.Duration
+	CDCCommitInterval       time.Duration
+	CDCBatchSize            int
+	CDCBatchTimeout         time.Duration
 }
 
 type Transaction struct {
@@ -195,6 +207,31 @@ func main() {
 		timeout:     cfg.ReconciliationTimeout,
 	}
 
+	// Initialize CDC consumer for payment ledger change event processing
+	var cdcConsumer *cdc.CDCConsumer
+	if cfg.CDCEnabled && len(cfg.KafkaBrokers) > 0 {
+		cdcConfig := cdc.CDCConsumerConfig{
+			KafkaBrokers:   cfg.KafkaBrokers,
+			KafkaGroupID:   cfg.CDCGroupID,
+			CDCTopic:       "reconciliation.cdc",
+			MinBytes:       cfg.CDCMinBytes,
+			MaxBytes:       cfg.CDCMaxBytes,
+			MaxWait:        cfg.CDCMaxWait,
+			CommitInterval: cfg.CDCCommitInterval,
+			BatchSize:      cfg.CDCBatchSize,
+			BatchTimeout:   cfg.CDCBatchTimeout,
+		}
+		var cdcErr error
+		cdcConsumer, cdcErr = cdc.NewCDCConsumer(ctx, cdcConfig, logger)
+		if cdcErr != nil {
+			logger.Error("failed to create cdc consumer", "error", cdcErr)
+			// Continue without CDC; it's optional
+			cdcConsumer = nil
+		} else {
+			logger.Info("cdc consumer created", "group_id", cfg.CDCGroupID)
+		}
+	}
+
 	ready := &atomic.Bool{}
 
 	mux := http.NewServeMux()
@@ -226,6 +263,16 @@ func main() {
 		logger.Error("failed to start scheduler", "error", err)
 		return
 	}
+
+	// Start CDC consumer if enabled
+	if cdcConsumer != nil {
+		if err := cdcConsumer.Start(ctx); err != nil {
+			logger.Error("failed to start cdc consumer", "error", err)
+		} else {
+			logger.Info("cdc consumer started")
+		}
+	}
+
 	ready.Store(true)
 
 	select {
@@ -242,6 +289,13 @@ func main() {
 
 	if err := scheduler.Stop(shutdownCtx); err != nil {
 		logger.Error("scheduler shutdown failed", "error", err)
+	}
+
+	// Stop CDC consumer
+	if cdcConsumer != nil {
+		if err := cdcConsumer.Stop(); err != nil {
+			logger.Error("cdc consumer shutdown failed", "error", err)
+		}
 	}
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
@@ -287,6 +341,15 @@ func loadConfig() Config {
 		KafkaBrokers:          splitCSV(getenv("KAFKA_BROKERS", "")),
 		KafkaTopic:            getenv("KAFKA_TOPIC", defaultKafkaTopic),
 		KafkaClientID:         getenv("KAFKA_CLIENT_ID", "reconciliation-engine"),
+		CDCEnabled:            getenvBool("CDC_ENABLED", true),
+		CDCTopics:             splitCSV(getenv("CDC_TOPICS", "reconciliation.cdc")),
+		CDCGroupID:            getenv("CDC_GROUP_ID", "reconciliation-cdc-consumer"),
+		CDCMinBytes:           getenvInt("CDC_MIN_BYTES", 10*1024),
+		CDCMaxBytes:           getenvInt("CDC_MAX_BYTES", 10*1024*1024),
+		CDCMaxWait:            getenvDuration("CDC_MAX_WAIT", 5*time.Second),
+		CDCCommitInterval:     getenvDuration("CDC_COMMIT_INTERVAL", 10*time.Second),
+		CDCBatchSize:          getenvInt("CDC_BATCH_SIZE", 500),
+		CDCBatchTimeout:       getenvDuration("CDC_BATCH_TIMEOUT", 5*time.Second),
 	}
 }
 
@@ -1016,6 +1079,18 @@ func getenvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
+}
+
+func getenvInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func splitCSV(value string) []string {
