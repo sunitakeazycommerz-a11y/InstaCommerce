@@ -42,9 +42,6 @@ subprojects {
             dependency("com.google.protobuf:protobuf-java:4.32.0")
             dependency("com.google.protobuf:protobuf-java-util:4.32.0")
             dependency("at.yawk.lz4:lz4-java:1.10.1")
-            dependency("tools.jackson.core:jackson-annotations:3.1.0")
-            dependency("tools.jackson.core:jackson-core:3.1.0")
-            dependency("tools.jackson.core:jackson-databind:3.1.0")
         }
     }
 }
