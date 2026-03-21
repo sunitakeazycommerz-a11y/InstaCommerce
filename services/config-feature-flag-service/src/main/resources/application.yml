@@ -29,6 +29,14 @@ spring:
     type: caffeine
     caffeine:
       spec: maximumSize=5000,expireAfterWrite=30s
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    timeout: 2s
+    lettuce:
+      pool:
+        min-idle: 2
+        max-active: 8
 
 feature-flag:
   jwt:
@@ -37,6 +45,8 @@ feature-flag:
   cache:
     flags-ttl-seconds: ${FLAG_CACHE_TTL:30}
     max-size: ${FLAG_CACHE_MAX_SIZE:5000}
+    caffeine-ttl: 30s
+    redis-enabled: ${FEATURE_FLAG_REDIS_ENABLED:true}
 
 management:
   tracing:

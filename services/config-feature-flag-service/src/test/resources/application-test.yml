@@ -1,0 +1,52 @@
+server:
+  port: 8096
+  shutdown: graceful
+
+spring:
+  application:
+    name: config-feature-flag-service
+  config:
+    import: optional:sm://
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: jdbc:postgresql://localhost/feature_flags_test
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: create-drop
+  flyway:
+    enabled: false
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=5000,expireAfterWrite=30s
+  redis:
+    host: localhost
+    port: 6379
+    timeout: 2s
+    lettuce:
+      pool:
+        min-idle: 2
+        max-active: 8
+
+feature-flag:
+  jwt:
+    issuer: instacommerce-identity
+    public-key: MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA
+  cache:
+    flags-ttl-seconds: 30
+    max-size: 5000
+    redis-enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always

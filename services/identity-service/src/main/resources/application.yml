@@ -91,3 +91,33 @@ internal:
   service:
     name: ${spring.application.name}
     token: ${INTERNAL_SERVICE_TOKEN}
+    allowed-callers:
+      identity-service: ${IDENTITY_SERVICE_TOKEN:}
+      catalog-service: ${CATALOG_SERVICE_TOKEN:}
+      inventory-service: ${INVENTORY_SERVICE_TOKEN:}
+      order-service: ${ORDER_SERVICE_TOKEN:}
+      payment-service: ${PAYMENT_SERVICE_TOKEN:}
+      fulfillment-service: ${FULFILLMENT_SERVICE_TOKEN:}
+      notification-service: ${NOTIFICATION_SERVICE_TOKEN:}
+      search-service: ${SEARCH_SERVICE_TOKEN:}
+      pricing-service: ${PRICING_SERVICE_TOKEN:}
+      cart-service: ${CART_SERVICE_TOKEN:}
+      checkout-orchestrator-service: ${CHECKOUT_ORCHESTRATOR_SERVICE_TOKEN:}
+      warehouse-service: ${WAREHOUSE_SERVICE_TOKEN:}
+      rider-fleet-service: ${RIDER_FLEET_SERVICE_TOKEN:}
+      routing-eta-service: ${ROUTING_ETA_SERVICE_TOKEN:}
+      wallet-loyalty-service: ${WALLET_LOYALTY_SERVICE_TOKEN:}
+      audit-trail-service: ${AUDIT_TRAIL_SERVICE_TOKEN:}
+      fraud-detection-service: ${FRAUD_DETECTION_SERVICE_TOKEN:}
+      config-feature-flag-service: ${CONFIG_FEATURE_FLAG_SERVICE_TOKEN:}
+      mobile-bff-service: ${MOBILE_BFF_SERVICE_TOKEN:}
+      admin-gateway-service: ${ADMIN_GATEWAY_SERVICE_TOKEN:}
+      cdc-consumer-service: ${CDC_CONSUMER_SERVICE_TOKEN:}
+      dispatch-optimizer-service: ${DISPATCH_OPTIMIZER_SERVICE_TOKEN:}
+      location-ingestion-service: ${LOCATION_INGESTION_SERVICE_TOKEN:}
+      outbox-relay-service: ${OUTBOX_RELAY_SERVICE_TOKEN:}
+      payment-webhook-service: ${PAYMENT_WEBHOOK_SERVICE_TOKEN:}
+      reconciliation-engine: ${RECONCILIATION_ENGINE_TOKEN:}
+      stream-processor-service: ${STREAM_PROCESSOR_SERVICE_TOKEN:}
+      ai-orchestrator-service: ${AI_ORCHESTRATOR_SERVICE_TOKEN:}
+      ai-inference-service: ${AI_INFERENCE_SERVICE_TOKEN:}

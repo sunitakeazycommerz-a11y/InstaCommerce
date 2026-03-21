@@ -114,3 +114,23 @@
 # Documentation
 # ---------------------------------------------------------------------------
 /docs/                                          @instacommerce/platform
+/docs/adr/                                      @instacommerce/platform  # All ADRs require platform review
+/docs/governance/                               @instacommerce/platform  # Governance framework
+/docs/slos/                                     @instacommerce/platform  # SLO definitions
+/docs/observability/                            @instacommerce/platform  # Observability & alerts
+/docs/reviews/                                  @instacommerce/platform  # Code review guidelines
+
+# =============================================================================
+# GOVERNANCE FRAMEWORK (Wave 38)
+# =============================================================================
+# See docs/governance/OWNERSHIP_MODEL.md for complete governance framework:
+# - Weekly Service Ownership Reviews (service owner + EM + SRE)
+# - Biweekly Contract Reviews (cross-team + data platform)
+# - Monthly Reliability Reviews (platform + SRE + leadership)
+# - Quarterly Steering (architecture + roadmap)
+#
+# All CODEOWNERS groups correspond to Slack channels and DRI assignments.
+# SLO definitions: docs/slos/service-slos.md (per-service availability + latency)
+# Error budgets: docs/adr/015-slo-error-budget-policy.md (multi-window burn rates)
+# ADRs: docs/adr/ (all decisions require platform review + principal engineer signoff)
+# =============================================================================

@@ -11,6 +11,8 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-cache")
+    implementation("org.springframework.boot:spring-boot-starter-data-redis:${springBootVersion}")
+    implementation("io.lettuce:lettuce-core:6.3.2.RELEASE")
     implementation("io.micrometer:micrometer-tracing-bridge-otel")
     implementation("io.micrometer:micrometer-registry-otlp")
     implementation("io.micrometer:micrometer-registry-prometheus")
@@ -34,6 +36,8 @@ dependencies {
     testImplementation("org.springframework.security:spring-security-test")
     testImplementation("org.testcontainers:postgresql:1.19.3")
     testImplementation("org.testcontainers:junit-jupiter:1.19.3")
+    testImplementation("org.testcontainers:testcontainers:1.19.3")
+    testImplementation("com.redis.testcontainers:testcontainers-redis:1.6.1")
 }
 
 tasks.withType<Test> {

@@ -83,3 +83,10 @@ module "dataflow" {
   env        = var.env
   location   = var.region
 }
+
+module "kubernetes_secrets" {
+  source    = "../../modules/kubernetes-secrets"
+  namespace = "default"
+
+  depends_on = [module.gke]
+}

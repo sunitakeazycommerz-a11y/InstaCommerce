@@ -105,6 +105,7 @@ istio:
       jwtRules:
         - issuer: instacommerce-identity
           jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local/.well-known/jwks.json
+          audiences: ["instacommerce-admin"]
           forwardOriginalToken: true
   authorizationPolicies:
     - name: payment-service-internal
@@ -236,6 +237,123 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///identity_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      # Per-service tokens for Wave 34 Track B - injected from service-tokens secret
+      IDENTITY_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: identity-service-token
+      CATALOG_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: catalog-service-token
+      INVENTORY_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: inventory-service-token
+      ORDER_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: order-service-token
+      PAYMENT_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: payment-service-token
+      FULFILLMENT_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: fulfillment-service-token
+      NOTIFICATION_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: notification-service-token
+      SEARCH_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: search-service-token
+      PRICING_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: pricing-service-token
+      CART_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: cart-service-token
+      CHECKOUT_ORCHESTRATOR_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: checkout-orchestrator-service-token
+      WAREHOUSE_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: warehouse-service-token
+      RIDER_FLEET_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: rider-fleet-service-token
+      ROUTING_ETA_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: routing-eta-service-token
+      WALLET_LOYALTY_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: wallet-loyalty-service-token
+      AUDIT_TRAIL_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: audit-trail-service-token
+      FRAUD_DETECTION_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: fraud-detection-service-token
+      CONFIG_FEATURE_FLAG_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: config-feature-flag-service-token
+      MOBILE_BFF_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: mobile-bff-service-token
+      ADMIN_GATEWAY_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: admin-gateway-service-token
+      CDC_CONSUMER_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: cdc-consumer-service-token
+      DISPATCH_OPTIMIZER_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: dispatch-optimizer-service-token
+      LOCATION_INGESTION_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: location-ingestion-service-token
+      OUTBOX_RELAY_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: outbox-relay-service-token
+      PAYMENT_WEBHOOK_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: payment-webhook-service-token
+      RECONCILIATION_ENGINE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: reconciliation-engine-token
+      STREAM_PROCESSOR_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: stream-processor-service-token
+      AI_ORCHESTRATOR_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: ai-orchestrator-service-token
+      AI_INFERENCE_SERVICE_TOKEN:
+        secretKeyRef:
+          name: service-tokens
+          key: ai-inference-service-token
     hpa:
       minReplicas: 2
       maxReplicas: 10
@@ -912,8 +1030,9 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8096"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///config_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
-      SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
-      SPRING_DATA_REDIS_PORT: "6379"
+      REDIS_HOST: redis-cluster.default.svc.cluster.local
+      REDIS_PORT: "6379"
+      FEATURE_FLAG_REDIS_ENABLED: "true"
     hpa:
       minReplicas: 2
       maxReplicas: 5

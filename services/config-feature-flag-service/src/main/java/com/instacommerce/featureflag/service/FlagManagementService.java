@@ -1,5 +1,6 @@
 package com.instacommerce.featureflag.service;
 
+import com.instacommerce.featureflag.config.FlagCacheEventListener;
 import com.instacommerce.featureflag.controller.FlagChangeStreamController;
 import com.instacommerce.featureflag.domain.model.FeatureFlag;
 import com.instacommerce.featureflag.domain.model.FlagAuditLog;
@@ -28,15 +29,18 @@ public class FlagManagementService {
     private final FlagAuditLogRepository auditLogRepository;
     private final FlagChangeStreamController flagChangeStreamController;
     private final CacheManager cacheManager;
+    private final FlagCacheEventListener cacheEventListener;
 
     public FlagManagementService(FeatureFlagRepository flagRepository,
                                  FlagAuditLogRepository auditLogRepository,
                                  FlagChangeStreamController flagChangeStreamController,
-                                 CacheManager cacheManager) {
+                                 CacheManager cacheManager,
+                                 FlagCacheEventListener cacheEventListener) {
         this.flagRepository = flagRepository;
         this.auditLogRepository = auditLogRepository;
         this.flagChangeStreamController = flagChangeStreamController;
         this.cacheManager = cacheManager;
+        this.cacheEventListener = cacheEventListener;
     }
 
     @Transactional
@@ -108,6 +112,7 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "UPDATED", oldValue,
                 flagSummary(flag), changedBy));
 
+        cacheEventListener.publishFlagUpdate(flag.getId(), key, flagSummary(flag));
         flagChangeStreamController.broadcast(key, flag.isEnabled());
         return toResponse(flag);
     }
@@ -123,6 +128,7 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "ENABLED",
                 String.valueOf(oldEnabled), "true", changedBy));
 
+        cacheEventListener.publishFlagUpdate(flag.getId(), key, "enabled=true");
         flagChangeStreamController.broadcast(key, true);
         return toResponse(flag);
     }
@@ -138,6 +144,7 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "DISABLED",
                 String.valueOf(oldEnabled), "false", changedBy));
 
+        cacheEventListener.publishFlagUpdate(flag.getId(), key, "enabled=false");
         flagChangeStreamController.broadcast(key, false);
         return toResponse(flag);
     }
@@ -158,6 +165,7 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "UPDATED",
                 String.valueOf(oldPercentage), String.valueOf(percentage), changedBy));
 
+        cacheEventListener.publishFlagUpdate(flag.getId(), key, "rollout=" + percentage);
         flagChangeStreamController.broadcast(key, percentage);
         return toResponse(flag);
     }
@@ -177,6 +185,7 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "EMERGENCY_STOP",
                 String.valueOf(oldEnabled), "false", "system"));
 
+        cacheEventListener.publishBulkUpdate("emergency_stop");
         log.warn("flags.force_disable flag={} previous_state={}", flagKey, oldEnabled);
     }
 

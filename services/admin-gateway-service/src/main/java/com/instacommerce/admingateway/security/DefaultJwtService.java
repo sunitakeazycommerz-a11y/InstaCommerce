@@ -2,6 +2,7 @@ package com.instacommerce.admingateway.security;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import java.util.Collection;
 import java.util.List;
@@ -16,20 +17,38 @@ import org.springframework.stereotype.Service;
 public class DefaultJwtService implements JwtService {
     private final JwtKeyLoader keyLoader;
     private final String issuer;
+    private final String audience;
+    private final long clockSkewSeconds;
 
     public DefaultJwtService(JwtKeyLoader keyLoader,
-                             @Value("${admin-gateway.jwt.issuer:instacommerce-identity}") String issuer) {
+                             @Value("${admin-gateway.jwt.issuer:instacommerce-identity}") String issuer,
+                             @Value("${admin-gateway.jwt.aud:instacommerce-admin}") String audience,
+                             @Value("${admin-gateway.jwt.clock-skew-seconds:300}") long clockSkewSeconds) {
         this.keyLoader = keyLoader;
         this.issuer = issuer;
+        this.audience = audience;
+        this.clockSkewSeconds = clockSkewSeconds;
     }
 
     @Override
     public Jws<Claims> validateAccessToken(String token) {
-        return Jwts.parser()
+        var parser = Jwts.parser()
             .verifyWith(keyLoader.getPublicKey())
             .requireIssuer(issuer)
+            .clockSkewSeconds(clockSkewSeconds);
+
+        Jws<Claims> jws = parser
             .build()
             .parseSignedClaims(token);
+
+        Claims claims = jws.getPayload();
+        List<String> audiences = claims.getAudience();
+
+        if (audiences == null || !audiences.contains(audience)) {
+            throw new JwtException("Token audience '" + audiences + "' does not match expected audience '" + audience + "'");
+        }
+
+        return jws;
     }
 
     @Override

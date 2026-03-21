@@ -1,5 +1,6 @@
 package com.instacommerce.featureflag.service;
 
+import com.instacommerce.featureflag.config.FlagCacheEventListener;
 import com.instacommerce.featureflag.domain.model.FeatureFlag;
 import com.instacommerce.featureflag.domain.model.FlagAuditLog;
 import com.instacommerce.featureflag.domain.model.FlagOverride;
@@ -28,13 +29,16 @@ public class FlagOverrideService {
     private final FeatureFlagRepository flagRepository;
     private final FlagOverrideRepository overrideRepository;
     private final FlagAuditLogRepository auditLogRepository;
+    private final FlagCacheEventListener cacheEventListener;
 
     public FlagOverrideService(FeatureFlagRepository flagRepository,
                                FlagOverrideRepository overrideRepository,
-                               FlagAuditLogRepository auditLogRepository) {
+                               FlagAuditLogRepository auditLogRepository,
+                               FlagCacheEventListener cacheEventListener) {
         this.flagRepository = flagRepository;
         this.overrideRepository = overrideRepository;
         this.auditLogRepository = auditLogRepository;
+        this.cacheEventListener = cacheEventListener;
     }
 
     @Transactional
@@ -68,6 +72,7 @@ public class FlagOverrideService {
                 request.value() + " (user=" + request.userId() + ")",
                 changedBy));
 
+        cacheEventListener.publishBulkUpdate("override_added");
         return override;
     }
 
@@ -92,6 +97,8 @@ public class FlagOverrideService {
                 override.getOverrideValue() + " (user=" + userId + ")",
                 null,
                 changedBy));
+
+        cacheEventListener.publishBulkUpdate("override_removed");
     }
 
     @Cacheable(value = "flag-overrides", key = "#flagKey + ':' + #userId")
@@ -109,3 +116,4 @@ public class FlagOverrideService {
                 .collect(Collectors.toMap(FlagOverride::getFlagId, Function.identity()));
     }
 }
+

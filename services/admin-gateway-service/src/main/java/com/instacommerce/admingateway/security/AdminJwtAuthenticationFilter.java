@@ -20,11 +20,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
-public class JwtAuthenticationFilter extends OncePerRequestFilter {
+public class AdminJwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
     private final ObjectMapper objectMapper;
 
-    public JwtAuthenticationFilter(JwtService jwtService, ObjectMapper objectMapper) {
+    public AdminJwtAuthenticationFilter(JwtService jwtService, ObjectMapper objectMapper) {
         this.jwtService = jwtService;
         this.objectMapper = objectMapper;
     }
@@ -33,6 +33,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
         return path.startsWith("/actuator")
+            || path.startsWith("/admin/health")
+            || path.startsWith("/admin/metrics")
             || path.equals("/error");
     }
 
@@ -61,7 +63,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             objectMapper.writeValue(response.getWriter(), Map.of(
                 "code", "TOKEN_INVALID",
-                "message", "Token is invalid or expired",
+                "message", "Token is invalid or expired: " + ex.getMessage(),
                 "timestamp", Instant.now().toString()));
         }
     }

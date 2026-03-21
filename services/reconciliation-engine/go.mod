@@ -3,6 +3,7 @@ module github.com/instacommerce/reconciliation-engine
 go 1.24.0
 
 require (
+	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.23.2
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/segmentio/kafka-go v0.4.50
