@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/robfig/cron/v3"
@@ -33,7 +35,9 @@ import (
 	"go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"reconciliation-engine/api"
 	"reconciliation-engine/pkg/cdc"
+	"reconciliation-engine/pkg/reconciliation"
 )
 
 const (
@@ -66,6 +70,13 @@ type Config struct {
 	CDCCommitInterval       time.Duration
 	CDCBatchSize            int
 	CDCBatchTimeout         time.Duration
+	DBHost                  string
+	DBPort                  string
+	DBUser                  string
+	DBPassword              string
+	DBName                  string
+	DBMaxConnections        int
+	DBConnTimeout           time.Duration
 }
 
 type Transaction struct {
@@ -181,31 +192,30 @@ func main() {
 		logger.Error("failed to initialize tracing", "error", err)
 	}
 
-	metrics := NewMetrics()
-
-	ledgerStore, err := NewLedgerStore(cfg, logger)
+	// Initialize PostgreSQL connection pool
+	db, err := initDatabase(ctx, cfg, logger)
 	if err != nil {
-		logger.Warn("ledger load failed", "error", err)
+		logger.Error("failed to initialize database", "error", err)
+		return
 	}
+	defer db.Close()
 
-	fixRegistry, err := NewFixRegistry(cfg.FixStatePath, logger)
-	if err != nil {
-		logger.Warn("fix registry load failed", "error", err)
+	// Verify database connection
+	if err := db.PingContext(ctx); err != nil {
+		logger.Error("failed to ping database", "error", err)
+		return
 	}
+	logger.Info("database connection established")
 
-	pspSource := NewPSPSource(cfg.PSPExportPath, logger)
-	publisher := NewKafkaPublisher(cfg, logger)
+	// Initialize Kafka event publisher
+	eventPub := reconciliation.NewEventPublisher(cfg.KafkaBrokers, cfg.KafkaTopic, logger)
+	defer eventPub.Close()
 
-	reconciler := &Reconciler{
-		logger:      logger,
-		tracer:      otel.Tracer(cfg.ServiceName),
-		metrics:     metrics,
-		pspSource:   pspSource,
-		ledgerStore: ledgerStore,
-		fixRegistry: fixRegistry,
-		publisher:   publisher,
-		timeout:     cfg.ReconciliationTimeout,
-	}
+	// Initialize database-backed reconciler
+	dbReconciler := reconciliation.NewDBReconciler(db, logger, otel.Tracer(cfg.ServiceName), eventPub)
+
+	// Initialize daily scheduler
+	dailyScheduler := reconciliation.NewDailyScheduler(dbReconciler, logger, getenv("RECONCILIATION_SCHEDULE", "0 2 * * *"))
 
 	// Initialize CDC consumer for payment ledger change event processing
 	var cdcConsumer *cdc.CDCConsumer
@@ -225,21 +235,43 @@ func main() {
 		cdcConsumer, cdcErr = cdc.NewCDCConsumer(ctx, cdcConfig, logger)
 		if cdcErr != nil {
 			logger.Error("failed to create cdc consumer", "error", cdcErr)
-			// Continue without CDC; it's optional
 			cdcConsumer = nil
 		} else {
 			logger.Info("cdc consumer created", "group_id", cfg.CDCGroupID)
 		}
 	}
 
-	ready := &atomic.Bool{}
+	// Initialize HTTP handlers
+	reconciliationHandler := api.NewReconciliationHandler(dbReconciler, logger)
 
+	ready := &atomic.Bool{}
 	mux := http.NewServeMux()
+
+	// Health check endpoints
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/health/live", handleHealth)
 	mux.HandleFunc("/ready", handleReady(ready))
 	mux.HandleFunc("/health/ready", handleReady(ready))
 	mux.Handle("/metrics", promhttp.Handler())
+
+	// Reconciliation API endpoints
+	mux.HandleFunc("/reconciliation/runs", reconciliationHandler.HandleListRuns)
+	mux.HandleFunc("/reconciliation/runs/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/mismatches") {
+			reconciliationHandler.HandleGetRunMismatches(w, r)
+		} else {
+			http.NotFound(w, r)
+		}
+	})
+	mux.HandleFunc("/reconciliation/mismatches/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/review") {
+			reconciliationHandler.HandleReviewMismatch(w, r)
+		} else if strings.Contains(r.URL.Path, "/fix") {
+			reconciliationHandler.HandleApplyFix(w, r)
+		} else {
+			http.NotFound(w, r)
+		}
+	})
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -258,8 +290,8 @@ func main() {
 		}
 	}()
 
-	scheduler, err := StartScheduler(ctx, cfg.Schedule, cfg.RunOnStartup, logger, reconciler.Run)
-	if err != nil {
+	// Start daily scheduler
+	if err := dailyScheduler.Start(ctx); err != nil {
 		logger.Error("failed to start scheduler", "error", err)
 		return
 	}
@@ -287,11 +319,10 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	if err := scheduler.Stop(shutdownCtx); err != nil {
+	if err := dailyScheduler.Stop(shutdownCtx); err != nil {
 		logger.Error("scheduler shutdown failed", "error", err)
 	}
 
-	// Stop CDC consumer
 	if cdcConsumer != nil {
 		if err := cdcConsumer.Stop(); err != nil {
 			logger.Error("cdc consumer shutdown failed", "error", err)
@@ -300,10 +331,6 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http server shutdown failed", "error", err)
-	}
-
-	if err := publisher.Close(); err != nil {
-		logger.Error("kafka publisher shutdown failed", "error", err)
 	}
 
 	if shutdownTracer != nil {
@@ -350,6 +377,13 @@ func loadConfig() Config {
 		CDCCommitInterval:     getenvDuration("CDC_COMMIT_INTERVAL", 10*time.Second),
 		CDCBatchSize:          getenvInt("CDC_BATCH_SIZE", 500),
 		CDCBatchTimeout:       getenvDuration("CDC_BATCH_TIMEOUT", 5*time.Second),
+		DBHost:                getenv("DB_HOST", "localhost"),
+		DBPort:                getenv("DB_PORT", "5432"),
+		DBUser:                getenv("DB_USER", "reconciliation"),
+		DBPassword:            getenv("DB_PASSWORD", ""),
+		DBName:                getenv("DB_NAME", "reconciliation"),
+		DBMaxConnections:      getenvInt("DB_MAX_CONNECTIONS", 20),
+		DBConnTimeout:         getenvDuration("DB_CONN_TIMEOUT", 10*time.Second),
 	}
 }
 
@@ -418,6 +452,44 @@ func buildTraceExporter(ctx context.Context, logger *slog.Logger) (sdktrace.Span
 	}
 
 	return otlptracegrpc.New(ctx, options...)
+}
+
+func initDatabase(ctx context.Context, cfg Config, logger *slog.Logger) (*sql.DB, error) {
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable&connect_timeout=%d",
+		cfg.DBUser,
+		cfg.DBPassword,
+		cfg.DBHost,
+		cfg.DBPort,
+		cfg.DBName,
+		int(cfg.DBConnTimeout.Seconds()),
+	)
+
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	db.SetMaxOpenConns(cfg.DBMaxConnections)
+	db.SetMaxIdleConns(cfg.DBMaxConnections / 2)
+	db.SetConnMaxLifetime(30 * time.Minute)
+
+	// Verify connection
+	connCtx, cancel := context.WithTimeout(ctx, cfg.DBConnTimeout)
+	defer cancel()
+
+	if err := db.PingContext(connCtx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to verify database connection: %w", err)
+	}
+
+	logger.Info("database connection pool initialized",
+		"host", cfg.DBHost,
+		"port", cfg.DBPort,
+		"database", cfg.DBName,
+		"max_connections", cfg.DBMaxConnections,
+	)
+
+	return db, nil
 }
 
 func NewMetrics() *Metrics {
