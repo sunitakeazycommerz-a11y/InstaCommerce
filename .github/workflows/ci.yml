@@ -177,21 +177,23 @@ jobs:
           echo "changed_python_services=$changed_python_services_json" >> "$GITHUB_OUTPUT"
       - name: Check cloud publish credentials
         id: check-cloud-creds
+        # For Java/Go image push: need GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT OR GCP_SA_KEY
         run: |
-          if [[ -n "$WIP" && -n "$SA" ]]; then
+          if [[ -n "$WIP" && -n "$SA" ]] || [[ -n "$SA_KEY" ]]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
             if [[ "$GITHUB_REF" == "refs/heads/main" || "$GITHUB_REF" == "refs/heads/master" ]]; then
-              echo "::notice::Cloud publish credentials are configured. Image push and deploy-dev will proceed."
+              echo "::notice::Cloud publish credentials are configured. Image push and deploy will proceed."
             fi
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
             if [[ "$GITHUB_REF" == "refs/heads/main" || "$GITHUB_REF" == "refs/heads/master" ]]; then
-              echo "::warning::Cloud publish credentials (GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT) are not configured. Artifact Registry push and deploy-dev will be skipped. Set these as repository secrets or variables to enable publishing."
+              echo "::warning::Cloud publish credentials not configured. To enable Artifact Registry push, set either: (1) GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT, or (2) GCP_SA_KEY. Deploy will be skipped."
             fi
           fi
         env:
           WIP: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER || vars.GCP_WORKLOAD_IDENTITY_PROVIDER || '' }}
           SA: ${{ secrets.GCP_SERVICE_ACCOUNT || vars.GCP_SERVICE_ACCOUNT || '' }}
+          SA_KEY: ${{ secrets.GCP_SA_KEY || '' }}
 
   security-scan:
     runs-on: ubuntu-latest
@@ -302,7 +304,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: 'temurin'
@@ -408,7 +410,7 @@ jobs:
   python-build-test:
     name: Python Build & Test (${{ matrix.service }})
     needs: detect-changes
-    if: needs.detect-changes.outputs.changed_python_services > 0
+    if: needs.detect-changes.outputs.python_services != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -417,10 +419,9 @@ jobs:
         service: ${{ fromJson(needs.detect-changes.outputs.python_services) }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
-          allow-prereleases: true
+          python-version: '3.13'
       - name: Install dependencies
         run: |
           cd services/${{ matrix.service }}
@@ -456,7 +457,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: 'temurin'

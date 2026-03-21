@@ -11,6 +11,6 @@ WORKDIR /app
 COPY --from=build /src/app .
 USER app
 ENV PORT=8106
-EXPOSE 8120
+EXPOSE 8106
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- "http://localhost:${PORT}/health" || exit 1
 ENTRYPOINT ["./app"]
