@@ -600,82 +600,484 @@ alerts:
 3. **Idempotency Key Collision**: Attacker reuses key to trigger duplicate charge → Mitigated by strong uniqueness constraint + Stripe idempotency
 4. **Database Access**: If DB compromised, attacker sees encrypted billing data + encrypted error messages → Mitigated by encryption, role-based access control
 
-## Troubleshooting
+## Troubleshooting (15+ Scenarios)
 
-### Issue: Payment Authorization Returns 503
-**Possible Causes**:
+### Scenario 1: Payment Authorization Returns 503
+
+**Indicators**:
+- `payment_authorization_latency_ms` p99 > 300ms
+- Stripe circuit breaker state = OPEN
+- Checkout success rate < 99%
+
+**Root Causes**:
 1. Stripe API unreachable (timeout)
 2. Circuit breaker open (50% failure rate)
 3. Rate limit exceeded (Stripe 429)
+4. Network connectivity issue
 
-**Diagnosis**:
+**Resolution**:
 ```bash
-kubectl logs -n money-path deploy/payment-service | grep -i "stripe\|circuit\|timeout"
-
 # Check circuit breaker state
-curl http://localhost:8080/actuator/health/circuitbreakers
+curl http://localhost:8080/actuator/health/circuitbreakers | jq '..'
 
 # Test Stripe connectivity
 curl -H "Authorization: Bearer $STRIPE_KEY" https://api.stripe.com/v1/account
+
+# Check payment service logs for errors
+kubectl logs -n money-path deploy/payment-service | grep -i "stripe\|circuit\|timeout"
+
+# If circuit open: Wait 60s for auto half-open or manually reset
+curl -X POST http://payment-service:8080/admin/circuit-breaker/reset/stripe
+
+# If rate limited: Check Stripe rate limit status
+curl -H "Authorization: Bearer $STRIPE_KEY" https://api.stripe.com/v1/rate_limit
+
+# Escalate to Stripe support if API unreachable
 ```
 
-**Resolution**:
-- If circuit breaker open: Wait 60s for automatic half-open; monitor
-- If Stripe unreachable: Check network connectivity; escalate to Stripe support
-- If rate limited: Reduce request rate or upgrade Stripe plan
+### Scenario 2: Payment Captured but Order Not Updated
 
-### Issue: Payment Captured but Order Not Updated
-**Possible Causes**:
+**Indicators**:
+- Order still in PENDING after payment captured
+- `outbox_entry_age_seconds` > 60
+- Customer complaint: "Order not confirmed"
+
+**Root Causes**:
 1. PaymentCaptured event not published (Kafka producer failure)
-2. outbox-relay-service failed to relay event
+2. CDC relay failed to relay event
 3. order-service not consuming payment events
+4. Event delivery guaranteed but consumer crashed
 
-**Diagnosis**:
+**Resolution**:
 ```bash
 # Check outbox table for pending events
-kubectl exec -n money-path deploy/payment-service -- \
+kubectl exec -n money-path pod/payment-service-0 -- \
   psql -U postgres -d payments -c "SELECT COUNT(*) FROM outbox_events WHERE sent=false"
 
 # Check Kafka topic
-kafka-console-consumer --topic payments.events --from-beginning | grep "PaymentCaptured"
+kafka-console-consumer --bootstrap-server kafka:9092 --topic payments.events --max-messages 10
 
 # Check order-service consumer lag
-kafka-consumer-groups --describe --group order-service-payment-consumer
+kafka-consumer-groups --bootstrap-server kafka:9092 \
+  --group order-service-payment-consumer --describe
+
+# Manually trigger order status update
+curl -X POST http://order-service:8085/admin/orders/{order_id}/confirm-payment \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Check CDC relay health
+curl http://cdc-relay:8091/actuator/health
 ```
 
-**Resolution**: Manually trigger order status update; check CDC relay health
+### Scenario 3: Ledger Balance Mismatch Detected
 
-### Issue: Ledger Balance Mismatch Detected
-**Possible Causes**:
+**Indicators**:
+- `ledger_balance_variance_cents` > 0
+- Reconciliation engine alerts: "Financial mismatch"
+- p99 latency spike during captures
+
+**Root Causes**:
 1. Partial refund recorded incorrectly
-2. Stripe API response lost in transit
-3. Database corruption
+2. Stripe API response lost (timeout during capture)
+3. Database corruption or concurrent update conflict
+4. Double capture (race condition)
 
-**Diagnosis**:
+**Resolution**:
 ```bash
-# Query ledger balance
-SELECT payment_id,
-       SUM(CASE WHEN debit_account = 'customer' THEN amount_cents ELSE 0 END) as debits,
-       SUM(CASE WHEN credit_account = 'customer' THEN amount_cents ELSE 0 END) as credits
+# Query ledger balance mismatches
+SELECT payment_id, SUM(amount_cents) as balance
 FROM ledger_entries
 GROUP BY payment_id
-HAVING debits != credits;
+HAVING SUM(amount_cents) != 0;
 
-# Check Stripe against local
+# Check Stripe against local state
 stripe charges get $STRIPE_CHARGE_ID
+
+# For partial refunds: Verify amounts
+SELECT payment_id, SUM(amount_cents) as total
+FROM ledger_entries
+WHERE operation IN ('AUTHORIZE', 'CAPTURE', 'REFUND')
+GROUP BY payment_id
+HAVING SUM(amount_cents) != 0;
+
+# Finance team manual review
+# Manual adjustment entry if needed
+INSERT INTO ledger_entries (payment_id, operation, amount_cents, ...)
+VALUES ('payment-uuid', 'ADJUSTMENT', 5000, '...');
+
+# Escalate to SRE for data corruption investigation
 ```
 
-**Resolution**: Finance team manually reviews; potential adjustment entry
+### Scenario 4: Idempotency Key Collision (Duplicate Authorization)
 
-## Operational Runbooks
+**Indicators**:
+- Same Idempotency-Key producing different payment IDs
+- `idempotency_cache_hit_ratio` < 50%
+- Duplicate charges on customer statements
 
-See [runbook.md](runbook.md) for:
-- Pre-deployment checklist (PCI DSS compliance verification)
-- Deployment procedures (canary, blue-green, rollback)
-- Scaling operations (load testing, circuit breaker tuning)
-- Database maintenance (backup verification, restoration drills)
-- Incident response (payment processing failures, fraud detection)
-- PCI DSS audit preparation
+**Root Causes**:
+1. Idempotency key constraint not enforced in DB
+2. Cache miss (Redis down)
+3. TTL expired (24h window)
+4. Race condition in cache + DB
+
+**Resolution**:
+```bash
+# Verify unique constraint exists
+SELECT constraint_name FROM information_schema.table_constraints
+WHERE table_name = 'payments' AND constraint_type = 'UNIQUE'
+AND constraint_name LIKE '%idempotency%';
+
+# If missing: Add constraint
+ALTER TABLE payments ADD CONSTRAINT uk_idempotency_key
+  UNIQUE (idempotency_key, user_id);
+
+# Check for duplicates
+SELECT idempotency_key, COUNT(*) as count
+FROM payments
+WHERE idempotency_key IS NOT NULL
+GROUP BY idempotency_key
+HAVING COUNT(*) > 1;
+
+# Manual deduplication (keep first, delete duplicates)
+DELETE FROM payments WHERE order_id IN (
+  SELECT order_id FROM payments
+  WHERE (idempotency_key, created_at) IN (
+    SELECT idempotency_key, MAX(created_at)
+    FROM payments
+    WHERE idempotency_key IS NOT NULL
+    GROUP BY idempotency_key
+    HAVING COUNT(*) > 1
+  )
+);
+```
+
+### Scenario 5: Authorization Expires (24h Expiry)
+
+**Indicators**:
+- Capture API returns 410 Gone
+- Authorization older than 24 hours in DB
+- Customer complaint: "Payment expired"
+
+**Root Causes**:
+1. Order processing delayed > 24 hours
+2. Fulfillment backlog (items slow to pick)
+3. Customer didn't confirm order within window
+4. Stripe stripe-initiated expiry
+
+**Resolution**:
+```bash
+# Identify expired authorizations
+SELECT payment_id, status, created_at, NOW() - created_at as age
+FROM payments
+WHERE status = 'AUTHORIZED'
+AND created_at < NOW() - INTERVAL '24 hours';
+
+# Re-authorize expired payment
+curl -X POST http://payment-service:8080/payments/authorize \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{
+    "orderId": "order-uuid",
+    "amount": {"value": 3500, "currency": "USD"},
+    "cardToken": "tok_visa_..."
+  }'
+
+# Notify customer of re-authorization if needed
+# Escalate to ops: Why processing took > 24h?
+
+# Prevention: Alert when authorization age > 18h
+```
+
+### Scenario 6: Stripe Webhook Delivery Failure
+
+**Indicators**:
+- Payment status updated in Stripe but not in local DB
+- Manual reconciliation finds payments without capture events
+- `payment_webhook_lag_seconds` > 30s
+
+**Root Causes**:
+1. Webhook endpoint unreachable or slow
+2. Webhook signature verification failed (key rotation issue)
+3. Webhook retry exhausted (max 5 days by Stripe)
+4. Database transaction rolled back after webhook received
+
+**Resolution**:
+```bash
+# Check webhook endpoint health
+curl -X GET http://payment-service:8080/payments/webhooks/health
+
+# Verify webhook signature verification is working
+# Check logs for "Webhook signature verification failed"
+kubectl logs -n money-path deploy/payment-service | grep -i webhook
+
+# Manual webhook re-processing (if webhook lost)
+curl -X POST http://payment-service:8080/admin/webhooks/replay \
+  -d '{"stripe_event_id": "evt_1234567890"}'
+
+# Check Stripe webhook delivery status
+stripe events list | head -20
+
+# If webhook endpoint URL wrong: Update in Stripe dashboard
+# https://dashboard.stripe.com/account/webhooks
+```
+
+### Scenario 7: Payment Webhook Queue Buildup (Lag > 30s)
+
+**Indicators**:
+- Kafka consumer lag on payment-webhooks topic high
+- Webhooks processing delayed
+- Dashboard shows "old" payment statuses
+
+**Root Causes**:
+1. Payment-service webhook handler slow
+2. Database contention during webhook processing
+3. Kafka consumer crashed or stuck
+4. High volume of webhooks from Stripe
+
+**Resolution**:
+```bash
+# Check Kafka consumer lag
+kafka-consumer-groups --bootstrap-server kafka:9092 \
+  --group payment-service-webhooks --describe
+
+# Monitor webhook queue depth
+curl http://payment-service:8080/actuator/metrics/webhook_queue_depth
+
+# Check webhook handler latency
+curl http://payment-service:8080/actuator/metrics/webhook_processing_latency_ms
+
+# Scale payment-service replicas
+kubectl scale deployment payment-service --replicas=6
+
+# Temporarily reduce webhook processing batch size
+PAYMENT_WEBHOOK_BATCH_SIZE=10 (instead of 100)
+
+# Monitor: Should clear backlog within 10 minutes
+```
+
+### Scenario 8: PCI DSS Compliance Audit Finding
+
+**Indicators**:
+- Annual audit finds: "Unencrypted sensitive data"
+- Quarterly scan reports vulnerabilities
+- Encryption key not rotated
+
+**Root Causes**:
+1. Encryption key not rotated (supposed to be quarterly)
+2. Sensitive data (billing address) stored unencrypted
+3. TLS version < 1.2
+4. Access logs not sufficient for audit trail
+
+**Resolution**:
+```bash
+# Verify encryption at rest
+SELECT * FROM payments WHERE billing_address_encrypted IS NULL
+AND created_at > NOW() - INTERVAL '1 year';
+
+# Rotate KMS key
+gcloud kms keys versions create \
+  --location us-central1 \
+  --keyring payments \
+  --key billing-data
+
+# Update payment-service to use new key
+kubectl restart deployment payment-service -n money-path
+
+# Verify TLS version
+openssl s_client -connect payment-service:8080 -tls1_2
+
+# Audit trail check
+SELECT COUNT(*) as audit_log_count
+FROM audit_log
+WHERE service = 'payment-service'
+AND created_at > NOW() - INTERVAL '7 years';
+
+# Schedule compliance review
+# - Quarterly vulnerability scans
+# - Annual third-party audit
+# - Incident response plan review
+```
+
+### Scenario 9: Database Connection Pool Exhausted
+
+**Indicators**:
+- `db_connection_pool_active` = 40/40
+- Payment authorization latency > 5s
+- New payment requests timeout (503)
+
+**Root Causes**:
+1. Leak: Connection not returned to pool
+2. Long-running queries holding connections
+3. Peak traffic spike
+4. Downstream service slow (payment gateway timeout)
+
+**Resolution**:
+```bash
+# Check connection pool status
+curl http://payment-service:8080/actuator/metrics/db.hikari.connections.active
+
+# Identify idle connections in database
+SELECT datname, usename, application_name, query, query_start
+FROM pg_stat_activity
+WHERE datname = 'payments' AND state = 'idle'
+ORDER BY query_start DESC;
+
+# Kill idle connections
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = 'payments'
+AND query_start < NOW() - INTERVAL '30 minutes'
+AND state = 'idle';
+
+# Check for long-running transactions
+SELECT pid, query, query_start, NOW() - query_start as duration
+FROM pg_stat_activity
+WHERE query NOT LIKE '%pg_stat_activity%'
+ORDER BY query_start ASC;
+
+# Increase pool size temporarily
+kubectl set env deployment payment-service \
+  SPRING_DATASOURCE_HIKARI_POOL_SIZE=60
+
+# Scale payment-service replicas
+kubectl scale deployment payment-service --replicas=6 -n money-path
+```
+
+### Scenario 10: Stripe Rate Limit (429 Too Many Requests)
+
+**Indicators**:
+- Stripe API errors: "Rate limit exceeded"
+- `stripe_api_errors_total` counter > 50/min
+- Authorization success rate drops to < 95%
+
+**Root Causes**:
+1. Accidental retry storm (exponential backoff not working)
+2. Peak traffic surge (checkout surge)
+3. Stripe account upgraded but rate limit not increased
+4. Malicious bot (brute force card testing)
+
+**Resolution**:
+```bash
+# Check current request rate
+kubectl logs -n money-path deploy/payment-service | grep -i "rate_limit" | tail -20
+
+# Check if retries are happening
+curl http://payment-service:8080/actuator/metrics/stripe_retry_total
+
+# Contact Stripe support to increase rate limit
+# Current plan: 100 req/s, request upgrade to 200 req/s
+
+# Implement adaptive backoff if not present
+# Max retries: 3, Initial backoff: 500ms, Max backoff: 30s
+
+# Temporarily increase request timeout
+STRIPE_API_REQUEST_TIMEOUT_MS=10000 (instead of 5000)
+
+# Monitor: Should recover once rate limit increased
+```
+
+### Scenario 11-15: Additional Troubleshooting Scenarios
+
+- **Scenario 11**: Refund Reversal (Customer disputing refund credit)
+- **Scenario 12**: Chargeback Detection (Fraud investigation)
+- **Scenario 13**: Card Token Expiry (Stripe token invalid)
+- **Scenario 14**: Multi-currency Conversion Error (Exchange rate mismatch)
+- **Scenario 15**: Webhook Signature Key Rotation (Security update)
+
+## Production Runbook Patterns
+
+### Runbook 1: Payment Service Deployment (Canary)
+
+**Pre-Deployment Checklist** (PCI DSS compliance):
+1. Security scan clean (0 critical vulnerabilities)
+2. Database migrations tested in staging
+3. Stripe API key rotation verified
+4. Encryption keys rotated (if quarterly cycle)
+5. Audit trail backup complete
+6. Runbook reviewed with ops team
+
+**Deployment Steps**:
+1. Deploy to 1 replica (canary, 5% traffic)
+2. Monitor: Error rate, latency, Stripe API latency
+3. Health check: `/actuator/health/ready` returns UP
+4. Scale to 50% (10 min)
+5. If issues: Rollback to previous version
+6. Scale to 100% (10 min)
+
+**Post-Deployment Verification**:
+1. All payment operations < 300ms p99
+2. Success rate > 99.95%
+3. Zero PCI violations in audit log
+4. Stripe API connectivity verified
+
+### Runbook 2: Payment Processing Outage (Stripe Down)
+
+**SLA**: < 15 min detection to mitigation
+
+1. **Alert Received**: Stripe circuit breaker open
+2. **Immediate Actions**:
+   - Verify Stripe status: https://status.stripe.com
+   - Check payment-service health
+   - Alert checkout team: "Payments temporarily unavailable"
+3. **Mitigation**:
+   - Switch to "payment deferral mode" (queue authorizations)
+   - Return 202 Accepted to clients (eventual processing)
+   - Notify customers: "Payment processing delayed by 1-2 hours"
+4. **Communication**: Post incident update to #incidents channel
+5. **Recovery**:
+   - Once Stripe recovers, replay deferred authorizations
+   - Monitor success rate (should return to > 99.95%)
+   - Post-mortem ticket: Why did Stripe go down?
+
+### Runbook 3: Ledger Reconciliation Failure
+
+**Scenario**: Nightly reconciliation detects balance mismatch
+
+1. **Detection**: Alert fired, SEV-2 incident
+2. **Diagnosis**: Query mismatched ledger entries
+3. **Scope**: How many payments affected? Variance total?
+4. **Resolution**:
+   - If variance < $100: Finance team manual review
+   - If variance > $1000: Page CTO (possible data corruption)
+   - Generate adjustment entries if safe
+5. **Communication**: Finance team notified, customer impact assessed
+
+### Runbook 4: PCI Compliance Audit Preparation
+
+**Annual Audit Checklist**:
+1. Encryption audit: All billing data encrypted at rest (KMS)
+2. Audit trail: 7 years of immutable logs
+3. Access control: Only payment-service writes to payments table
+4. Incident response: Recent incidents documented
+5. Key rotation: Quarterly KMS key rotation complete
+6. Network security: TLS 1.3, rate limiting enabled
+7. Penetration test: Recent pen test completed
+
+## Integrations
+
+### Stripe API Integration
+
+| Operation | Endpoint | Method | Timeout | Retry |
+|-----------|----------|--------|---------|-------|
+| Authorize | /v1/charges | POST | 5s | 3x exponential |
+| Capture | /v1/charges/{id}/capture | POST | 5s | 3x exponential |
+| Refund | /v1/charges/{id}/refunds | POST | 5s | 3x exponential |
+| List | /v1/charges | GET | 10s | 1x |
+| Webhook | POST event delivery | N/A | N/A | 5 days (Stripe retry) |
+
+### Event Publishing (Kafka)
+
+| Topic | Events | Guarantee | Format |
+|-------|--------|-----------|--------|
+| payments.events | PaymentAuthorized, PaymentCaptured, PaymentRefunded, PaymentFailed | Exactly-once (via outbox) | Avro or JSON |
+
+### Event Consumption
+
+| Topic | Purpose | Consumer Group |
+|-------|---------|----------------|
+| orders.events | OrderCancelled → auto-refund | payment-service-order-consumer |
+| reconciliation.events | Daily reconciliation check | payment-service-reconciliation-consumer |
 
 ## Related Documentation
 
@@ -683,6 +1085,7 @@ See [runbook.md](runbook.md) for:
 - **ADR-014**: Reconciliation Authority Model (ledger)
 - **Wave 34**: Admin-Gateway authentication
 - **Wave 36**: Reconciliation-engine (financial audits)
+- **Wave 38**: SLOs and error-budget policy
 - [High-Level Design](diagrams/hld.md)
 - [Low-Level Architecture](diagrams/lld.md)
 - [Database Schema (ERD)](diagrams/erd.md)
@@ -690,3 +1093,5 @@ See [runbook.md](runbook.md) for:
 - [Kafka Events](implementation/events.md)
 - [Database Details](implementation/database.md)
 - [Resilience & Retry Logic](implementation/resilience.md)
+- [Runbook: payment-service/runbook.md](runbook.md)
+- [Sequence Diagrams: Payment Flow](diagrams/sequence.md)

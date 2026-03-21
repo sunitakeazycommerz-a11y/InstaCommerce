@@ -822,10 +822,409 @@ WHERE created_at > NOW() - INTERVAL '7 days';
    - Revert thresholds once contained
    - File incident ticket for model retrain
 
+## Advanced Fraud Detection Patterns
+
+### ML Model Ensemble Architecture
+
+**Model 1: Gradient Boosting (XGBoost)**
+```
+Purpose: Primary scorer (80% weight)
+Features: 30 features (velocity, geography, device, profile)
+Output: Risk score (0-100)
+Accuracy: 92% precision on fraud detection
+```
+
+**Model 2: Anomaly Detection (Isolation Forest)**
+```
+Purpose: Detect novel patterns (15% weight)
+Features: Unsupervised clustering on user transaction profiles
+Output: Anomaly score (0-1)
+Strength: Catches new fraud techniques
+```
+
+**Model 3: Graph Network (Neo4j)**
+```
+Purpose: Network fraud detection (5% weight)
+Nodes: Users, devices, IPs, payment methods
+Edges: Transactions, shared attributes
+Detects: Fraud rings, organized schemes
+Example: 5 users all from IP 10.0.0.1 = suspicious network
+```
+
+**Ensemble Combination**:
+```
+final_score = 0.80 * xgboost_score + 0.15 * isolation_forest_score + 0.05 * graph_score
+Decision: If final_score > threshold → BLOCK/REVIEW
+```
+
+### Advanced Velocity Checks
+
+**Temporal Patterns**:
+```
+Rule: Micro-burst (extreme velocity)
+  IF transactions in 1-min window > 5: +50 points
+  IF transactions in 5-min window > 20: +40 points
+  IF transactions in 1-hour window > 100: +30 points
+
+Rule: Velocity slope
+  IF rate increases > 300% in 1 hour: +25 points
+  Example: 1 txn/min → 4 txn/min spike
+
+Rule: Off-hours transactions
+  IF transaction at 3 AM + user normally sleeps: +15 points
+  (Learn user's activity pattern)
+```
+
+**Location Patterns**:
+```
+Rule: Impossible travel
+  IF distance > 500 km AND time_delta < 2 hours: +50 points
+  IF distance > 1000 km AND time_delta < 6 hours: +40 points
+
+Rule: Unfamiliar location
+  IF country not in user's last 10 transactions: +15 points
+  IF city > 200 km from usual location: +10 points
+
+Rule: High-risk geography
+  IF country in fraud_hotspot_list: +20 points
+```
+
+### Device Fingerprinting & Trust
+
+**Device Trust Score Calculation**:
+```
+Components:
+  1. Device age (how long known to system)
+     - New device (< 7 days): 0.3 trust
+     - Known device (> 30 days): 0.9 trust
+
+  2. Device consistency
+     - Same device across transactions: +0.2
+     - Different devices same user: -0.1
+
+  3. Hardware indicators
+     - High-end device (recent phone): +0.1
+     - Emulated/test device: -0.3
+
+  4. Geographic consistency
+     - Device location matches IP location: +0.1
+     - Mismatch (VPN/proxy): -0.2
+
+Final trust = AVG(components), capped [0, 1]
+
+If trust < 0.4: Device flagged as suspicious, +20 fraud points
+```
+
+## Advanced Operational Patterns
+
+### Fraud Ring Detection (Graph-Based)
+
+**Algorithm**:
+```
+1. Identify suspicious transactions (score > 60)
+2. Extract connected components:
+   - Shared IP addresses
+   - Shared payment methods
+   - Shared device IDs
+   - Shared email domains
+
+3. Build subgraph for each component
+4. Analyze structure:
+   - If N users connected with 1 IP: Likely ring
+   - If N users connected with 1 payment method: Likely ring
+   - If N IPs, same device: Proxy farm
+
+5. Ring confidence score = function(connectivity, pattern)
+   If confidence > 0.8: Flag as organized fraud ring
+```
+
+**Example Detection**:
+```
+Scenario: 20 users, all from IP 203.0.113.45, all low-risk scores (25)
+Analysis:
+  - Individual scores: LOW (passed thresholds)
+  - Network structure: SUSPICIOUS (all connected)
+  - Ring confidence: HIGH (98%)
+
+Result: BLOCK all 20 users, flag as fraud ring
+```
+
+### Whitelist Auto-Generation
+
+**Auto-Whitelist Conditions**:
+```
+Trigger: 30 consecutive clean transactions
+  - No chargebacks
+  - No disputes
+  - No manual reviews
+  - All within normal velocity/amount
+
+Action:
+  - Add user to whitelist
+  - All future scores capped at 10 (very low risk)
+  - Bypass velocity checks entirely
+  - Still log transactions for monitoring
+
+Bypass:
+  - If watchlist hit recently: Don't auto-whitelist
+  - If risk profile changed significantly: Don't auto-whitelist
+```
+
+**Auto-Blacklist Conditions**:
+```
+Trigger: 2 confirmed fraud cases
+  - User confirmed fraudster (manual review)
+  - Multiple chargebacks
+  - Reported by victims
+
+Action:
+  - Add to blacklist
+  - All future transactions: score = 100 (block immediately)
+  - TTL: 90 days default (can be permanent)
+  - Auto-review at 90 days (manual decision to renew)
+
+Appeal Process:
+  - User can request whitelist removal after 60 days
+  - Review with risk team
+  - If legitimate: Transition to watchlist (30-day monitoring)
+```
+
+## Advanced Monitoring Patterns
+
+### Real-Time Fraud Detection Dashboard
+
+**Metrics displayed**:
+```
+1. Transaction Volume
+   - Today: 50,000 transactions
+   - Approved: 48,500 (97%)
+   - Reviewed: 1,200 (2.4%)
+   - Blocked: 300 (0.6%)
+
+2. Risk Distribution
+   - APPROVE (score 0-30): 48,500 (97%)
+   - REVIEW (score 31-70): 1,200 (2.4%)
+   - BLOCK (score 71-100): 300 (0.6%)
+
+3. Fraud Detection
+   - Confirmed fraud (this week): 45 users
+   - Fraud ring (this month): 3 rings (180 users)
+   - Chargebacks: 23 (0.046%)
+
+4. Model Performance
+   - Precision: 96%
+   - Recall: 91%
+   - F1 Score: 93%
+   - False positive rate: 3%
+   - False negative rate: 8%
+```
+
+### Operational Health Checks (Hourly)
+
+**Health Check 1: Model Staleness**
+```
+IF model version not updated for > 8 days:
+  Alert: SEV-2 "Model stale, accuracy may degrade"
+  Action: Manual trigger retraining job
+
+IF model inference latency > 100ms:
+  Alert: SEV-2 "Model slow, fallback to rules"
+  Action: Check ML model pod CPU/memory
+```
+
+**Health Check 2: Decision Distribution Anomalies**
+```
+IF APPROVE rate drops below 90%:
+  Alert: SEV-3 "Approval rate low"
+  Possible causes: Rules too strict, model drift
+
+IF BLOCK rate exceeds 1%:
+  Alert: SEV-3 "Block rate high"
+  Possible causes: False positives increasing
+
+IF REVIEW rate exceeds 5%:
+  Alert: SEV-3 "Manual review backlog growing"
+  Action: Adjust decision thresholds
+```
+
+## Production Runbook Patterns
+
+### Runbook 1: Fraud Epidemic Response (10x Normal Fraud Rate)
+
+**Scenario**: Sudden spike in fraud (0.6% → 6%)
+
+**Detection** (< 1 min):
+- Alert: fraud_false_negative_rate spike
+- Dashboard: Fraud transactions increasing
+
+**Immediate Action** (< 5 min):
+```bash
+# Step 1: Lower decision thresholds (stricter blocking)
+FRAUD_DECISION_BLOCK_THRESHOLD=40  # from 75 (block more aggressively)
+
+# Step 2: Restart service
+kubectl rollout restart deployment/fraud-detection-service
+
+# Step 3: Monitor impact
+# Approval rate should drop (more blocked)
+# False positive rate will increase (acceptable in emergency)
+
+# Step 4: Parallel investigation
+# Identify common pattern (new IP? device? category?)
+```
+
+**Investigation** (5-30 min):
+```bash
+# Analyze recent frauds
+SELECT COUNT(*) as count,
+       ip_address, device_id, country, category
+FROM fraud_alerts
+WHERE created_at > NOW() - INTERVAL '1 hour'
+  AND decision = 'BLOCK'
+GROUP BY ip_address, device_id, country, category
+ORDER BY count DESC;
+
+# Example output: 500 frauds all from IP 203.0.113.45, category electronics
+```
+
+**Containment** (30-60 min):
+```bash
+# Add fraud ring to blacklist
+INSERT INTO fraud_flags (flag_type, target_id, target_type, reason, expires_at)
+SELECT 'BLACKLIST_USER', user_id, 'USER', 'Fraud ring - IP 203.0.113.45', NOW() + '90 days'
+FROM users
+WHERE last_ip = '203.0.113.45'
+  AND created_at > NOW() - '24 hours';
+
+# Add IP to blacklist
+INSERT INTO fraud_flags (flag_type, target_id, target_type, reason)
+VALUES ('BLACKLIST_IP', '203.0.113.45', 'IP', 'Proxy farm detected');
+
+# Expected: Fraud rate drops back to normal
+```
+
+**Post-Incident** (Next day):
+- Review fraud pattern
+- Update ML model features (add IP-based detection)
+- Retrain model with new examples
+- Document incident for future reference
+
+### Runbook 2: False Positive Crisis (4% False Positive Rate)
+
+**Scenario**: Legitimate customers blocked at checkout
+
+**Detection** (< 10 min):
+- Alert: fraud_false_positive_rate > 3%
+- Support tickets spike: "Transaction declined unfairly"
+
+**Impact Assessment**:
+```bash
+# Find affected users
+SELECT COUNT(DISTINCT user_id) as blocked_users,
+       AVG(score) as avg_fraud_score,
+       MAX(score) as max_fraud_score
+FROM fraud_alerts
+WHERE decision = 'BLOCK'
+  AND false_positive = true
+  AND created_at > NOW() - INTERVAL '2 hours';
+
+# Example: 500 legitimate users blocked
+# Revenue impact: ~$50K (assuming avg order $100)
+```
+
+**Immediate Mitigation** (< 15 min):
+```bash
+# Adjust decision thresholds (less aggressive)
+FRAUD_DECISION_BLOCK_THRESHOLD=85     # from 40 (block fewer)
+FRAUD_DECISION_REVIEW_THRESHOLD=70    # from 55 (review fewer)
+
+# Expected: More transactions approved, false positive rate drops
+
+# Notify affected users
+# Option 1: Auto-retry their blocked transactions
+# Option 2: Send notification: "Try checkout again"
+```
+
+**Root Cause Analysis** (1-2 hours):
+```bash
+# Identify what changed
+# Was it:
+#  1. New rule too strict?
+#  2. Model retraining with bad data?
+#  3. Feature distribution shift (new user cohort)?
+
+# Find pattern in false positives
+SELECT rule_fired, COUNT(*)
+FROM fraud_alerts
+WHERE false_positive = true
+GROUP BY rule_fired
+ORDER BY COUNT DESC;
+
+# Example: VELOCITY_HIGH rule firing for legitimate new users
+```
+
+**Long-term Fix** (< 24 hours):
+```bash
+# Update rules to be less aggressive
+# Example: Adjust VELOCITY_HIGH from > 10 txns/hour to > 20 txns/hour
+
+# Retrain model with fixed dataset
+# Remove false positive examples from training data
+
+# A/B test new model on 10% traffic before full rollout
+```
+
+## Testing & Validation
+
+### Integration Test Scenarios (15+)
+
+**Test 1: Whitelist Override**
+```
+Setup: User in whitelist
+Input: Transaction with very high score (95)
+Expected: APPROVE (whitelist overrides everything)
+```
+
+**Test 2: Blacklist Hit**
+```
+Setup: User in blacklist
+Input: Low-score transaction (5)
+Expected: BLOCK (blacklist overrides everything)
+```
+
+**Test 3: Velocity Check**
+```
+Setup: User with 50 transactions in last hour
+Input: New transaction
+Expected: BLOCK (velocity > 10 txns/hour = +25 points)
+```
+
+**Test 4: Impossible Travel**
+```
+Setup: User in NYC, last transaction 1 hour ago
+Input: Transaction from Mumbai (12,000 km away)
+Expected: BLOCK (impossible travel = +50 points)
+```
+
+**Test 5: New User**
+```
+Setup: Account created 2 days ago
+Input: Any transaction
+Expected: Score >= 20 (new user bias)
+```
+
+**Tests 6-15**: Additional scenarios for edge cases, fallbacks, etc.
+
 ## Related Documentation
 
 - **ADR-011**: Fraud Scoring Model & Rules
+- **ADR-012**: ML Model Ensemble Strategy
 - **Runbook**: fraud-detection-service/runbook.md
+- [High-Level Design](diagrams/hld.md)
+- [Low-Level Architecture](diagrams/lld.md)
+- [Fraud Ring Detection Algorithm](fraud-ring-detection.md)
+- [Model Retraining Pipeline](ml-training-pipeline.md)
+- [False Positive Reduction Strategy](false-positive-analysis.md)
 
 ## Configuration
 

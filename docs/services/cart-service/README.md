@@ -13,10 +13,6 @@
 | **Auth** | JWT RS256 + per-service token isolation |
 | **Owner** | Cart & Checkout Team |
 | **Status** | Tier 1 (Checkout Critical Path) |
-| **Service Ownership**: Checkout Team |
-| **Language**: Java 21 / Spring Boot 4.0 |
-| **Default Port**: 8088 |
-| **Database**: PostgreSQL 15+ (cart state, transactional outbox) |
 
 ## SLOs & Availability
 
@@ -979,6 +975,151 @@ spring:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 ```
 
+## Advanced Cart Operations
+
+### Cart Merging (Multi-Device Support Future)
+
+**When merging carts**:
+```
+Scenario: User adds items on mobile, then opens website
+
+Phase 1: Fetch carts
+  - Mobile cart: [Milk (qty=2), Bread (qty=1)]
+  - Web cart: [Milk (qty=1), Eggs (qty=1)]
+
+Phase 2: Merge algorithm
+  IF item in both carts:
+    qty = MAX(qty_mobile, qty_web)  -- take larger quantity
+  ELSE:
+    qty = qty_mobile + qty_web  -- combine quantities
+
+Phase 3: Result
+  Merged: [Milk (qty=2), Bread (qty=1), Eggs (qty=1)]
+
+Phase 4: Validation
+  - Check inventory still available
+  - Recalculate pricing with combined totals
+  - Notify user of changes
+```
+
+### Cart Recovery & Abandonment
+
+**Abandoned Cart Detection**:
+```
+Definition: ACTIVE cart with no modifications for 7+ days
+
+Detection job (nightly):
+  SELECT * FROM carts
+  WHERE status='ACTIVE' AND updated_at < NOW() - INTERVAL '7 days'
+
+Action:
+  1. Mark as ABANDONED
+  2. Trigger recovery email (next morning, 9 AM user timezone)
+  3. Email includes: Products in cart, total value, 24h discount code
+  4. Re-engagement target: Recover 15-20% of abandoned carts
+
+Metrics:
+  - Abandonment rate: 30-40% (industry standard 25%)
+  - Recovery rate: 10-15% of abandoned (email effectiveness)
+  - Revenue recovered: $X per day
+```
+
+**Lifetime of Abandoned Cart**:
+```
+Day 0: Cart becomes abandoned (inactive 7+ days)
+Day 1: Recovery email sent (p0.5 open rate)
+Day 2-7: Retargeting ads shown
+Day 8: Mark as EXPIRED, flag for archival
+Day 30: Archive to cold storage (keep for 1 year)
+
+If user re-engages (adds item):
+  → Cart status back to ACTIVE
+  → Cancels recovery email schedule
+```
+
+### High-Concurrency Cart Updates
+
+**Concurrency Control Strategy**:
+```
+Problem: Mobile users fast-clicking "Add to Cart"
+  Request 1: Add Milk, update quantity
+  Request 2: Add Bread (arrive before Request 1 completes)
+  Race condition: Request 2 reads stale cart version
+
+Solution: Optimistic Locking
+
+Request 1:
+  SELECT cart WHERE id='cart-uuid' (version=5, items=3)
+  INSERT item (version still 5)
+  UPDATE carts SET version=6 (if version=5) -- atomic
+  Success: version now 6
+
+Request 2:
+  SELECT cart WHERE id='cart-uuid' (version=5, items=3)
+  INSERT item (version still 5)
+  UPDATE carts SET version=6 (if version=5) -- fails! (version already 6)
+  Failure: 409 Conflict
+
+Client retry logic:
+  1. Get latest cart (version=6)
+  2. Reapply change
+  3. Re-submit with version=6
+  → Success on retry
+```
+
+**Performance under load**:
+```
+Low contention (< 10% retries):
+  - Average latency: 150ms
+  - p99 latency: 300ms
+  - No user impact
+
+High contention (> 30% retries):
+  - Average latency: 250ms (longer retry cycles)
+  - p99 latency: 800ms (multiple retries)
+  - User impact: Slow "Add to Cart" response
+
+Mitigation:
+  - Increase retry backoff multiplier
+  - Use pessimistic lock for ultra-high-contention users
+  - Add queue for rapid-fire requests
+```
+
+## Production Deployment Patterns
+
+### Blue-Green Deployment
+
+**Deployment process**:
+```
+1. Deploy cart-service-v2 (new version)
+2. Route 10% traffic to v2, monitor:
+   - p99 latency
+   - Error rate
+   - Cache hit rate
+   - Payment success rate
+3. After 15 min healthy: Route 50% → 50%
+4. After 30 min healthy: Route 100% to v2
+5. Keep v1 running for 24h (rollback window)
+6. Metrics to watch during cutover:
+   - Checkout conversion rate (should not drop)
+   - Cart validation success rate (should stay > 99%)
+   - Price staleness (should not increase)
+```
+
+**Rollback triggers**:
+```
+Automatic rollback if:
+  - p99 latency > 500ms
+  - Error rate > 1%
+  - Payment service errors > 5/min
+  - Pricing sync failures > 10/min
+
+Manual rollback if:
+  - Customer complaints about pricing
+  - Fraud score anomalies
+  - Data inconsistency alerts
+```
+
 ## Known Limitations
 
 1. No persistent cart sync across devices (session-only)
@@ -987,6 +1128,8 @@ spring:
 4. No cart expiry notifications
 5. No location-aware pricing (all users see same price)
 6. No bulk cart import/export
+7. No cart analytics (popular products, avg cart value per segment)
+8. No inventory reservation (soft hold only)
 
 **Roadmap (Wave 41+):**
 - Cross-device cart sync
@@ -994,4 +1137,7 @@ spring:
 - Abandoned cart recovery emails
 - Gift cart functionality
 - Wishlist/save for later feature
+- Advanced cart analytics & insights
+- Hard inventory reservation (30-min hold)
+- Cart sharing (share link with others)
 
