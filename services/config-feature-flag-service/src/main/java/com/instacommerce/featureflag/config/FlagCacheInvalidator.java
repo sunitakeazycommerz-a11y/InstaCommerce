@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.cache.CacheManager;
-import org.springframework.context.ApplicationRunner;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
@@ -55,8 +54,8 @@ public class FlagCacheInvalidator implements MessageListener {
                 .description("Redis pub/sub subscription failures")
                 .register(meterRegistry);
 
-        meterRegistry.gauge("feature_flag.cache.staleness_window_seconds",
-                () -> maxStalenessMs.get() / 1000.0);
+        meterRegistry.gauge("feature_flag.cache.staleness_window_seconds", maxStalenessMs,
+                (v) -> v.get() / 1000d);
     }
 
     @EventListener(ApplicationReadyEvent.class)

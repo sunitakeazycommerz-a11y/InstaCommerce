@@ -7,6 +7,7 @@ import io.jsonwebtoken.Jwts;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.GrantedAuthority;
@@ -42,7 +43,7 @@ public class DefaultJwtService implements JwtService {
             .parseSignedClaims(token);
 
         Claims claims = jws.getPayload();
-        List<String> audiences = claims.getAudience();
+        Set<String> audiences = claims.getAudience();
 
         if (audiences == null || !audiences.contains(audience)) {
             throw new JwtException("Token audience '" + audiences + "' does not match expected audience '" + audience + "'");
