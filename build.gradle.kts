@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.springframework.boot") version "4.0.0" apply false
+    id("org.springframework.boot") version "3.3.4" apply false
     id("io.spring.dependency-management") version "1.1.7" apply false
 }
 
@@ -28,8 +28,9 @@ subprojects {
 
     the<io.spring.gradle.dependencymanagement.dsl.DependencyManagementExtension>().apply {
         imports {
+            mavenBom("org.springframework.boot:spring-boot-dependencies:3.3.4")
             mavenBom("com.google.cloud:spring-cloud-gcp-dependencies:5.1.0")
-            mavenBom("org.springframework.cloud:spring-cloud-dependencies:2024.0.0")
+            mavenBom("org.springframework.cloud:spring-cloud-dependencies:2023.0.3")
             mavenBom("io.grpc:grpc-bom:1.75.0")
         }
         dependencies {
