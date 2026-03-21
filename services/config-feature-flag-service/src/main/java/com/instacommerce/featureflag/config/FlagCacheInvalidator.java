@@ -55,10 +55,8 @@ public class FlagCacheInvalidator implements MessageListener {
                 .description("Redis pub/sub subscription failures")
                 .register(meterRegistry);
 
-        Gauge.builder("feature_flag.cache.staleness_window_seconds",
-                () -> maxStalenessMs.get() / 1000.0)
-                .description("Maximum staleness window in seconds")
-                .register(meterRegistry);
+        meterRegistry.gauge("feature_flag.cache.staleness_window_seconds", maxStalenessMs,
+                (v) -> v.get() / 1000d);
     }
 
     @EventListener(ApplicationReadyEvent.class)
