@@ -43,6 +43,9 @@ subprojects {
             dependency("com.google.protobuf:protobuf-java:4.32.0")
             dependency("com.google.protobuf:protobuf-java-util:4.32.0")
             dependency("at.yawk.lz4:lz4-java:1.10.1")
+            // Explicitly manage Spring Kafka (spring-boot-starter-kafka doesn't exist in SB 3.3.4)
+            dependency("org.springframework.kafka:spring-kafka:3.2.4")
+            dependency("org.springframework.kafka:spring-kafka-test:3.2.4")
         }
     }
 }
