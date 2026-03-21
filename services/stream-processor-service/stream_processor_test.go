@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/instacommerce/stream-processor-service/dedup"
 	"github.com/instacommerce/stream-processor-service/processor"
@@ -38,9 +37,6 @@ func (m *MockRedisClient) SetNX(ctx context.Context, key string, value interface
 func TestEventDeduplicationDetectsRepeatedEvents(t *testing.T) {
 	// Test that deduplication detects duplicate events
 	ctx := context.Background()
-
-	// Create a mock Redis client
-	mockRedis := NewMockRedisClient()
 
 	// Create deduplication checker
 	checker := dedup.NewChecker(nil, nil)
@@ -205,7 +201,6 @@ func TestSLAMonitorInitialization(t *testing.T) {
 func TestDeduplicationKeyGeneration(t *testing.T) {
 	// Test that deduplication keys are properly formatted
 	topic := "orders.events"
-	partition := 0
 	offset := int64(12345)
 
 	// Key format: dedup:{topic}:{partition}:{offset}

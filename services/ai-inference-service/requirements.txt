@@ -7,7 +7,7 @@ opentelemetry-sdk==1.27.0
 prometheus-client==0.20.0
 redis==5.0.4
 uvicorn[standard]==0.29.0
-lightgbm==4.4.1
+lightgbm==4.6.0
 xgboost==2.0.3
 scikit-learn==1.4.2
 numpy==1.26.4

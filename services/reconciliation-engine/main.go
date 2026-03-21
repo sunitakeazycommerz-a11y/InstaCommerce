@@ -35,9 +35,9 @@ import (
 	"go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
 
-	"reconciliation-engine/api"
-	"reconciliation-engine/pkg/cdc"
-	"reconciliation-engine/pkg/reconciliation"
+	"github.com/instacommerce/reconciliation-engine/api"
+	"github.com/instacommerce/reconciliation-engine/pkg/cdc"
+	"github.com/instacommerce/reconciliation-engine/pkg/reconciliation"
 )
 
 const (
