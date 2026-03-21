@@ -918,6 +918,28 @@ services:
       REDIS_URL: "${REDIS_URL}"
       HEALTH_PORT: "8108"
 
+  reverse-etl-orchestrator:
+    image: instacommerce/reverse-etl-orchestrator
+    port: 8080
+    replicas: 2
+    readinessPath: /health/ready
+    livenessPath: /health/live
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      API_ADDR: ":8080"
+      HEALTH_ADDR: ":8081"
+      METRICS_ADDR: ":9090"
+      DATABASE_URL: jdbc:postgresql:///reverse_etl_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      TEMPORAL_HOST: temporal.temporal:7233
+      TEMPORAL_NAMESPACE: reverse-etl
+    hpa:
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPU: 70
+
   warehouse-service:
     replicas: 2
     image: warehouse-service
