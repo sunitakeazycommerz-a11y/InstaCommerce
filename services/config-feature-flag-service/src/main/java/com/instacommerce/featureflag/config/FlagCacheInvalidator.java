@@ -2,6 +2,7 @@ package com.instacommerce.featureflag.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Instant;
@@ -12,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.cache.CacheManager;
-import org.springframework.context.ApplicationRunner;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
@@ -55,8 +55,10 @@ public class FlagCacheInvalidator implements MessageListener {
                 .description("Redis pub/sub subscription failures")
                 .register(meterRegistry);
 
-        meterRegistry.gauge("feature_flag.cache.staleness_window_seconds",
-                () -> maxStalenessMs.get() / 1000.0);
+        Gauge.builder("feature_flag.cache.staleness_window_seconds",
+                () -> maxStalenessMs.get() / 1000.0)
+                .description("Maximum staleness window in seconds")
+                .register(meterRegistry);
     }
 
     @EventListener(ApplicationReadyEvent.class)
