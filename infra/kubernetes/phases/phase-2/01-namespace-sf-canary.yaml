@@ -1,0 +1,229 @@
+---
+# SF Canary Namespace with Resource Quotas
+# Isolated namespace for San Francisco dark-store canary deployment
+# Enforces resource limits to prevent cluster destabilization
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sf-canary
+  labels:
+    environment: canary
+    region: us-west1
+    phase: 2
+    deployment: sf-dark-store
+  annotations:
+    description: "San Francisco dark-store canary deployment namespace (100% traffic)"
+    team: fulfillment-platform
+    created-by: wave-40-phase-2
+    cost-center: fulfillment-operations
+
+---
+# Resource Quota: Enforce total resource consumption limits
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sf-canary-quota
+  namespace: sf-canary
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "20"                  # Max 20 CPU cores
+    requests.memory: "80Gi"             # Max 80 GiB memory
+    limits.cpu: "30"                    # Max 30 CPU cores
+    limits.memory: "120Gi"              # Max 120 GiB memory
+
+    # Pod and deployment limits
+    pods: "50"                          # Max 50 pods
+    replicationcontrollers: "10"
+    deployments.apps: "10"
+    daemonsets.apps: "5"
+    statefulsets.apps: "5"
+    jobs.batch: "20"
+    cronjobs.batch: "10"
+
+    # Service limits
+    services: "20"
+    services.loadbalancers: "2"
+    services.nodeports: "5"
+
+    # Storage limits
+    requests.storage: "500Gi"           # Max 500 GiB persistent storage
+    persistentvolumeclaims: "20"
+
+    # Compute limits (counted)
+    limits.ephemeral-storage: "1Ti"
+    requests.ephemeral-storage: "500Gi"
+  scopeSelector:
+    matchExpressions:
+      - operator: In
+        scopeName: PriorityClass
+        values: ["high", "medium"]
+
+---
+# Network Policy: Pod communication isolation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sf-canary-default-deny
+  namespace: sf-canary
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress: []
+
+---
+# Service Accounts and RBAC
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dark-store-sa
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    region: us-west1
+  annotations:
+    workload-identity: "dark-store-service@instacommerce-prod.iam.gserviceaccount.com"
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dark-store-role
+  namespace: sf-canary
+rules:
+  # Pod access
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["get", "list", "watch"]
+
+  # ConfigMap and Secret access
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+    resourceNames: ["dark-store-config", "dark-store-secrets"]
+
+  # Service access
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+
+  # Event access for debugging
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dark-store-rolebinding
+  namespace: sf-canary
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dark-store-role
+subjects:
+  - kind: ServiceAccount
+    name: dark-store-sa
+    namespace: sf-canary
+
+---
+# PriorityClass for canary workloads (medium priority)
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: canary-medium-priority
+value: 500
+globalDefault: false
+description: "Medium priority for SF canary dark-store workloads"
+
+---
+# ResourceQuota for ephemeral storage
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: sf-canary-limits
+  namespace: sf-canary
+spec:
+  limits:
+    # Container limits
+    - type: Container
+      max:
+        cpu: "4"
+        memory: "16Gi"
+        ephemeral-storage: "50Gi"
+      min:
+        cpu: "250m"
+        memory: "256Mi"
+        ephemeral-storage: "1Gi"
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+        ephemeral-storage: "10Gi"
+      defaultRequest:
+        cpu: "250m"
+        memory: "256Mi"
+        ephemeral-storage: "5Gi"
+
+    # Pod limits
+    - type: Pod
+      max:
+        cpu: "8"
+        memory: "32Gi"
+        ephemeral-storage: "100Gi"
+      min:
+        cpu: "250m"
+        memory: "256Mi"
+        ephemeral-storage: "1Gi"
+
+    # PVC limits
+    - type: PersistentVolumeClaim
+      max:
+        storage: "100Gi"
+      min:
+        storage: "1Gi"
+
+---
+# NetworkPolicy: Allow DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sf-canary-allow-dns
+  namespace: sf-canary
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+# ConfigMap for canary deployment metadata
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sf-canary-config
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    region: us-west1
+data:
+  DEPLOYMENT_REGION: "us-west1"
+  DEPLOYMENT_CITY: "San Francisco"
+  DEPLOYMENT_TYPE: "dark-store-canary"
+  TRAFFIC_PERCENTAGE: "100"
+  REPLICAS: "5"
+  DEPLOYMENT_PHASE: "2"
+  CANARY_ID: "sf-canary-001"
+  LOG_LEVEL: "info"
+  ENVIRONMENT: "production"
