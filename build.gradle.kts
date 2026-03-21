@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.springframework.boot") version "3.3.4" apply false
+    id("org.springframework.boot") version "4.0.0" apply false
     id("io.spring.dependency-management") version "1.1.7" apply false
 }
 
@@ -28,9 +28,9 @@ subprojects {
 
     the<io.spring.gradle.dependencymanagement.dsl.DependencyManagementExtension>().apply {
         imports {
-            mavenBom("org.springframework.boot:spring-boot-dependencies:3.3.4")
-            mavenBom("com.google.cloud:spring-cloud-gcp-dependencies:5.1.0")
-            mavenBom("org.springframework.cloud:spring-cloud-dependencies:2023.0.3")
+            mavenBom("org.springframework.boot:spring-boot-dependencies:4.0.0")
+            mavenBom("com.google.cloud:spring-cloud-gcp-dependencies:6.0.0")
+            mavenBom("org.springframework.cloud:spring-cloud-dependencies:2024.0.0")
             mavenBom("io.grpc:grpc-bom:1.75.0")
         }
         dependencies {
@@ -43,9 +43,9 @@ subprojects {
             dependency("com.google.protobuf:protobuf-java:4.32.0")
             dependency("com.google.protobuf:protobuf-java-util:4.32.0")
             dependency("at.yawk.lz4:lz4-java:1.10.1")
-            // Explicitly manage Spring Kafka (spring-boot-starter-kafka doesn't exist in SB 3.3.4)
-            dependency("org.springframework.kafka:spring-kafka:3.2.4")
-            dependency("org.springframework.kafka:spring-kafka-test:3.2.4")
+            // Spring Boot 4.0+ manages spring-kafka via BOM, but explicit for clarity
+            dependency("org.springframework.kafka:spring-kafka:4.0.0")
+            dependency("org.springframework.kafka:spring-kafka-test:4.0.0")
         }
     }
 }
