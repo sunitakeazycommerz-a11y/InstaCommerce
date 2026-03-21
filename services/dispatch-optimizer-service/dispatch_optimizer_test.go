@@ -66,9 +66,7 @@ func TestDispatchOptimizationWithAvailableRiders(t *testing.T) {
 	}
 
 	constraints := ConstraintSet{
-		Constraints: []Constraint{
-			CapacityConstraint{Max: 5},
-		},
+		CapacityConstraint{Max: 5},
 	}
 
 	assignments, unassigned := optimizeAssignments(riders, orders, constraints)
@@ -97,9 +95,7 @@ func TestDispatchOptimizationWithCapacityConstraint(t *testing.T) {
 
 	// Capacity constraint allows only 2 orders per rider
 	constraints := ConstraintSet{
-		Constraints: []Constraint{
-			CapacityConstraint{Max: 2},
-		},
+		CapacityConstraint{Max: 2},
 	}
 
 	assignments, unassigned := optimizeAssignments(riders, orders, constraints)
@@ -126,10 +122,8 @@ func TestDispatchOptimizationWithZoneConstraint(t *testing.T) {
 	}
 
 	constraints := ConstraintSet{
-		Constraints: []Constraint{
-			ZoneConstraint{},
-			CapacityConstraint{Max: 5},
-		},
+		ZoneConstraint{},
+		CapacityConstraint{Max: 5},
 	}
 
 	assignments, unassigned := optimizeAssignments(riders, orders, constraints)
@@ -151,7 +145,7 @@ func TestDispatchOptimizationWithNoAvailableRiders(t *testing.T) {
 	}
 
 	constraints := ConstraintSet{
-		Constraints: []Constraint{CapacityConstraint{Max: 5}},
+		CapacityConstraint{Max: 5},
 	}
 
 	assignments, unassigned := optimizeAssignments(riders, orders, constraints)
@@ -193,7 +187,7 @@ func TestTotalDistanceCalculationInAssignment(t *testing.T) {
 	}
 
 	constraints := ConstraintSet{
-		Constraints: []Constraint{CapacityConstraint{Max: 5}},
+		CapacityConstraint{Max: 5},
 	}
 
 	assignments, _ := optimizeAssignments(riders, orders, constraints)
