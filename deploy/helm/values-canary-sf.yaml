@@ -1,0 +1,137 @@
+# SF Canary Deployment Values - 100% Traffic (Week 1)
+# Dark-store pilot: fulfillment-service, warehouse-service, rider-fleet-service
+
+global:
+  environment: canary-sf
+  region: us-west-1
+  cluster: instacommerce-sf-canary
+
+canary:
+  enabled: true
+  region: us-west-1
+  city: san-francisco
+  traffic:
+    weight: 100
+  slos:
+    availability: 99.5
+    latency_p99_ms: 2000
+    error_rate_threshold: 0.01
+  analysis:
+    enabled: true
+    interval: 5m
+    successThreshold: 3
+    failureThreshold: 2
+    metrics:
+      - name: error-rate
+        provider: prometheus
+        query: |
+          sum(rate(http_requests_total{status=~"5..",service="{{ .ServiceName }}",region="us-west-1"}[5m])) 
+          / sum(rate(http_requests_total{service="{{ .ServiceName }}",region="us-west-1"}[5m]))
+        successCondition: result < 0.01
+      - name: latency-p99
+        provider: prometheus
+        query: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="{{ .ServiceName }}",region="us-west-1"}[5m])) by (le))
+        successCondition: result < 2.0
+
+# Fulfillment Service - Dark-store pilot
+fulfillment-service:
+  enabled: true
+  replicaCount: 3
+  image:
+    tag: canary-sf
+  canary:
+    enabled: true
+    weight: 100
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  env:
+    REGION: us-west-1
+    DARK_STORE_PILOT_ENABLED: "true"
+    FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "false"
+  slo:
+    orderPackingTimeP99Seconds: 300
+    orderDispatchTimeP99Seconds: 120
+
+# Warehouse Service - Dark-store pilot  
+warehouse-service:
+  enabled: true
+  replicaCount: 2
+  image:
+    tag: canary-sf
+  canary:
+    enabled: true
+    weight: 100
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  env:
+    REGION: us-west-1
+    DARK_STORE_PILOT_ENABLED: "true"
+    INVENTORY_SYNC_INTERVAL_SECONDS: "60"
+  slo:
+    inventoryAccuracyPercent: 99.0
+    pickTimeP99Seconds: 180
+
+# Rider Fleet Service - Dark-store pilot
+rider-fleet-service:
+  enabled: true
+  replicaCount: 3
+  image:
+    tag: canary-sf
+  canary:
+    enabled: true
+    weight: 100
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  env:
+    REGION: us-west-1
+    DARK_STORE_PILOT_ENABLED: "true"
+    RIDER_ASSIGNMENT_TIMEOUT_MS: "500"
+  slo:
+    riderAssignmentP99Ms: 500
+    etaAccuracyMinutes: 15
+
+# Monitoring configuration
+monitoring:
+  prometheus:
+    enabled: true
+    scrapeInterval: 15s
+  grafana:
+    dashboards:
+      - canary-sf-overview
+      - fulfillment-metrics
+      - warehouse-metrics
+      - rider-fleet-metrics
+
+# Alerting
+alerting:
+  slack:
+    enabled: true
+    channel: "#canary-sf-alerts"
+    webhook: ${SLACK_WEBHOOK_CANARY_SF}
+  pagerduty:
+    enabled: true
+    serviceKey: ${PAGERDUTY_SERVICE_KEY_CANARY}
+
+# Rollback configuration
+rollback:
+  automatic: true
+  triggers:
+    - errorRateAbove: 0.05
+    - latencyP99Above: 5000
+    - availabilityBelow: 0.95

@@ -1,0 +1,291 @@
+# Austin Canary Deployment Configuration
+# Phase 2 Week 3: Gated Deployment with 5% Traffic
+# Region: us-central-1 (Austin/Texas)
+
+global:
+  image:
+    registry: us-central1-docker.pkg.dev/instacommerce/canary-images
+    pullPolicy: Always
+  region: us-central-1
+  environment: canary-austin
+
+# Canary deployment configuration with conservative gated rollout
+canary:
+  enabled: true
+  region: us-central-1
+  regionName: austin
+  traffic:
+    weight: 5
+    # Conservative gradual traffic ramp schedule
+    ramp:
+      - weight: 5
+        pause: 2h
+        description: "Initial canary - minimal blast radius"
+      - weight: 10
+        pause: 4h
+        description: "Slight increase after initial validation"
+      - weight: 25
+        pause: 8h
+        description: "Quarter traffic - extended observation"
+      - weight: 50
+        pause: 12h
+        description: "Half traffic - full business cycle validation"
+      - weight: 100
+        pause: 0
+        description: "Full rollout after all gates pass"
+
+  # Canary analysis configuration
+  analysis:
+    successThreshold: 5
+    failureThreshold: 1
+    interval: 5m
+    # Strict metric thresholds for gated rollout
+    metrics:
+      - name: error-rate
+        provider: prometheus
+        successCondition: result < 0.005  # 0.5% error rate - stricter threshold
+        query: |
+          sum(rate(http_requests_total{status=~"5..",service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
+          /
+          sum(rate(http_requests_total{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
+      - name: latency-p99
+        provider: prometheus
+        successCondition: result < 1500  # 1.5s p99 latency - stricter threshold
+        query: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m])) by (le)
+          ) * 1000
+      - name: latency-p95
+        provider: prometheus
+        successCondition: result < 800  # 800ms p95 latency
+        query: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m])) by (le)
+          ) * 1000
+      - name: success-rate
+        provider: prometheus
+        successCondition: result >= 0.995  # 99.5% success rate
+        query: |
+          sum(rate(http_requests_total{status=~"2..",service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
+          /
+          sum(rate(http_requests_total{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
+
+  # Automatic rollback configuration
+  rollback:
+    enabled: true
+    scaleDownDelaySeconds: 30
+    abortScaleDownDelaySeconds: 30
+
+# SLO targets for Austin canary
+slo:
+  availability:
+    target: 99.5
+    burnRateWindow: 1h
+  latency:
+    p99Target: 2000  # 2s p99 max
+    p95Target: 1000  # 1s p95 max
+    p50Target: 200   # 200ms p50 max
+  errorBudget:
+    monthlyTarget: 99.5
+    alertThreshold: 50  # Alert when 50% of error budget consumed
+
+# Istio traffic splitting for canary
+istio:
+  enabled: true
+  gateway:
+    name: instacommerce-gateway-austin
+    hosts:
+      - api-austin.instacommerce.dev
+      - m-austin.instacommerce.dev
+    tlsSecret: instacommerce-tls-austin
+  virtualService:
+    name: canary-austin-routing
+    hosts:
+      - api-austin.instacommerce.dev
+      - m-austin.instacommerce.dev
+  # Header-based routing for canary testing
+  canaryHeaders:
+    - name: x-canary-region
+      value: austin
+    - name: x-canary-version
+      value: "true"
+
+# Pod disruption budget - more conservative for canary
+pdb:
+  enabled: true
+  minAvailable: 1
+  maxUnavailable: 0
+
+# Services targeted for Austin canary deployment
+services:
+  # Fulfillment service - core darkstore operations
+  fulfillment-service:
+    enabled: true
+    replicas: 2
+    tag: canary-austin
+    canary:
+      enabled: true
+      weight: 5
+      stableReplicas: 3
+      canaryReplicas: 1
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    env:
+      SPRING_PROFILES_ACTIVE: canary,austin
+      CANARY_REGION: us-central-1
+      CANARY_WEIGHT: "5"
+      FEATURE_DARKSTORE_OPTIMIZATION_ENABLED: "true"
+      METRICS_CANARY_LABELS_ENABLED: "true"
+
+  # Warehouse service - darkstore inventory management
+  warehouse-service:
+    enabled: true
+    replicas: 2
+    tag: canary-austin
+    canary:
+      enabled: true
+      weight: 5
+      stableReplicas: 2
+      canaryReplicas: 1
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    env:
+      SPRING_PROFILES_ACTIVE: canary,austin
+      CANARY_REGION: us-central-1
+      CANARY_WEIGHT: "5"
+      FEATURE_REALTIME_INVENTORY_SYNC_ENABLED: "true"
+      METRICS_CANARY_LABELS_ENABLED: "true"
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-austin.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+
+  # Rider fleet service - delivery operations
+  rider-fleet-service:
+    enabled: true
+    replicas: 2
+    tag: canary-austin
+    canary:
+      enabled: true
+      weight: 5
+      stableReplicas: 2
+      canaryReplicas: 1
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    env:
+      SPRING_PROFILES_ACTIVE: canary,austin
+      CANARY_REGION: us-central-1
+      CANARY_WEIGHT: "5"
+      FEATURE_DYNAMIC_DISPATCH_ENABLED: "true"
+      METRICS_CANARY_LABELS_ENABLED: "true"
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-austin.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+
+# Monitoring and alerting for canary
+monitoring:
+  enabled: true
+  prometheus:
+    scrapeInterval: 15s
+    additionalLabels:
+      canary: "true"
+      region: us-central-1
+  alerts:
+    enabled: true
+    rules:
+      - alert: AustinCanaryHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5..",canary="true",region="us-central-1"}[5m]))
+          /
+          sum(rate(http_requests_total{canary="true",region="us-central-1"}[5m]))
+          > 0.005
+        for: 2m
+        labels:
+          severity: critical
+          region: austin
+          deployment: canary
+        annotations:
+          summary: "Austin canary error rate exceeded threshold"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 0.5%)"
+          runbook_url: "https://runbooks.instacommerce.dev/canary-rollback"
+      - alert: AustinCanaryHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket{canary="true",region="us-central-1"}[5m])) by (le)
+          ) * 1000 > 1500
+        for: 2m
+        labels:
+          severity: critical
+          region: austin
+          deployment: canary
+        annotations:
+          summary: "Austin canary p99 latency exceeded threshold"
+          description: "P99 latency is {{ $value }}ms (threshold: 1500ms)"
+          runbook_url: "https://runbooks.instacommerce.dev/canary-rollback"
+      - alert: AustinCanaryLowAvailability
+        expr: |
+          sum(rate(http_requests_total{status=~"2..",canary="true",region="us-central-1"}[5m]))
+          /
+          sum(rate(http_requests_total{canary="true",region="us-central-1"}[5m]))
+          < 0.995
+        for: 2m
+        labels:
+          severity: critical
+          region: austin
+          deployment: canary
+        annotations:
+          summary: "Austin canary availability below SLO target"
+          description: "Availability is {{ $value | humanizePercentage }} (target: 99.5%)"
+          runbook_url: "https://runbooks.instacommerce.dev/canary-rollback"
+
+# Argo Rollouts analysis templates
+argoRollouts:
+  enabled: true
+  analysisTemplates:
+    - name: austin-canary-analysis
+      metrics:
+        - name: error-rate
+          interval: 5m
+          successCondition: result[0] < 0.005
+          failureLimit: 1
+          provider:
+            prometheus:
+              address: http://prometheus.monitoring:9090
+              query: |
+                sum(rate(http_requests_total{status=~"5..",canary="true",region="us-central-1"}[5m]))
+                /
+                sum(rate(http_requests_total{canary="true",region="us-central-1"}[5m]))
+        - name: latency-p99
+          interval: 5m
+          successCondition: result[0] < 1500
+          failureLimit: 1
+          provider:
+            prometheus:
+              address: http://prometheus.monitoring:9090
+              query: |
+                histogram_quantile(0.99,
+                  sum(rate(http_request_duration_seconds_bucket{canary="true",region="us-central-1"}[5m])) by (le)
+                ) * 1000
+        - name: success-rate
+          interval: 5m
+          successCondition: result[0] >= 0.995
+          failureLimit: 1
+          provider:
+            prometheus:
+              address: http://prometheus.monitoring:9090
+              query: |
+                sum(rate(http_requests_total{status=~"2..",canary="true",region="us-central-1"}[5m]))
+                /
+                sum(rate(http_requests_total{canary="true",region="us-central-1"}[5m]))
