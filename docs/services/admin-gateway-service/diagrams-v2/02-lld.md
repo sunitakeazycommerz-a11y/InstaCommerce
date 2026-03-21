@@ -33,8 +33,8 @@ graph TB
     DashboardEndpoint["📈 GET /api/admin/dashboard<br/>@GetMapping"]
 
     FlagServiceClient["Service Clients<br/>(gRPC/REST)"]
-    ReconcileServiceClient[""]
-    PaymentServiceClient[""]
+    ReconcileServiceClient["Reconciliation Service<br/>(gRPC)"]
+    PaymentServiceClient["Payment Service<br/>(gRPC)"]
 
     Response["✅ 200 OK<br/>or ❌ 401/403/429"]
 
@@ -91,7 +91,7 @@ graph TD
     H["Verify RS256 signature<br/>using public key"]
     I{"Signature<br/>valid?"}
     J["Extract claims<br/>(sub, roles, aud, exp)"]
-    K["Validate aud claim<br/>=instacommerce-admin"}
+    K["Validate aud claim<br/>=instacommerce-admin"]
     L{"aud<br/>match?"}
     M["Check token not expired<br/>(exp > now)"]
     N{"Expired?"}

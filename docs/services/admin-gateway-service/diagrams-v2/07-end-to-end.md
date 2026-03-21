@@ -49,58 +49,59 @@ graph TB
     ALB -->|4. Decrypt TLS,<br/>forward to gateway| DispatcherServlet
 
     DispatcherServlet -->|5. Route to filters| RateLimitFilter
-    RateLimitFilter -->|6a. Check rate_limit:{user_id}<br/>GET from Redis| Cache
-    Cache -->|6b. counter=35/100<br/>(allowed)| RateLimitFilter
+    RateLimitFilter -->|6a. Check rate_limit_user_id<br/>GET from Redis| Cache
+    Cache -->|6b. counter 35 of 100<br/>status allowed| RateLimitFilter
 
     RateLimitFilter -->|7. Pass to JWT auth| JwtAuth
     JwtAuth -->|8a. Extract Bearer token<br/>from Authorization header| JwtAuth
     JwtAuth -->|8b. Get kid from JWT header| JwtAuth
     JwtAuth -->|8c. Lookup kid in JWKS| JWKS
-    JWKS -->|8d. Return public key<br/>(cached, <2ms)| JwtAuth
-    JwtAuth -->|8e. Verify RS256 signature<br/>Check aud=instacommerce-admin<br/>Verify ROLE_ADMIN<br/>Verify exp < now()| JwtAuth
+    JWKS -->|8d. Return public key<br/>cached under 2ms| JwtAuth
+    JwtAuth -->|8e. Verify RS256 signature<br/>Check aud=instacommerce-admin<br/>Verify ROLE_ADMIN<br/>Verify exp is valid| JwtAuth
 
-    JwtAuth -->|9. Create SecurityContext<br/>(principal=user123,<br/>authorities=[ROLE_ADMIN])| SecurityContext
+    JwtAuth -->|9. Create SecurityContext<br/>principal user123<br/>authorities ROLE_ADMIN| SecurityContext
     SecurityContext -->|10. Store in ThreadLocal| JwtAuth
 
     JwtAuth -->|11. Pass to authz filter| AuthzFilter
     AuthzFilter -->|12. Check ROLE_ADMIN<br/>from SecurityContext| AuthzFilter
     AuthzFilter -->|13. Authorization PASSED| DashboardController
 
-    Note over JwtAuth,AuthzFilter: Auth overhead: ~29ms
+    AuthNote["Auth overhead ~29ms"]
+    JwtAuth -.-> AuthNote
+    AuthzFilter -.-> AuthNote
 
-    DashboardController -->|14. Check cache| DashCache
-    alt Cache HIT (within 5 min)
-        DashCache -->|15a. Return cached<br/>DashboardDTO| DashboardController
-        DashboardController -->|15b. Send 200 OK<br/>(from cache, ~10ms total)| ALB
-    else Cache MISS
-        DashboardController -->|16. Cache miss - fetch from services| DashboardController
-        DashboardController -->|17a. Launch gRPC in parallel<br/>(timeout: 300ms each)| PaymentService
-        DashboardController -->|17b. gRPC call| FulfillmentService
-        DashboardController -->|17c. gRPC call| OrderService
+    DashboardController -->|14. Check cache| CacheDecision{"Cache HIT<br/>within 5 min?"}
+    CacheDecision -->|Yes| DashCache
+    DashCache -->|15a. Return cached<br/>DashboardDTO| DashboardController
+    DashboardController -->|15b. Send 200 OK<br/>from cache about 10ms total| ALB
 
-        par Service Calls Parallel
-            PaymentService -->|18a. Query payment_ledger<br/>Calculate SLO from 24h data| PaymentService
-            PaymentService -->|19a. {slo: 99.95, revenue: 1M}| Aggregator
-        and
-            FulfillmentService -->|18b. Aggregate metrics| FulfillmentService
-            FulfillmentService -->|19b. {p99: 450ms, success: 99.8}| Aggregator
-        and
-            OrderService -->|18c. Query order stats| OrderService
-            OrderService -->|19c. {p50: 200ms, processed: 5000}| Aggregator
-        end
+    CacheDecision -->|No| CacheMiss["16. Cache miss - fetch from services"]
+    CacheMiss -->|17a. Launch gRPC in parallel<br/>timeout 300ms each| PaymentService
+    CacheMiss -->|17b. gRPC call| FulfillmentService
+    CacheMiss -->|17c. gRPC call| OrderService
 
-        Note over PaymentService,OrderService: Service call latency: ~200-300ms (p99)
+    PaymentService -->|18a. Query payment_ledger<br/>Calculate SLO from 24h data| PaymentService
+    PaymentService -->|19a. slo=99.95, revenue=1M| Aggregator
 
-        Aggregator -->|20. Merge 3 responses| ResponseBuilder
-        ResponseBuilder -->|21. Build DashboardDTO<br/>{payment_slo, fulfillment_p99, order_p50}| ResponseBuilder
-        ResponseBuilder -->|22. Serialize to JSON| ResponseBuilder
+    FulfillmentService -->|18b. Aggregate metrics| FulfillmentService
+    FulfillmentService -->|19b. p99=450ms, success=99.8| Aggregator
 
-        ResponseBuilder -->|23. Store in Redis<br/>Key: dashboard_summary<br/>TTL: 5 min| DashCache
-        DashCache -->|24. Cached| ResponseBuilder
+    OrderService -->|18c. Query order stats| OrderService
+    OrderService -->|19c. p50=200ms, processed=5000| Aggregator
 
-        ResponseBuilder -->|25. Return 200 OK<br/>with dashboard data| DashboardController
-        DashboardController -->|26. Send response| ALB
-    end
+    ServiceLatencyNote["Service call latency ~200-300ms p99"]
+    PaymentService -.-> ServiceLatencyNote
+    OrderService -.-> ServiceLatencyNote
+
+    Aggregator -->|20. Merge 3 responses| ResponseBuilder
+    ResponseBuilder -->|21. Build DashboardDTO<br/>payment_slo, fulfillment_p99, order_p50| ResponseBuilder
+    ResponseBuilder -->|22. Serialize to JSON| ResponseBuilder
+
+    ResponseBuilder -->|23. Store in Redis<br/>Key dashboard_summary<br/>TTL 5 min| DashCache
+    DashCache -->|24. Cached| ResponseBuilder
+
+    ResponseBuilder -->|25. Return 200 OK<br/>with dashboard data| DashboardController
+    DashboardController -->|26. Send response| ALB
 
     DashboardController -->|27. Emit metrics<br/>http_request_duration_ms=XXms| Metrics
     DashboardController -->|28. Structured log<br/>user_id, endpoint, status| Logs
@@ -184,10 +185,11 @@ graph TB
     E2 --> E2_Response
     E3 --> E3_Response
 
-    E1_Response --> [*]
-    E2_Response --> [*]
-    E3_Response --> [*]
-    H5 --> [*]
+    EndNode([End])
+    E1_Response --> EndNode
+    E2_Response --> EndNode
+    E3_Response --> EndNode
+    H5 --> EndNode
 
     style happy fill:#E8F5E9,color:#000,stroke:#333,stroke-width:2px
     style errors fill:#FFEBEE,color:#000,stroke:#333,stroke-width:2px
@@ -305,8 +307,11 @@ graph TB
     Response2 --> Admin2
     Response3 --> Admin3
 
-    Note over Admin1,Admin3: All 3 requests processed<br/>independently & in parallel<br/>No shared state (stateless)<br/>Rate limit per user_id
-    Note over Cache: Shared cache reduces<br/>downstream calls<br/>Cache hit saves ~300ms
+    ParallelNote["All 3 requests processed<br/>independently and in parallel<br/>No shared state (stateless)<br/>Rate limit per user_id"]
+    CacheNote["Shared cache reduces<br/>downstream calls<br/>Cache hit saves ~300ms"]
+    Admin1 -.-> ParallelNote
+    Admin3 -.-> ParallelNote
+    Cache -.-> CacheNote
 
     style Gateway fill:#4A90E2,color:#fff,stroke:#333,stroke-width:2px
     style Cache fill:#F5A623,color:#000,stroke:#333,stroke-width:2px

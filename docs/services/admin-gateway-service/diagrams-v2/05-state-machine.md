@@ -84,11 +84,11 @@ stateDiagram-v2
     ROLE_DENIED --> FORBIDDEN
     RATE_LIMITED --> TOO_MANY
 
-    UNAUTHORIZED --> ERROR_LOGGED: Log: JWT_VALIDATION_FAILED<br/>return 401
+    UNAUTHORIZED --> ERROR_LOGGED: Log JWT_VALIDATION_FAILED return 401
 
-    FORBIDDEN --> ERROR_LOGGED: Log: AUTHZ_DENIED<br/>return 403
+    FORBIDDEN --> ERROR_LOGGED: Log AUTHZ_DENIED return 403
 
-    TOO_MANY --> ERROR_LOGGED: Log: RATE_LIMIT_EXCEEDED<br/>return 429
+    TOO_MANY --> ERROR_LOGGED: Log RATE_LIMIT_EXCEEDED return 429
 
     ERROR_LOGGED --> [*]
 
@@ -137,7 +137,7 @@ stateDiagram-v2
     REVOKED_SESSION --> INVALID: Return 401
     EXPIRED --> INVALID: Return 401
 
-    VALID --> EXPIRED: Time passes<br/>expiry_time reached<br/>(default: 1 hour)
+    VALID --> EXPIRED: Time passes expiry_time reached (default 1 hour)
 
     EXPIRED --> INVALID
 
@@ -227,13 +227,13 @@ stateDiagram-v2
 
     ACTIVE --> CHECK_LIMIT: Request arrives<br/>for user_id
 
-    CHECK_LIMIT --> GET_COUNTER: Get user's<br/>request counter<br/>from Redis<br/>Key: rate_limit:{user_id}
+    CHECK_LIMIT --> GET_COUNTER: Get user's<br/>request counter<br/>from Redis<br/>Key rate_limit_user_id
 
     GET_COUNTER --> WITHIN_LIMIT: counter < 100
 
     GET_COUNTER --> EXCEEDED: counter >= 100
 
-    WITHIN_LIMIT --> INCREMENT: Increment counter<br/>INCR rate_limit:{user_id}
+    WITHIN_LIMIT --> INCREMENT: Increment counter<br/>INCR rate_limit_user_id
 
     INCREMENT --> SET_TTL: Set expiry<br/>EXPIRE 60s
 
@@ -241,15 +241,15 @@ stateDiagram-v2
 
     ALLOWED --> CONTINUE_CHAIN: Continue<br/>filter chain
 
-    EXCEEDED --> LOG_EXCEEDED: Log:<br/>RATE_LIMIT_EXCEEDED<br/>user_id, endpoint
+    EXCEEDED --> LOG_EXCEEDED: Log<br/>RATE_LIMIT_EXCEEDED<br/>user_id, endpoint
 
     LOG_EXCEEDED --> REJECT: ❌ Request rejected<br/>return 429<br/>Too Many Requests
 
-    REJECT --> RETRY_AFTER: Send header:<br/>Retry-After: 60
+    REJECT --> RETRY_AFTER: Send header<br/>Retry-After 60
 
-    CONTINUE_CHAIN --> METRIC_OK: Emit metric:<br/>rate_limit_checks_passed
+    CONTINUE_CHAIN --> METRIC_OK: Emit metric<br/>rate_limit_checks_passed
 
-    RETRY_AFTER --> METRIC_FAILED: Emit metric:<br/>rate_limit_rejections_total
+    RETRY_AFTER --> METRIC_FAILED: Emit metric<br/>rate_limit_rejections_total
 
     CONTINUE_CHAIN --> [*]
     METRIC_FAILED --> [*]
@@ -296,7 +296,7 @@ stateDiagram-v2
 
     CALL_FAILURE --> INCREMENT_FAILURE: error_count += 1
 
-    INCREMENT_FAILURE --> THRESHOLD_CHECK: error_count<br/>< threshold?<br/>(threshold: 5)
+    INCREMENT_FAILURE --> THRESHOLD_CHECK: error_count<br/>below threshold?<br/>(threshold = 5)
 
     THRESHOLD_CHECK --> CLOSED: Counter not<br/>reached yet
 
@@ -304,7 +304,7 @@ stateDiagram-v2
 
     OPEN --> FAIL_FAST: All requests<br/>fail immediately<br/>return cached response<br/>or default value
 
-    FAIL_FAST --> METRICS: Emit:<br/>circuit_breaker_open_total<br/>circuit_breaker_open_duration
+    FAIL_FAST --> METRICS: Emit<br/>circuit_breaker_open_total<br/>circuit_breaker_open_duration
 
     METRICS --> BACKOFF: Wait timeout<br/>60 seconds
 
@@ -356,7 +356,7 @@ stateDiagram-v2
 
     SUCCESS --> STORING: Store in Redis
 
-    STORING --> CACHED: Cached with TTL<br/>- dashboard_summary: 5min<br/>- admin:flags: 30s<br/>- reconciliation:runs: 10min
+    STORING --> CACHED: Cached with TTLs<br/>dashboard_summary 5min<br/>admin_flags 30s<br/>reconciliation_runs 10min
 
     CACHED --> SERVING: Serve from cache<br/>to client
 

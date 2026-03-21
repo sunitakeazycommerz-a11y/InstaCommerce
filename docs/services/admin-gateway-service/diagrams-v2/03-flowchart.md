@@ -6,27 +6,27 @@
 flowchart TD
     A["🌐 HTTP Request<br/>GET /api/admin/dashboard"]
     B["Extract Authorization<br/>header value"]
-    C{{"Authorization<br/>header<br/>present?"}}"
+    C{{"Authorization<br/>header<br/>present?"}}
     D{{"Starts with<br/>Bearer ?"}}
     E["Extract JWT token<br/>(remove 'Bearer ' prefix)"]
     F["Parse JWT header<br/>(decode base64)"]
-    G{{"Extract kid<br/>present in<br/>header?"}}"
+    G{{"Extract kid<br/>present in<br/>header?"}}
     H["Lookup kid in JWKS<br/>(check 5-min cache)"]
-    I{{"kid found<br/>in JWKS?"}}"
+    I{{"kid found<br/>in JWKS?"}}
     J["Fetch public key<br/>from JWKS entry"]
     K["Verify RS256 signature<br/>(using public key)"]
-    L{{"Signature<br/>valid?"}}"
+    L{{"Signature<br/>valid?"}}
     M["Parse JWT payload<br/>(decode base64)"]
     N["Extract aud claim"]
-    O{{"aud ==<br/>instacommerce-admin?"}}"
+    O{{"aud ==<br/>instacommerce-admin?"}}
     P["Extract exp claim<br/>(expiration time)"]
-    Q{{"exp > now()?"}}"
+    Q{{"exp > now()"}}
     R["Extract roles array"]
-    S{{"ROLE_ADMIN<br/>in roles?"}}"
+    S{{"ROLE_ADMIN<br/>in roles?"}}
     T["✅ Set SecurityContext<br/>(principal, authorities)"]
     U["Log: JWT_VALIDATED_SUCCESS"]
     V["Check rate limit<br/>(per user_id)"]
-    W{{"Rate limit<br/>exceeded?"}}"
+    W{{"Rate limit<br/>exceeded?"}}
     X["Route to controller"]
     Y["Execute endpoint handler"]
     Z["Return 200 OK"]
@@ -88,12 +88,12 @@ flowchart TD
     A["Client: GET /api/admin/dashboard"]
     B["✅ JWT validated & authorized"]
     C["Check Redis cache<br/>Key: dashboard_summary"]
-    D{{"Cache<br/>hit?"}}"
+    D{{"Cache<br/>hit?"}}
     E["Return cached response<br/>(TTL: 5 min)"]
     F["Cache miss - fetch from services"]
     G["🚀 Launch 3 parallel gRPC calls:<br/>1. PaymentService.GetPaymentStats<br/>2. FulfillmentService.GetFulfillmentMetrics<br/>3. OrderService.GetOrderStats"]
     H["Wait for all 3 to complete<br/>(max timeout: 300ms per call)"]
-    I{{"All calls<br/>succeeded?"}}"
+    I{{"All calls<br/>succeeded?"}}
     J["Aggregate responses<br/>into DashboardDTO"]
     K["Calculate metrics:<br/>- Payment SLO %<br/>- Fulfillment avg latency<br/>- Order p99"]
     L["Cache response<br/>(TTL: 5 min)"]
@@ -131,11 +131,11 @@ flowchart TD
     A["Client: GET /api/admin/flags"]
     B["✅ JWT validated & authorized"]
     C["Check Redis cache<br/>Key: admin:flags:active"]
-    D{{"Cache<br/>hit?"}}"
+    D{{"Cache<br/>hit?"}}
     E["Return cached flags<br/>(TTL: 30s)<br/>Include ETag header"]
     F["Cache miss<br/>- fetch from Flag Service"]
     G["Call FlagService REST<br/>GET /flags?status=active"]
-    H{{"Call<br/>successful?"}}"
+    H{{"Call<br/>successful?"}}
     I["Transform response<br/>to FeatureFlagDTO list"]
     J["Filter by<br/>admin-queryable flags only"]
     K["Sort by name ASC"]
@@ -171,14 +171,14 @@ flowchart TD
     A["Client: GET /api/admin/reconciliation<br/>?days=7&page=1"]
     B["✅ JWT validated & authorized"]
     C["Validate query params:<br/>- days: 1-90 (default 7)<br/>- page: >= 1<br/>- limit: 1-100 (default 20)"]
-    D{{"Params<br/>valid?"}}"
+    D{{"Params<br/>valid?"}}
     E["❌ Return 400<br/>Bad Request"]
     F["Calculate date range<br/>from_date = now - days"]
     G["Check cache<br/>Key: reconciliation:runs:{from_date}:{page}"]
-    H{{"Cache<br/>hit?"}}"
+    H{{"Cache<br/>hit?"}}
     I["Return cached runs<br/>(TTL: 10 min)"]
     J["Call Reconciliation Service<br/>(gRPC)<br/>ListReconciliationRuns(from_date, to_date, page, limit)"]
-    K{{"Call<br/>succeeded?"}}"
+    K{{"Call<br/>succeeded?"}}
     L["Process response:<br/>- Filter by status<br/>- Calculate metrics:<br/>  * success_rate = successful/total<br/>  * avg_duration_ms<br/>  * auto_fix_rate"]
     M["Pagination:<br/>- total_count<br/>- current_page<br/>- has_next"]
     N["Sort by timestamp DESC"]
@@ -214,13 +214,13 @@ flowchart TD
     A["Client: GET /api/admin/payments<br/>?status=completed&limit=50"]
     B["✅ JWT validated & authorized"]
     C["Validate status param:<br/>allowed: completed, failed,<br/>pending, all"]
-    D{{"Status<br/>valid?"}}"
+    D{{"Status<br/>valid?"}}
     E["❌ Return 400<br/>Bad Request"]
     F["Check Redis cache<br/>Key: admin:payments:{status}"]
-    G{{"Cache<br/>hit?"}}"
+    G{{"Cache<br/>hit?"}}
     H["Return cached stats<br/>(TTL: 5 min)"]
     I["Call Payment Service (gRPC)<br/>GetPaymentStats(status, limit=50)"]
-    J{{"Call<br/>succeeded?"}}"
+    J{{"Call<br/>succeeded?"}}
     K["Aggregate response:<br/>- total_revenue<br/>- transaction_count<br/>- error_rate %<br/>- avg_latency_ms<br/>- p99_latency_ms"]
     L["Categorize by payment method:<br/>- card<br/>- upi<br/>- wallet"]
     M["Add time-series data:<br/>(last 24 hours by hour)"]
