@@ -1,0 +1,140 @@
+# Seattle Gated Deployment Values - 10% Traffic (Week 2)
+# Dark-store pilot: fulfillment-service, warehouse-service, rider-fleet-service
+
+global:
+  environment: canary-seattle
+  region: us-west-2
+  cluster: instacommerce-seattle-canary
+
+canary:
+  enabled: true
+  region: us-west-2
+  city: seattle
+  traffic:
+    weight: 10
+    ramp:
+      - weight: 10
+        pause: 1h
+      - weight: 25
+        pause: 2h
+      - weight: 50
+        pause: 4h
+      - weight: 100
+        pause: 0
+  slos:
+    availability: 99.5
+    latency_p99_ms: 2000
+    error_rate_threshold: 0.01
+  analysis:
+    enabled: true
+    interval: 5m
+    successThreshold: 3
+    failureThreshold: 1
+    metrics:
+      - name: error-rate
+        provider: prometheus
+        query: |
+          sum(rate(http_requests_total{status=~"5..",service="{{ .ServiceName }}",region="us-west-2"}[5m])) 
+          / sum(rate(http_requests_total{service="{{ .ServiceName }}",region="us-west-2"}[5m]))
+        successCondition: result < 0.01
+      - name: latency-p99
+        provider: prometheus
+        query: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="{{ .ServiceName }}",region="us-west-2"}[5m])) by (le))
+        successCondition: result < 2.0
+
+# Fulfillment Service - Seattle gated rollout
+fulfillment-service:
+  enabled: true
+  replicaCount: 2
+  image:
+    tag: canary-seattle
+  canary:
+    enabled: true
+    weight: 10
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  env:
+    REGION: us-west-2
+    DARK_STORE_PILOT_ENABLED: "true"
+    FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "false"
+
+# Warehouse Service - Seattle gated rollout
+warehouse-service:
+  enabled: true
+  replicaCount: 2
+  image:
+    tag: canary-seattle
+  canary:
+    enabled: true
+    weight: 10
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  env:
+    REGION: us-west-2
+    DARK_STORE_PILOT_ENABLED: "true"
+
+# Rider Fleet Service - Seattle gated rollout
+rider-fleet-service:
+  enabled: true
+  replicaCount: 2
+  image:
+    tag: canary-seattle
+  canary:
+    enabled: true
+    weight: 10
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  env:
+    REGION: us-west-2
+    DARK_STORE_PILOT_ENABLED: "true"
+    RIDER_ASSIGNMENT_TIMEOUT_MS: "500"
+
+# Gated rollout strategy
+rollout:
+  strategy: canary
+  steps:
+    - setWeight: 10
+      pause:
+        duration: 1h
+    - setWeight: 25
+      pause:
+        duration: 2h
+    - setWeight: 50
+      pause:
+        duration: 4h
+    - setWeight: 100
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    scrapeInterval: 15s
+
+# Alerting  
+alerting:
+  slack:
+    enabled: true
+    channel: "#canary-seattle-alerts"
+
+# Rollback
+rollback:
+  automatic: true
+  triggers:
+    - errorRateAbove: 0.02
+    - latencyP99Above: 3000

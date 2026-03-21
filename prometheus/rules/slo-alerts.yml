@@ -1,0 +1,336 @@
+# SLO Alert Rules - InstaCommerce Platform
+# Implements multi-window, multi-burn-rate alerting
+# Reference: https://sre.google/workbook/alerting-on-slos/
+
+groups:
+  # ============================================
+  # FAST BURN ALERTS (5 minute window)
+  # Page on-call immediately
+  # ============================================
+  - name: slo_fast_burn
+    interval: 30s
+    rules:
+      - alert: FastBurnHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total[5m])) by (service)
+          ) > 0.10
+        for: 1m
+        labels:
+          severity: page
+          burn_rate: fast
+        annotations:
+          summary: "Fast burn: >10% error rate in 5min for {{ $labels.service }}"
+          description: "Service {{ $labels.service }} has error rate {{ $value | humanizePercentage }} (threshold: 10%)"
+          runbook_url: "https://docs.instacommerce.dev/runbooks/high-error-rate"
+          dashboard_url: "https://grafana.instacommerce.dev/d/service-health?var-service={{ $labels.service }}"
+
+      - alert: FastBurnHighLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (service, le))
+          > 5.0
+        for: 1m
+        labels:
+          severity: page
+          burn_rate: fast
+        annotations:
+          summary: "Fast burn: P99 latency >5s for {{ $labels.service }}"
+          description: "Service {{ $labels.service }} has P99 latency {{ $value | humanizeDuration }} (threshold: 5s)"
+          runbook_url: "https://docs.instacommerce.dev/runbooks/high-latency"
+
+      - alert: FastBurnServiceDown
+        expr: |
+          up{job=~".*-service"} == 0
+        for: 1m
+        labels:
+          severity: page
+          burn_rate: fast
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Instance {{ $labels.instance }} of {{ $labels.job }} has been down for >1 minute"
+
+  # ============================================
+  # MEDIUM BURN ALERTS (30 minute window)
+  # Create incident, notify team
+  # ============================================
+  - name: slo_medium_burn
+    interval: 1m
+    rules:
+      - alert: MediumBurnHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[30m])) by (service)
+            / sum(rate(http_requests_total[30m])) by (service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          burn_rate: medium
+        annotations:
+          summary: "Medium burn: >5% error rate in 30min for {{ $labels.service }}"
+          description: "Service {{ $labels.service }} has sustained error rate {{ $value | humanizePercentage }}"
+
+      - alert: MediumBurnHighLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[30m])) by (service, le))
+          > 3.0
+        for: 5m
+        labels:
+          severity: critical
+          burn_rate: medium
+        annotations:
+          summary: "Medium burn: P99 latency >3s for {{ $labels.service }}"
+          description: "Service {{ $labels.service }} has sustained P99 latency {{ $value | humanizeDuration }}"
+
+      - alert: MediumBurnLowThroughput
+        expr: |
+          sum(rate(http_requests_total[30m])) by (service)
+          < (sum(rate(http_requests_total[1d] offset 1d)) by (service) * 0.5)
+        for: 10m
+        labels:
+          severity: critical
+          burn_rate: medium
+        annotations:
+          summary: "Traffic drop >50% for {{ $labels.service }}"
+          description: "Service {{ $labels.service }} throughput is significantly below baseline"
+
+  # ============================================
+  # SLOW BURN ALERTS (6 hour window)
+  # Schedule audit review
+  # ============================================
+  - name: slo_slow_burn
+    interval: 5m
+    rules:
+      - alert: SlowBurnHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[6h])) by (service)
+            / sum(rate(http_requests_total[6h])) by (service)
+          ) > 0.01
+        for: 30m
+        labels:
+          severity: warning
+          burn_rate: slow
+        annotations:
+          summary: "Slow burn: >1% error rate over 6h for {{ $labels.service }}"
+          description: "Service {{ $labels.service }} has elevated error rate requiring audit"
+
+      - alert: SlowBurnHighLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[6h])) by (service, le))
+          > 2.0
+        for: 30m
+        labels:
+          severity: warning
+          burn_rate: slow
+        annotations:
+          summary: "Slow burn: P99 latency >2s over 6h for {{ $labels.service }}"
+
+  # ============================================
+  # ERROR BUDGET ALERTS
+  # ============================================
+  - name: error_budget
+    interval: 5m
+    rules:
+      - alert: ErrorBudgetCritical
+        expr: |
+          (
+            1 - (
+              sum(increase(http_requests_total{status!~"5.."}[30d])) by (service)
+              / sum(increase(http_requests_total[30d])) by (service)
+            )
+          ) / 0.001 > 0.75
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Error budget >75% consumed for {{ $labels.service }}"
+          description: "Service {{ $labels.service }} has consumed {{ $value | humanizePercentage }} of monthly error budget"
+
+      - alert: ErrorBudgetExhausted
+        expr: |
+          (
+            1 - (
+              sum(increase(http_requests_total{status!~"5.."}[30d])) by (service)
+              / sum(increase(http_requests_total[30d])) by (service)
+            )
+          ) / 0.001 > 1.0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Error budget exhausted for {{ $labels.service }}"
+          description: "Service {{ $labels.service }} has exceeded monthly error budget - feature freeze required"
+
+  # ============================================
+  # CHECKOUT & PAYMENT CRITICAL PATH
+  # ============================================
+  - name: checkout_critical
+    interval: 15s
+    rules:
+      - alert: CheckoutFailureRateHigh
+        expr: |
+          (
+            sum(rate(checkout_workflow_completed_total{status="failed"}[5m]))
+            / sum(rate(checkout_workflow_completed_total[5m]))
+          ) > 0.02
+        for: 1m
+        labels:
+          severity: page
+          service: checkout-orchestrator-service
+        annotations:
+          summary: "Checkout failure rate >2%"
+          description: "Checkout workflow failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: PaymentProcessingLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le))
+          > 10.0
+        for: 2m
+        labels:
+          severity: page
+          service: payment-service
+        annotations:
+          summary: "Payment processing P99 >10s"
+          description: "Payment processing latency is critically high: {{ $value | humanizeDuration }}"
+
+      - alert: PaymentGatewayErrors
+        expr: |
+          sum(rate(payment_gateway_errors_total[5m])) by (gateway, error_type) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: payment-service
+        annotations:
+          summary: "Payment gateway errors: {{ $labels.gateway }}"
+          description: "Gateway {{ $labels.gateway }} has error rate {{ $value }}/s (type: {{ $labels.error_type }})"
+
+  # ============================================
+  # FULFILLMENT & LOGISTICS
+  # ============================================
+  - name: fulfillment_alerts
+    interval: 30s
+    rules:
+      - alert: OrderPackingDelayed
+        expr: |
+          histogram_quantile(0.99, sum(rate(order_packing_duration_seconds_bucket[15m])) by (le, warehouse))
+          > 600
+        for: 5m
+        labels:
+          severity: warning
+          service: fulfillment-service
+        annotations:
+          summary: "Order packing P99 >10min at {{ $labels.warehouse }}"
+          description: "Warehouse {{ $labels.warehouse }} has packing delays"
+
+      - alert: RiderAssignmentSlow
+        expr: |
+          histogram_quantile(0.99, sum(rate(rider_assignment_duration_seconds_bucket[5m])) by (le, region))
+          > 120
+        for: 2m
+        labels:
+          severity: critical
+          service: rider-fleet-service
+        annotations:
+          summary: "Rider assignment P99 >2min in {{ $labels.region }}"
+
+      - alert: DeliveryETAInaccurate
+        expr: |
+          abs(avg(delivery_eta_accuracy_minutes) by (region)) > 15
+        for: 15m
+        labels:
+          severity: warning
+          service: routing-eta-service
+        annotations:
+          summary: "ETA accuracy >15min off in {{ $labels.region }}"
+
+  # ============================================
+  # DATA PIPELINE ALERTS
+  # ============================================
+  - name: data_pipeline
+    interval: 1m
+    rules:
+      - alert: KafkaConsumerLagHigh
+        expr: |
+          sum(kafka_consumer_lag) by (consumer_group, topic) > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka consumer lag >10K for {{ $labels.consumer_group }}"
+          description: "Consumer group {{ $labels.consumer_group }} on topic {{ $labels.topic }} has lag {{ $value }}"
+
+      - alert: KafkaConsumerLagCritical
+        expr: |
+          sum(kafka_consumer_lag) by (consumer_group, topic) > 100000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka consumer lag >100K for {{ $labels.consumer_group }}"
+
+      - alert: DeadLetterTopicMessages
+        expr: |
+          sum(increase(kafka_messages_total{topic=~".*\\.DLT"}[1h])) by (topic) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Messages in DLT: {{ $labels.topic }}"
+          description: "{{ $value }} messages sent to dead letter topic in past hour"
+
+      - alert: ReconciliationMismatch
+        expr: |
+          sum(reconciliation_mismatches_total) by (mismatch_type) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: reconciliation-engine
+        annotations:
+          summary: "Reconciliation mismatch detected"
+          description: "{{ $value }} mismatches of type {{ $labels.mismatch_type }}"
+
+  # ============================================
+  # INFRASTRUCTURE ALERTS
+  # ============================================
+  - name: infrastructure
+    interval: 30s
+    rules:
+      - alert: HighMemoryUsage
+        expr: |
+          (container_memory_usage_bytes / container_spec_memory_limit_bytes) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage: {{ $labels.container }}"
+          description: "Container {{ $labels.container }} using {{ $value | humanizePercentage }} of memory limit"
+
+      - alert: HighCPUUsage
+        expr: |
+          rate(container_cpu_usage_seconds_total[5m]) / container_spec_cpu_quota * 100000 > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage: {{ $labels.container }}"
+
+      - alert: PodRestartLoop
+        expr: |
+          increase(kube_pod_container_status_restarts_total[1h]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod {{ $labels.pod }} restarting frequently"
+          description: "{{ $value }} restarts in the past hour"
+
+      - alert: DatabaseConnectionPoolExhausted
+        expr: |
+          hikaricp_connections_active / hikaricp_connections_max > 0.9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DB connection pool near exhaustion: {{ $labels.pool }}"
