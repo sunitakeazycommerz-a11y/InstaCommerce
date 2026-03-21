@@ -50,6 +50,8 @@ admin-gateway:
   jwt:
     public-key: ${JWT_PUBLIC_KEY:#{null}}
     issuer: ${JWT_ISSUER:instacommerce-identity}
+    aud: ${JWT_AUD:instacommerce-admin}
+    clock-skew-seconds: ${JWT_CLOCK_SKEW_SECONDS:300}
 
 internal:
   service:
