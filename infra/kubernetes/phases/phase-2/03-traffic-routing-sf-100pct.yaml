@@ -1,0 +1,319 @@
+---
+# Istio Gateway for SF Canary Deployment
+# Internal traffic entry point for 100% traffic routing to SF dark-store
+
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: dark-store-gateway
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    region: us-west1
+  annotations:
+    managed-by: wave-40-phase-2
+    purpose: "100% traffic routing to SF dark-store canary"
+
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "dark-store.instacommerce.internal"
+        - "dark-store-sf.instacommerce.internal"
+        - "fulfillment-sf.instacommerce.internal"
+
+    - port:
+        number: 9090
+        name: grpc
+        protocol: GRPC
+      hosts:
+        - "dark-store.instacommerce.internal"
+        - "dark-store-sf.instacommerce.internal"
+
+---
+# VirtualService: 100% traffic routing to SF canary
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: dark-store-vs
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    region: us-west1
+    deployment: sf-canary
+  annotations:
+    traffic-policy: "100-percent-sf-canary"
+    created-by: wave-40-phase-2
+    rollback-trigger: "error-rate > 0.1% OR latency-p99 > 2000ms"
+
+spec:
+  hosts:
+    - dark-store.instacommerce.internal
+    - dark-store-sf.instacommerce.internal
+    - fulfillment-sf.instacommerce.internal
+    - dark-store.sf-canary.svc.cluster.local
+    - dark-store.sf-canary
+
+  gateways:
+    - dark-store-gateway
+
+  http:
+    # Main traffic route: 100% to SF canary
+    - name: "sf-canary-100-percent"
+      match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: dark-store-service
+            port:
+              number: 8080
+            subset: sf-canary
+          weight: 100
+
+      timeout: 30s
+      retries:
+        attempts: 3
+        perTryTimeout: 10s
+        backoff:
+          baseInterval: 100ms
+          maxInterval: 10s
+
+      corsPolicy:
+        allowOrigins:
+          - exact: "https://instacommerce.internal"
+          - exact: "http://localhost:3000"
+        allowMethods:
+          - POST
+          - GET
+          - OPTIONS
+          - PUT
+          - DELETE
+        allowHeaders:
+          - authorization
+          - content-type
+          - x-request-id
+        maxAge: "24h"
+
+  # GRPC routing (separate)
+  tcp:
+    - name: "sf-canary-grpc"
+      match:
+        - port: 9090
+      route:
+        - destination:
+            host: dark-store-service
+            port:
+              number: 9090
+            subset: sf-canary
+          weight: 100
+
+---
+# DestinationRule: Define traffic policies and subset for SF canary
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: dark-store-dr
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    region: us-west1
+  annotations:
+    traffic-management: "connection-pooling-and-outlier-detection"
+
+spec:
+  host: dark-store-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1000
+      http:
+        http1MaxPendingRequests: 500
+        http2MaxRequests: 2000
+        maxRequestsPerConnection: 2
+        idleTimeout: 300s
+        h2UpgradePolicy: UPGRADE
+
+    loadBalancer:
+      consistentHash:
+        httpCookie:
+          name: "x-session-id"
+          ttl: 3600s
+
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      splitExternalLocalOriginErrors: true
+      minRequestVolume: 5
+      maxEjectionPercent: 50
+      minRequestVolume: 10
+
+    # Timeout and retry policies
+    timeout: 10s
+
+  subsets:
+    # SF Canary subset (100% traffic)
+    - name: sf-canary
+      labels:
+        region: us-west1
+        deployment: sf-canary
+      trafficPolicy:
+        connectionPool:
+          tcp:
+            maxConnections: 1000
+          http:
+            http1MaxPendingRequests: 500
+            http2MaxRequests: 2000
+        loadBalancer:
+          simple: LEAST_REQUEST
+
+---
+# RequestAuthentication: Verify JWT for dark-store service
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: dark-store-jwt-auth
+  namespace: sf-canary
+  labels:
+    app: dark-store
+
+spec:
+  jwtRules:
+    - issuer: "https://identity-service.instacommerce.internal"
+      jwksUri: "https://identity-service.instacommerce.internal/.well-known/jwks.json"
+      audiences: ["dark-store"]
+      forwardOriginalToken: true
+
+---
+# AuthorizationPolicy: Allow traffic from internal services
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: dark-store-authz
+  namespace: sf-canary
+  labels:
+    app: dark-store
+
+spec:
+  rules:
+    # Allow traffic from admin-gateway-service
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/default/sa/admin-gateway-service"
+      to:
+        - operation:
+            methods: ["GET", "POST", "PUT", "DELETE"]
+            paths:
+              - "/dark-store/*"
+
+    # Allow traffic from fulfillment-service
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/default/sa/fulfillment-service"
+      to:
+        - operation:
+            methods: ["GET", "POST", "PUT"]
+            paths:
+              - "/orders/*"
+              - "/inventory/*"
+
+    # Allow metrics collection
+    - from:
+        - source:
+            namespaces: ["prometheus"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths:
+              - "/actuator/prometheus"
+
+    # Health checks (no auth required)
+    - from:
+        - source:
+            principals: ["*"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths:
+              - "/actuator/health"
+
+---
+# PeerAuthentication: Enforce mutual TLS
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: dark-store-mtls
+  namespace: sf-canary
+  labels:
+    app: dark-store
+
+spec:
+  mtls:
+    mode: STRICT               # Enforce mTLS for all traffic
+
+---
+# Telemetry: Enhanced observability
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: dark-store-telemetry
+  namespace: sf-canary
+
+spec:
+  metrics:
+    - providers:
+        - name: prometheus
+      dimensions:
+        - request_path
+        - response_code
+        - grpc_method
+
+  tracing:
+    - providers:
+        - name: jaeger
+      randomSamplingPercentage: 100.0
+      useRequestIdForTraceid: true
+
+---
+# ServiceEntry: External endpoints if needed
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: dark-store-metrics
+  namespace: sf-canary
+
+spec:
+  hosts:
+    - prometheus.instacommerce.internal
+  ports:
+    - number: 9090
+      name: prometheus
+      protocol: HTTP
+  location: MESH_EXTERNAL
+  resolution: DNS
+
+---
+# ProxyConfig: Sidecar configuration for dark-store pods
+apiVersion: networking.istio.io/v1beta1
+kind: ProxyConfig
+metadata:
+  name: dark-store-proxy-config
+  namespace: sf-canary
+
+spec:
+  concurrency: 2
+  drainDuration: 45s
+  parentShutdownDuration: 60s
+  terminationDrainDuration: 30s
+  environmentVariables:
+    ISTIO_META_ENABLE_AUTHN_POLICY_CHECK: "true"
+    ISTIO_META_ENABLE_AUTHZ_POLICY_CHECK: "true"
+    ISTIO_META_TLS_MODE: "STRICT"

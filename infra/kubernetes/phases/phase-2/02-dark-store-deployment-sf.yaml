@@ -1,0 +1,415 @@
+---
+# SF Canary Dark-Store Deployment
+# 5 replicas for high availability and load distribution
+# Production-grade resource limits, health probes, and security policies
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dark-store-service
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    service: dark-store-service
+    version: v1
+    region: us-west1
+    deployment: sf-canary
+  annotations:
+    deployment.phase: "2-canary"
+    team: fulfillment-platform
+    created-by: wave-40-phase-2
+    slo-target: "99.5%"
+    rollback-trigger: "error-rate > 0.1% OR latency-p99 > 2000ms"
+
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                     # Max 1 additional pod during update
+      maxUnavailable: 0               # Zero downtime update
+
+  selector:
+    matchLabels:
+      app: dark-store
+      region: us-west1
+      deployment: sf-canary
+
+  template:
+    metadata:
+      labels:
+        app: dark-store
+        service: dark-store-service
+        version: v1
+        region: us-west1
+        deployment: sf-canary
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/actuator/prometheus"
+        sidecar.istio.io/inject: "true"
+        traffic.sidecar.istio.io/excludeOutboundPorts: "5432,6379"
+
+    spec:
+      serviceAccountName: dark-store-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups: [4000]
+
+      affinity:
+        # Pod distribution across nodes (anti-affinity)
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - dark-store
+                topologyKey: kubernetes.io/hostname
+
+        # Node affinity: prefer SF region
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: topology.kubernetes.io/region
+                    operator: In
+                    values:
+                      - us-west1
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: cloud.google.com/gke-nodepool
+                    operator: In
+                    values:
+                      - dark-store-pool
+
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: dark-store
+
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: dark-store
+          image: gcr.io/instacommerce-prod/dark-store-service:v1.0.0-wave40-phase2
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 9090
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+
+          # Environment variables from ConfigMap and Secrets
+          envFrom:
+            - configMapRef:
+                name: sf-canary-config
+            - secretRef:
+                name: dark-store-secrets
+                optional: true
+
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: DEPLOYMENT_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: sf-canary-config
+                  key: DEPLOYMENT_REGION
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: sf-canary-config
+                  key: LOG_LEVEL
+            - name: JAVA_OPTS
+              value: "-Xms2g -Xmx2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+
+          # Resource requests and limits
+          resources:
+            requests:
+              cpu: "1000m"              # 1 CPU core
+              memory: "2Gi"             # 2 GiB memory
+              ephemeral-storage: "5Gi"
+            limits:
+              cpu: "2000m"              # 2 CPU cores max
+              memory: "4Gi"             # 4 GiB memory max
+              ephemeral-storage: "10Gi"
+
+          # Liveness probe: restart if unhealthy
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 30      # Wait 30s before first check
+            periodSeconds: 10            # Check every 10s
+            timeoutSeconds: 5            # Timeout after 5s
+            successThreshold: 1
+            failureThreshold: 3          # Restart after 3 failures
+
+          # Readiness probe: remove from load balancer if not ready
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 15      # Wait 15s before first check
+            periodSeconds: 5             # Check every 5s
+            timeoutSeconds: 3            # Timeout after 3s
+            successThreshold: 1
+            failureThreshold: 2          # Remove from LB after 2 failures
+
+          # Startup probe: give time for app to start
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 30         # Allow 150s to start (30 * 5s)
+
+          # Security context for container
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+
+          # Volume mounts
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /app/cache
+            - name: logs
+              mountPath: /app/logs
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+
+      # Volumes
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: cache
+          emptyDir:
+            sizeLimit: 5Gi
+        - name: logs
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: config
+          configMap:
+            name: sf-canary-config
+            defaultMode: 0644
+
+      # DNS policy
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+          - name: edns0
+
+      # Restart policy
+      restartPolicy: Always
+
+---
+# Service: Internal service for dark-store
+apiVersion: v1
+kind: Service
+metadata:
+  name: dark-store-service
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    service: dark-store-service
+    region: us-west1
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"ports": {"8080":"dark-store-backend-config"}}'
+
+spec:
+  type: ClusterIP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+
+  selector:
+    app: dark-store
+    region: us-west1
+    deployment: sf-canary
+
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 9090
+      targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP
+
+---
+# BackendConfig for internal GCP load balancer
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: dark-store-backend-config
+  namespace: sf-canary
+  labels:
+    app: dark-store
+
+spec:
+  healthChecks:
+    - checkIntervalSec: 10
+      timeoutSec: 5
+      type: HTTP
+      requestPath: /actuator/health
+      port: 8080
+
+  sessionAffinity:
+    affinityType: "CLIENT_IP"
+    affinityCookieTtlSec: 3600
+
+  timeoutSec: 30
+  connectionDrainingTimeoutSec: 60
+
+  iap:
+    enabled: false
+
+---
+# HorizontalPodAutoscaler for dynamic scaling
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: dark-store-hpa
+  namespace: sf-canary
+  labels:
+    app: dark-store
+
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: dark-store-service
+
+  minReplicas: 5
+  maxReplicas: 15
+
+  metrics:
+    # Scale on CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Scale on memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Max
+
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+      selectPolicy: Min
+
+---
+# PodMonitor for Prometheus metrics collection
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: dark-store-metrics
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    release: prometheus
+
+spec:
+  selector:
+    matchLabels:
+      app: dark-store
+
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+      path: /actuator/prometheus
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          action: replace
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          action: replace
+          targetLabel: namespace
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          action: replace
+          targetLabel: node

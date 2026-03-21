@@ -1,0 +1,339 @@
+---
+# StorageClass for dark-store persistent storage
+# SSD-backed, high-performance storage for order and fulfillment state
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dark-store-ssd
+  labels:
+    app: dark-store
+    storage-type: ssd
+  annotations:
+    description: "SSD-backed storage for SF dark-store canary"
+
+provisioner: pd.csi.storage.gke.io
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+
+parameters:
+  type: pd-ssd                    # Google Cloud SSD
+  replication-type: regional-pd   # Regional replicas for HA
+  fstype: ext4
+
+---
+# PersistentVolumeClaim: Order state storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dark-store-orders-pvc
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    data-type: orders
+    region: us-west1
+  annotations:
+    description: "Order state and transaction logs for SF dark-store"
+    retention-policy: "7-days-backup"
+    backup-schedule: "daily"
+
+spec:
+  accessModes:
+    - ReadWriteOnce                 # Single pod can read/write
+  storageClassName: dark-store-ssd
+  resources:
+    requests:
+      storage: 100Gi               # 100 GiB for order state
+
+---
+# PersistentVolumeClaim: Fulfillment state storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dark-store-fulfillment-pvc
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    data-type: fulfillment
+    region: us-west1
+  annotations:
+    description: "Fulfillment tracking and inventory state for SF dark-store"
+    retention-policy: "7-days-backup"
+    backup-schedule: "daily"
+
+spec:
+  accessModes:
+    - ReadWriteOnce                 # Single pod can read/write
+  storageClassName: dark-store-ssd
+  resources:
+    requests:
+      storage: 100Gi               # 100 GiB for fulfillment state
+
+---
+# PersistentVolumeClaim: Cache storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dark-store-cache-pvc
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    data-type: cache
+    region: us-west1
+  annotations:
+    description: "Local cache for fast access patterns"
+
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: dark-store-ssd
+  resources:
+    requests:
+      storage: 50Gi                # 50 GiB for cache
+
+---
+# PersistentVolumeClaim: Logs storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dark-store-logs-pvc
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    data-type: logs
+    region: us-west1
+  annotations:
+    description: "Application logs storage"
+
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: dark-store-ssd
+  resources:
+    requests:
+      storage: 25Gi                # 25 GiB for logs
+
+---
+# StatefulSet: Alternative deployment if state needs to persist across restarts
+# Can be used alongside the Deployment for stateful workloads
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dark-store-stateful
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    workload-type: stateful
+    region: us-west1
+  annotations:
+    description: "Stateful deployment for dark-store if needed"
+
+spec:
+  serviceName: dark-store-stateful
+  replicas: 1                      # Can be increased if needed
+
+  selector:
+    matchLabels:
+      app: dark-store
+      workload-type: stateful
+
+  template:
+    metadata:
+      labels:
+        app: dark-store
+        workload-type: stateful
+
+    spec:
+      serviceAccountName: dark-store-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 2000
+
+      containers:
+        - name: dark-store-stateful
+          image: gcr.io/instacommerce-prod/dark-store-service:v1.0.0-wave40-phase2
+          imagePullPolicy: IfNotPresent
+
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "2Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+
+          volumeMounts:
+            - name: order-state
+              mountPath: /data/orders
+            - name: fulfillment-state
+              mountPath: /data/fulfillment
+            - name: cache
+              mountPath: /data/cache
+
+  volumeClaimTemplates:
+    # Order state volume
+    - metadata:
+        name: order-state
+        labels:
+          data-type: orders
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: dark-store-ssd
+        resources:
+          requests:
+            storage: 100Gi
+
+    # Fulfillment state volume
+    - metadata:
+        name: fulfillment-state
+        labels:
+          data-type: fulfillment
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: dark-store-ssd
+        resources:
+          requests:
+            storage: 100Gi
+
+    # Cache volume
+    - metadata:
+        name: cache
+        labels:
+          data-type: cache
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: dark-store-ssd
+        resources:
+          requests:
+            storage: 50Gi
+
+---
+# Service for StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: dark-store-stateful
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    workload-type: stateful
+
+spec:
+  clusterIP: None                  # Headless service
+  selector:
+    app: dark-store
+    workload-type: stateful
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+
+---
+# Backup policy for PVCs (using Velero)
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: dark-store-pvc-backup
+  namespace: sf-canary
+  labels:
+    app: dark-store
+
+spec:
+  schedule: "0 2 * * *"             # 2 AM daily
+  template:
+    ttl: "720h"                      # 30 days retention
+    includedNamespaces:
+      - sf-canary
+    includedResources:
+      - persistentvolumeclaims
+      - persistentvolumes
+    storageLocation: gcs-backup
+    volumeSnapshotLocation: gcs-snapshot
+
+---
+# Snapshot class for PVC backups
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: dark-store-snapshot-class
+  labels:
+    app: dark-store
+
+driver: pd.csi.storage.gke.io
+deletionPolicy: Delete
+
+---
+# Volume snapshot for order state (manual backup)
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: dark-store-orders-snapshot
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    data-type: orders
+
+spec:
+  volumeSnapshotClassName: dark-store-snapshot-class
+  source:
+    persistentVolumeClaimName: dark-store-orders-pvc
+
+---
+# Volume snapshot for fulfillment state (manual backup)
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: dark-store-fulfillment-snapshot
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    data-type: fulfillment
+
+spec:
+  volumeSnapshotClassName: dark-store-snapshot-class
+  source:
+    persistentVolumeClaimName: dark-store-fulfillment-pvc
+
+---
+# Persistent Volume: Order state (if using static provisioning)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: dark-store-orders-pv
+  labels:
+    app: dark-store
+    data-type: orders
+
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: dark-store-ssd
+  gcePersistentDisk:
+    pdName: dark-store-orders-disk
+    fsType: ext4
+
+---
+# Persistent Volume: Fulfillment state (if using static provisioning)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: dark-store-fulfillment-pv
+  labels:
+    app: dark-store
+    data-type: fulfillment
+
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: dark-store-ssd
+  gcePersistentDisk:
+    pdName: dark-store-fulfillment-disk
+    fsType: ext4

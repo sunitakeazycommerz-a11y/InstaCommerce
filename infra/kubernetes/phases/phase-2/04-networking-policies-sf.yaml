@@ -1,0 +1,410 @@
+---
+# NetworkPolicy: Allow ingress traffic to dark-store pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dark-store-allow-ingress
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    policy-type: ingress
+
+spec:
+  podSelector:
+    matchLabels:
+      app: dark-store
+  policyTypes:
+    - Ingress
+
+  ingress:
+    # Allow from Istio ingress gateway
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: istio-system
+          podSelector:
+            matchLabels:
+              app: istio-ingressgateway
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Allow from Istio-injected pods in other namespaces
+    - from:
+        - podSelector:
+            matchLabels:
+              service: order-service
+        - podSelector:
+            matchLabels:
+              service: fulfillment-service
+        - podSelector:
+            matchLabels:
+              service: warehouse-service
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Allow from Prometheus for metrics scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: prometheus
+          podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9091
+
+    # Allow health checks from Kubernetes
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+
+    # Allow from admin-gateway-service
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: default
+          podSelector:
+            matchLabels:
+              app: admin-gateway-service
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# NetworkPolicy: Allow egress traffic from dark-store pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dark-store-allow-egress
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    policy-type: egress
+
+spec:
+  podSelector:
+    matchLabels:
+      app: dark-store
+  policyTypes:
+    - Egress
+
+  egress:
+    # Allow DNS queries to kube-system
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow to PostgreSQL Cloud SQL
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432
+
+    # Allow to Redis Memorystore
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+
+    # Allow to Kafka (event streaming)
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9092
+
+    # Allow to other services in default namespace
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: default
+          podSelector:
+            matchLabels:
+              service: order-service
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: default
+          podSelector:
+            matchLabels:
+              service: inventory-service
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: default
+          podSelector:
+            matchLabels:
+              service: identity-service
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Allow external HTTPS (for external API calls if needed)
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# NetworkPolicy: Deny all traffic by default (whitelist approach)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sf-canary-deny-all
+  namespace: sf-canary
+  labels:
+    policy-type: deny-all
+
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# NetworkPolicy: Allow DNS globally
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sf-canary-allow-dns-to-coredns
+  namespace: sf-canary
+  labels:
+    policy-type: dns
+
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+# NetworkPolicy: Allow traffic within sf-canary namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sf-canary-allow-internal
+  namespace: sf-canary
+  labels:
+    policy-type: internal
+
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 9091
+
+---
+# NetworkPolicy: Isolate dark-store from other namespaces
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dark-store-isolate-namespace
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    policy-type: namespace-isolation
+
+spec:
+  podSelector:
+    matchLabels:
+      app: dark-store
+  policyTypes:
+    - Ingress
+
+  ingress:
+    # Only allow from sf-canary namespace
+    - from:
+        - podSelector: {}
+
+---
+# Egress rule for dark-store to external services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dark-store-external-egress
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    policy-type: external-egress
+
+spec:
+  podSelector:
+    matchLabels:
+      app: dark-store
+  policyTypes:
+    - Egress
+
+  egress:
+    # Allow to Google Cloud services
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32  # Metadata server (deny)
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+
+---
+# NetworkPolicy: Restrict traffic to Cloud SQL
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dark-store-cloudsql-only
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    target-service: cloudsql
+
+spec:
+  podSelector:
+    matchLabels:
+      app: dark-store
+  policyTypes:
+    - Egress
+
+  egress:
+    - to:
+        # Cloud SQL Private IP range (specific to us-west1)
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# NetworkPolicy: Restrict traffic to Redis
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dark-store-redis-only
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    target-service: redis
+
+spec:
+  podSelector:
+    matchLabels:
+      app: dark-store
+  policyTypes:
+    - Egress
+
+  egress:
+    - to:
+        # Redis Memorystore Private IP range
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# NetworkPolicy: Allow metrics collection
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dark-store-allow-metrics
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    policy-type: metrics
+
+spec:
+  podSelector:
+    matchLabels:
+      app: dark-store
+  policyTypes:
+    - Ingress
+
+  ingress:
+    # Allow Prometheus from prometheus namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9091
+
+    # Allow from Grafana
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: grafana
+      ports:
+        - protocol: TCP
+          port: 9091
+
+---
+# NetworkPolicy: Allow logging sidecar
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dark-store-allow-logging
+  namespace: sf-canary
+  labels:
+    app: dark-store
+    policy-type: logging
+
+spec:
+  podSelector:
+    matchLabels:
+      app: dark-store
+  policyTypes:
+    - Egress
+
+  egress:
+    # Allow to Google Cloud Logging
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
