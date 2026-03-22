@@ -84,6 +84,7 @@ jobs:
             payment-webhook-service: 'services/payment-webhook-service/**'
             reconciliation-engine: 'services/reconciliation-engine/**'
             stream-processor-service: 'services/stream-processor-service/**'
+            reverse-etl-orchestrator: 'services/reverse-etl-orchestrator/**'
             ai-orchestrator-service:
               - 'services/ai-orchestrator-service/**'
             ai-inference-service:
@@ -128,7 +129,7 @@ jobs:
           echo "changed_services=$changed_services_json" >> "$GITHUB_OUTPUT"
       - id: set-go-matrix
         run: |
-          all_go_services=(go-shared cdc-consumer-service dispatch-optimizer-service location-ingestion-service outbox-relay-service payment-webhook-service reconciliation-engine stream-processor-service)
+          all_go_services=(go-shared cdc-consumer-service dispatch-optimizer-service location-ingestion-service outbox-relay-service payment-webhook-service reconciliation-engine stream-processor-service reverse-etl-orchestrator)
           changed_go_services=()
 
           if [[ "${{ steps.filter.outputs.go-shared }}" == "true" ]]; then
@@ -141,6 +142,7 @@ jobs:
             [[ "${{ steps.filter.outputs.payment-webhook-service }}" == "true" ]] && changed_go_services+=("payment-webhook-service")
             [[ "${{ steps.filter.outputs.reconciliation-engine }}" == "true" ]] && changed_go_services+=("reconciliation-engine")
             [[ "${{ steps.filter.outputs.stream-processor-service }}" == "true" ]] && changed_go_services+=("stream-processor-service")
+            [[ "${{ steps.filter.outputs.reverse-etl-orchestrator }}" == "true" ]] && changed_go_services+=("reverse-etl-orchestrator")
           fi
 
           if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then

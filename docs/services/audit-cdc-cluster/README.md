@@ -4,8 +4,17 @@
 
 This cluster comprises two **data plane** services handling observability and analytics:
 
-1. **audit-trail-service**: Centralized, immutable audit log with compliance-grade querying
-2. **cdc-consumer-service**: Debezium CDC → BigQuery ingestion for data warehouse
+1. **audit-trail-service**: Centralized, immutable audit log with compliance-grade querying (Tier 2)
+2. **cdc-consumer-service**: Debezium CDC → BigQuery ingestion for data warehouse (Tier 2)
+
+**Service Ownership**: Platform Team - Data & Observability
+**Languages**: Java 21 / Spring Boot 4.0 (audit-trail), Go 1.24 (cdc-consumer)
+**Default Ports**: 8089/8080 (audit-trail), 8104/8080 (cdc-consumer, container)
+**Status**: Tier 2 Critical (Data plane)
+
+This document covers the **cluster architecture & inter-service communication**. See individual service README files for detailed specifications:
+- [Audit Trail Service README](/docs/services/audit-trail-service/README.md)
+- [CDC Consumer Service README](/docs/services/cdc-consumer-service/README.md)
 
 ## Cluster Architecture
 

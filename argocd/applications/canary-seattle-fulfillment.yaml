@@ -1,0 +1,203 @@
+# ArgoCD Application for Seattle Canary - Fulfillment Service
+# Phase 2 Week 2: Gated Deployment with 10% Traffic
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: canary-seattle-fulfillment
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: fulfillment-service
+    app.kubernetes.io/component: canary
+    app.kubernetes.io/part-of: instacommerce
+    canary.instacommerce.dev/region: seattle
+    canary.instacommerce.dev/phase: "2"
+    canary.instacommerce.dev/week: "2"
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: canary-deployments
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: canary-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: canary-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: instacommerce-canary
+  source:
+    repoURL: https://github.com/your-org/instacommerce
+    targetRevision: canary/seattle
+    path: deploy/helm
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-canary-seattle.yaml
+      parameters:
+        - name: canary.targetService
+          value: fulfillment-service
+        - name: canary.traffic.weight
+          value: "10"
+        - name: services.fulfillment-service.enabled
+          value: "true"
+  destination:
+    server: https://us-west-2.gke.instacommerce.dev
+    namespace: instacommerce-canary-seattle
+  syncPolicy:
+    automated:
+      prune: false  # Conservative: manual prune for gated canary
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 5
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/minReplicas
+        - /spec/maxReplicas
+---
+# Argo Rollout for canary deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: fulfillment-service-canary
+  namespace: instacommerce-canary-seattle
+  labels:
+    app: fulfillment-service
+    canary: "true"
+    region: us-west-2
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: fulfillment-service
+      canary: "true"
+  strategy:
+    canary:
+      canaryService: fulfillment-service-canary
+      stableService: fulfillment-service-stable
+      trafficRouting:
+        istio:
+          virtualService:
+            name: fulfillment-service-vs
+            routes:
+              - primary
+      steps:
+        # Week 2: Seattle gated at 10% traffic
+        - setWeight: 10
+        - pause:
+            duration: 24h
+        - setWeight: 25
+        - pause:
+            duration: 24h
+        - setWeight: 50
+        - pause: {}  # Manual promotion to 100%
+      analysis:
+        templates:
+          - templateName: success-rate
+          - templateName: latency-p99
+        startingStep: 0
+        args:
+          - name: service-name
+            value: fulfillment-service
+          - name: namespace
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+  template:
+    metadata:
+      labels:
+        app: fulfillment-service
+        canary: "true"
+    spec:
+      containers:
+        - name: fulfillment-service
+          image: gcr.io/instacommerce-prod/fulfillment-service:canary
+          ports:
+            - containerPort: 8087
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: canary,gcp
+            - name: CANARY_REGION
+              value: seattle
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8087
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8087
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1024Mi
+---
+# AnalysisTemplate for success rate
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate
+  namespace: instacommerce-canary-seattle
+spec:
+  metrics:
+    - name: success-rate
+      interval: 1m
+      successCondition: result[0] >= 0.995
+      failureLimit: 3
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            sum(rate(http_server_requests_seconds_count{
+              namespace="{{args.namespace}}",
+              service="{{args.service-name}}",
+              status=~"2.."
+            }[5m])) /
+            sum(rate(http_server_requests_seconds_count{
+              namespace="{{args.namespace}}",
+              service="{{args.service-name}}"
+            }[5m]))
+---
+# AnalysisTemplate for latency
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: latency-p99
+  namespace: instacommerce-canary-seattle
+spec:
+  metrics:
+    - name: latency-p99
+      interval: 1m
+      successCondition: result[0] <= 2.0
+      failureLimit: 3
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            histogram_quantile(0.99,
+              sum(rate(http_server_requests_seconds_bucket{
+                namespace="{{args.namespace}}",
+                service="{{args.service-name}}"
+              }[5m])) by (le)
+            )
