@@ -9,7 +9,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"reconciliation-engine/pkg/reconciliation"
+	"github.com/instacommerce/reconciliation-engine/pkg/reconciliation"
 )
 
 // TestShouldAutoFix tests the auto-fix eligibility logic
