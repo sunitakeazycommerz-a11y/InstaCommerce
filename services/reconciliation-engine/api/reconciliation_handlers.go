@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"reconciliation-engine/pkg/reconciliation"
+	"github.com/instacommerce/reconciliation-engine/pkg/reconciliation"
 )
 
 type ReconciliationHandler struct {
