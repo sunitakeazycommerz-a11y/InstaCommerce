@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import exp
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Literal
@@ -47,7 +47,7 @@ class Settings:
     cache_enabled: bool = parse_bool(os.getenv("AI_INFERENCE_CACHE_ENABLED"), True)
     cache_ttl_seconds: float = float(os.getenv("AI_INFERENCE_CACHE_TTL_SECONDS", "300"))
     cache_max_items: int = int(os.getenv("AI_INFERENCE_CACHE_MAX_ITEMS", "1000"))
-    shadow_models: Dict[str, str] = parse_json_env("AI_INFERENCE_SHADOW_MODELS", {})
+    shadow_models: Dict[str, str] = field(default_factory=lambda: parse_json_env("AI_INFERENCE_SHADOW_MODELS", {}))
     shadow_sample_rate: float = float(os.getenv("AI_INFERENCE_SHADOW_SAMPLE_RATE", "1.0"))
     feature_store_backend: str = os.getenv("AI_INFERENCE_FEATURE_STORE_BACKEND", "none")
     redis_url: str = os.getenv("AI_INFERENCE_REDIS_URL", "")
