@@ -312,7 +312,7 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@v6
       - name: Build (skip tests - migration in progress)
         run: ./gradlew :services:${{ matrix.service }}:build -x test --no-daemon
       - name: Build bootJar
@@ -465,7 +465,7 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@v6
       - name: Build contracts (proto + schemas)
         run: ./gradlew :contracts:build --no-daemon
       - name: Validate JSON event schemas
