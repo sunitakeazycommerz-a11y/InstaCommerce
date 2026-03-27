@@ -378,7 +378,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to Container Registry
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
