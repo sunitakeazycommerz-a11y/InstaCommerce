@@ -34,9 +34,9 @@ subprojects {
             mavenBom("io.grpc:grpc-bom:1.75.0")
         }
         dependencies {
-            dependency("tools.jackson.core:jackson-annotations:3.1.0")
-            dependency("tools.jackson.core:jackson-core:3.1.0")
-            dependency("tools.jackson.core:jackson-databind:3.1.0")
+            dependency("tools.jackson.core:jackson-annotations:3.1.1")
+            dependency("tools.jackson.core:jackson-core:3.1.1")
+            dependency("tools.jackson.core:jackson-databind:3.1.1")
             dependency("tools.jackson.datatype:jackson-datatype-jdk8:3.1.0")
             dependency("tools.jackson.datatype:jackson-datatype-jsr310:3.1.0")
             dependency("tools.jackson.module:jackson-module-parameter-names:3.1.0")
