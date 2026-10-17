@@ -20,6 +20,7 @@ import com.instacommerce.identity.repository.RefreshTokenRepository;
 import com.instacommerce.identity.repository.UserRepository;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +44,7 @@ public class AuthService {
     private final RateLimitService rateLimitService;
     private final AuthMetrics authMetrics;
     private final UserService userService;
+    private final OutboxService outboxService;
 
     public AuthService(UserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
@@ -51,7 +53,8 @@ public class AuthService {
                        AuditService auditService,
                        RateLimitService rateLimitService,
                        AuthMetrics authMetrics,
-                       UserService userService) {
+                       UserService userService,
+                       OutboxService outboxService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordEncoder = passwordEncoder;
@@ -60,6 +63,7 @@ public class AuthService {
         this.rateLimitService = rateLimitService;
         this.authMetrics = authMetrics;
         this.userService = userService;
+        this.outboxService = outboxService;
     }
 
     @Transactional
@@ -84,6 +88,14 @@ public class AuthService {
             ipAddress,
             userAgent,
             traceId);
+
+        Map<String, Object> registerPayload = new LinkedHashMap<>();
+        registerPayload.put("userId", saved.getId().toString());
+        registerPayload.put("email", saved.getEmail());
+        registerPayload.put("roles", saved.getRoles());
+        registerPayload.put("registeredAt", Instant.now().toString());
+        outboxService.publish(TARGET_TYPE_USER, saved.getId().toString(), "UserRegistered", registerPayload, traceId);
+
         String accessToken = tokenService.generateAccessToken(saved);
         String refreshToken = tokenService.generateRefreshToken();
         String refreshHash = tokenService.hashRefreshToken(refreshToken);
@@ -122,7 +134,15 @@ public class AuthService {
                     User u = userOptional.get();
                     u.setFailedAttempts(u.getFailedAttempts() + 1);
                     if (u.getFailedAttempts() >= MAX_FAILED_ATTEMPTS) {
-                        u.setLockedUntil(Instant.now().plusSeconds(LOCKOUT_DURATION_MINUTES * 60));
+                        Instant lockedUntil = Instant.now().plusSeconds(LOCKOUT_DURATION_MINUTES * 60);
+                        u.setLockedUntil(lockedUntil);
+                        Map<String, Object> lockPayload = new LinkedHashMap<>();
+                        lockPayload.put("userId", u.getId().toString());
+                        lockPayload.put("email", u.getEmail());
+                        lockPayload.put("lockedUntil", lockedUntil.toString());
+                        lockPayload.put("failedAttempts", u.getFailedAttempts());
+                        lockPayload.put("reason", "EXCESSIVE_FAILED_ATTEMPTS");
+                        outboxService.publish(TARGET_TYPE_USER, u.getId().toString(), "AccountLocked", lockPayload, traceId);
                     }
                     userRepository.save(u);
                 }
