@@ -276,4 +276,6 @@ WAVE*_TOKENS.txt
 .cmd.old
 
 # Ralph loop scratchpad
-.cursor/ralph/
+.cursor/
+*-stale-bak/
+*-bak/
