@@ -122,7 +122,7 @@ Prompt injection attack allowing malicious users to read server environment vari
         "milestone": 21,
         "title": "fix(ai-orchestrator): PII masking regex incomplete for international phone numbers and street addresses",
         "labels": ["kind/security", "priority/p2-medium", "area/ai-ml", "python"],
-        "body": """### Summary
+        "body": r"""### Summary
 `PIIVault` in `ai-orchestrator-service` uses basic US-centric phone and address regex patterns, leaking Indian mobile numbers (+91) and localized street addresses to external LLM APIs.
 
 ### Evidence & Code Reference

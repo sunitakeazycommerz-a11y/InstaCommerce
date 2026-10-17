@@ -7,15 +7,16 @@ BG/NBD models purchase frequency/churn probability.
 Gamma-Gamma models average transaction value.
 Combined: expected revenue over a time horizon.
 """
+from __future__ import annotations
 
 import argparse
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import mlflow
+import mlflow  # type: ignore
 import numpy as np
 import pandas as pd
 import yaml
@@ -63,9 +64,12 @@ class CLVPredictionTrainer:
         - T: time between first purchase and observation end (in days)
         - monetary_value: average order value (excluding first purchase)
         """
-        customer_first = df.groupby("customer_id")["order_date"].min().rename("first_purchase")
-        customer_last = df.groupby("customer_id")["order_date"].max().rename("last_purchase")
-        customer_count = df.groupby("customer_id")["order_date"].count().rename("total_orders")
+        customer_first = cast(pd.Series, df.groupby("customer_id")["order_date"].min())
+        customer_first.name = "first_purchase"
+        customer_last = cast(pd.Series, df.groupby("customer_id")["order_date"].max())
+        customer_last.name = "last_purchase"
+        customer_count = cast(pd.Series, df.groupby("customer_id")["order_date"].count())
+        customer_count.name = "total_orders"
 
         rfm = pd.concat([customer_first, customer_last, customer_count], axis=1)
         rfm["frequency"] = rfm["total_orders"] - 1
@@ -80,11 +84,10 @@ class CLVPredictionTrainer:
         repeat_purchases = repeat_purchases[
             repeat_purchases["order_date"] > repeat_purchases["first_purchase"]
         ]
-        monetary = (
-            repeat_purchases.groupby("customer_id")["order_value"]
-            .mean()
-            .rename("monetary_value")
-        )
+        monetary = cast(
+            pd.Series,
+            repeat_purchases.groupby("customer_id")["order_value"].mean()
+        ).to_frame("monetary_value")
         rfm = rfm.join(monetary, how="left")
         rfm["monetary_value"] = rfm["monetary_value"].fillna(0)
 
@@ -203,7 +206,7 @@ class CLVPredictionTrainer:
     def train(self, df: pd.DataFrame):
         """Train BG/NBD and Gamma-Gamma models."""
         logger.info("Starting CLV model training")
-        observation_end = df["order_date"].max()
+        observation_end = cast(pd.Timestamp, pd.Timestamp(str(df["order_date"].max())))
         rfm = self._build_rfm(df, observation_end)
         self._fit_bgnbd(rfm)
         self._fit_gamma_gamma(rfm)
@@ -236,12 +239,12 @@ class CLVPredictionTrainer:
         clv = expected_purchases * expected_monetary
 
         result = rfm[["customer_id"]].copy()
-        result["predicted_clv"] = clv.values
-        result["predicted_purchases"] = expected_purchases.values
-        result["predicted_avg_value"] = expected_monetary.values
-        result["segment"] = result["predicted_clv"].apply(self._assign_segment)
+        result["predicted_clv"] = clv
+        result["predicted_purchases"] = expected_purchases
+        result["predicted_avg_value"] = expected_monetary
+        result["segment"] = [self._assign_segment(float(val)) for val in clv]
 
-        return result
+        return cast(pd.DataFrame, result)
 
     def _assign_segment(self, clv: float) -> str:
         """Assign customer to CLV segment."""
@@ -255,25 +258,27 @@ class CLVPredictionTrainer:
         if not self.bgf_params or not self.ggf_params:
             raise RuntimeError("Models not trained yet")
 
-        observation_end = train_df["order_date"].max()
+        observation_end = cast(pd.Timestamp, pd.Timestamp(str(train_df["order_date"].max())))
         rfm = self._build_rfm(train_df, observation_end)
 
         horizon_days = (test_df["order_date"].max() - observation_end).days
         predictions = self.predict_clv(rfm, horizon_days=max(horizon_days, 1))
 
         # Actual spend in test period
-        actual_spend = (
-            test_df.groupby("customer_id")["order_value"]
-            .sum()
-            .rename("actual_clv")
-        )
+        actual_spend = cast(
+            pd.Series,
+            test_df.groupby("customer_id")["order_value"].sum()
+        ).to_frame("actual_clv").reset_index()
 
-        eval_df = predictions.merge(actual_spend.reset_index(), on="customer_id", how="inner")
+        eval_df = predictions.merge(actual_spend, on="customer_id", how="inner")
+
+        actual_series = cast(pd.Series, eval_df["actual_clv"])
+        pred_series = cast(pd.Series, eval_df["predicted_clv"])
 
         metrics = {
-            "mae": float(mean_absolute_error(eval_df["actual_clv"], eval_df["predicted_clv"])),
-            "median_abs_error": float(np.median(np.abs(eval_df["actual_clv"] - eval_df["predicted_clv"]))),
-            "correlation": float(eval_df["actual_clv"].corr(eval_df["predicted_clv"])),
+            "mae": float(mean_absolute_error(actual_series, pred_series)),
+            "median_abs_error": float(np.median(np.abs(actual_series - pred_series))),
+            "correlation": float(actual_series.corr(pred_series)),
             "customers_evaluated": len(eval_df),
         }
 
@@ -354,8 +359,8 @@ def main():
         # Time-based split: train on older data, evaluate on recent
         holdout_days = config["training"].get("holdout_days", 90)
         cutoff = df["order_date"].max() - pd.Timedelta(days=holdout_days)
-        train_df = df[df["order_date"] <= cutoff]
-        test_df = df[df["order_date"] > cutoff]
+        train_df = cast(pd.DataFrame, df[df["order_date"] <= cutoff])
+        test_df = cast(pd.DataFrame, df[df["order_date"] > cutoff])
         logger.info("Train: %d transactions, Test: %d transactions", len(train_df), len(test_df))
 
         # Train
@@ -376,7 +381,7 @@ def main():
         mlflow.log_metric("promotion_gate_passed", int(gate_passed))
 
         # Generate full CLV predictions
-        observation_end = train_df["order_date"].max()
+        observation_end = cast(pd.Timestamp, pd.Timestamp(str(train_df["order_date"].max())))
         rfm = trainer._build_rfm(df, observation_end)
         clv_predictions = trainer.predict_clv(rfm, horizon_days=365)
         logger.info("Segment distribution:\n%s", clv_predictions["segment"].value_counts())

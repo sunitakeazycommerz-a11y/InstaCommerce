@@ -5,19 +5,21 @@ Includes: holiday calendar (Indian festivals, IPL), weather integration,
 promotion effects, and cannibalization adjustments.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import mlflow
+import mlflow  # type: ignore
 import numpy as np
 import pandas as pd
 import yaml
 from google.cloud import bigquery
-from prophet import Prophet
+from prophet import Prophet  # type: ignore
 from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
 
 logger = logging.getLogger(__name__)
@@ -107,7 +109,8 @@ class DemandForecastTrainer:
         total = len(groups)
         trained = 0
 
-        for (store_id, sku_id), group_df in groups:
+        for group_key, group_df in groups:
+            store_id, sku_id = cast(tuple[Any, Any], group_key)
             key = f"{store_id}__{sku_id}"
             if len(group_df) < self.config["training"].get("min_history_rows", 168):
                 logger.debug("Skipping %s: insufficient history (%d rows)", key, len(group_df))
@@ -135,7 +138,8 @@ class DemandForecastTrainer:
         per_model_mape = []
 
         groups = df.groupby(["store_id", "sku_id"])
-        for (store_id, sku_id), group_df in groups:
+        for group_key, group_df in groups:
+            store_id, sku_id = cast(tuple[Any, Any], group_key)
             key = f"{store_id}__{sku_id}"
             model = self.models.get(key)
             if model is None:
@@ -143,8 +147,8 @@ class DemandForecastTrainer:
 
             future = group_df[["ds"] + self.regressors].copy()
             forecast = model.predict(future)
-            y_true = group_df["y"].values
-            y_pred = forecast["yhat"].values
+            y_true = np.asarray(group_df["y"].values)
+            y_pred = np.asarray(forecast["yhat"].values)
 
             # Clip negative predictions to zero (demand can't be negative)
             y_pred = np.clip(y_pred, 0, None)
@@ -240,8 +244,8 @@ def main():
         # Time-based split: train on history, test on recent period
         cutoff_days = config["training"].get("test_days", 7)
         cutoff_date = df["ds"].max() - pd.Timedelta(days=cutoff_days)
-        train_df = df[df["ds"] <= cutoff_date]
-        test_df = df[df["ds"] > cutoff_date]
+        train_df = cast(pd.DataFrame, df[df["ds"] <= cutoff_date])
+        test_df = cast(pd.DataFrame, df[df["ds"] > cutoff_date])
         logger.info("Train: %d rows (up to %s), Test: %d rows", len(train_df), cutoff_date, len(test_df))
 
         # Train

@@ -4,15 +4,17 @@ Production evaluation with promotion gates, bias checks, and reporting.
 Supports all InstaCommerce ML models with configurable metric thresholds.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import mlflow
+import mlflow  # type: ignore
 import numpy as np
 import pandas as pd
 import yaml
@@ -25,7 +27,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 class BiasReport:
     """Report on model fairness and bias metrics."""
 
-    demographic_parity: dict[str, float] = field(default_factory=dict)
+    demographic_parity: dict[str, Any] = field(default_factory=dict)
     equalized_odds: dict[str, float] = field(default_factory=dict)
     disparate_impact: dict[str, float] = field(default_factory=dict)
     passed: bool = True
@@ -125,7 +127,7 @@ class ModelEvaluator:
         if label_col is None:
             raise ValueError("No label column found in test data")
 
-        y_true = test_data[label_col].values
+        y_true = np.asarray(test_data[label_col].values)
 
         # Compute metrics based on task type
         metrics = self._compute_metrics(y_true, y_pred, y_pred_proba)
@@ -173,9 +175,9 @@ class ModelEvaluator:
 
         if is_classification:
             metrics["accuracy"] = float(accuracy_score(y_true, y_pred))
-            metrics["f1_score"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
-            metrics["precision"] = float(precision_score(y_true, y_pred, average="weighted", zero_division=0))
-            metrics["recall"] = float(recall_score(y_true, y_pred, average="weighted", zero_division=0))
+            metrics["f1_score"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0)))
+            metrics["precision"] = float(precision_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0)))
+            metrics["recall"] = float(recall_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0)))
 
             if y_pred_proba is not None and len(unique_labels) == 2:
                 metrics["auc_roc"] = float(roc_auc_score(y_true, y_pred_proba))

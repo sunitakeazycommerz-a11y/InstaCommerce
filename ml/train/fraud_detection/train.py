@@ -5,15 +5,17 @@ transactional, and velocity signals.
 Metrics: AUC, Precision@95%Recall, F1
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import mlflow
-import mlflow.xgboost
+import mlflow  # type: ignore
+import mlflow.xgboost  # type: ignore
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -131,7 +133,7 @@ class FraudDetectionTrainer:
 
     def __init__(self, config: dict):
         self.config = config
-        self.model: xgb.XGBClassifier | None = None
+        self.model: Any = None
         self.calibrated_model = None
         self.optimal_threshold: float = 0.5
         self.feature_columns = config.get("features", FEATURE_COLUMNS)
@@ -161,7 +163,7 @@ class FraudDetectionTrainer:
         label_col = self.config["training"]["label_column"]
 
         X = df[self.feature_columns]
-        y = df[label_col]
+        y = cast(pd.Series, df[label_col])
 
         scale_pos_weight = self._compute_scale_pos_weight(y)
         logger.info("Scale pos weight: %.2f", scale_pos_weight)
@@ -255,7 +257,7 @@ class FraudDetectionTrainer:
             raise RuntimeError("Model not trained yet")
 
         X = df[self.feature_columns]
-        y_true = df[self.config["training"]["label_column"]].values
+        y_true = np.asarray(df[self.config["training"]["label_column"]].values)
         predictor = self.calibrated_model if self.calibrated_model else self.model
         y_proba = predictor.predict_proba(X)[:, 1]
         y_pred = (y_proba >= self.optimal_threshold).astype(int)
@@ -278,7 +280,7 @@ class FraudDetectionTrainer:
             "f1_score": float(f1),
             "optimal_threshold": self.optimal_threshold,
             "predicted_fraud_rate": float(y_pred.mean()),
-            "actual_fraud_rate": float(y_true.mean()),
+            "actual_fraud_rate": float(np.mean(y_true)),
         }
         logger.info("Evaluation metrics: %s", json.dumps(metrics, indent=2))
         return metrics
@@ -348,8 +350,11 @@ def main():
         from sklearn.model_selection import train_test_split
 
         val_split = config["training"].get("validation_split", 0.2)
-        train_df, test_df = train_test_split(
-            df, test_size=val_split, stratify=df[config["training"]["label_column"]], random_state=42
+        train_df, test_df = cast(
+            tuple[pd.DataFrame, pd.DataFrame],
+            train_test_split(
+                df, test_size=val_split, stratify=df[config["training"]["label_column"]], random_state=42
+            ),
         )
         logger.info("Train: %d rows, Test: %d rows", len(train_df), len(test_df))
 

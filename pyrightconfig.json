@@ -5,6 +5,8 @@
     "services/ai-inference-service",
     "services/ai-orchestrator-service",
     "data-platform-jobs",
+    "data-platform/streaming/pipelines",
+    "ml",
     "scripts"
   ],
   "exclude": [

@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import lightgbm as lgb
-import mlflow
-import mlflow.lightgbm
+import mlflow  # type: ignore
+import mlflow.lightgbm  # type: ignore
 import numpy as np
 import pandas as pd
 import yaml
@@ -161,6 +161,9 @@ class ETAPredictionTrainer:
                 best_mae = fold_mae
                 best_model = model
 
+        if best_model is None:
+            raise RuntimeError(f"Training failed to produce a valid model for stage {self.stage}")
+
         self.models[self.stage] = best_model
         logger.info("Best MAE across folds: %.4f min, Mean MAE: %.4f min", best_mae, np.mean(fold_maes))
         return best_model
@@ -174,8 +177,8 @@ class ETAPredictionTrainer:
         features = self._get_features(self.stage)
         label_col = self.config["training"]["label_column"]
         X = df[features]
-        y_true = df[label_col].values
-        y_pred = model.predict(X)
+        y_true = np.asarray(df[label_col].values)
+        y_pred = np.asarray(model.predict(X))
 
         errors = np.abs(y_true - y_pred)
 
