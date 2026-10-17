@@ -7,8 +7,18 @@ metadata:
 spec:
   selector:
     matchLabels:
+      {{- if .selector.istio }}
+      istio: {{ .selector.istio }}
+      {{- else if .selector.app }}
       app: {{ .selector.app }}
-  action: ALLOW
+      {{- else }}
+      {{- toYaml .selector | nindent 6 }}
+      {{- end }}
+  action: {{ .action | default "ALLOW" }}
+  {{- if .rules }}
+  rules:
+    {{- toYaml .rules | nindent 4 }}
+  {{- else if .principals }}
   rules:
     - from:
         - source:
@@ -16,6 +26,7 @@ spec:
               {{- range .principals }}
               - {{ tpl . $ | quote }}
               {{- end }}
+  {{- end }}
 ---
 {{- end }}
 {{- end }}
