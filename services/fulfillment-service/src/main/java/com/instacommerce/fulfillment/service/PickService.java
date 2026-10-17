@@ -79,6 +79,32 @@ public class PickService {
         }
     }
 
+    @Transactional
+    public void cancelPickTask(UUID orderId, String reason) {
+        Optional<PickTask> taskOpt = pickTaskRepository.findByOrderId(orderId);
+        if (taskOpt.isEmpty()) {
+            logger.info("No pick task found to cancel for order {}", orderId);
+            return;
+        }
+        PickTask task = taskOpt.get();
+        if (task.getStatus() == PickTaskStatus.CANCELLED) {
+            logger.info("Pick task for order {} is already cancelled", orderId);
+            return;
+        }
+        if (task.getStatus() == PickTaskStatus.COMPLETED) {
+            logger.warn("Order {} was cancelled but pick task is already COMPLETED", orderId);
+            return;
+        }
+        task.setStatus(PickTaskStatus.CANCELLED);
+        pickTaskRepository.save(task);
+        eventPublisher.publishEvent(new OrderStatusUpdateEvent(orderId, "CANCELLED", reason));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", orderId);
+        payload.put("reason", reason != null ? reason : "Order cancelled");
+        outboxService.publish("Fulfillment", orderId.toString(), "PickTaskCancelled", payload);
+        logger.info("Pick task for order {} marked CANCELLED", orderId);
+    }
+
     @Transactional(readOnly = true)
     public List<PickTaskResponse> listPendingTasks(String storeId) {
         return pickTaskRepository.findByStoreIdAndStatusIn(storeId,

@@ -158,6 +158,30 @@ class PickServiceIntegrationTest {
         assertThat(eventPayload).contains(payload.storeId());
     }
 
+    @Test
+    void shouldCancelPickTaskWhenOrderCancelled() {
+        OrderPlacedPayload payload = newOrderPlacedPayload();
+        pickService.createPickTask(payload);
+
+        PickTask persisted = pickTaskRepository.findByOrderId(payload.orderId()).orElseThrow();
+        assertThat(persisted.getStatus()).isEqualTo(PickTaskStatus.PENDING);
+
+        pickService.cancelPickTask(payload.orderId(), "Customer cancelled within grace period");
+
+        PickTask cancelled = pickTaskRepository.findByOrderId(payload.orderId()).orElseThrow();
+        assertThat(cancelled.getStatus()).isEqualTo(PickTaskStatus.CANCELLED);
+
+        // Verify outbox event emitted for PickTaskCancelled
+        List<Map<String, Object>> outboxRows = jdbcTemplate.queryForList(
+            "SELECT aggregate_type, aggregate_id, event_type, payload FROM outbox_events WHERE aggregate_id = ?",
+            payload.orderId().toString());
+        assertThat(outboxRows).isNotEmpty();
+
+        boolean hasCancelledEvent = outboxRows.stream()
+            .anyMatch(row -> "PickTaskCancelled".equals(row.get("event_type")));
+        assertThat(hasCancelledEvent).isTrue();
+    }
+
     // -- helpers -----------------------------------------------------------------
 
     private OrderPlacedPayload newOrderPlacedPayload() {
