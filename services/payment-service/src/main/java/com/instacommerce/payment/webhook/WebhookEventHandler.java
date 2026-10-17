@@ -68,6 +68,13 @@ public class WebhookEventHandler {
             return;
         }
 
+        // Fast-path composite deduplication (pspReference, eventId)
+        if (eventId != null && !eventId.isBlank()
+            && processedWebhookEventRepository.existsByExternalPaymentReferenceAndPspEventId(pspReference, eventId)) {
+            log.debug("Webhook event {} for reference {} already processed, skipping", eventId, pspReference);
+            return;
+        }
+
         // Retry with backoff on lock conflicts so brief webhook/refund contention
         // resolves locally before we rely on PSP-side retries.
         for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {

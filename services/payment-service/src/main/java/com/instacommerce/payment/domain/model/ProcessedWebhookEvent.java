@@ -26,6 +26,12 @@ public class ProcessedWebhookEvent {
     @Column(name = "raw_payload", columnDefinition = "jsonb")
     private String rawPayload;
 
+    @Column(name = "external_payment_reference")
+    private String externalPaymentReference;
+
+    @Column(name = "psp_event_id")
+    private String pspEventId;
+
     @PrePersist
     void prePersist() {
         if (processedAt == null) {
@@ -63,5 +69,21 @@ public class ProcessedWebhookEvent {
 
     public void setRawPayload(String rawPayload) {
         this.rawPayload = rawPayload;
+    }
+
+    public String getExternalPaymentReference() {
+        return externalPaymentReference;
+    }
+
+    public void setExternalPaymentReference(String externalPaymentReference) {
+        this.externalPaymentReference = externalPaymentReference;
+    }
+
+    public String getPspEventId() {
+        return pspEventId;
+    }
+
+    public void setPspEventId(String pspEventId) {
+        this.pspEventId = pspEventId;
     }
 }

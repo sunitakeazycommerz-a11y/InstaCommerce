@@ -190,26 +190,27 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 		return
 	}
 
-	// Idempotency check.
-	if h.deduper.IsDuplicate(event.ID) {
+	// Idempotency check with atomic CheckAndMark to eliminate concurrent race condition.
+	if h.deduper.CheckAndMark(event.ID) {
 		h.metrics.EventsDuplicate.WithLabelValues(string(psp), event.EventType).Inc()
 		h.logger.DebugContext(ctx, "duplicate event skipped",
 			"psp", psp, "event_id", event.ID)
 		h.writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
 		return
 	}
-	h.deduper.Mark(event.ID)
 
 	// Publish to Kafka.
 	processStart := time.Now()
 	encoded, err := json.Marshal(event)
 	if err != nil {
+		h.deduper.Remove(event.ID)
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "marshal").Inc()
 		h.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	if err := h.producer.Publish(ctx, h.topic, []byte(event.ID), encoded); err != nil {
+		h.deduper.Remove(event.ID)
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "publish").Inc()
 		h.logger.ErrorContext(ctx, "kafka publish failed",
 			"psp", psp, "event_id", event.ID, "error", err)
