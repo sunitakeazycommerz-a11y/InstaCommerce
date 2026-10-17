@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/riders")
+@RequestMapping({"/riders", "/api/riders"})
 public class RiderAssignmentController {
     private final RiderAssignmentService assignmentService;
 
