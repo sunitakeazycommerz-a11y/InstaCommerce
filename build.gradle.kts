@@ -48,6 +48,13 @@ subprojects {
         dependencies {
             dependency("tools.jackson.core:jackson-annotations:3.1.0")
             dependency("com.fasterxml.jackson.core:jackson-annotations:2.21")
+            dependency("com.fasterxml.jackson.core:jackson-core:2.20.1")
+            dependency("com.fasterxml.jackson.core:jackson-databind:2.20.1")
+            dependency("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.20.1")
+            dependency("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.20.1")
+            dependency("io.jsonwebtoken:jjwt-api:0.12.5")
+            dependency("io.jsonwebtoken:jjwt-impl:0.12.5")
+            dependency("io.jsonwebtoken:jjwt-jackson:0.12.5")
             dependency("tools.jackson.core:jackson-core:3.1.0")
             dependency("tools.jackson.core:jackson-databind:3.1.0")
             dependency("tools.jackson.datatype:jackson-datatype-jdk8:3.1.0")
