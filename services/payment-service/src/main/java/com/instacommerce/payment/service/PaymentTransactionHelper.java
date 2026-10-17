@@ -45,7 +45,7 @@ public class PaymentTransactionHelper {
         Optional<Payment> existing = paymentRepository.findByIdempotencyKey(normalizedKey);
         if (existing.isPresent()) {
             Payment payment = existing.get();
-            if (!payment.getOrderId().equals(request.orderId())
+            if ((request.orderId() != null && !payment.getOrderId().equals(request.orderId()))
                 || payment.getAmountCents() != request.amountCents()) {
                 throw new DuplicatePaymentException(request.idempotencyKey());
             }
@@ -54,14 +54,15 @@ public class PaymentTransactionHelper {
 
         String currency = normalizeCurrency(request.currency());
         Payment payment = new Payment();
-        payment.setOrderId(request.orderId());
+        UUID orderId = request.orderId() != null ? request.orderId() : UUID.randomUUID();
+        payment.setOrderId(orderId);
         payment.setAmountCents(request.amountCents());
         payment.setCapturedCents(0);
         payment.setRefundedCents(0);
         payment.setCurrency(currency);
         payment.setStatus(PaymentStatus.AUTHORIZE_PENDING);
         payment.setIdempotencyKey(normalizedKey);
-        payment.setPaymentMethod(request.paymentMethod());
+        payment.setPaymentMethod(request.effectivePaymentMethod());
         return paymentRepository.save(payment);
     }
 

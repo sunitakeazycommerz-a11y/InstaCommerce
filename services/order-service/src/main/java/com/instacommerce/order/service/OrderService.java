@@ -73,7 +73,7 @@ public class OrderService {
         order.setSubtotalCents(command.getSubtotalCents());
         order.setDiscountCents(command.getDiscountCents());
         order.setTotalCents(command.getTotalCents());
-        order.setCurrency(command.getCurrency());
+        order.setCurrency(command.getCurrency() != null && !command.getCurrency().isBlank() ? command.getCurrency() : "INR");
         order.setCouponCode(command.getCouponCode());
         order.setReservationId(command.getReservationId());
         order.setPaymentId(command.getPaymentId());
@@ -88,11 +88,11 @@ public class OrderService {
             OrderItem orderItem = new OrderItem();
             orderItem.setOrder(order);
             orderItem.setProductId(item.productId());
-            orderItem.setProductName(item.productName());
-            orderItem.setProductSku(item.productSku());
+            orderItem.setProductName(item.effectiveProductName());
+            orderItem.setProductSku(item.effectiveProductSku());
             orderItem.setQuantity(item.quantity());
             orderItem.setUnitPriceCents(item.unitPriceCents());
-            orderItem.setLineTotalCents((long) item.quantity() * item.unitPriceCents());
+            orderItem.setLineTotalCents(item.effectiveLineTotalCents());
             items.add(orderItem);
         }
         order.setItems(items);

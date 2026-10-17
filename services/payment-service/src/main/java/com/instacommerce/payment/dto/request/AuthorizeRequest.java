@@ -8,10 +8,18 @@ import java.util.UUID;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record AuthorizeRequest(
-    @NotNull UUID orderId,
+    UUID orderId,
     @Positive long amountCents,
     String currency,
     @NotBlank String idempotencyKey,
-    String paymentMethod
+    String paymentMethod,
+    String paymentMethodId
 ) {
+    public AuthorizeRequest(UUID orderId, long amountCents, String currency, String idempotencyKey, String paymentMethod) {
+        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, null);
+    }
+
+    public String effectivePaymentMethod() {
+        return paymentMethod != null && !paymentMethod.isBlank() ? paymentMethod : paymentMethodId;
+    }
 }

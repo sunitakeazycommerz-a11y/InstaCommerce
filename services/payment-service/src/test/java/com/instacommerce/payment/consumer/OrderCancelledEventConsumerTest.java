@@ -350,7 +350,8 @@ class OrderCancelledEventConsumerTest {
             ConsumerRecord<String, String> record = new ConsumerRecord<>("orders.events", 0, 0L, null, json);
             consumer.onOrderEvent(record);
 
-            verifyNoInteractions(paymentRepository, paymentService, refundService);
+            verify(paymentRepository).findByOrderId(orderId);
+            verifyNoInteractions(paymentService, refundService);
         }
 
         @Test
@@ -438,6 +439,33 @@ class OrderCancelledEventConsumerTest {
 
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orders.events", 0, 0L, null, json);
         consumer.onOrderEvent(record);
+    }
+
+    @Test
+    @DisplayName("Falls back to looking up payment by orderId when paymentId is omitted")
+    void fallsBackToLookingUpPaymentByOrderId() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        Payment payment = buildPayment(paymentId, orderId, PaymentStatus.AUTHORIZED, 5000, 0, 0);
+
+        when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.of(payment));
+        when(paymentService.voidAuth(eq(paymentId), any())).thenReturn(buildPaymentResponse(paymentId, PaymentStatus.VOIDED));
+
+        String json = objectMapper.writeValueAsString(Map.of(
+            "id", UUID.randomUUID().toString(),
+            "aggregateId", orderId.toString(),
+            "eventType", "OrderCancelled",
+            "payload", Map.of(
+                "orderId", orderId.toString(),
+                "totalCents", 5000,
+                "currency", "INR",
+                "reason", "Customer cancelled before paymentId linked")));
+
+        ConsumerRecord<String, String> record = new ConsumerRecord<>("orders.events", 0, 0L, null, json);
+        consumer.onOrderEvent(record);
+
+        verify(paymentRepository).findByOrderId(orderId);
+        verify(paymentService).voidAuth(eq(paymentId), eq(orderId + "-cancellation-refund"));
     }
 
     private Payment buildPayment(UUID id, UUID orderId, PaymentStatus status,

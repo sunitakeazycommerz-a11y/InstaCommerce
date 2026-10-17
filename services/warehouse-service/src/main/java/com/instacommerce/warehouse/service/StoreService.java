@@ -11,6 +11,7 @@ import com.instacommerce.warehouse.exception.StoreNotFoundException;
 import com.instacommerce.warehouse.repository.StoreHoursRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
 import java.time.DateTimeException;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -77,6 +78,18 @@ public class StoreService {
     }
 
     @Transactional(readOnly = true)
+    public boolean isStoreOpen(UUID storeId, Instant instant) {
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> new StoreNotFoundException(storeId));
+        if (store.getStatus() != StoreStatus.ACTIVE) {
+            return false;
+        }
+        ZoneId storeZone = resolveZoneId(store.getTimezone());
+        ZonedDateTime storeNow = instant.atZone(storeZone);
+        return checkStoreHours(storeId, storeNow);
+    }
+
+    @Transactional(readOnly = true)
     public boolean isStoreOpen(UUID storeId, LocalDateTime now) {
         Store store = storeRepository.findById(storeId)
                 .orElseThrow(() -> new StoreNotFoundException(storeId));
@@ -84,6 +97,10 @@ public class StoreService {
             return false;
         }
         ZonedDateTime storeNow = toStoreTime(store, now);
+        return checkStoreHours(storeId, storeNow);
+    }
+
+    private boolean checkStoreHours(UUID storeId, ZonedDateTime storeNow) {
         int dayOfWeek = storeNow.getDayOfWeek().getValue() % 7;
         LocalTime currentTime = storeNow.toLocalTime();
 
@@ -152,7 +169,7 @@ public class StoreService {
 
     private ZonedDateTime toStoreTime(Store store, LocalDateTime now) {
         ZoneId storeZone = resolveZoneId(store.getTimezone());
-        return now.atZone(ZoneId.systemDefault()).withZoneSameInstant(storeZone);
+        return now.atZone(storeZone);
     }
 
     private ZoneId resolveZoneId(String timezone) {
