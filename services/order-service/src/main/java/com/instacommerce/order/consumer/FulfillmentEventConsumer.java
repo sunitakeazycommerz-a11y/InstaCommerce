@@ -39,6 +39,7 @@ public class FulfillmentEventConsumer {
             case "OrderPacked" -> OrderStatus.PACKED;
             case "OrderDispatched" -> OrderStatus.OUT_FOR_DELIVERY;
             case "OrderDelivered" -> OrderStatus.DELIVERED;
+            case "DeliveryFailed", "FulfillmentFailed" -> OrderStatus.FAILED;
             case "OrderModified" -> {
                 logger.info("Ignoring OrderModified event for aggregateId={}", envelope.aggregateId());
                 yield null;
@@ -57,6 +58,7 @@ public class FulfillmentEventConsumer {
             case PACKED -> "order-packed";
             case OUT_FOR_DELIVERY -> "order-dispatched";
             case DELIVERED -> "order-delivered";
+            case FAILED -> "delivery-failed";
             default -> "fulfillment-event";
         };
         orderService.advanceLifecycleFromFulfillment(orderId, targetStatus, CHANGED_BY, note);

@@ -93,7 +93,7 @@ services:
     replicas: 2
     tag: prod
     env:
-      WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "false"
+      WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "true"
   audit-trail-service:
     replicas: 2
     tag: prod

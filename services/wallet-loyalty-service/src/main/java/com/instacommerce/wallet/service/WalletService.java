@@ -11,6 +11,7 @@ import com.instacommerce.wallet.exception.InsufficientBalanceException;
 import com.instacommerce.wallet.exception.WalletNotFoundException;
 import com.instacommerce.wallet.repository.WalletRepository;
 import com.instacommerce.wallet.repository.WalletTransactionRepository;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,7 +64,15 @@ public class WalletService {
         recordLedgerEntry(wallet.getId(), userId, refType, amountCents, refId, true);
         log.info("Credited {} cents to wallet for user={} ref={}/{}", amountCents, userId, refType, refId);
 
-        outboxService.publish("Wallet", wallet.getId().toString(), "WalletCredited", txn.getId());
+        Map<String, Object> creditPayload = new java.util.LinkedHashMap<>();
+        creditPayload.put("transactionId", txn.getId().toString());
+        creditPayload.put("walletId", wallet.getId().toString());
+        creditPayload.put("userId", userId.toString());
+        creditPayload.put("amountCents", amountCents);
+        creditPayload.put("balanceCents", wallet.getBalanceCents());
+        creditPayload.put("referenceType", refType.name());
+        creditPayload.put("referenceId", refId != null ? refId : "");
+        outboxService.publish("Wallet", wallet.getId().toString(), "WalletCredited", creditPayload);
         return toResponse(txn);
     }
 
@@ -86,7 +95,15 @@ public class WalletService {
         recordLedgerEntry(wallet.getId(), userId, refType, amountCents, refId, false);
         log.info("Debited {} cents from wallet for user={} ref={}/{}", amountCents, userId, refType, refId);
 
-        outboxService.publish("Wallet", wallet.getId().toString(), "WalletDebited", txn.getId());
+        Map<String, Object> debitPayload = new java.util.LinkedHashMap<>();
+        debitPayload.put("transactionId", txn.getId().toString());
+        debitPayload.put("walletId", wallet.getId().toString());
+        debitPayload.put("userId", userId.toString());
+        debitPayload.put("amountCents", amountCents);
+        debitPayload.put("balanceCents", wallet.getBalanceCents());
+        debitPayload.put("referenceType", refType.name());
+        debitPayload.put("referenceId", refId != null ? refId : "");
+        outboxService.publish("Wallet", wallet.getId().toString(), "WalletDebited", debitPayload);
         return toResponse(txn);
     }
 

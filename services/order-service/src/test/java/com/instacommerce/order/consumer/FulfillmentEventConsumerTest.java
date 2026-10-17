@@ -45,6 +45,29 @@ class FulfillmentEventConsumerTest {
     }
 
     @Test
+    void mapsDeliveryFailedEventToFailed() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        FulfillmentEventConsumer consumer = new FulfillmentEventConsumer(objectMapper, orderService);
+
+        ConsumerRecord<String, String> record = new ConsumerRecord<>(
+            "fulfillment.events",
+            0,
+            0L,
+            orderId.toString(),
+            """
+                {"eventType":"DeliveryFailed","aggregateId":"%s","payload":{"orderId":"%s"}}
+                """.formatted(orderId, orderId));
+
+        consumer.onFulfillmentEvent(record);
+
+        verify(orderService).advanceLifecycleFromFulfillment(
+            orderId,
+            OrderStatus.FAILED,
+            "system:fulfillment-event",
+            "delivery-failed");
+    }
+
+    @Test
     void ignoresUnsupportedFulfillmentEvent() throws Exception {
         UUID orderId = UUID.randomUUID();
         FulfillmentEventConsumer consumer = new FulfillmentEventConsumer(objectMapper, orderService);

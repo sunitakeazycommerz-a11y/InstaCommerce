@@ -212,12 +212,25 @@ public class OrderService {
                 "ORDER_CANCELLED",
                 "Order",
                 saved.getId().toString(),
-                Map.of("orderUserId", saved.getUserId(), "reason", note));
+                Map.of("orderUserId", saved.getUserId(), "reason", note != null ? note : ""));
+        } else if (newStatus == OrderStatus.FAILED) {
+            auditLogService.log(actorId,
+                "ORDER_FAILED",
+                "Order",
+                saved.getId().toString(),
+                Map.of("orderUserId", saved.getUserId(), "reason", note != null ? note : ""));
         }
         outboxService.publish("Order", saved.getId().toString(), "OrderStatusChanged",
             Map.of("orderId", saved.getId(), "from", previous.name(), "to", newStatus.name()));
         if (newStatus == OrderStatus.PLACED) {
             outboxService.publish("Order", saved.getId().toString(), "OrderPlaced", buildOrderPlacedPayload(saved));
+        } else if (newStatus == OrderStatus.FAILED) {
+            Map<String, Object> failedPayload = new java.util.LinkedHashMap<>();
+            failedPayload.put("orderId", saved.getId());
+            failedPayload.put("userId", saved.getUserId());
+            failedPayload.put("paymentId", saved.getPaymentId() != null ? saved.getPaymentId() : "");
+            failedPayload.put("reason", note != null ? note : "Fulfillment failure");
+            outboxService.publish("Order", saved.getId().toString(), "OrderFailed", failedPayload);
         }
     }
 
@@ -235,6 +248,10 @@ public class OrderService {
         if (currentStatus == OrderStatus.PENDING) {
             throw new InvalidOrderStateException(
                 "Cannot apply fulfillment event " + targetStatus + " while order is PENDING");
+        }
+        if (targetStatus == OrderStatus.FAILED) {
+            updateOrderStatus(orderId, OrderStatus.FAILED, changedBy, note);
+            return;
         }
         if (hasReachedLifecycleStep(currentStatus, targetStatus)) {
             logger.debug("Ignoring stale fulfillment event for order {} at {} (target {})",
@@ -319,6 +336,7 @@ public class OrderService {
                 OrderStatus.PACKED,
                 OrderStatus.OUT_FOR_DELIVERY,
                 OrderStatus.DELIVERED);
+            case FAILED -> List.of(OrderStatus.FAILED);
             default -> throw new IllegalArgumentException("Unsupported fulfillment target status: " + targetStatus);
         };
     }

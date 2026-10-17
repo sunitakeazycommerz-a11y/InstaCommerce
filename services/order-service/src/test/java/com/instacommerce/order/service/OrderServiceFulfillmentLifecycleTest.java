@@ -93,4 +93,23 @@ class OrderServiceFulfillmentLifecycleTest {
         verify(orderRepository, never()).save(any(Order.class));
         verifyNoInteractions(statusHistoryRepository, outboxService, auditLogService);
     }
+
+    @Test
+    void transitionsDirectlyToFailedWhenDeliveryFailedEventArrives() {
+        when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        order.setStatus(OrderStatus.OUT_FOR_DELIVERY);
+
+        orderService.advanceLifecycleFromFulfillment(
+            orderId,
+            OrderStatus.FAILED,
+            "system:fulfillment-event",
+            "delivery-failed");
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.FAILED);
+        verify(orderRepository).save(order);
+        verify(statusHistoryRepository).save(any());
+        verify(auditLogService).log(any(), eq("ORDER_FAILED"), eq("Order"), eq(orderId.toString()), any());
+        verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderStatusChanged"), any());
+        verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderFailed"), any());
+    }
 }

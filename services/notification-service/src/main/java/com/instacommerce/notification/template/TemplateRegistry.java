@@ -8,17 +8,27 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class TemplateRegistry {
-    private final Map<String, TemplateDefinition> definitions = Map.of(
-        "OrderPlaced", new TemplateDefinition("order_confirmed",
-            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Order confirmed"),
-        "OrderPacked", new TemplateDefinition("order_packed",
-            List.of(NotificationChannel.SMS), "Order packed"),
-        "OrderDispatched", new TemplateDefinition("order_dispatched",
-            List.of(NotificationChannel.SMS, NotificationChannel.PUSH), "Out for delivery"),
-        "OrderDelivered", new TemplateDefinition("order_delivered",
-            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Order delivered"),
-        "PaymentRefunded", new TemplateDefinition("payment_refunded",
-            List.of(NotificationChannel.EMAIL), "Payment refunded")
+    private final Map<String, TemplateDefinition> definitions = Map.ofEntries(
+        Map.entry("OrderPlaced", new TemplateDefinition("order_confirmed",
+            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Order confirmed")),
+        Map.entry("OrderPacked", new TemplateDefinition("order_packed",
+            List.of(NotificationChannel.SMS), "Order packed")),
+        Map.entry("OrderDispatched", new TemplateDefinition("order_dispatched",
+            List.of(NotificationChannel.SMS, NotificationChannel.PUSH), "Out for delivery")),
+        Map.entry("OrderDelivered", new TemplateDefinition("order_delivered",
+            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Order delivered")),
+        Map.entry("PaymentRefunded", new TemplateDefinition("payment_refunded",
+            List.of(NotificationChannel.EMAIL), "Payment refunded")),
+        Map.entry("OrderCancelled", new TemplateDefinition("order_cancelled",
+            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Order cancelled")),
+        Map.entry("OrderFailed", new TemplateDefinition("order_failed",
+            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Order failed")),
+        Map.entry("DeliveryFailed", new TemplateDefinition("delivery_failed",
+            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS, NotificationChannel.PUSH), "Delivery attempt failed")),
+        Map.entry("PaymentFailed", new TemplateDefinition("payment_failed",
+            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Payment failed")),
+        Map.entry("ETABreachRisk", new TemplateDefinition("eta_delayed",
+            List.of(NotificationChannel.SMS, NotificationChannel.PUSH), "Delivery delayed"))
     );
 
     public Optional<TemplateDefinition> resolve(String eventType) {
