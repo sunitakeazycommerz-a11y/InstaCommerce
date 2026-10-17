@@ -113,10 +113,10 @@ class OrderVolumeAggregator(beam.CombineFn):
 class SLAComplianceAggregator(beam.CombineFn):
     """Compute SLA compliance rate over a sliding window.
 
-    SLA target: order delivered within 30 minutes of placement.
+    SLA target: order delivered within 10 minutes of placement (InstaCommerce SLA promise).
     """
 
-    SLA_TARGET_SECONDS = 1800  # 30 minutes
+    SLA_TARGET_SECONDS = 600  # 10 minutes (600 seconds)
 
     def create_accumulator(self):
         return {"total": 0, "within_sla": 0}

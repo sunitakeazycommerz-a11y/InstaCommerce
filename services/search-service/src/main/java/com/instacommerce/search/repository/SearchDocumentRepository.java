@@ -19,7 +19,8 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
     void deleteByProductId(UUID productId);
 
     @Query(value = """
-            SELECT sd.*, ts_rank(sd.search_vector, plainto_tsquery('english', :query)) AS rank
+            SELECT sd.id, sd.product_id, sd.name, sd.description, sd.brand, sd.category, sd.price_cents, sd.image_url, sd.in_stock,
+                   ts_rank(sd.search_vector, plainto_tsquery('english', :query)) AS rank
             FROM search_documents sd
             WHERE sd.search_vector @@ plainto_tsquery('english', :query)
               AND sd.in_stock = TRUE
@@ -50,7 +51,7 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
     @Query(value = """
             SELECT sd.name AS suggestion, sd.category, sd.product_id
             FROM search_documents sd
-            WHERE sd.name ILIKE :prefix || '%' ESCAPE '\\'
+            WHERE sd.name ILIKE :prefix || '%'
               AND sd.in_stock = TRUE
             ORDER BY sd.name
             LIMIT :limit

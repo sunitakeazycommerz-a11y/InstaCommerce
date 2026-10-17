@@ -29,12 +29,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ReservationService {
+    private static final Logger log = LoggerFactory.getLogger(ReservationService.class);
     private static final String LOCK_TIMEOUT_HINT = "jakarta.persistence.lock.timeout";
     private final ReservationRepository reservationRepository;
     private final StockItemRepository stockItemRepository;
@@ -129,6 +132,10 @@ public class ReservationService {
     public void confirm(UUID reservationId) {
         Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> new ReservationNotFoundException(reservationId));
+        if (reservation.getStatus() == ReservationStatus.CONFIRMED) {
+            log.info("Reservation {} is already confirmed; returning idempotently", reservationId);
+            return;
+        }
         if (reservation.getStatus() != ReservationStatus.PENDING) {
             throw new ReservationStateException(reservationId, reservation.getStatus(), "confirm");
         }
@@ -171,6 +178,10 @@ public class ReservationService {
     public void cancel(UUID reservationId) {
         Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> new ReservationNotFoundException(reservationId));
+        if (reservation.getStatus() == ReservationStatus.CANCELLED) {
+            log.info("Reservation {} is already cancelled; returning idempotently", reservationId);
+            return;
+        }
         if (reservation.getStatus() == ReservationStatus.PENDING
             && reservation.getExpiresAt().isBefore(Instant.now())) {
             expireReservation(reservation);
@@ -241,6 +252,7 @@ public class ReservationService {
         if (available <= threshold) {
             Map<String, Object> alertPayload = new LinkedHashMap<>();
             alertPayload.put("productId", stock.getProductId().toString());
+            alertPayload.put("storeId", storeId.toString());
             alertPayload.put("warehouseId", storeId.toString());
             alertPayload.put("currentQuantity", available);
             alertPayload.put("threshold", threshold);

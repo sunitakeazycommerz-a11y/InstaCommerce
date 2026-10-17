@@ -1,0 +1,833 @@
+# Wave 40 Phase 3: Complete SLO Alert Rules - InstaCommerce Platform
+# 50+ multi-window burn-rate alert rules for all 28 services
+# Reference: https://sre.google/workbook/alerting-on-slos/
+# Implementation: 3-tier alerting (SEV-1 fast/SEV-2 medium/SEV-3 slow) + error budget tracking
+# Generated: 2026-03-22 (Wave 40 Phase 3)
+
+groups:
+  # ============================================
+  # TIER 1: CRITICAL MONEY PATH ALERTS
+  # Payment, Checkout, Order, Fulfillment
+  # ============================================
+  - name: tier_1_critical_path
+    interval: 30s
+    rules:
+      # Payment Service: 99.95% SLO (2.2 min/month budget)
+      - alert: PaymentServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="payment-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="payment-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          service: payment-service
+          slo_window: fast_burn
+          tier: tier-1
+        annotations:
+          summary: "Payment Service CRITICAL: Error rate >10% in 5min (SLO breach - SEV-1)"
+          description: "{{ $labels.service }} has error rate {{ $value | humanizePercentage }} (threshold 10%). Monthly error budget: 2.2 min. Expected status: {{ .GroupLabels.severity }}"
+          runbook_url: "https://docs.instacommerce.dev/docs/runbooks/payment-service-errors"
+          dashboard_url: "https://grafana.instacommerce.dev/d/slo-payment-service"
+          pagerduty_severity: "critical"
+          on_call_action: "Page immediately - SEV-1 incident"
+
+      - alert: PaymentServiceMediumBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="payment-service", status=~"5.."}[30m])) by (service)
+            / sum(rate(http_requests_total{service="payment-service"}[30m])) by (service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: payment-service
+          slo_window: medium_burn
+          tier: tier-1
+        annotations:
+          summary: "Payment Service WARNING: Error rate >5% in 30min (SLO breach - SEV-2)"
+          description: "{{ $labels.service }} sustained error rate {{ $value | humanizePercentage }}"
+          runbook_url: "https://docs.instacommerce.dev/docs/runbooks/payment-service-errors"
+
+      - alert: PaymentServiceSlowBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="payment-service", status=~"5.."}[6h])) by (service)
+            / sum(rate(http_requests_total{service="payment-service"}[6h])) by (service)
+          ) > 0.01
+        for: 30m
+        labels:
+          severity: info
+          service: payment-service
+          slo_window: slow_burn
+          tier: tier-1
+        annotations:
+          summary: "Payment Service INFO: Error rate >1% in 6h (SLO review - SEV-3)"
+          description: "{{ $labels.service }} error rate {{ $value | humanizePercentage }} requires SRE review"
+          runbook_url: "https://docs.instacommerce.dev/docs/runbooks/payment-service-audit"
+
+      - alert: PaymentServiceLatencySLOBreach
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="payment-service"}[5m])) by (le))
+          > 0.3
+        for: 5m
+        labels:
+          severity: critical
+          service: payment-service
+          slo_metric: latency
+          tier: tier-1
+        annotations:
+          summary: "Payment Service p99 latency >300ms SLO breach"
+          description: "p99 latency: {{ $value | humanizeDuration }} (target: 300ms)"
+          pagerduty_severity: "critical"
+
+      - alert: PaymentWebhookDeliveryFailure
+        expr: |
+          (
+            sum(rate(payment_webhook_delivery_failed_total[5m])) by (service)
+            / sum(rate(payment_webhook_sent_total[5m])) by (service)
+          ) > 0.01
+        for: 1m
+        labels:
+          severity: critical
+          service: payment-webhook-service
+          slo_window: fast_burn
+          tier: tier-1
+        annotations:
+          summary: "Payment Webhook CRITICAL: >1% delivery failure rate"
+          description: "Webhook delivery failure rate {{ $value | humanizePercentage }}. Risk: Lost payment confirmations."
+          pagerduty_severity: "critical"
+
+      # Order Service: 99.9% SLO (8.6 min/month budget)
+      - alert: OrderServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="order-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="order-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          service: order-service
+          slo_window: fast_burn
+          tier: tier-1
+        annotations:
+          summary: "Order Service CRITICAL: Error rate >10% in 5min (SEV-1)"
+          description: "{{ $labels.service }} error rate {{ $value | humanizePercentage }}. Budget: 8.6 min/month"
+          pagerduty_severity: "critical"
+
+      - alert: OrderServiceMediumBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="order-service", status=~"5.."}[30m])) by (service)
+            / sum(rate(http_requests_total{service="order-service"}[30m])) by (service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: order-service
+          slo_window: medium_burn
+          tier: tier-1
+        annotations:
+          summary: "Order Service WARNING: Error rate >5% in 30min (SEV-2)"
+
+      - alert: OrderServiceSlowBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="order-service", status=~"5.."}[6h])) by (service)
+            / sum(rate(http_requests_total{service="order-service"}[6h])) by (service)
+          ) > 0.01
+        for: 30m
+        labels:
+          severity: info
+          service: order-service
+          slo_window: slow_burn
+
+      # Checkout Orchestrator: 99.9% SLO
+      - alert: CheckoutOrchestrationFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="checkout-orchestrator-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="checkout-orchestrator-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          service: checkout-orchestrator-service
+          slo_window: fast_burn
+          tier: tier-1
+        annotations:
+          summary: "Checkout Orchestrator CRITICAL: Error rate >10% (SEV-1)"
+          description: "Checkout failures: {{ $value | humanizePercentage }}. Revenue impact possible."
+          pagerduty_severity: "critical"
+
+      - alert: CheckoutLatencySLOBreach
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="checkout-orchestrator-service"}[5m])) by (le))
+          > 2.0
+        for: 5m
+        labels:
+          severity: warning
+          service: checkout-orchestrator-service
+          slo_metric: latency
+          tier: tier-1
+        annotations:
+          summary: "Checkout p99 latency >2s SLO breach"
+          description: "p99: {{ $value | humanizeDuration }} (target: 2s). Impacts user experience."
+
+      # Fulfillment Service: 99.5% SLO
+      - alert: FulfillmentServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="fulfillment-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="fulfillment-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          service: fulfillment-service
+          slo_window: fast_burn
+          tier: tier-1
+        annotations:
+          summary: "Fulfillment Service CRITICAL: Error rate >10% (SEV-1)"
+          description: "Rider assignment failures: {{ $value | humanizePercentage }}"
+
+      - alert: FulfillmentETAAccuracyDegraded
+        expr: |
+          (100 - histogram_quantile(0.95, rate(eta_accuracy_percent_bucket[15m]))) > 15
+        for: 10m
+        labels:
+          severity: warning
+          service: fulfillment-service
+          slo_metric: eta_accuracy
+          tier: tier-1
+        annotations:
+          summary: "Fulfillment ETA accuracy <80% (>20min deviation)"
+          description: "ETA accuracy {{ $value }}% below 95% target. Impacts customer satisfaction."
+
+  # ============================================
+  # TIER 2: READ PATH ALERTS
+  # Search, Catalog, Cart, Pricing, Inventory
+  # ============================================
+  - name: tier_2_read_path
+    interval: 30s
+    rules:
+      - alert: SearchServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="search-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="search-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: search-service
+          slo_window: fast_burn
+          tier: tier-2
+        annotations:
+          summary: "Search Service WARNING: Error rate >10% (SEV-2)"
+
+      - alert: SearchIndexStaleness
+        expr: (time() - elasticsearch_indices_last_indexed_timestamp{index="products"}) / 60 > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: search-service
+          slo_metric: freshness
+        annotations:
+          summary: "Search index staleness >5min (SLO: <5min)"
+          description: "Last indexing: {{ $value | humanizeDuration }} ago"
+
+      - alert: CatalogServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="catalog-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="catalog-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: catalog-service
+          slo_window: fast_burn
+          tier: tier-2
+        annotations:
+          summary: "Catalog Service WARNING: Error rate >10%"
+
+      - alert: CartServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="cart-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="cart-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: cart-service
+          slo_window: fast_burn
+          tier: tier-2
+        annotations:
+          summary: "Cart Service WARNING: Error rate >10%"
+
+      - alert: PricingServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="pricing-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="pricing-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: pricing-service
+          slo_window: fast_burn
+          tier: tier-2
+        annotations:
+          summary: "Pricing Service WARNING: Error rate >10%"
+
+      - alert: InventoryServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="inventory-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="inventory-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: inventory-service
+          slo_window: fast_burn
+          tier: tier-2
+        annotations:
+          summary: "Inventory Service WARNING: Error rate >10%"
+
+      - alert: FraudDetectionServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="fraud-detection-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="fraud-detection-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: fraud-detection-service
+          slo_window: fast_burn
+          tier: tier-2
+        annotations:
+          summary: "Fraud Detection WARNING: Error rate >10%"
+
+  # ============================================
+  # TIER 3: PLATFORM SERVICES
+  # Identity, Config, Audit, CDC, Stream, Reconciliation
+  # ============================================
+  - name: tier_3_platform_services
+    interval: 30s
+    rules:
+      - alert: IdentityServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="identity-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="identity-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          service: identity-service
+          slo_window: fast_burn
+          tier: tier-3
+        annotations:
+          summary: "Identity Service CRITICAL: Error rate >10% (SEV-1)"
+          description: "Auth failures: {{ $value | humanizePercentage }}. Cascading impact: All services affected."
+          pagerduty_severity: "critical"
+
+      - alert: JwtValidationLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(jwt_validation_duration_seconds_bucket[5m])) by (le))
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: identity-service
+          slo_metric: latency
+        annotations:
+          summary: "JWT validation p99 >100ms SLO breach"
+          description: "p99: {{ $value | humanizeDuration }} (target: 100ms)"
+
+      - alert: FeatureFlagServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="config-feature-flag-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="config-feature-flag-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: config-feature-flag-service
+          slo_window: fast_burn
+          tier: tier-3
+        annotations:
+          summary: "Feature Flag Service WARNING: Error rate >10%"
+
+      - alert: FeatureFlagCacheMissRate
+        expr: |
+          (
+            sum(rate(feature_flag_cache_misses_total[5m])) by (service)
+            / (sum(rate(feature_flag_cache_hits_total[5m])) by (service) + sum(rate(feature_flag_cache_misses_total[5m])) by (service))
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: info
+          service: config-feature-flag-service
+          slo_metric: cache_hit_rate
+        annotations:
+          summary: "Feature Flag cache miss rate >5% (target: >95% hits)"
+
+      - alert: ReconciliationEngineJobFailure
+        expr: reconciliation_job_failures_total > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: reconciliation-engine
+          slo_window: fast_burn
+          tier: tier-3
+        annotations:
+          summary: "Reconciliation Engine CRITICAL: Job failed (SEV-1)"
+          description: "Financial impact: Reconciliation run failed. Requires immediate investigation."
+          pagerduty_severity: "critical"
+
+      - alert: ReconciliationMismatchesDetected
+        expr: reconciliation_mismatches_count > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: reconciliation-engine
+          slo_metric: accuracy
+        annotations:
+          summary: "Reconciliation Engine CRITICAL: Mismatches detected"
+          description: "{{ $value }} mismatches require audit review. Compliance risk."
+
+      - alert: AuditTrailServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="audit-trail-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="audit-trail-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: audit-trail-service
+          slo_window: fast_burn
+          tier: tier-3
+        annotations:
+          summary: "Audit Trail Service WARNING: Error rate >10%"
+
+      - alert: CDCConsumerLag
+        expr: |
+          sum(kafka_consumer_lag{consumer_group="cdc-consumer-group"}) > 50000
+        for: 5m
+        labels:
+          severity: warning
+          service: cdc-consumer-service
+          slo_metric: lag
+          tier: tier-3
+        annotations:
+          summary: "CDC Consumer lag >50K (SLO: <10K)"
+          description: "Consumer lag: {{ $value }} messages"
+
+      - alert: StreamProcessorSlowBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="stream-processor-service", status=~"5.."}[6h])) by (service)
+            / sum(rate(http_requests_total{service="stream-processor-service"}[6h])) by (service)
+          ) > 0.01
+        for: 30m
+        labels:
+          severity: info
+          service: stream-processor-service
+          slo_window: slow_burn
+        annotations:
+          summary: "Stream Processor slow burn >1% error rate"
+
+  # ============================================
+  # TIER 4: LOGISTICS & DISPATCH
+  # ============================================
+  - name: tier_4_logistics
+    interval: 30s
+    rules:
+      - alert: RoutingETAServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="routing-eta-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="routing-eta-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: routing-eta-service
+          slo_window: fast_burn
+          tier: tier-4
+        annotations:
+          summary: "Routing & ETA Service WARNING: Error rate >10%"
+
+      - alert: DispatchOptimizerFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="dispatch-optimizer-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="dispatch-optimizer-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: dispatch-optimizer-service
+          slo_window: fast_burn
+          tier: tier-4
+        annotations:
+          summary: "Dispatch Optimizer WARNING: Error rate >10%"
+
+      - alert: RiderFleetServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="rider-fleet-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="rider-fleet-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: rider-fleet-service
+          slo_window: fast_burn
+          tier: tier-4
+        annotations:
+          summary: "Rider Fleet Service WARNING: Error rate >10%"
+
+      - alert: WarehouseServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="warehouse-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="warehouse-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: warehouse-service
+          slo_window: fast_burn
+          tier: tier-4
+        annotations:
+          summary: "Warehouse Service WARNING: Error rate >10%"
+
+  # ============================================
+  # TIER 5: MOBILE & AI SERVICES
+  # ============================================
+  - name: tier_5_mobile_ai
+    interval: 30s
+    rules:
+      - alert: MobileBFFServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="mobile-bff-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="mobile-bff-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: mobile-bff-service
+          slo_window: fast_burn
+          tier: tier-5
+        annotations:
+          summary: "Mobile BFF WARNING: Error rate >10%"
+
+      - alert: NotificationServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="notification-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="notification-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: info
+          service: notification-service
+          slo_window: fast_burn
+          tier: tier-5
+        annotations:
+          summary: "Notification Service INFO: Error rate >10%"
+
+      - alert: WalletLoyaltyServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="wallet-loyalty-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="wallet-loyalty-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: wallet-loyalty-service
+          slo_window: fast_burn
+          tier: tier-5
+        annotations:
+          summary: "Wallet & Loyalty WARNING: Error rate >10%"
+
+      - alert: AIOrchestratorServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="ai-orchestrator-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="ai-orchestrator-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: info
+          service: ai-orchestrator-service
+          slo_window: fast_burn
+          tier: tier-5
+        annotations:
+          summary: "AI Orchestrator INFO: Error rate >10%"
+
+      - alert: AIInferenceServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="ai-inference-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="ai-inference-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: info
+          service: ai-inference-service
+          slo_window: fast_burn
+          tier: tier-5
+        annotations:
+          summary: "AI Inference INFO: Error rate >10%"
+
+      - alert: LocationIngestionServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="location-ingestion-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="location-ingestion-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: info
+          service: location-ingestion-service
+          slo_window: fast_burn
+          tier: tier-5
+        annotations:
+          summary: "Location Ingestion INFO: Error rate >10%"
+
+  # ============================================
+  # ADMIN GATEWAY & AUXILIARY SERVICES
+  # ============================================
+  - name: admin_auxiliary_services
+    interval: 30s
+    rules:
+      - alert: AdminGatewayServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="admin-gateway-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="admin-gateway-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: admin-gateway-service
+          slo_window: fast_burn
+        annotations:
+          summary: "Admin Gateway WARNING: Error rate >10%"
+
+      - alert: OutboxRelayServiceFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="outbox-relay-service", status=~"5.."}[5m])) by (service)
+            / sum(rate(http_requests_total{service="outbox-relay-service"}[5m])) by (service)
+          ) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: outbox-relay-service
+          slo_window: fast_burn
+        annotations:
+          summary: "Outbox Relay WARNING: Error rate >10%"
+
+  # ============================================
+  # ERROR BUDGET ALERTS (All Services)
+  # ============================================
+  - name: error_budget_tracking
+    interval: 5m
+    rules:
+      - alert: ErrorBudgetConsumption75Percent
+        expr: |
+          (
+            1 - (
+              sum(increase(http_requests_total{status!~"5.."}[30d])) by (service)
+              / sum(increase(http_requests_total[30d])) by (service)
+            )
+          ) / (1 - on(service) group_left slo_target{slo_target > 0}) > 0.75
+        for: 1h
+        labels:
+          severity: warning
+          alert_type: error_budget
+        annotations:
+          summary: "Error budget >75% consumed for {{ $labels.service }}"
+          description: "{{ $labels.service }} has consumed {{ $value | humanizePercentage }} of monthly budget. Recommend feature freeze."
+
+      - alert: ErrorBudgetExhausted
+        expr: |
+          (
+            1 - (
+              sum(increase(http_requests_total{status!~"5.."}[30d])) by (service)
+              / sum(increase(http_requests_total[30d])) by (service)
+            )
+          ) / (1 - on(service) group_left slo_target{slo_target > 0}) >= 1.0
+        for: 10m
+        labels:
+          severity: critical
+          alert_type: error_budget
+        annotations:
+          summary: "CRITICAL: Error budget EXHAUSTED for {{ $labels.service }}"
+          description: "{{ $labels.service }} has exceeded monthly error budget. Feature freeze in effect."
+          pagerduty_severity: "critical"
+
+  # ============================================
+  # INFRASTRUCTURE & SYSTEM HEALTH
+  # ============================================
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+      - alert: KubernetesNodeNotReady
+        expr: |
+          count(kube_node_status_condition{condition="Ready", status="true"})
+          < count(kube_node_status_condition{condition="Ready"})
+        for: 5m
+        labels:
+          severity: critical
+          component: kubernetes
+        annotations:
+          summary: "Kubernetes node not ready"
+          description: "{{ $value }} nodes are not in Ready state"
+
+      - alert: HighMemoryUsage
+        expr: |
+          (container_memory_usage_bytes / container_spec_memory_limit_bytes) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: container
+        annotations:
+          summary: "High memory usage: {{ $labels.container }}"
+          description: "Memory usage: {{ $value | humanizePercentage }}"
+
+      - alert: HighCPUUsage
+        expr: |
+          rate(container_cpu_usage_seconds_total[5m]) / container_spec_cpu_quota > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: container
+        annotations:
+          summary: "High CPU usage: {{ $labels.container }}"
+
+      - alert: PodCrashLooping
+        expr: |
+          increase(kube_pod_container_status_restarts_total[1h]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          component: kubernetes
+        annotations:
+          summary: "Pod crash looping: {{ $labels.pod }}"
+          description: "{{ $value }} restarts in past hour"
+
+      - alert: DatabaseConnectionPoolNearExhaustion
+        expr: |
+          hikaricp_connections_active / hikaricp_connections_max > 0.85
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "DB connection pool near exhaustion"
+          description: "Active connections: {{ $value | humanizePercentage }} of max"
+
+      - alert: KafkaBrokerDown
+        expr: |
+          count(up{job="kafka-broker"} == 1) < 3
+        for: 2m
+        labels:
+          severity: critical
+          component: kafka
+        annotations:
+          summary: "Kafka broker down"
+          description: "Only {{ $value }} brokers up (need minimum 3)"
+
+      - alert: RedisMemoryUsageHigh
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis memory usage high"
+          description: "Memory usage: {{ $value | humanizePercentage }}"
+
+  # ============================================
+  # CROSS-SERVICE DEPENDENCY ALERTS
+  # ============================================
+  - name: cross_service_dependencies
+    interval: 1m
+    rules:
+      - alert: DownstreamServiceDegraded
+        expr: |
+          (
+            sum(rate(upstream_calls_total{status=~"5.."}[5m])) by (upstream_service)
+            / sum(rate(upstream_calls_total[5m])) by (upstream_service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          alert_type: dependency
+        annotations:
+          summary: "Upstream service degradation for {{ $labels.upstream_service }}"
+          description: "Error rate to {{ $labels.upstream_service }}: {{ $value | humanizePercentage }}"
+
+      - alert: ServiceToServiceLatencyHigh
+        expr: |
+          histogram_quantile(0.99, sum(rate(upstream_call_duration_seconds_bucket[5m])) by (upstream_service, le))
+          > 5.0
+        for: 5m
+        labels:
+          severity: warning
+          alert_type: dependency
+        annotations:
+          summary: "Service-to-service latency high for {{ $labels.upstream_service }}"
+          description: "p99 latency: {{ $value | humanizeDuration }}"
+
+# Alert routing configuration
+# Maps alerts to PagerDuty escalation policies
+alert_routing:
+  tier-1-critical:
+    policy: "critical-path-oncall"
+    escalation: "5 min -> SRE lead -> Platform VP"
+    critical_window: "00:00-23:59 UTC"
+
+  tier-1-warning:
+    policy: "payment-team-oncall"
+    escalation: "15 min -> Team lead -> Payment manager"
+
+  tier-2-warning:
+    policy: "platform-oncall"
+    escalation: "30 min -> Platform lead"
+
+  tier-3-warning:
+    policy: "sre-team"
+    escalation: "1 hour -> SRE lead"
+
+  infrastructure-critical:
+    policy: "infra-oncall"
+    escalation: "5 min -> Infra lead -> VP Engineering"
+
+# Maintenance windows
+maintenance_windows:
+  deployment:
+    days: "Tuesday, Thursday"
+    time: "10:00-11:00 UTC"
+    silence_alerts: true
+
+  maintenance:
+    days: "Sunday"
+    time: "02:00-04:00 UTC"
+    silence_non_critical: true

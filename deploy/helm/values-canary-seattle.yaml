@@ -43,67 +43,68 @@ canary:
           histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="{{ .ServiceName }}",region="us-west-2"}[5m])) by (le))
         successCondition: result < 2.0
 
-# Fulfillment Service - Seattle gated rollout
-fulfillment-service:
-  enabled: true
-  replicaCount: 2
-  image:
-    tag: canary-seattle
-  canary:
+services:
+  # Fulfillment Service - Seattle gated rollout
+  fulfillment-service:
     enabled: true
-    weight: 10
-  resources:
-    requests:
-      cpu: 500m
-      memory: 1Gi
-    limits:
-      cpu: 2000m
-      memory: 4Gi
-  env:
-    REGION: us-west-2
-    DARK_STORE_PILOT_ENABLED: "true"
-    FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "false"
+    replicas: 2
+    replicaCount: 2
+    tag: canary-seattle
+    canary:
+      enabled: true
+      weight: 10
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    env:
+      REGION: us-west-2
+      DARK_STORE_PILOT_ENABLED: "true"
+      FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "false"
 
-# Warehouse Service - Seattle gated rollout
-warehouse-service:
-  enabled: true
-  replicaCount: 2
-  image:
-    tag: canary-seattle
-  canary:
+  # Warehouse Service - Seattle gated rollout
+  warehouse-service:
     enabled: true
-    weight: 10
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      cpu: 1000m
-      memory: 2Gi
-  env:
-    REGION: us-west-2
-    DARK_STORE_PILOT_ENABLED: "true"
+    replicas: 2
+    replicaCount: 2
+    tag: canary-seattle
+    canary:
+      enabled: true
+      weight: 10
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    env:
+      REGION: us-west-2
+      DARK_STORE_PILOT_ENABLED: "true"
 
-# Rider Fleet Service - Seattle gated rollout
-rider-fleet-service:
-  enabled: true
-  replicaCount: 2
-  image:
-    tag: canary-seattle
-  canary:
+  # Rider Fleet Service - Seattle gated rollout
+  rider-fleet-service:
     enabled: true
-    weight: 10
-  resources:
-    requests:
-      cpu: 500m
-      memory: 1Gi
-    limits:
-      cpu: 2000m
-      memory: 4Gi
-  env:
-    REGION: us-west-2
-    DARK_STORE_PILOT_ENABLED: "true"
-    RIDER_ASSIGNMENT_TIMEOUT_MS: "500"
+    replicas: 2
+    replicaCount: 2
+    tag: canary-seattle
+    canary:
+      enabled: true
+      weight: 10
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    env:
+      REGION: us-west-2
+      DARK_STORE_PILOT_ENABLED: "true"
+      RIDER_ASSIGNMENT_TIMEOUT_MS: "500"
 
 # Gated rollout strategy
 rollout:

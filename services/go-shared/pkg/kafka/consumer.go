@@ -84,7 +84,7 @@ func NewConsumer(cfg ConsumerConfig, handler MessageHandler, logger *slog.Logger
 		MinBytes:       cfg.MinBytes,
 		MaxBytes:       cfg.MaxBytes,
 		MaxWait:        cfg.MaxWait,
-		CommitInterval: time.Second,
+		CommitInterval: 0,
 		StartOffset:    kafkago.LastOffset,
 	})
 

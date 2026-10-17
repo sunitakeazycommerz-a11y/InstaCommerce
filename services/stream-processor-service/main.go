@@ -132,10 +132,14 @@ func main() {
 
 	// HTTP server for health and metrics
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	healthHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
+	}
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/health/live", healthHandler)
+	mux.HandleFunc("/health/ready", healthHandler)
 	mux.Handle("/metrics", promhttp.Handler())
 
 	srv := &http.Server{
@@ -180,8 +184,8 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 		Topic:          topic,
 		MinBytes:       1e3,  // 1KB
 		MaxBytes:       10e6, // 10MB
-		CommitInterval: time.Second,
-		StartOffset:    kafka.LastOffset,
+		CommitInterval: 0,
+		StartOffset:    kafka.FirstOffset,
 	})
 
 	wg.Add(1)

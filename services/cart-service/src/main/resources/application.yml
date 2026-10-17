@@ -44,7 +44,7 @@ cart:
   max-items-per-cart: 50
   max-quantity-per-item: 10
   kafka:
-    cart-events-topic: ${CART_EVENTS_TOPIC:cart-events}
+    cart-events-topic: ${CART_EVENTS_TOPIC:cart.events}
 
 pricing-service:
   base-url: ${PRICING_SERVICE_URL:http://pricing-service:8087}

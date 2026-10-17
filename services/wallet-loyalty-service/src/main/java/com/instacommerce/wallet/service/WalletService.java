@@ -140,8 +140,17 @@ public class WalletService {
             case TOPUP -> walletLedgerService.recordTopUp(walletId, userId, amountCents, refId);
             case ORDER -> walletLedgerService.recordPurchase(walletId, userId, amountCents, refId);
             case REFUND -> walletLedgerService.recordRefund(walletId, userId, amountCents, refId);
-            case CASHBACK, REFERRAL -> walletLedgerService.recordPromotion(
+            case CASHBACK, REFERRAL, PROMOTION -> walletLedgerService.recordPromotion(
                     walletId, userId, amountCents, refType.name(), refId);
+            case ADMIN_ADJUSTMENT -> {
+                if (isCredit) {
+                    walletLedgerService.recordEntry(walletId, "platform_float", "user_wallet:" + userId,
+                            amountCents, "ADMIN_ADJUSTMENT", refId);
+                } else {
+                    walletLedgerService.recordEntry(walletId, "user_wallet:" + userId, "platform_float",
+                            amountCents, "ADMIN_ADJUSTMENT", refId);
+                }
+            }
         }
     }
 }

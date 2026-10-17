@@ -47,17 +47,26 @@ public class PricingClient {
     @CircuitBreaker(name = "pricingService", fallbackMethod = "getPriceFallback")
     @Retry(name = "pricingService")
     public PriceResponse getPrice(UUID productId) {
-        PriceResponse response = restTemplate.getForObject(
-                baseUrl + "/pricing/products/{productId}", PriceResponse.class, productId);
-        if (response == null) {
+        try {
+            PriceResponse response = restTemplate.getForObject(
+                    baseUrl + "/pricing/products/{productId}", PriceResponse.class, productId);
+            if (response == null) {
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
+                        "Pricing service returned null for product: " + productId);
+            }
+            return response;
+        } catch (RestClientException ex) {
+            log.warn("Pricing service call failed for product {}: {}", productId, ex.getMessage());
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
-                    "Pricing service returned null for product: " + productId);
+                    "Unable to verify product price: " + ex.getMessage());
         }
-        return response;
     }
 
     private PriceResponse getPriceFallback(UUID productId, Exception e) {
         log.warn("Circuit breaker fallback for pricingService getPrice productId={}: {}", productId, e.getMessage());
+        if (e instanceof ApiException apiEx) {
+            throw apiEx;
+        }
         throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
                 "Unable to verify product price. Please try again later.");
     }

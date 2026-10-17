@@ -1,8 +1,10 @@
 package com.instacommerce.routing.config;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.core.KafkaOperations;
@@ -17,12 +19,19 @@ public class KafkaConfig {
     private static final Logger log = LoggerFactory.getLogger(KafkaConfig.class);
 
     @Bean
-    public CommonErrorHandler kafkaErrorHandler(KafkaOperations<String, String> kafkaOperations) {
-        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaOperations,
-            (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition()));
-        DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3));
+    public CommonErrorHandler kafkaErrorHandler(ObjectProvider<KafkaOperations<String, String>> kafkaOperationsProvider) {
+        KafkaOperations<String, String> kafkaOperations = kafkaOperationsProvider.getIfAvailable();
+        if (kafkaOperations != null) {
+            DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaOperations,
+                (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition()));
+            DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3));
+            errorHandler.addNotRetryableExceptions(JsonProcessingException.class, IllegalArgumentException.class);
+            errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+            return errorHandler;
+        }
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(new FixedBackOff(1000L, 3));
+        errorHandler.addNotRetryableExceptions(JsonProcessingException.class, IllegalArgumentException.class);
         errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
         return errorHandler;
     }
 }
-

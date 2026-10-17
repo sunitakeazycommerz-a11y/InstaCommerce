@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func TestEventDeduplicationDetectsRepeatedEvents(t *testing.T) {
 	ctx := context.Background()
 
 	// Create deduplication checker
-	checker := dedup.NewChecker(nil, nil)
+	checker := dedup.NewChecker(NewMockRedisClient(), nil)
 
 	// Simulate first event
 	duplicate1, _ := checker.IsDuplicate(ctx, "orders.events", 0, 12345)
@@ -54,7 +55,7 @@ func TestEventDeduplicationWithDifferentPartitions(t *testing.T) {
 	// Test that events from different partitions are not considered duplicates
 	ctx := context.Background()
 
-	checker := dedup.NewChecker(nil, nil)
+	checker := dedup.NewChecker(NewMockRedisClient(), nil)
 
 	// Event from partition 0
 	dup1, _ := checker.IsDuplicate(ctx, "orders.events", 0, 12345)
@@ -69,7 +70,7 @@ func TestEventDeduplicationWithDifferentTopics(t *testing.T) {
 	// Test that events from different topics are not considered duplicates
 	ctx := context.Background()
 
-	checker := dedup.NewChecker(nil, nil)
+	checker := dedup.NewChecker(NewMockRedisClient(), nil)
 
 	// Event from orders.events topic
 	dup1, _ := checker.IsDuplicate(ctx, "orders.events", 0, 12345)
@@ -207,7 +208,7 @@ func TestDeduplicationKeyGeneration(t *testing.T) {
 	expectedKey := "dedup:orders.events:0:12345"
 
 	// Verify the key would be correctly formed
-	actualKey := "dedup:" + topic + ":0:12345"
+	actualKey := fmt.Sprintf("dedup:%s:0:%d", topic, offset)
 	assert.Equal(t, expectedKey, actualKey)
 }
 
@@ -259,7 +260,7 @@ func TestWindowEdgeCases(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			inWindow := tc.eventTime.After(windowStart) &&
+			inWindow := !tc.eventTime.Before(windowStart) &&
 				tc.eventTime.Before(windowStart.Add(windowSize))
 			assert.Equal(t, tc.expectInWindow, inWindow)
 		})

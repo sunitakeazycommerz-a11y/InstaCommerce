@@ -7,6 +7,13 @@ from airflow import DAG
 from airflow.operators.python import BranchPythonOperator, PythonOperator
 from airflow.utils.task_group import TaskGroup
 
+def failure_alert(context):
+    try:
+        from plugins.slack_alerts import send_slack_alert
+        send_slack_alert(context)
+    except Exception:
+        pass
+
 default_args = {
     "owner": "ml-eng",
     "depends_on_past": False,
@@ -15,7 +22,7 @@ default_args = {
     "retries": 1,
     "retry_delay": timedelta(minutes=15),
     "execution_timeout": timedelta(hours=3),
-    "on_failure_callback": "plugins.slack_alerts.send_slack_alert",
+    "on_failure_callback": failure_alert,
 }
 
 PROJECT_ID = "instacommerce-prod"

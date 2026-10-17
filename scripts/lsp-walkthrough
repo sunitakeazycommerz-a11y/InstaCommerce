@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# InstaCommerce LSP Walkthrough Entrypoint Wrapper
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "${DIR}/lsp/code_walkthrough.py" "$@"
+

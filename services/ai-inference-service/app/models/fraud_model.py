@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field
+from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
 logger = logging.getLogger("ai_inference.models.fraud")
@@ -70,7 +71,7 @@ class FraudFeatures(BaseModel):
     chargeback_rate: float = Field(default=0.0, ge=0, le=1, description="Historical chargeback rate")
 
 
-class FraudResponse(BaseModel):
+class FraudResponse(MLBaseModel):
     """Fraud prediction result."""
     fraud_score: float = Field(..., ge=0, le=100, description="Fraud risk score (0-100)")
     fraud_probability: float = Field(..., ge=0, le=1, description="Calibrated probability")

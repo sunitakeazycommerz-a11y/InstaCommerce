@@ -48,6 +48,7 @@ public class PickItem {
     private long lineTotalCents;
 
     @Enumerated(EnumType.STRING)
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.NAMED_ENUM)
     @Column(nullable = false, columnDefinition = "pick_item_status")
     private PickItemStatus status = PickItemStatus.PENDING;
 

@@ -1,0 +1,13 @@
+go 1.25.0
+
+use (
+	./services/cdc-consumer-service
+	./services/dispatch-optimizer-service
+	./services/go-shared
+	./services/location-ingestion-service
+	./services/outbox-relay-service
+	./services/payment-webhook-service
+	./services/reconciliation-engine
+	./services/reverse-etl-orchestrator
+	./services/stream-processor-service
+)

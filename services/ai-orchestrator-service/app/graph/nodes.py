@@ -28,6 +28,13 @@ from app.graph.state import (
     ToolResult,
 )
 from app.graph.tools import ToolRegistry
+from app.guardrails import (
+    EscalationPolicy,
+    InjectionDetector,
+    OutputPolicy,
+    PIIVault,
+)
+from app.guardrails.escalation import EscalationState
 
 logger = logging.getLogger("ai_orchestrator.nodes")
 
@@ -92,6 +99,30 @@ def classify_intent(state: AgentState) -> AgentState:
     confidence when no keywords match.
     """
     try:
+        # Layer 1: Prompt injection defense
+        detector = InjectionDetector()
+        is_injection, inj_conf, inj_reason = detector.detect(state.query)
+        if is_injection:
+            logger.warning(
+                "node.classify_intent.injection_detected",
+                extra={
+                    "request_id": state.request_id,
+                    "reason": inj_reason,
+                    "confidence": inj_conf,
+                },
+            )
+            return state.model_copy(
+                update={
+                    "intent": IntentType.UNKNOWN,
+                    "intent_confidence": 0.0,
+                    "risk_level": RiskLevel.CRITICAL,
+                    "needs_escalation": True,
+                    "escalation_reason": f"Prompt injection detected: {inj_reason}",
+                    "current_node": "classify_intent",
+                    "completed_nodes": state.completed_nodes + ["classify_intent"],
+                }
+            )
+
         query_lower = state.query.lower()
         scores: Dict[IntentType, int] = {}
 
@@ -185,6 +216,20 @@ def check_policy(state: AgentState, settings: Optional[Settings] = None) -> Agen
         # Risk gate: CRITICAL always escalates
         if state.risk_level == RiskLevel.CRITICAL:
             violations.append(f"Risk level {state.risk_level.value} requires human review")
+
+        # Configurable escalation rule engine
+        esc_state = EscalationState(
+            query=state.query,
+            intent=state.intent.value,
+            intent_confidence=state.intent_confidence,
+            risk_level=state.risk_level.value,
+            tool_results=state.tool_results,
+            errors=state.errors,
+            metadata=state.context,
+        )
+        should_esc, trigger_name = EscalationPolicy().should_escalate(esc_state)
+        if should_esc:
+            violations.append(f"Escalation policy triggered: {trigger_name}")
 
         if violations:
             logger.warning(
@@ -465,6 +510,33 @@ def validate_output(state: AgentState) -> AgentState:
         # PII scrubbing
         for pattern, replacement in _PII_PATTERNS:
             response = pattern.sub(replacement, response)
+
+        vault = PIIVault()
+        response, _ = vault.redact(response)
+
+        # Output policy business rules and cap enforcement
+        output_policy = OutputPolicy()
+        output_payload = {"response": response, "message": response}
+        val_result = output_policy.validate(state.intent.value, output_payload, state.tool_results)
+        if not val_result.is_valid:
+            error_msgs = [v.message for v in val_result.violations if v.severity == "error"]
+            logger.warning(
+                "node.validate_output.violations",
+                extra={"request_id": state.request_id, "violations": error_msgs},
+            )
+            return state.model_copy(
+                update={
+                    "needs_escalation": True,
+                    "escalation_reason": f"Output policy violations: {'; '.join(error_msgs)}",
+                    "errors": state.errors + error_msgs,
+                    "current_node": "validate_output",
+                    "completed_nodes": state.completed_nodes + ["validate_output"],
+                }
+            )
+        if val_result.sanitised_output and "response" in val_result.sanitised_output:
+            response = str(val_result.sanitised_output["response"])
+        elif val_result.sanitised_output and "message" in val_result.sanitised_output:
+            response = str(val_result.sanitised_output["message"])
 
         # Auto-generate citations from retrieval results if missing
         if state.retrieval_results and not citations:

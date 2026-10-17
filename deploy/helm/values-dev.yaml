@@ -1,6 +1,7 @@
 global:
+  gcpProject: "instacommerce-dev"
   image:
-    registry: asia-south1-docker.pkg.dev/instacommerce/dev-images
+    registry: asia-south1-docker.pkg.dev/instacommerce/images
 
 services:
   identity-service:
@@ -64,4 +65,8 @@ services:
   mobile-bff-service:
     tag: dev
   admin-gateway-service:
+    tag: dev
+  stream-processor:
+    tag: dev
+  reverse-etl-orchestrator:
     tag: dev

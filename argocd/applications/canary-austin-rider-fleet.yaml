@@ -1,0 +1,288 @@
+# ArgoCD Application for Austin Canary - Rider Fleet Service
+# Phase 2 Week 3: Gated Deployment with 5% Traffic
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: canary-austin-rider-fleet
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: rider-fleet-service
+    app.kubernetes.io/component: canary
+    app.kubernetes.io/part-of: instacommerce
+    canary.instacommerce.dev/region: austin
+    canary.instacommerce.dev/phase: "2"
+    canary.instacommerce.dev/week: "3"
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: canary-deployments
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: canary-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: canary-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: instacommerce-canary
+  source:
+    repoURL: https://github.com/your-org/instacommerce
+    targetRevision: canary/austin
+    path: deploy/helm
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-canary-austin.yaml
+      parameters:
+        - name: canary.targetService
+          value: rider-fleet-service
+        - name: canary.traffic.weight
+          value: "5"
+        - name: services.rider-fleet-service.enabled
+          value: "true"
+  destination:
+    server: https://us-central-1.gke.instacommerce.dev
+    namespace: instacommerce-canary-austin
+  syncPolicy:
+    automated:
+      prune: false  # Conservative: manual prune for canary
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 5
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/minReplicas
+        - /spec/maxReplicas
+---
+# Argo Rollout for canary deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rider-fleet-service-canary
+  namespace: instacommerce-canary-austin
+  labels:
+    app: rider-fleet-service
+    canary: "true"
+    region: us-central-1
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: rider-fleet-service
+      canary: "true"
+  template:
+    metadata:
+      labels:
+        app: rider-fleet-service
+        canary: "true"
+        region: us-central-1
+        version: canary-austin
+    spec:
+      serviceAccountName: rider-fleet-service
+      containers:
+        - name: rider-fleet-service
+          image: us-central1-docker.pkg.dev/instacommerce/canary-images/rider-fleet-service:canary-austin
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8081
+              name: management
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: canary,austin
+            - name: CANARY_REGION
+              value: us-central-1
+            - name: CANARY_WEIGHT
+              value: "5"
+            - name: FEATURE_DYNAMIC_DISPATCH_ENABLED
+              value: "true"
+            - name: METRICS_CANARY_LABELS_ENABLED
+              value: "true"
+            - name: SPRING_DATA_REDIS_HOST
+              value: instacommerce-redis-austin.redis.cache.goog
+            - name: SPRING_DATA_REDIS_PORT
+              value: "6379"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+  strategy:
+    canary:
+      canaryService: rider-fleet-service-canary
+      stableService: rider-fleet-service-stable
+      trafficRouting:
+        istio:
+          virtualService:
+            name: rider-fleet-service-vsvc
+            routes:
+              - primary
+      steps:
+        - setWeight: 5
+        - pause:
+            duration: 2h
+        - analysis:
+            templates:
+              - templateName: austin-canary-analysis
+            args:
+              - name: service-name
+                value: rider-fleet-service
+        - setWeight: 10
+        - pause:
+            duration: 4h
+        - analysis:
+            templates:
+              - templateName: austin-canary-analysis
+            args:
+              - name: service-name
+                value: rider-fleet-service
+        - setWeight: 25
+        - pause:
+            duration: 8h
+        - analysis:
+            templates:
+              - templateName: austin-canary-analysis
+            args:
+              - name: service-name
+                value: rider-fleet-service
+        - setWeight: 50
+        - pause:
+            duration: 12h
+        - analysis:
+            templates:
+              - templateName: austin-canary-analysis
+            args:
+              - name: service-name
+                value: rider-fleet-service
+        - setWeight: 100
+      analysis:
+        templates:
+          - templateName: austin-canary-analysis
+        startingStep: 1
+        args:
+          - name: service-name
+            value: rider-fleet-service
+      antiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          weight: 100
+      scaleDownDelaySeconds: 30
+      abortScaleDownDelaySeconds: 30
+---
+# Istio VirtualService for traffic splitting
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: rider-fleet-service-vsvc
+  namespace: instacommerce-canary-austin
+spec:
+  hosts:
+    - rider-fleet-service
+  http:
+    - name: primary
+      match:
+        - headers:
+            x-canary-region:
+              exact: austin
+      route:
+        - destination:
+            host: rider-fleet-service-canary
+            port:
+              number: 8080
+          weight: 5
+        - destination:
+            host: rider-fleet-service-stable
+            port:
+              number: 8080
+          weight: 95
+    - route:
+        - destination:
+            host: rider-fleet-service-stable
+            port:
+              number: 8080
+          weight: 100
+---
+# Service for canary traffic
+apiVersion: v1
+kind: Service
+metadata:
+  name: rider-fleet-service-canary
+  namespace: instacommerce-canary-austin
+  labels:
+    app: rider-fleet-service
+    canary: "true"
+spec:
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+    - port: 8081
+      targetPort: management
+      name: management
+  selector:
+    app: rider-fleet-service
+    canary: "true"
+---
+# Service for stable traffic
+apiVersion: v1
+kind: Service
+metadata:
+  name: rider-fleet-service-stable
+  namespace: instacommerce-canary-austin
+  labels:
+    app: rider-fleet-service
+    stable: "true"
+spec:
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+    - port: 8081
+      targetPort: management
+      name: management
+  selector:
+    app: rider-fleet-service
+    stable: "true"
+---
+# PodDisruptionBudget for canary pods
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rider-fleet-service-canary-pdb
+  namespace: instacommerce-canary-austin
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: rider-fleet-service
+      canary: "true"

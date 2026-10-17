@@ -217,6 +217,7 @@ public class InventoryService {
         if (available <= threshold) {
             Map<String, Object> alertPayload = new LinkedHashMap<>();
             alertPayload.put("productId", stock.getProductId().toString());
+            alertPayload.put("storeId", storeId.toString());
             alertPayload.put("warehouseId", storeId.toString());
             alertPayload.put("currentQuantity", available);
             alertPayload.put("threshold", threshold);

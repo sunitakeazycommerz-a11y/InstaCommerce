@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field
+from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
 logger = logging.getLogger("ai_inference.models.clv")
@@ -69,7 +70,7 @@ class CLVFeatures(BaseModel):
     preferred_payment: str = Field(default="card", description="Preferred payment method")
 
 
-class CLVResponse(BaseModel):
+class CLVResponse(MLBaseModel):
     """CLV prediction result."""
     predicted_annual_value_cents: int = Field(..., ge=0, description="Predicted annual CLV in cents")
     predicted_annual_value_dollars: float = Field(..., ge=0)

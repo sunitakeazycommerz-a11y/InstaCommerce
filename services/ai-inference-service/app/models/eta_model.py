@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field
+from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
 logger = logging.getLogger("ai_inference.models.eta")
@@ -63,7 +64,7 @@ class ETAFeatures(BaseModel):
     stage: ETAStage = Field(default=ETAStage.PRE_ORDER, description="Prediction stage")
 
 
-class ETAResponse(BaseModel):
+class ETAResponse(MLBaseModel):
     """ETA prediction result."""
     eta_minutes: float = Field(..., ge=0, description="Predicted ETA in minutes")
     confidence_lower_minutes: float = Field(..., ge=0, description="Lower prediction interval (90%)")

@@ -37,7 +37,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error").permitAll()
-                .requestMatchers(HttpMethod.GET, "/stores/nearest", "/stores/{id}").permitAll()
+                .requestMatchers(HttpMethod.GET, "/stores/nearest", "/stores/{id}", "/stores/{id}/open", "/stores/{id}/zones", "/stores/{id}/delivery-radius", "/stores/by-city", "/stores/by-pincode").permitAll()
                 .requestMatchers("/stores/{id}/capacity").authenticated()
                 .requestMatchers("/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())

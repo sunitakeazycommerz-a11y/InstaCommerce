@@ -3,6 +3,7 @@ package com.instacommerce.notification.infrastructure.retry;
 import com.instacommerce.notification.repository.NotificationLogRepository;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,6 +25,7 @@ public class NotificationLogCleanupJob {
     }
 
     @Scheduled(cron = "${notification.cleanup.cron:0 0 3 * * *}")
+    @SchedulerLock(name = "notification_cleanup_job", lockAtMostFor = "PT30M", lockAtLeastFor = "PT1M")
     @Transactional
     public void cleanupOldLogs() {
         Instant cutoff = Instant.now().minus(RETENTION_DAYS, ChronoUnit.DAYS);

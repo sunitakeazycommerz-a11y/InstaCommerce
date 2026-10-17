@@ -7,7 +7,7 @@
 | **Module path** | `services/warehouse-service` (canonical ID in `settings.gradle.kts`) |
 | **Port** | `8090` |
 | **Database** | PostgreSQL — `warehouse` |
-| **Kafka topic** | `store.events` (via outbox + CDC relay) |
+| **Kafka topic** | `warehouse.events` (canonical in `TopicNames.java`, via outbox + CDC relay) |
 | **Flyway migrations** | V1–V7 |
 | **Runtime** | JDK 21, ZGC, Eclipse Temurin Alpine |
 
@@ -63,7 +63,7 @@ flowchart TB
 
     subgraph Downstream
         CDC[Debezium CDC Relay]
-        KFK{{Kafka<br/>store.events}}
+        KFK{{Kafka<br/>warehouse.events}}
         INV[inventory-service]
         FUL[fulfillment-service]
         DP[data-platform / dbt]
@@ -447,7 +447,7 @@ Default radius is 10.0 km, max results is 5 (configurable via `WarehouseProperti
 | `StoreStatusChanged` | `PATCH /admin/stores/{id}/status` | `storeId`, `previousStatus`, `newStatus` |
 | `StoreDeleted` | `DELETE /admin/stores/{id}` | `storeId`, `name` |
 
-**Mechanism:** `OutboxService.publish()` is annotated `@Transactional(propagation = MANDATORY)` — it can only execute within an existing transaction. Events are serialized to JSON and inserted into the `outbox_events` table with `sent = false`. The Debezium CDC connector reads from this table and publishes to Kafka topic `store.events`.
+**Mechanism:** `OutboxService.publish()` is annotated `@Transactional(propagation = MANDATORY)` — it can only execute within an existing transaction. Events are serialized to JSON and inserted into the `outbox_events` table with `sent = false`. The outbox relay / Debezium CDC connector reads from this table and routes aggregate types `store`/`stores`/`warehouse` to Kafka topic `warehouse.events` (per `TopicNames.WAREHOUSE_EVENTS`).
 
 **Cleanup:** `OutboxCleanupJob` runs daily at 03:00 (ShedLock-guarded: `lockAtMostFor = PT30M`, `lockAtLeastFor = PT5M`) and deletes events where `sent = true AND created_at < now() - 30 days`.
 

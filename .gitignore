@@ -273,3 +273,7 @@ WAVE*_TOKENS.txt
 
 # Claude Copilot worktrees (local development only)
 .claude/worktrees/
+.cmd.old
+
+# Ralph loop scratchpad
+.cursor/ralph/

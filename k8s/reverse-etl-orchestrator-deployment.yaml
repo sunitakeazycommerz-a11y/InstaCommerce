@@ -1,0 +1,359 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: reverse-etl
+  labels:
+    name: reverse-etl
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reverse-etl-config
+  namespace: reverse-etl
+data:
+  kafka.brokers: "kafka-broker-1.kafka.svc.cluster.local:9092,kafka-broker-2.kafka.svc.cluster.local:9092,kafka-broker-3.kafka.svc.cluster.local:9092"
+  kafka.consumer.group: "reverse-etl-orchestrator-prod"
+  kafka.topics: "payment_ledger.cdc,order_ledger.cdc,fulfillment_ledger.cdc"
+  database.max.connections: "50"
+  warehouse.batch.size: "10000"
+  warehouse.batch.timeout.ms: "15000"
+  marketing.batch.size: "1000"
+  marketing.batch.timeout.ms: "5000"
+  analytics.aggregation.window.minutes: "5"
+  analytics.retention.days: "90"
+  circuit.breaker.failure.threshold: "5"
+  circuit.breaker.reset.timeout.seconds: "30"
+  consumer.lag.alert.threshold.bytes: "1048576"  # 1MB
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reverse-etl-orchestrator
+  namespace: reverse-etl
+  labels:
+    app: reverse-etl-orchestrator
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: reverse-etl-orchestrator
+  template:
+    metadata:
+      labels:
+        app: reverse-etl-orchestrator
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: reverse-etl-orchestrator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      containers:
+      - name: reverse-etl-orchestrator
+        image: gcr.io/instacommerce/reverse-etl-orchestrator:1.0.0
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - name: api
+          containerPort: 8080
+          protocol: TCP
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+
+        env:
+        - name: API_ADDR
+          value: ":8080"
+        - name: HEALTH_ADDR
+          value: ":8081"
+        - name: METRICS_ADDR
+          value: ":9090"
+        - name: SERVICE_VERSION
+          value: "1.0.0"
+        - name: ENVIRONMENT
+          value: "production"
+
+        # Kafka Configuration
+        - name: KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-config
+              key: kafka.brokers
+        - name: KAFKA_CONSUMER_GROUP
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-config
+              key: kafka.consumer.group
+        - name: KAFKA_TOPICS
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-config
+              key: kafka.topics
+
+        # Database Configuration
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: reverse-etl-db-credentials
+              key: url
+        - name: DATABASE_MAX_CONN
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-config
+              key: database.max.connections
+
+        # Warehouse Configuration
+        - name: WAREHOUSE_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-warehouse-config
+              key: type
+        - name: WAREHOUSE_ACCOUNT
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-warehouse-config
+              key: account
+        - name: WAREHOUSE_USER
+          valueFrom:
+            secretKeyRef:
+              name: reverse-etl-warehouse-credentials
+              key: username
+        - name: WAREHOUSE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: reverse-etl-warehouse-credentials
+              key: password
+        - name: WAREHOUSE_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-warehouse-config
+              key: database
+
+        # Marketing Platform Configuration
+        - name: MARKETING_PLATFORM
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-marketing-config
+              key: platform
+        - name: MARKETING_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: reverse-etl-marketing-credentials
+              key: api_key
+        - name: MARKETING_BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-config
+              key: marketing.batch.size
+        - name: MARKETING_BATCH_TIMEOUT_MS
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-config
+              key: marketing.batch.timeout.ms
+
+        # Analytics Configuration
+        - name: ANALYTICS_HOSTS
+          valueFrom:
+            secretKeyRef:
+              name: reverse-etl-analytics-credentials
+              key: hosts
+        - name: ANALYTICS_INDEX_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-analytics-config
+              key: index_prefix
+
+        # Observability
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector.observability.svc.cluster.local:4318"
+        - name: OTEL_SERVICE_NAME
+          value: "reverse-etl-orchestrator"
+
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: health
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 2
+
+        volumeMounts:
+        - name: checkpoint-cache
+          mountPath: /var/cache/reverse-etl
+
+      volumes:
+      - name: checkpoint-cache
+        emptyDir:
+          sizeLimit: 500Mi
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - reverse-etl-orchestrator
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: workload-type
+                operator: In
+                values:
+                - data-pipeline
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reverse-etl-orchestrator
+  namespace: reverse-etl
+  labels:
+    app: reverse-etl-orchestrator
+spec:
+  type: ClusterIP
+  selector:
+    app: reverse-etl-orchestrator
+  ports:
+  - name: api
+    port: 8080
+    targetPort: api
+    protocol: TCP
+  - name: health
+    port: 8081
+    targetPort: health
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: metrics
+    protocol: TCP
+
+---
+apiVersion: autoscaling.k8s.io/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reverse-etl-orchestrator
+  namespace: reverse-etl
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reverse-etl-orchestrator
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+      - type: Pods
+        value: 2
+        periodSeconds: 30
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: reverse-etl-orchestrator
+  namespace: reverse-etl
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: reverse-etl-orchestrator
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reverse-etl-orchestrator
+  namespace: reverse-etl
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: reverse-etl-orchestrator
+  namespace: reverse-etl
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: reverse-etl-orchestrator
+  namespace: reverse-etl
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: reverse-etl-orchestrator
+subjects:
+- kind: ServiceAccount
+  name: reverse-etl-orchestrator
+  namespace: reverse-etl

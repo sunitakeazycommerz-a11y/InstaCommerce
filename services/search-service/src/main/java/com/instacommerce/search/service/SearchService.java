@@ -97,7 +97,7 @@ public class SearchService {
                 ((Number) row[6]).longValue(), // price_cents
                 (String) row[7],     // image_url
                 (Boolean) row[8],    // in_stock
-                row[11] != null ? ((Number) row[11]).doubleValue() : 0.0 // rank
+                row[9] != null ? ((Number) row[9]).doubleValue() : 0.0 // rank
         );
     }
 }

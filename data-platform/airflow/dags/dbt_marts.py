@@ -8,6 +8,13 @@ from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from airflow.sensors.external_task import ExternalTaskSensor
 
+def failure_alert(context):
+    try:
+        from plugins.slack_alerts import send_slack_alert
+        send_slack_alert(context)
+    except Exception:
+        pass
+
 default_args = {
     "owner": "data-eng",
     "depends_on_past": False,
@@ -16,7 +23,7 @@ default_args = {
     "retries": 2,
     "retry_delay": timedelta(minutes=10),
     "execution_timeout": timedelta(minutes=60),
-    "on_failure_callback": "plugins.slack_alerts.send_slack_alert",
+    "on_failure_callback": failure_alert,
 }
 
 DBT_PROJECT_DIR = "/opt/airflow/dbt"
@@ -42,6 +49,18 @@ with DAG(
         timeout=3600,
         poke_interval=120,
         allowed_states=["success"],
+    )
+
+    dbt_run_intermediate = BashOperator(
+        task_id="dbt_run_intermediate",
+        bash_command=(
+            f"cd {DBT_PROJECT_DIR} && "
+            f"dbt run --select intermediate "
+            f"--profiles-dir {DBT_PROFILES_DIR} "
+            f"--target prod"
+        ),
+        env={"DBT_PROFILES_DIR": DBT_PROFILES_DIR},
+        append_env=True,
     )
 
     dbt_run_marts = BashOperator(
@@ -104,6 +123,7 @@ with DAG(
 
     (
         wait_for_staging
+        >> dbt_run_intermediate
         >> dbt_run_marts
         >> dbt_test_marts
         >> [notify_completion, alert_on_failure]

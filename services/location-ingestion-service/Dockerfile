@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS build
+FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 RUN go mod download
@@ -11,6 +11,6 @@ WORKDIR /app
 COPY --from=build /src/app .
 USER app
 ENV PORT=8105
-EXPOSE 8120
+EXPOSE 8105
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- "http://localhost:${PORT}/health" || exit 1
 ENTRYPOINT ["./app"]

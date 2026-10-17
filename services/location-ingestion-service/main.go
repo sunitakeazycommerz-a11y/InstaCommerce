@@ -716,7 +716,7 @@ func (b *KafkaBatcher) writeBatch(ctx context.Context, updates []LocationUpdate)
 		return nil
 	}
 
-	writeCtx, cancel := context.WithTimeout(ctx, b.writeTimeout)
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.writeTimeout)
 	defer cancel()
 	return b.writer.WriteMessages(writeCtx, messages...)
 }

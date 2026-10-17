@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,33 +26,49 @@ type dedupMetrics struct {
 	errorsTotal  prometheus.Counter
 }
 
-func newDedupMetrics() *dedupMetrics {
-	return &dedupMetrics{
-		skippedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "dedup_skipped_total",
-			Help: "Total duplicate messages skipped by topic",
-		}, []string{"topic"}),
+var (
+	metricsInstance *dedupMetrics
+	metricsOnce     sync.Once
+)
 
-		errorsTotal: promauto.NewCounter(prometheus.CounterOpts{
-			Name: "dedup_errors_total",
-			Help: "Total dedup Redis check errors (fail-open)",
-		}),
-	}
+func getDedupMetrics() *dedupMetrics {
+	metricsOnce.Do(func() {
+		metricsInstance = &dedupMetrics{
+			skippedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "dedup_skipped_total",
+				Help: "Total duplicate messages skipped by topic",
+			}, []string{"topic"}),
+
+			errorsTotal: promauto.NewCounter(prometheus.CounterOpts{
+				Name: "dedup_errors_total",
+				Help: "Total dedup Redis check errors (fail-open)",
+			}),
+		}
+	})
+	return metricsInstance
+}
+
+// RedisClient interface abstraction allowing mock clients for unit tests.
+type RedisClient interface {
+	SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd
 }
 
 // Checker performs event-ID deduplication via Redis SET NX.
 type Checker struct {
-	redis   *redis.Client
+	redis   RedisClient
 	logger  *slog.Logger
 	metrics *dedupMetrics
 }
 
 // NewChecker creates a deduplication checker backed by Redis.
-func NewChecker(rdb *redis.Client, logger *slog.Logger) *Checker {
+func NewChecker(rdb RedisClient, logger *slog.Logger) *Checker {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Checker{
 		redis:   rdb,
 		logger:  logger.With("component", "dedup"),
-		metrics: newDedupMetrics(),
+		metrics: getDedupMetrics(),
 	}
 }
 
@@ -62,6 +79,9 @@ func NewChecker(rdb *redis.Client, logger *slog.Logger) *Checker {
 // Returns true if the message was already processed (duplicate).
 // On Redis failure, returns false to allow processing (fail-open for availability).
 func (c *Checker) IsDuplicate(ctx context.Context, topic string, partition int, offset int64) (bool, error) {
+	if c.redis == nil {
+		return false, nil
+	}
 	key := fmt.Sprintf("dedup:%s:%d:%d", topic, partition, offset)
 
 	set, err := c.redis.SetNX(ctx, key, 1, keyTTL).Result()

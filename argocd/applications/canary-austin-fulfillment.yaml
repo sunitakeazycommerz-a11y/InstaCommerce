@@ -1,0 +1,273 @@
+# ArgoCD Application for Austin Canary - Fulfillment Service
+# Phase 2 Week 3: Gated Deployment with 5% Traffic
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: canary-austin-fulfillment
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: fulfillment-service
+    app.kubernetes.io/component: canary
+    app.kubernetes.io/part-of: instacommerce
+    canary.instacommerce.dev/region: austin
+    canary.instacommerce.dev/phase: "2"
+    canary.instacommerce.dev/week: "3"
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: canary-deployments
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: canary-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: canary-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: instacommerce-canary
+  source:
+    repoURL: https://github.com/your-org/instacommerce
+    targetRevision: canary/austin
+    path: deploy/helm
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-canary-austin.yaml
+      parameters:
+        - name: canary.targetService
+          value: fulfillment-service
+        - name: canary.traffic.weight
+          value: "5"
+        - name: services.fulfillment-service.enabled
+          value: "true"
+  destination:
+    server: https://us-central-1.gke.instacommerce.dev
+    namespace: instacommerce-canary-austin
+  syncPolicy:
+    automated:
+      prune: false  # Conservative: manual prune for canary
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 5
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/minReplicas
+        - /spec/maxReplicas
+---
+# Argo Rollout for canary deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: fulfillment-service-canary
+  namespace: instacommerce-canary-austin
+  labels:
+    app: fulfillment-service
+    canary: "true"
+    region: us-central-1
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: fulfillment-service
+      canary: "true"
+  template:
+    metadata:
+      labels:
+        app: fulfillment-service
+        canary: "true"
+        region: us-central-1
+        version: canary-austin
+    spec:
+      serviceAccountName: fulfillment-service
+      containers:
+        - name: fulfillment-service
+          image: us-central1-docker.pkg.dev/instacommerce/canary-images/fulfillment-service:canary-austin
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8081
+              name: management
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: canary,austin
+            - name: CANARY_REGION
+              value: us-central-1
+            - name: CANARY_WEIGHT
+              value: "5"
+            - name: FEATURE_DARKSTORE_OPTIMIZATION_ENABLED
+              value: "true"
+            - name: METRICS_CANARY_LABELS_ENABLED
+              value: "true"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+  strategy:
+    canary:
+      canaryService: fulfillment-service-canary
+      stableService: fulfillment-service-stable
+      trafficRouting:
+        istio:
+          virtualService:
+            name: fulfillment-service-vsvc
+            routes:
+              - primary
+      steps:
+        - setWeight: 5
+        - pause:
+            duration: 2h
+        - analysis:
+            templates:
+              - templateName: austin-canary-analysis
+            args:
+              - name: service-name
+                value: fulfillment-service
+        - setWeight: 10
+        - pause:
+            duration: 4h
+        - analysis:
+            templates:
+              - templateName: austin-canary-analysis
+            args:
+              - name: service-name
+                value: fulfillment-service
+        - setWeight: 25
+        - pause:
+            duration: 8h
+        - analysis:
+            templates:
+              - templateName: austin-canary-analysis
+            args:
+              - name: service-name
+                value: fulfillment-service
+        - setWeight: 50
+        - pause:
+            duration: 12h
+        - analysis:
+            templates:
+              - templateName: austin-canary-analysis
+            args:
+              - name: service-name
+                value: fulfillment-service
+        - setWeight: 100
+      analysis:
+        templates:
+          - templateName: austin-canary-analysis
+        startingStep: 1
+        args:
+          - name: service-name
+            value: fulfillment-service
+      antiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          weight: 100
+      scaleDownDelaySeconds: 30
+      abortScaleDownDelaySeconds: 30
+---
+# Analysis Template for fulfillment canary
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: austin-canary-analysis
+  namespace: instacommerce-canary-austin
+spec:
+  args:
+    - name: service-name
+  metrics:
+    - name: error-rate
+      interval: 5m
+      successCondition: result[0] < 0.005
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            sum(rate(http_requests_total{status=~"5..",service="{{args.service-name}}",canary="true",region="us-central-1"}[5m]))
+            /
+            sum(rate(http_requests_total{service="{{args.service-name}}",canary="true",region="us-central-1"}[5m]))
+    - name: latency-p99
+      interval: 5m
+      successCondition: result[0] < 1500
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            histogram_quantile(0.99,
+              sum(rate(http_request_duration_seconds_bucket{service="{{args.service-name}}",canary="true",region="us-central-1"}[5m])) by (le)
+            ) * 1000
+    - name: success-rate
+      interval: 5m
+      successCondition: result[0] >= 0.995
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            sum(rate(http_requests_total{status=~"2..",service="{{args.service-name}}",canary="true",region="us-central-1"}[5m]))
+            /
+            sum(rate(http_requests_total{service="{{args.service-name}}",canary="true",region="us-central-1"}[5m]))
+---
+# Istio VirtualService for traffic splitting
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: fulfillment-service-vsvc
+  namespace: instacommerce-canary-austin
+spec:
+  hosts:
+    - fulfillment-service
+  http:
+    - name: primary
+      match:
+        - headers:
+            x-canary-region:
+              exact: austin
+      route:
+        - destination:
+            host: fulfillment-service-canary
+            port:
+              number: 8080
+          weight: 5
+        - destination:
+            host: fulfillment-service-stable
+            port:
+              number: 8080
+          weight: 95
+    - route:
+        - destination:
+            host: fulfillment-service-stable
+            port:
+              number: 8080
+          weight: 100

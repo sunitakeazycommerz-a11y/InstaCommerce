@@ -1,0 +1,429 @@
+global:
+  gcpProject: "instacommerce-staging"
+  image:
+    registry: asia-south1-docker.pkg.dev/instacommerce/images
+
+services:
+  identity-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  catalog-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 192Mi }
+      limits: { cpu: 250m, memory: 384Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  inventory-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  order-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      ORDER_CHECKOUT_DIRECT_SAGA_ENABLED: "false"
+      ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED: "false"
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  payment-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED: "false"
+      PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED: "false"
+      PAYMENT_STALE_PENDING_RECOVERY_ENABLED: "false"
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  fulfillment-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  notification-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 200m, memory: 256Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  search-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-staging.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  pricing-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-staging.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  cart-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-staging.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  checkout-orchestrator-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  ai-orchestrator-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { cpu: 500m, memory: 768Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+
+  ai-inference-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 375m, memory: 512Mi }
+      limits: { cpu: 750m, memory: 1024Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+
+  dispatch-optimizer-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+
+  outbox-relay:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+
+  # Per-domain outbox-relay sidecar replicas (Go service; no HikariCP)
+  outbox-relay-order:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-payment:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-cart:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-fulfillment:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-inventory:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-identity:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-catalog:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-rider-fleet:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-warehouse:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-pricing:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-wallet-loyalty:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-fraud-detection:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  outbox-relay-routing-eta:
+    replicas: 1
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info
+
+  cdc-consumer:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+
+  location-ingestion:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      LOG_LEVEL: info
+
+  payment-webhook:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  reconciliation-engine:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  warehouse-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 192Mi }
+      limits: { cpu: 250m, memory: 384Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  rider-fleet-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 192Mi }
+      limits: { cpu: 250m, memory: 384Mi }
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-staging.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  routing-eta-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 192Mi }
+      limits: { cpu: 250m, memory: 384Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  wallet-loyalty-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 192Mi }
+      limits: { cpu: 250m, memory: 384Mi }
+    env:
+      WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "false"
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  audit-trail-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 200m, memory: 256Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  fraud-detection-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 192Mi }
+      limits: { cpu: 250m, memory: 384Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  config-feature-flag-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 200m, memory: 256Mi }
+    env:
+      SPRING_DATA_REDIS_HOST: instacommerce-redis-staging.redis.cache.goog
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_LOGGING_LEVEL_ROOT: info
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
+
+  mobile-bff-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 192Mi }
+      limits: { cpu: 250m, memory: 384Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+
+  admin-gateway-service:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 192Mi }
+      limits: { cpu: 250m, memory: 384Mi }
+    env:
+      SPRING_LOGGING_LEVEL_ROOT: info
+
+  stream-processor:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    env:
+      LOG_LEVEL: info
+
+  reverse-etl-orchestrator:
+    replicas: 2
+    tag: staging
+    resources:
+      requests: { cpu: 125m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    env:
+      LOG_LEVEL: info

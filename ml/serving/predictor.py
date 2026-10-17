@@ -111,7 +111,7 @@ class BasePredictor(ABC):
     def _verify_integrity(self, model_dir: Path) -> bool:
         """Verify model artifact checksums before loading."""
         from ml.serving.integrity import verify_model_integrity
-        return verify_model_integrity(model_dir, self.metadata.name)
+        return verify_model_integrity(model_dir, self.model_name)
 
     def health(self) -> Dict[str, Any]:
         """Return a lightweight health-check payload."""

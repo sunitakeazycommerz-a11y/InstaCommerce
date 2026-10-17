@@ -1,0 +1,196 @@
+# Analytics System Sink Configuration
+# Destination: Elasticsearch/Analytics DB
+# Type: Aggregated (5-minute buckets)
+# SLO: 99.5% delivery, <10s latency p99
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reverse-etl-analytics-sink-config
+  namespace: reverse-etl
+data:
+  analytics-sink.yaml: |
+    sink:
+      id: analytics-sink-1
+      name: "Elasticsearch Analytics Sink"
+      type: elasticsearch
+      enabled: true
+
+      connection:
+        hosts:
+          - es-node1.elasticsearch.svc.cluster.local:9200
+          - es-node2.elasticsearch.svc.cluster.local:9200
+          - es-node3.elasticsearch.svc.cluster.local:9200
+        username: ${ES_USERNAME}
+        password: ${ES_PASSWORD}
+        scheme: https
+        verify_certs: true
+        timeout_seconds: 30
+        max_retries: 3
+
+      index_configuration:
+        index_prefix: reverse-etl
+        date_format: yyyy.MM.dd
+        number_of_shards: 3
+        number_of_replicas: 2
+        refresh_interval: 30s
+        codec: best_compression
+
+      indices:
+        - name: orders
+          index_pattern: "reverse-etl-orders-*"
+          index_template: "reverse-etl-orders"
+          aggregation_window_minutes: 5
+          mapping:
+            properties:
+              timestamp:
+                type: date
+              hour:
+                type: keyword
+              date:
+                type: date
+              order_id:
+                type: keyword
+              customer_id:
+                type: keyword
+              status:
+                type: keyword
+              order_count:
+                type: integer
+              unique_customers:
+                type: integer
+              total_amount_cents:
+                type: long
+              currency:
+                type: keyword
+              avg_order_value_cents:
+                type: long
+              p95_order_value_cents:
+                type: long
+
+        - name: payments
+          index_pattern: "reverse-etl-payments-*"
+          index_template: "reverse-etl-payments"
+          aggregation_window_minutes: 5
+          mapping:
+            properties:
+              timestamp:
+                type: date
+              hour:
+                type: keyword
+              payment_status:
+                type: keyword
+              payment_method:
+                type: keyword
+              payment_count:
+                type: integer
+              success_count:
+                type: integer
+              failure_count:
+                type: integer
+              success_rate:
+                type: scaled_float
+                scaling_factor: 100
+              total_amount_cents:
+                type: long
+              avg_amount_cents:
+                type: long
+              p95_latency_ms:
+                type: long
+
+        - name: fulfillments
+          index_pattern: "reverse-etl-fulfillments-*"
+          index_template: "reverse-etl-fulfillments"
+          aggregation_window_minutes: 5
+          mapping:
+            properties:
+              timestamp:
+                type: date
+              hour:
+                type: keyword
+              fulfillment_status:
+                type: keyword
+              fulfillment_count:
+                type: integer
+              on_time_count:
+                type: integer
+              delayed_count:
+                type: integer
+              slo_achievement:
+                type: scaled_float
+                scaling_factor: 100
+              avg_delivery_days:
+                type: double
+              p95_delivery_days:
+                type: double
+              avg_to_status_delivery_ms:
+                type: long
+
+      aggregations:
+        enabled: true
+        window_minutes: 5
+        metrics:
+          - name: count
+            type: count
+            rollup: sum
+          - name: avg_value
+            type: average
+            rollup: weighted_avg
+          - name: p95_value
+            type: percentile
+            percentile: 95
+            rollup: p95
+          - name: p99_value
+            type: percentile
+            percentile: 99
+            rollup: p99
+          - name: min_value
+            type: min
+            rollup: min
+          - name: max_value
+            type: max
+            rollup: max
+
+      deduplication:
+        enabled: true
+        strategy: idempotency_key
+        cache_size: 100000
+        ttl_minutes: 10
+
+      error_handling:
+        dlq_enabled: true
+        max_retries: 3
+        retry_backoff_ms: 1000
+        retry_max_backoff_ms: 30000
+        dead_letter_on:
+          - mapping_error
+          - index_not_found
+          - shard_not_available
+          - timeout
+
+      monitoring:
+        metrics_enabled: true
+        sample_rate: 1.0
+        log_sample_rate: 0.05
+        alert_latency_ms: 10000
+        alert_error_rate: 0.005
+
+      performance:
+        bulk_request_size_mb: 10
+        max_bulk_requests: 20
+        flush_interval_ms: 5000
+        thread_pool_size: 5
+        index_refresh_interval: 30s
+
+      retention:
+        enabled: true
+        retention_days: 90
+        delete_indices: true
+        delete_schedule: "0 2 * * *"  # Daily at 2 AM
+
+      lifecycle_policies:
+        enabled: true
+        hot_phase_days: 3
+        warm_phase_days: 30
+        cold_phase_days: 60
+        delete_phase_days: 90

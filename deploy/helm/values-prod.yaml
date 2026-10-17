@@ -1,6 +1,7 @@
 global:
+  gcpProject: "instacommerce-prod"
   image:
-    registry: asia-south1-docker.pkg.dev/instacommerce/prod-images
+    registry: asia-south1-docker.pkg.dev/instacommerce/images
 
 services:
   identity-service:
@@ -111,3 +112,10 @@ services:
   admin-gateway-service:
     replicas: 2
     tag: prod
+  stream-processor:
+    replicas: 2
+    tag: prod
+  reverse-etl-orchestrator:
+    replicas: 2
+    tag: prod
+

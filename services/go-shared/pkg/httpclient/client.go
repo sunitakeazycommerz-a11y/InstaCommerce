@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -178,7 +179,22 @@ func WithLogger(l *slog.Logger) Option {
 //   - CircuitBreaker reset timeout: 30s
 func NewClient(opts ...Option) *Client {
 	c := &Client{
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout:   10 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   100,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
+		},
 		circuitBreaker: newCircuitBreaker(5, 30*time.Second),
 		maxRetries:     3,
 		baseDelay:      500 * time.Millisecond,

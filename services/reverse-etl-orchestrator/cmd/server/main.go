@@ -57,6 +57,10 @@ func main() {
 	// Setup routers
 	apiRouter := mux.NewRouter()
 	apiHandler.RegisterRoutes(apiRouter.PathPrefix("/api/v1").Subrouter())
+	apiRouter.HandleFunc("/health", healthChecker.Health).Methods("GET")
+	apiRouter.HandleFunc("/health/live", healthChecker.Liveness).Methods("GET")
+	apiRouter.HandleFunc("/health/ready", healthChecker.Readiness).Methods("GET")
+	apiRouter.Handle("/metrics", promhttp.Handler())
 
 	healthRouter := mux.NewRouter()
 	healthRouter.HandleFunc("/health", healthChecker.Health).Methods("GET")

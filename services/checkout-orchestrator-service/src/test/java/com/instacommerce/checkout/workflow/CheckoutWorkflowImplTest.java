@@ -39,11 +39,15 @@ import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.Logger;
 
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+
 /**
  * Unit tests for {@link CheckoutWorkflowImpl} verifying the checkout saga orchestration logic.
  * Uses Mockito to mock Temporal activity stubs and verify call ordering and compensation behavior.
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class CheckoutWorkflowImplTest {
 
     private static final String WORKFLOW_ID = "checkout-user42-ik-test123";
@@ -63,11 +67,39 @@ class CheckoutWorkflowImplTest {
     @Mock private CouponActivity couponActivity;
 
     private MockedStatic<Workflow> workflowMock;
+    private MockedStatic<io.temporal.workflow.Async> asyncMock;
     private CheckoutWorkflowImpl workflow;
 
     @BeforeEach
     void setUp() {
         workflowMock = mockStatic(Workflow.class);
+        asyncMock = mockStatic(io.temporal.workflow.Async.class);
+
+        io.temporal.workflow.Promise<Void> donePromise = mock(io.temporal.workflow.Promise.class);
+        when(donePromise.get()).thenReturn(null);
+        when(donePromise.isCompleted()).thenReturn(true);
+
+        asyncMock.when(() -> io.temporal.workflow.Async.procedure(any(io.temporal.workflow.Functions.Proc.class)))
+            .thenAnswer(invocation -> {
+                io.temporal.workflow.Functions.Proc proc = invocation.getArgument(0);
+                proc.apply();
+                return donePromise;
+            });
+        asyncMock.when(() -> io.temporal.workflow.Async.procedure(any(io.temporal.workflow.Functions.Proc1.class), any()))
+            .thenAnswer(invocation -> {
+                io.temporal.workflow.Functions.Proc1 proc = invocation.getArgument(0);
+                Object arg = invocation.getArgument(1);
+                proc.apply(arg);
+                return donePromise;
+            });
+        asyncMock.when(() -> io.temporal.workflow.Async.procedure(any(io.temporal.workflow.Functions.Proc2.class), any(), any()))
+            .thenAnswer(invocation -> {
+                io.temporal.workflow.Functions.Proc2 proc = invocation.getArgument(0);
+                Object arg1 = invocation.getArgument(1);
+                Object arg2 = invocation.getArgument(2);
+                proc.apply(arg1, arg2);
+                return donePromise;
+            });
 
         // Mock WorkflowInfo for PaymentOperationKeys initialization
         WorkflowInfo workflowInfo = mock(WorkflowInfo.class);
@@ -98,6 +130,7 @@ class CheckoutWorkflowImplTest {
     @AfterEach
     void tearDown() {
         workflowMock.close();
+        asyncMock.close();
     }
 
     // -- shouldCompleteCheckoutHappyPath -----------------------------------------

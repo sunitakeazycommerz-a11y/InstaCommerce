@@ -106,14 +106,24 @@ public class FlagOverrideService {
         return overrideRepository.findActiveByFlagIdAndUserId(flagId, userId, Instant.now());
     }
 
-    @Cacheable(value = "flag-overrides-bulk", key = "#flagIds.stream().map(T(String)::valueOf).sorted().collect(T(java.util.stream.Collectors).joining(',')) + ':' + #userId")
+    @Cacheable(value = "flag-overrides-bulk", key = "#root.target.bulkCacheKey(#flagIds, #userId)")
     public Map<UUID, FlagOverride> findActiveOverridesByFlagIds(List<UUID> flagIds, UUID userId) {
-        if (flagIds.isEmpty()) {
+        if (flagIds == null || flagIds.isEmpty()) {
             return Map.of();
         }
         return overrideRepository.findActiveByFlagIdsAndUserId(flagIds, userId, Instant.now())
                 .stream()
                 .collect(Collectors.toMap(FlagOverride::getFlagId, Function.identity()));
+    }
+
+    String bulkCacheKey(List<UUID> flagIds, UUID userId) {
+        if (flagIds == null || flagIds.isEmpty()) {
+            return ":" + userId;
+        }
+        return flagIds.stream()
+                .map(UUID::toString)
+                .sorted()
+                .collect(Collectors.joining(",")) + ":" + userId;
     }
 }
 

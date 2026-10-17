@@ -22,6 +22,7 @@ dependencies {
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
     implementation("io.github.resilience4j:resilience4j-ratelimiter:2.2.0")
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.5")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.5")
 

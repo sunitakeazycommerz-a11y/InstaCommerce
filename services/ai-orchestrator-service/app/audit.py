@@ -75,18 +75,31 @@ def _build_envelope(
     ``aggregateType``, ``aggregateId``, ``correlationId``, ``action``,
     and ``payload``.
     """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    event_id = str(uuid4())
     return {
-        "eventId": str(uuid4()),
+        "id": event_id,
+        "eventId": event_id,
+        "event_id": event_id,
         "eventType": event_type,
-        "schemaVersion": "1.0",
+        "event_type": event_type,
+        "schemaVersion": "v1",
+        "schema_version": "v1",
         "sourceService": "ai-orchestrator-service",
+        "source_service": "ai-orchestrator-service",
         "userId": user_id,
         "actorType": "SYSTEM",
+        "actor_type": "SYSTEM",
         "aggregateType": "ai_session",
+        "aggregate_type": "ai_session",
         "aggregateId": aggregate_id,
+        "aggregate_id": aggregate_id,
         "correlationId": correlation_id,
+        "correlation_id": correlation_id,
         "action": event_type,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eventTime": now_iso,
+        "event_time": now_iso,
+        "timestamp": now_iso,
         "payload": payload or {},
     }
 

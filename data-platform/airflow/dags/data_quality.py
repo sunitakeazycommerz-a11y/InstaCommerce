@@ -7,6 +7,13 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.sensors.external_task import ExternalTaskSensor
 
+def failure_alert(context):
+    try:
+        from plugins.slack_alerts import send_slack_alert
+        send_slack_alert(context)
+    except Exception:
+        pass
+
 default_args = {
     "owner": "data-eng",
     "depends_on_past": False,
@@ -15,7 +22,7 @@ default_args = {
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     "execution_timeout": timedelta(minutes=30),
-    "on_failure_callback": "plugins.slack_alerts.send_slack_alert",
+    "on_failure_callback": failure_alert,
 }
 
 PROJECT_ID = "instacommerce-prod"
@@ -35,7 +42,7 @@ DOMAIN_SUITES = {
     },
     "inventory": {
         "suite_name": "inventory_suite",
-        "datasource": f"{PROJECT_ID}.staging.stg_inventory",
+        "datasource": f"{PROJECT_ID}.staging.stg_inventory_movements",
         "critical": True,
     },
     "users": {
@@ -78,7 +85,7 @@ with DAG(
             "data_asset_name": suite_config["datasource"],
             "batch_spec_passthrough": {
                 "query": f"SELECT * FROM `{suite_config['datasource']}` "
-                         f"WHERE DATE(_loaded_at) = '{context['ds']}'"
+                         f"WHERE DATE(_cdc_updated_at) = '{context['ds']}'"
             },
         }
 

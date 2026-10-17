@@ -8,10 +8,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.client.RestTemplate;
 
@@ -21,7 +24,7 @@ class AdminDashboardControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private RestTemplate restTemplate;
 
     @Test
@@ -46,8 +49,12 @@ class AdminDashboardControllerTest {
     @WithMockUser(username = "admin", roles = "ADMIN")
     void shouldReturnFeatureFlags() throws Exception {
         Map<String, Object> flags = Map.of("feature-a", true, "feature-b", false);
-        when(restTemplate.getForObject("http://config-feature-flag-service:8095/flags", Map.class))
-            .thenReturn(flags);
+        when(restTemplate.exchange(
+                eq("http://config-feature-flag-service:8095/flags"),
+                eq(HttpMethod.GET),
+                isNull(),
+                any(ParameterizedTypeReference.class)))
+            .thenReturn(ResponseEntity.ok(flags));
 
         mockMvc.perform(get("/admin/v1/flags")
                 .with(csrf()))
@@ -59,7 +66,11 @@ class AdminDashboardControllerTest {
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
     void shouldHandleFeatureFlagsServiceError() throws Exception {
-        when(restTemplate.getForObject(anyString(), eq(Map.class)))
+        when(restTemplate.exchange(
+                anyString(),
+                eq(HttpMethod.GET),
+                isNull(),
+                any(ParameterizedTypeReference.class)))
             .thenThrow(new RuntimeException("Service unavailable"));
 
         mockMvc.perform(get("/admin/v1/flags")
@@ -88,8 +99,12 @@ class AdminDashboardControllerTest {
             "items", new Object[]{
                 Map.of("id", "rec-1", "status", "PENDING")
             });
-        when(restTemplate.getForObject("http://reconciliation-engine:8098/pending", Map.class))
-            .thenReturn(pending);
+        when(restTemplate.exchange(
+                eq("http://reconciliation-engine:8098/pending"),
+                eq(HttpMethod.GET),
+                isNull(),
+                any(ParameterizedTypeReference.class)))
+            .thenReturn(ResponseEntity.ok(pending));
 
         mockMvc.perform(get("/admin/v1/reconciliation/pending")
                 .with(csrf()))

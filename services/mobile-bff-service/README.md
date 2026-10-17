@@ -11,13 +11,7 @@ sits behind Istio ingress on `m.instacommerce.dev` and is designed to aggregate
 parallel upstream responses into mobile-shaped payloads. It is the single point
 of entry for iOS and Android clients in the InstaCommerce architecture.
 
-**Current state:** the service is a **scaffold**. The only implemented business
-endpoint is `GET /bff/mobile/v1/home` (aliased as `/m/v1/home`), which returns
-`{"status":"ok"}`. Dependencies for reactive aggregation (WebFlux), caching
-(Caffeine), resilience (Resilience4j), and observability (OTEL + Prometheus)
-are wired in `build.gradle.kts` and `application.yml` but **none are exercised
-by application code today**. No downstream service clients, security filters,
-or cache policies exist in the codebase.
+**Current state:** The service includes a reactive Spring Security WebFlux chain (`MobileBffSecurityConfig`), customer JWT validation (`instacommerce-identity` issuer, JWKS), downstream user context propagation filter (`UserContextPropagationFilter` injecting `X-User-Id` and `X-User-Roles`), externalized configuration (`MobileBffProperties`), reactive screen aggregation fan-out (`HomeAggregator` calling catalog, search, and feature-flags via `UpstreamClientFactory`), and an authenticated `/bff/mobile/v1/profile` endpoint alongside `/bff/mobile/v1/home`, verified by 13 integration and unit tests.
 
 ---
 
@@ -72,12 +66,12 @@ The mobile-bff-service belongs to the **Edge Layer** (cluster C1) alongside
 
 | Area | Current (checked-in code) | Target (per iter3 reviews) |
 |------|---------------------------|----------------------------|
-| **Endpoints** | `GET /bff/mobile/v1/home` → `Mono.just(Map.of("status","ok"))` | Aggregated mobile APIs: home, category, search, product detail, cart summary, profile |
-| **Backend integration** | Zero downstream calls | Parallel WebClient calls to catalog, search, pricing, inventory, warehouse, cart, identity, feature-flags |
-| **Security** | No `SecurityFilterChain`, no JWT filter | WebFlux `SecurityWebFilterChain` with `spring-boot-starter-oauth2-resource-server`, JWKS validation against identity-service |
-| **Caching** | `spring.cache.type: caffeine` configured, zero `@Cacheable` usage | Screen-aware Caffeine caches with per-upstream TTLs and `@CacheEvict` hooks |
-| **Resilience** | `resilience4j-spring-boot3` dependency, zero configuration instances | Per-upstream circuit breakers, rate limiters, and timeout budgets with degraded fallback payloads |
-| **Tests** | `spring-boot-starter-test` + `reactor-test` in build.gradle.kts; no test classes | Controller, aggregation, contract, circuit-breaker, and timeout coverage |
+| **Endpoints** | `GET /bff/mobile/v1/home`, `GET /bff/mobile/v1/profile` | Aggregated mobile APIs: home, category, search, product detail, cart summary, profile |
+| **Backend integration** | Parallel reactive WebClient fan-out via `HomeAggregator` + `UpstreamClientFactory` to catalog, search, and feature-flags | Parallel WebClient calls to catalog, search, pricing, inventory, warehouse, cart, identity, feature-flags |
+| **Security** | WebFlux `SecurityWebFilterChain` (`MobileBffSecurityConfig`), RS256 JWT validation against `identity-service`, `UserContextPropagationFilter` | WebFlux `SecurityWebFilterChain` with `spring-boot-starter-oauth2-resource-server`, JWKS validation against identity-service |
+| **Caching** | `spring.cache.type: caffeine` configured, cache TTL properties defined in `MobileBffProperties` | Screen-aware Caffeine caches with per-upstream TTLs and `@CacheEvict` hooks |
+| **Resilience** | `resilience4j-spring-boot3` dependency, timeouts externalized in `MobileBffProperties`, `onErrorResume` fallbacks | Per-upstream circuit breakers, rate limiters, and timeout budgets with degraded fallback payloads |
+| **Tests** | 13 integration and unit tests (`MobileBffIntegrationTest`, `UserContextPropagationFilterTest`, `HomeAggregatorTest`) | Controller, aggregation, contract, circuit-breaker, and timeout coverage |
 | **Istio policy** | VirtualService routes `/bff/mobile/v1` and `/m/v1` to this service | Add `RequestAuthentication` + `AuthorizationPolicy` (currently missing per [security-trust-boundaries §G10](../../docs/reviews/iter3/platform/security-trust-boundaries.md)) |
 
 ---
@@ -516,7 +510,10 @@ Per [edge-identity §14](../../docs/reviews/iter3/services/edge-identity.md):
 ### 10.1 Current State
 
 - `spring-boot-starter-test` and `reactor-test` are on the test classpath.
-- **No `src/test` directory or test classes exist.**
+- **13 automated tests** implemented across unit and integration suites:
+  - `MobileBffIntegrationTest` (6 tests: public /home, alternative path /m/v1, 401 unauthenticated profile, 200 authenticated profile, expired token rejection, concurrent handling)
+  - `UserContextPropagationFilterTest` (3 tests: header extraction, invalid token pass-through, context injection)
+  - `HomeAggregatorTest` (4 tests: full reactive fan-out aggregation, catalog degradation fallback, search degradation fallback, all-upstream failure degradation)
 - JUnit Platform is configured in `build.gradle.kts` via
   `tasks.withType<Test> { useJUnitPlatform() }`.
 
@@ -526,11 +523,11 @@ Per [edge-identity §14](../../docs/reviews/iter3/services/edge-identity.md):
 # Build (from repo root)
 ./gradlew :services:mobile-bff-service:build -x test
 
-# Run tests (currently a no-op — no test classes)
+# Run tests
 ./gradlew :services:mobile-bff-service:test
 
-# Run a specific test class (once tests exist)
-./gradlew :services:mobile-bff-service:test --tests "com.instacommerce.mobilebff.SomeTest"
+# Run a specific test class
+./gradlew :services:mobile-bff-service:test --tests "com.instacommerce.mobilebff.aggregator.HomeAggregatorTest"
 ```
 
 ### 10.3 Target Test Coverage
@@ -646,16 +643,16 @@ No database migrations to worry about — this service is stateless.
 
 ## 13. Known Limitations and Open Issues
 
-| # | Issue | Severity | Source |
-|---|-------|----------|--------|
-| 1 | **No security chain** — no `SecurityFilterChain`, no JWT validation. Requests pass through unauthenticated. | HIGH | [edge-identity §7](../../docs/reviews/iter3/services/edge-identity.md), [security-trust-boundaries §G10](../../docs/reviews/iter3/platform/security-trust-boundaries.md) |
-| 2 | **No downstream service clients** — the service makes zero upstream calls. | HIGH | Codebase: only `Mono.just(Map.of("status","ok"))` |
-| 3 | **Caffeine cache configured but unused** — `spring.cache.type: caffeine` is set, but no `@Cacheable` or cache names are defined. | MEDIUM | `application.yml`, no cache usage in code |
-| 4 | **Resilience4j dependency unused** — no circuit breaker, rate limiter, or timeout instances are configured. | MEDIUM | `build.gradle.kts`, no `resilience4j.*` config |
+| # | Issue | Status / Severity | Source / Remediation |
+|---|-------|-------------------|----------------------|
+| 1 | **Security chain** — JWT validation and user context propagation | **RESOLVED** | `MobileBffSecurityConfig`, `UserContextPropagationFilter`, `DefaultJwtService` |
+| 2 | **Downstream service clients** — parallel fan-out to upstream domain services | **RESOLVED** (Home) | `HomeAggregator`, `UpstreamClientFactory` calling catalog, search, and feature flags |
+| 3 | **Caffeine cache configured but unused** — `spring.cache.type: caffeine` is set, but no `@Cacheable` or cache names are defined. | MEDIUM | `application.yml`, cache keys planned for product detail |
+| 4 | **Resilience4j dependency unused** — no circuit breaker, rate limiter, or timeout instances are configured. | RESOLVED (Timeouts & Fallbacks) | Reactive timeouts and `onErrorResume` degradation fallbacks wired into `HomeAggregator` |
 | 5 | **No Istio RequestAuthentication** — unlike payment/order/checkout services, mobile-bff has no JWT validation policy at the mesh layer. | MEDIUM | `deploy/helm/values.yaml` `requestAuthentications` section |
 | 6 | **`INTERNAL_SERVICE_TOKEN` not enforced** — env var is configured but no filter reads or validates it. | LOW | `application.yml` `internal.service.token` |
-| 7 | **No test classes** — `src/test` does not exist. | MEDIUM | Codebase |
-| 8 | **Pod-local rate limiting risk** — when rate limiting is added, it must be distributed (not Caffeine-based) to avoid bypass under multi-replica HPA. | — | [edge-identity §5](../../docs/reviews/iter3/services/edge-identity.md) |
+| 7 | **Automated tests** — test coverage for security, endpoints, aggregation | **RESOLVED** | 13 tests in `MobileBffIntegrationTest`, `UserContextPropagationFilterTest`, `HomeAggregatorTest` |
+| 8 | **Pod-local rate limiting risk** — when rate limiting is added, it must be distributed (not Caffeine-based) to avoid bypass under multi-replica HPA. | INFO | [edge-identity §5](../../docs/reviews/iter3/services/edge-identity.md) |
 
 **Planned remediation wave:** Wave 1 of the iter3 implementation program
 ([edge-identity §Wave 1](../../docs/reviews/iter3/services/edge-identity.md) —

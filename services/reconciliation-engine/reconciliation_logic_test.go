@@ -23,7 +23,7 @@ func TestShouldAutoFix(t *testing.T) {
 		{"1000", "1050", true},          // 5% difference
 		{"1000", "1010", true},          // 1% difference
 		{"1000", "2000", false},         // 100% difference (too large)
-		{"1000", "1100", true},          // 10% difference is under 5% threshold
+		{"1000", "1100", false},         // 10% difference is over 5% threshold
 		{"0", "0", true},                // zero amounts
 	}
 

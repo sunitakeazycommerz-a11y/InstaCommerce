@@ -787,6 +787,10 @@ func resolveKafkaTopic(overrideTopic, aggregateType string) string {
 		return "fraud.events"
 	case "notification", "notifications":
 		return "notification.events"
+	case "cart", "carts":
+		return "cart.events"
+	case "delivery", "routing":
+		return "delivery.events"
 	default:
 		normalized := normalizeAggregateType(aggregateType)
 		if normalized == "" {
@@ -841,16 +845,25 @@ func buildEventMessage(evt outboxEvent) []byte {
 	envelope := map[string]any{
 		"id":             evt.ID,
 		"eventId":        evt.ID,
+		"event_id":       evt.ID,
 		"aggregateType":  evt.AggregateType,
+		"aggregate_type": evt.AggregateType,
 		"aggregateId":    evt.AggregateID,
+		"aggregate_id":   evt.AggregateID,
 		"eventType":      evt.EventType,
+		"event_type":     evt.EventType,
 		"eventTime":      evt.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"event_time":     evt.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"timestamp":      evt.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"schemaVersion":  schemaVersion,
+		"schema_version": schemaVersion,
 		"source_service": evt.SourceService,
+		"sourceService":  evt.SourceService,
 		"payload":        payload,
 	}
 	if evt.CorrelationID != "" {
 		envelope["correlation_id"] = evt.CorrelationID
+		envelope["correlationId"] = evt.CorrelationID
 	}
 	if payloadMap, ok := payload.(map[string]any); ok {
 		for key, value := range payloadMap {

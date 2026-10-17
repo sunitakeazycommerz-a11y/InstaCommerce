@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 SKIP_PATHS = frozenset({
     "/health", "/health/ready", "/health/live",
+    "/v2/agent/health",
     "/metrics", "/openapi.json", "/docs", "/redoc",
 })
 
@@ -99,6 +100,7 @@ class InternalServiceAuthMiddleware(BaseHTTPMiddleware):
         if per_service_token:
             return hmac.compare_digest(token, per_service_token)
         # Fall back to shared token during migration
-        if self._expected_token:
-            return hmac.compare_digest(token, self._expected_token)
+        expected = self._expected_token or os.getenv("INTERNAL_SERVICE_TOKEN", "")
+        if expected:
+            return hmac.compare_digest(token, expected)
         return False

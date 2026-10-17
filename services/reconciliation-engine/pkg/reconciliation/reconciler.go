@@ -299,9 +299,21 @@ func ShouldAutoFix(ledgerAmountStr, pspAmountStr string) bool {
 		diff.Neg(diff)
 	}
 
-	// Auto-fix if difference is less than 5% of PSP amount
-	threshold := new(big.Float).Mul(pspAmount, big.NewFloat(0.05))
-	return diff.Cmp(threshold) < 0
+	if diff.Sign() == 0 {
+		return true
+	}
+
+	base := new(big.Float).Abs(ledgerAmount)
+	if base.Sign() == 0 {
+		base = new(big.Float).Abs(pspAmount)
+	}
+	if base.Sign() == 0 {
+		return true
+	}
+
+	// Auto-fix if difference is at most 5% of base amount
+	threshold := new(big.Float).Mul(base, big.NewFloat(0.05))
+	return diff.Cmp(threshold) <= 0
 }
 
 func (r *DBReconciler) processMismatch(ctx context.Context, tx *sql.Tx, runID int64, mismatch MismatchDetail) error {

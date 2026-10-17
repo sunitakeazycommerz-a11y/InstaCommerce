@@ -30,9 +30,9 @@ func TestDistanceCalculationWithHaversineFormula(t *testing.T) {
 			name:          "Bangalore to Delhi (approximate)",
 			pos1:          Position{Lat: 12.9716, Lng: 77.5946},
 			pos2:          Position{Lat: 28.7041, Lng: 77.1025},
-			expectedMinKm: 2000,
-			expectedMaxKm: 2500,
-			description:   "Distance should be roughly 2000-2500 km",
+			expectedMinKm: 1700,
+			expectedMaxKm: 1800,
+			description:   "Distance should be roughly 1700-1800 km",
 		},
 		{
 			name:          "Close locations",

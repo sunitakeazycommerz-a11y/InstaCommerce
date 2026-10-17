@@ -1,6 +1,8 @@
 package com.instacommerce.admingateway.controller;
 
 import java.util.Map;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,6 +16,9 @@ import org.springframework.web.client.RestTemplate;
 @RequestMapping("/admin/v1")
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminDashboardController {
+    private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
+        new ParameterizedTypeReference<>() {};
+
     private final RestTemplate restTemplate;
 
     public AdminDashboardController(RestTemplate restTemplate) {
@@ -33,7 +38,13 @@ public class AdminDashboardController {
     @GetMapping("/flags")
     public Map<String, Object> featureFlags() {
         try {
-            var flags = restTemplate.getForObject("http://config-feature-flag-service:8095/flags", Map.class);
+            var response = restTemplate.exchange(
+                "http://config-feature-flag-service:8095/flags",
+                HttpMethod.GET,
+                null,
+                MAP_TYPE
+            );
+            var flags = response.getBody();
             return flags != null ? flags : Map.of("error", "No flags configured");
         } catch (Exception ex) {
             return Map.of("error", "Failed to fetch feature flags: " + ex.getMessage());
@@ -53,9 +64,13 @@ public class AdminDashboardController {
     @GetMapping("/reconciliation/pending")
     public Map<String, Object> pendingReconciliation() {
         try {
-            var reconciliation = restTemplate.getForObject(
+            var response = restTemplate.exchange(
                 "http://reconciliation-engine:8098/pending",
-                Map.class);
+                HttpMethod.GET,
+                null,
+                MAP_TYPE
+            );
+            var reconciliation = response.getBody();
             return reconciliation != null ? reconciliation : Map.of("items", new Object[0]);
         } catch (Exception ex) {
             return Map.of("error", "Failed to fetch pending reconciliation: " + ex.getMessage());

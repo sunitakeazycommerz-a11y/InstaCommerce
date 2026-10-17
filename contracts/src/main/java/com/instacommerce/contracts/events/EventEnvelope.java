@@ -15,26 +15,28 @@ import java.time.Instant;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record EventEnvelope(
-        @JsonAlias("eventId")
+        @JsonAlias({"eventId", "event_id"})
         String id,
 
+        @JsonAlias("event_type")
         String eventType,
 
+        @JsonAlias("aggregate_type")
         String aggregateType,
 
         @JsonAlias("aggregate_id")
         String aggregateId,
 
-        @JsonAlias("event_time")
+        @JsonAlias({"event_time", "timestamp", "occurred_at", "event_timestamp"})
         Instant eventTime,
 
         @JsonAlias("schema_version")
         String schemaVersion,
 
-        @JsonAlias("source_service")
+        @JsonAlias({"source_service", "sourceService"})
         String sourceService,
 
-        @JsonAlias("correlation_id")
+        @JsonAlias({"correlation_id", "correlationId"})
         String correlationId,
 
         JsonNode payload

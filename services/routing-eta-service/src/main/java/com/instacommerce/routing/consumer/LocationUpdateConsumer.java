@@ -54,22 +54,78 @@ public class LocationUpdateConsumer {
         try {
             JsonNode event = objectMapper.readTree(message);
 
-            UUID deliveryId = UUID.fromString(event.path("deliveryId").asText());
-            BigDecimal lat = new BigDecimal(event.path("latitude").asText());
-            BigDecimal lng = new BigDecimal(event.path("longitude").asText());
-            BigDecimal speed = event.has("speedKmh")
-                ? new BigDecimal(event.path("speedKmh").asText()) : null;
-            BigDecimal heading = event.has("heading")
-                ? new BigDecimal(event.path("heading").asText()) : null;
+            BigDecimal lat = null;
+            if (event.hasNonNull("latitude")) {
+                lat = new BigDecimal(event.path("latitude").asText());
+            } else if (event.hasNonNull("lat")) {
+                lat = new BigDecimal(event.path("lat").asText());
+            }
 
-            LocationUpdateRequest request = new LocationUpdateRequest(
-                deliveryId, lat, lng, speed, heading);
-            trackingService.recordLocation(request);
+            BigDecimal lng = null;
+            if (event.hasNonNull("longitude")) {
+                lng = new BigDecimal(event.path("longitude").asText());
+            } else if (event.hasNonNull("lng")) {
+                lng = new BigDecimal(event.path("lng").asText());
+            }
 
-            log.debug("Recorded location update for delivery {}", deliveryId);
+            if (lat == null || lng == null) {
+                log.warn("Skipping location update missing coordinates: {}", message);
+                return;
+            }
 
-            if (routingProperties.getBreach().isRecalcOnLocationUpdateEnabled()) {
-                recalculateETA(deliveryId, lat.doubleValue(), lng.doubleValue());
+            BigDecimal speed = null;
+            if (event.hasNonNull("speedKmh")) {
+                speed = new BigDecimal(event.path("speedKmh").asText());
+            } else if (event.hasNonNull("speed")) {
+                speed = new BigDecimal(event.path("speed").asText());
+            }
+
+            BigDecimal heading = null;
+            if (event.hasNonNull("heading")) {
+                heading = new BigDecimal(event.path("heading").asText());
+            }
+
+            java.util.List<UUID> deliveryIds = new java.util.ArrayList<>();
+            String deliveryIdStr = event.hasNonNull("deliveryId") ? event.path("deliveryId").asText()
+                : event.hasNonNull("delivery_id") ? event.path("delivery_id").asText() : null;
+
+            if (deliveryIdStr != null && !deliveryIdStr.isBlank()) {
+                try {
+                    deliveryIds.add(UUID.fromString(deliveryIdStr));
+                } catch (IllegalArgumentException ex) {
+                    log.warn("Invalid deliveryId format in update: {}", deliveryIdStr);
+                }
+            } else {
+                String riderIdStr = event.hasNonNull("rider_id") ? event.path("rider_id").asText()
+                    : event.hasNonNull("riderId") ? event.path("riderId").asText() : null;
+                if (riderIdStr != null && !riderIdStr.isBlank()) {
+                    try {
+                        UUID riderId = UUID.fromString(riderIdStr);
+                        List<Delivery> active = deliveryRepository.findByRiderIdAndStatusIn(riderId, ACTIVE_STATUSES);
+                        for (Delivery d : active) {
+                            deliveryIds.add(d.getId());
+                        }
+                    } catch (IllegalArgumentException ex) {
+                        log.warn("Invalid riderId format in update: {}", riderIdStr);
+                    }
+                }
+            }
+
+            if (deliveryIds.isEmpty()) {
+                log.debug("No active deliveries found for location update: {}", message);
+                return;
+            }
+
+            for (UUID deliveryId : deliveryIds) {
+                LocationUpdateRequest request = new LocationUpdateRequest(
+                    deliveryId, lat, lng, speed, heading);
+                trackingService.recordLocation(request);
+
+                log.debug("Recorded location update for delivery {}", deliveryId);
+
+                if (routingProperties.getBreach().isRecalcOnLocationUpdateEnabled()) {
+                    recalculateETA(deliveryId, lat.doubleValue(), lng.doubleValue());
+                }
             }
         } catch (Exception ex) {
             log.error("Failed to process location update: {}", message, ex);

@@ -5,6 +5,7 @@ import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.notification.repository.NotificationLogRepository;
 import java.time.Instant;
 import java.util.List;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -32,6 +33,7 @@ public class NotificationRetryJob {
     }
 
     @Scheduled(fixedDelayString = "${notification.retry.poll-interval-ms:5000}")
+    @SchedulerLock(name = "notification_retry_job", lockAtMostFor = "PT4S", lockAtLeastFor = "PT1S")
     @Transactional
     public void retryPendingNotifications() {
         List<NotificationLog> pending = logRepository.findPendingForRetry(Instant.now(), batchSize);

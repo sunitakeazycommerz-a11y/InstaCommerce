@@ -23,9 +23,11 @@ public class PromotionService {
     private static final Logger log = LoggerFactory.getLogger(PromotionService.class);
 
     private final PromotionRepository promotionRepository;
+    private final OutboxService outboxService;
 
-    public PromotionService(PromotionRepository promotionRepository) {
+    public PromotionService(PromotionRepository promotionRepository, OutboxService outboxService) {
         this.promotionRepository = promotionRepository;
+        this.outboxService = outboxService;
     }
 
     @Cacheable(value = "activePromotions", key = "'all'")
@@ -81,7 +83,9 @@ public class PromotionService {
         p.setActive(true);
         Promotion saved = promotionRepository.save(p);
         log.info("Created promotion id={} name={}", saved.getId(), saved.getName());
-        return toResponse(saved);
+        PromotionResponse response = toResponse(saved);
+        outboxService.recordEvent("pricing", saved.getId().toString(), "PROMOTION_CREATED", response);
+        return response;
     }
 
     @CacheEvict(value = "activePromotions", allEntries = true)
@@ -103,7 +107,9 @@ public class PromotionService {
 
         Promotion saved = promotionRepository.save(p);
         log.info("Updated promotion id={}", saved.getId());
-        return toResponse(saved);
+        PromotionResponse response = toResponse(saved);
+        outboxService.recordEvent("pricing", saved.getId().toString(), "PROMOTION_UPDATED", response);
+        return response;
     }
 
     @CacheEvict(value = "activePromotions", allEntries = true)
@@ -129,7 +135,8 @@ public class PromotionService {
         Promotion p = promotionRepository.findById(id)
                 .orElseThrow(() -> new PromotionNotFoundException(id.toString()));
         p.setActive(false);
-        promotionRepository.save(p);
+        Promotion saved = promotionRepository.save(p);
+        outboxService.recordEvent("pricing", id.toString(), "PROMOTION_DEACTIVATED", toResponse(saved));
         log.info("Deactivated promotion id={}", id);
     }
 

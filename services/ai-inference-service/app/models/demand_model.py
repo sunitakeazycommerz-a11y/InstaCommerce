@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field
+from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
 logger = logging.getLogger("ai_inference.models.demand")
@@ -59,7 +60,7 @@ class DemandFeatures(BaseModel):
     discount_percent: float = Field(default=0.0, ge=0, le=100, description="Active discount %")
 
 
-class DemandResponse(BaseModel):
+class DemandResponse(MLBaseModel):
     """Demand prediction result."""
     predicted_units: float = Field(..., ge=0, description="Predicted demand (units)")
     confidence_lower: float = Field(..., ge=0, description="Lower bound (80% CI)")

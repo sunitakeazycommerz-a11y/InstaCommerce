@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/instacommerce/reconciliation-engine/pkg/reconciliation"
 )
@@ -237,10 +238,10 @@ func (h *ReconciliationHandler) writeError(w http.ResponseWriter, status int, me
 	h.writeJSON(w, status, ErrorResponse{Error: message})
 }
 
-func formatTimestamp(t *interface{}) *string {
+func formatTimestamp(t *time.Time) *string {
 	if t == nil {
 		return nil
 	}
-	ts := (*t).(string)
+	ts := t.Format(time.RFC3339)
 	return &ts
 }

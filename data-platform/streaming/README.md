@@ -9,8 +9,8 @@ Dataflow, and sinks results into BigQuery for analytics and alerting.
 ```
   Kafka Topics                 Beam Pipelines               Sinks
   ─────────────               ──────────────               ─────
-  order.events       ──►  order_events_pipeline       ──►  BigQuery (analytics.realtime_order_volume)
-  payment.events     ──►  payment_events_pipeline     ──►  BigQuery (analytics.payment_metrics)
+  orders.events      ──►  order_events_pipeline       ──►  BigQuery (analytics.realtime_order_volume)
+  payments.events    ──►  payment_events_pipeline     ──►  BigQuery (analytics.payment_metrics)
   rider.location     ──►  rider_location_pipeline     ──►  BigQuery (analytics.rider_utilization)
   inventory.events   ──►  inventory_events_pipeline   ──►  BigQuery (analytics.inventory_velocity)
   cart.events        ──►  cart_events_pipeline         ──►  BigQuery (analytics.cart_abandonment)
@@ -20,8 +20,8 @@ Dataflow, and sinks results into BigQuery for analytics and alerting.
 
 | Pipeline | Source Topic | Window | Key Metrics |
 |---|---|---|---|
-| `order_events_pipeline` | `order.events` | 1-min fixed / 30-min sliding | Orders per minute, GMV, SLA compliance |
-| `payment_events_pipeline` | `payment.events` | 1-min fixed | Payment success rate, latency P95 |
+| `order_events_pipeline` | `orders.events` (`order.events`) | 1-min fixed / 30-min sliding | Orders per minute, GMV, SLA compliance |
+| `payment_events_pipeline` | `payments.events` (`payment.events`) | 1-min fixed | Payment success rate, latency P95 |
 | `rider_location_pipeline` | `rider.location` | 1-min fixed | Rider utilization per zone |
 | `inventory_events_pipeline` | `inventory.events` | 5-min fixed | Inventory velocity, stockout detection |
 | `cart_events_pipeline` | `cart.events` | 15-min session | Cart abandonment rate |

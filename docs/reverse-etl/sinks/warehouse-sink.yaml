@@ -1,0 +1,140 @@
+# Data Warehouse Sink Configuration
+# Destination: Snowflake/BigQuery
+# Type: Batch (15-second micro-batches)
+# SLO: 99.9% delivery, <5s latency p99
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reverse-etl-warehouse-sink-config
+  namespace: reverse-etl
+data:
+  warehouse-sink.yaml: |
+    sink:
+      id: warehouse-sink-1
+      name: "Snowflake Data Warehouse"
+      type: snowflake
+      enabled: true
+
+      connection:
+        account: ${WAREHOUSE_ACCOUNT}
+        user: ${WAREHOUSE_USER}
+        password: ${WAREHOUSE_PASSWORD}
+        database: reverse_etl_prod
+        warehouse: etl_compute
+        role: etl_role
+        region: us-east-1
+        timeout_seconds: 30
+        max_retries: 3
+
+      batching:
+        enabled: true
+        batch_size: 10000
+        timeout_ms: 15000
+        compression: gzip
+
+      schema_mapping:
+        topics:
+          - topic: payment_ledger.cdc
+            table: dim_payments
+            key_column: payment_id
+            timestamp_column: processed_at
+            columns:
+              - source: id
+                target: payment_id
+                type: STRING
+                nullable: false
+              - source: customer_id
+                target: customer_id
+                type: STRING
+                nullable: false
+              - source: amount
+                target: amount_cents
+                type: NUMBER
+                scale: 0
+                nullable: false
+              - source: currency
+                target: currency_code
+                type: STRING
+                nullable: false
+              - source: status
+                target: payment_status
+                type: STRING
+                nullable: false
+              - source: created_at
+                target: created_at
+                type: TIMESTAMP_NTZ
+                nullable: false
+              - source: updated_at
+                target: updated_at
+                type: TIMESTAMP_NTZ
+                nullable: false
+
+          - topic: order_ledger.cdc
+            table: dim_orders
+            key_column: order_id
+            columns:
+              - source: id
+                target: order_id
+                type: STRING
+              - source: customer_id
+                target: customer_id
+                type: STRING
+              - source: total_amount
+                target: total_amount_cents
+                type: NUMBER
+              - source: status
+                target: order_status
+                type: STRING
+              - source: created_at
+                target: created_at
+                type: TIMESTAMP_NTZ
+
+          - topic: fulfillment_ledger.cdc
+            table: dim_fulfillments
+            key_column: fulfillment_id
+            columns:
+              - source: id
+                target: fulfillment_id
+                type: STRING
+              - source: order_id
+                target: order_id
+                type: STRING
+              - source: status
+                target: fulfillment_status
+                type: STRING
+              - source: estimated_delivery
+                target: estimated_delivery_date
+                type: DATE
+              - source: actual_delivery
+                target: actual_delivery_date
+                type: DATE
+
+      deduplication:
+        enabled: true
+        strategy: idempotency_key
+        cache_size: 100000
+        ttl_minutes: 30
+
+      error_handling:
+        dlq_enabled: true
+        dlq_table: reverse_etl_dlq
+        max_retries: 3
+        retry_backoff_ms: 1000
+        retry_max_backoff_ms: 30000
+        dead_letter_on:
+          - schema_mismatch
+          - data_type_error
+          - constraint_violation
+
+      monitoring:
+        metrics_enabled: true
+        sample_rate: 1.0
+        log_sample_rate: 0.1
+        alert_latency_ms: 5000
+        alert_error_rate: 0.001
+
+      performance:
+        connection_pool_size: 20
+        max_query_concurrency: 5
+        query_timeout_seconds: 60

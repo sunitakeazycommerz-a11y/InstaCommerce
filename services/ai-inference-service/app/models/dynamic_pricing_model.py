@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field
+from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
 logger = logging.getLogger("ai_inference.models.dynamic_pricing")
@@ -65,7 +66,7 @@ class PricingFeatures(BaseModel):
     min_margin_cents: int = Field(default=100, ge=0, description="Minimum margin per delivery")
 
 
-class PricingResponse(BaseModel):
+class PricingResponse(MLBaseModel):
     """Pricing decision result."""
     delivery_fee_cents: int = Field(..., ge=0, description="Recommended delivery fee in cents")
     delivery_fee_dollars: float = Field(..., ge=0)

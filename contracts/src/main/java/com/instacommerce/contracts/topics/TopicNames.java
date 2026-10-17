@@ -33,10 +33,18 @@ public final class TopicNames {
     public static final String RECONCILIATION_EVENTS  = "reconciliation.events";
     public static final String WALLET_EVENTS          = "wallet.events";
     public static final String FRAUD_EVENTS           = "fraud.events";
+    public static final String CART_EVENTS            = "cart.events";
+    public static final String DELIVERY_EVENTS        = "delivery.events";
+    public static final String ROUTING_EVENTS         = DELIVERY_EVENTS;
+
+    // Aliases for singular compatibility
+    public static final String ORDER_EVENTS           = ORDERS_EVENTS;
+    public static final String PAYMENT_EVENTS         = PAYMENTS_EVENTS;
 
     // ── Non-domain topics ───────────────────────────────────────────────
 
     public static final String RIDER_LOCATION_UPDATES = "rider.location.updates";
+    public static final String RIDER_GEOFENCE_EVENTS  = "rider.geofence.events";
     public static final String PAYMENT_WEBHOOKS       = "payment.webhooks";
 
     // ── Outbox relay ───────────────────────────────────────────────────
@@ -65,4 +73,7 @@ public final class TopicNames {
     public static final String RECONCILIATION_DLT     = RECONCILIATION_EVENTS + DLT_SUFFIX;
     public static final String WALLET_DLT             = WALLET_EVENTS + DLT_SUFFIX;
     public static final String FRAUD_DLT              = FRAUD_EVENTS + DLT_SUFFIX;
+    public static final String CART_DLT               = CART_EVENTS + DLT_SUFFIX;
+    public static final String DELIVERY_DLT           = DELIVERY_EVENTS + DLT_SUFFIX;
+    public static final String AUDIT_DLT              = "audit.DLT";
 }

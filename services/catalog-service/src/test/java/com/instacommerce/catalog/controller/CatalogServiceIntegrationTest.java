@@ -5,20 +5,27 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.catalog.domain.model.Category;
+import com.instacommerce.catalog.domain.model.OutboxEvent;
+import com.instacommerce.catalog.domain.model.Product;
 import com.instacommerce.catalog.dto.request.CreateProductRequest;
 import com.instacommerce.catalog.dto.response.ProductResponse;
-import com.instacommerce.catalog.repository.ProductRepository;
-import com.instacommerce.catalog.domain.model.Product;
+import com.instacommerce.catalog.repository.CategoryRepository;
 import com.instacommerce.catalog.repository.OutboxEventRepository;
-import com.instacommerce.catalog.domain.model.OutboxEvent;
+import com.instacommerce.catalog.repository.ProductRepository;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -41,6 +48,26 @@ class CatalogServiceIntegrationTest {
       .withUsername("test")
       .withPassword("test");
 
+  @DynamicPropertySource
+  static void registerProperties(DynamicPropertyRegistry registry) {
+    postgres.start();
+    registry.add("spring.datasource.url", postgres::getJdbcUrl);
+    registry.add("spring.datasource.username", postgres::getUsername);
+    registry.add("spring.datasource.password", postgres::getPassword);
+    registry.add("spring.cloud.gcp.secretmanager.enabled", () -> "false");
+    registry.add("spring.cloud.gcp.sql.enabled", () -> "false");
+  }
+
+  @BeforeAll
+  static void runMigrations() {
+    postgres.start();
+    Flyway.configure()
+        .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+        .locations("classpath:db/migration")
+        .load()
+        .migrate();
+  }
+
   @Autowired
   private MockMvc mvc;
 
@@ -51,12 +78,16 @@ class CatalogServiceIntegrationTest {
   private ProductRepository productRepository;
 
   @Autowired
+  private CategoryRepository categoryRepository;
+
+  @Autowired
   private OutboxEventRepository outboxEventRepository;
 
   @BeforeEach
   void setUp() {
-    productRepository.deleteAll();
     outboxEventRepository.deleteAll();
+    productRepository.deleteAll();
+    categoryRepository.deleteAll();
   }
 
   @Test
@@ -99,14 +130,20 @@ class CatalogServiceIntegrationTest {
   }
 
   @Test
+  @WithMockUser(username = "admin", roles = {"ADMIN"})
   @DisplayName("POST /admin/products creates product and publishes event")
   void testCreateProductPublishesEvent() throws Exception {
     // Arrange
+    Category category = new Category();
+    category.setName("Test Category");
+    category.setSlug("test-category-" + UUID.randomUUID().toString().substring(0, 8));
+    category = categoryRepository.save(category);
+
     CreateProductRequest request = new CreateProductRequest(
-        "SKU-123",
+        "SKU-" + UUID.randomUUID().toString().substring(0, 8),
         "New Product",
         "New product description",
-        UUID.randomUUID(),
+        category.getId(),
         "Brand A",
         1999L,
         "INR",
@@ -120,7 +157,6 @@ class CatalogServiceIntegrationTest {
 
     // Act
     mvc.perform(post("/admin/products")
-        .header("Authorization", "Bearer test-token")
         .contentType(MediaType.APPLICATION_JSON)
         .content(requestBody))
         .andExpect(status().isOk())
@@ -128,7 +164,6 @@ class CatalogServiceIntegrationTest {
         .andExpect(jsonPath("$.description").value("New product description"));
 
     // Assert - verify event was created in outbox
-    // Note: In production, this would be consumed from Kafka, but here we test the outbox table
     Thread.sleep(500); // Allow async processing
     long outboxEvents = outboxEventRepository.count();
     assertThat(outboxEvents).isGreaterThanOrEqualTo(0L);
@@ -138,20 +173,30 @@ class CatalogServiceIntegrationTest {
   @DisplayName("GET /products with category filter returns filtered results")
   void testListProductsWithCategoryFilter() throws Exception {
     // Arrange
-    for (int i = 0; i < 3; i++) {
-      Product product = createTestProduct("Product " + i, "Description " + i);
-      productRepository.save(product);
-    }
+    Category cat1 = new Category();
+    cat1.setName("Category 1");
+    cat1.setSlug("cat-1-" + UUID.randomUUID().toString().substring(0, 8));
+    cat1 = categoryRepository.save(cat1);
 
-    // Act & Assert - without category filter should return all
-    mvc.perform(get("/products?page=0&size=10"))
+    Product p1 = createTestProduct("Product 1", "Description 1");
+    p1.setCategory(cat1);
+    productRepository.save(p1);
+
+    Product p2 = createTestProduct("Product 2", "Description 2");
+    productRepository.save(p2);
+
+    // Act & Assert
+    mvc.perform(get("/products?category=" + cat1.getSlug()))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.content.length()").isNumber());
+        .andExpect(jsonPath("$.content.length()").value(1))
+        .andExpect(jsonPath("$.content[0].name").value("Product 1"));
   }
 
   private Product createTestProduct(String name, String description) {
+    String suffix = UUID.randomUUID().toString().substring(0, 8);
     Product product = new Product();
-    product.setId(UUID.randomUUID());
+    product.setSku("SKU-" + suffix);
+    product.setSlug("slug-" + suffix);
     product.setName(name);
     product.setDescription(description);
     product.setBasePriceCents(1000);

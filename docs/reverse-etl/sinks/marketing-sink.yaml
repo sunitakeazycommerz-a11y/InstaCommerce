@@ -1,0 +1,130 @@
+# Marketing Platform Sink Configuration
+# Destination: Segment/mParticle
+# Type: Real-time (sub-second)
+# SLO: 99.9% delivery, <1s latency p99
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reverse-etl-marketing-sink-config
+  namespace: reverse-etl
+data:
+  marketing-sink.yaml: |
+    sink:
+      id: marketing-sink-1
+      name: "Segment Marketing Platform"
+      type: segment
+      enabled: true
+
+      connection:
+        api_key: ${MARKETING_API_KEY}
+        workspace: instacommerce-prod
+        api_endpoint: https://api.segment.io/v1
+        data_residency: US
+        timeout_seconds: 10
+        max_retries: 3
+
+      batching:
+        enabled: true
+        batch_size: 1000
+        timeout_ms: 5000
+
+      event_mapping:
+        events:
+          - source_topic: order_ledger.cdc
+            source_operation: c  # create only
+            event_name: order.created
+            user_id_field: customer_id
+            fields:
+              - source: id
+                target: orderId
+              - source: total_amount
+                target: totalAmount
+              - source: currency
+                target: currency
+              - source: items_count
+                target: itemCount
+              - source: shipping_address
+                target: shippingAddress
+              - source: created_at
+                target: timestamp
+
+          - source_topic: payment_ledger.cdc
+            source_operation: u  # update
+            event_name: payment.confirmed
+            filter: 'status == "succeeded"'
+            user_id_field: customer_id
+            fields:
+              - source: id
+                target: paymentId
+              - source: amount
+                target: amount
+              - source: payment_method
+                target: paymentMethod
+              - source: updated_at
+                target: timestamp
+
+          - source_topic: fulfillment_ledger.cdc
+            source_operation: u
+            event_name: fulfillment.updated
+            filter: 'status in ["shipped", "delivered"]'
+            user_id_field: order_id  # cross-reference
+            fields:
+              - source: id
+                target: fulfillmentId
+              - source: status
+                target: status
+              - source: tracking_number
+                target: trackingNumber
+              - source: carrier
+                target: carrier
+              - source: estimated_delivery
+                target: estimatedDelivery
+
+      privacy:
+        pii_redaction:
+          enabled: true
+          fields_to_mask:
+            - customer_email
+            - customer_phone
+            - customer_name
+            - billing_address
+            - customer_ssn
+          redaction_strategy: hash  # hash, mask, remove
+          hash_algorithm: sha256
+
+      deduplication:
+        enabled: true
+        strategy: idempotency_key
+        cache_size: 50000
+        ttl_minutes: 60
+
+      error_handling:
+        dlq_enabled: true
+        max_retries: 3
+        retry_backoff_ms: 500
+        retry_max_backoff_ms: 10000
+        retry_strategy: exponential
+        dead_letter_on:
+          - authentication_failed
+          - rate_limit_exceeded
+          - invalid_payload
+          - network_timeout
+
+      monitoring:
+        metrics_enabled: true
+        sample_rate: 1.0
+        log_sample_rate: 0.1
+        alert_latency_ms: 1000
+        alert_error_rate: 0.01
+
+      performance:
+        connection_pool_size: 10
+        max_concurrent_requests: 50
+        request_timeout_ms: 10000
+        compression: gzip
+
+      rate_limiting:
+        enabled: true
+        requests_per_second: 1000
+        burst_size: 5000

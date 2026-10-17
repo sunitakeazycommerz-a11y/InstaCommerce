@@ -21,6 +21,7 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("com.stripe:stripe-java:24.18.0")
     implementation("net.javacrumbs.shedlock:shedlock-spring:5.10.2")
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.2")

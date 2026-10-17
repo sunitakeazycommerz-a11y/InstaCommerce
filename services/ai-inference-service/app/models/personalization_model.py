@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field
+from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
 logger = logging.getLogger("ai_inference.models.personalization")
@@ -73,7 +74,7 @@ class PersonalizationFeatures(BaseModel):
     max_results: int = Field(default=20, ge=1, le=100, description="Max items to return")
 
 
-class PersonalizationResponse(BaseModel):
+class PersonalizationResponse(MLBaseModel):
     """Personalization result."""
     recommendations: List[Dict[str, Any]] = Field(
         default_factory=list,

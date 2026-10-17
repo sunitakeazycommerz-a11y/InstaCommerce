@@ -95,7 +95,13 @@ public class ETAService {
 
     private double adjustedSpeedKmh(Instant instant) {
         double avgSpeedKmh = routingProperties.getEta().getAverageSpeedKmh();
-        int hour = instant.atZone(ZoneId.systemDefault()).getHour();
+        ZoneId zoneId;
+        try {
+            zoneId = ZoneId.of(routingProperties.getEta().getTimezone());
+        } catch (Exception ex) {
+            zoneId = ZoneId.of("Asia/Kolkata");
+        }
+        int hour = instant.atZone(zoneId).getHour();
         double adjusted = avgSpeedKmh;
         if (isPeakHour(hour)) {
             adjusted = avgSpeedKmh * routingProperties.getEta().getPeakSpeedMultiplier();
@@ -114,7 +120,7 @@ public class ETAService {
         return hour >= NIGHT_START || hour < NIGHT_END;
     }
 
-    String cacheKey(double fromLat, double fromLng, double toLat, double toLng) {
+    public String cacheKey(double fromLat, double fromLng, double toLat, double toLng) {
         return String.join(",",
             formatCoordinate(fromLat),
             formatCoordinate(fromLng),
