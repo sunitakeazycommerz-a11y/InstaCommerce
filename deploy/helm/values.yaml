@@ -282,6 +282,9 @@ istio:
         - fulfillment-service
         - rider-fleet-service
 
+vpa:
+  enabled: true
+
 services:
   identity-service:
     replicas: 2

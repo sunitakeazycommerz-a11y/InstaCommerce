@@ -1,0 +1,33 @@
+{{- if and .Values.vpa .Values.vpa.enabled }}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc (hasKey $svc "vpa") $svc.vpa.enabled }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ $name }}-vpa
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $name }}
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}
+  updatePolicy:
+    updateMode: {{ default "Off" $svc.vpa.updateMode | quote }}
+  resourcePolicy:
+    containerPolicies:
+      - containerName: {{ $name }}
+        minAllowed:
+          cpu: {{ default "50m" $svc.vpa.minCPU | quote }}
+          memory: {{ default "64Mi" $svc.vpa.minMemory | quote }}
+        maxAllowed:
+          cpu: {{ default "2000m" $svc.vpa.maxCPU | quote }}
+          memory: {{ default "2048Mi" $svc.vpa.maxMemory | quote }}
+        controlledResources: ["cpu", "memory"]
+{{- end }}
+{{- end }}
+{{- end }}

@@ -62,21 +62,57 @@ services:
   dispatch-optimizer-service:
     replicas: 2
     tag: prod
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 1000m, memory: 512Mi }
+    vpa:
+      enabled: true
+      updateMode: "Off"
   outbox-relay:
     replicas: 2
     tag: prod
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 1000m, memory: 512Mi }
+    vpa:
+      enabled: true
+      updateMode: "Off"
   cdc-consumer:
     replicas: 2
     tag: prod
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 1000m, memory: 512Mi }
+    vpa:
+      enabled: true
+      updateMode: "Off"
   location-ingestion:
     replicas: 2
     tag: prod
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 1000m, memory: 512Mi }
+    vpa:
+      enabled: true
+      updateMode: "Off"
   payment-webhook:
     replicas: 2
     tag: prod
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 1000m, memory: 512Mi }
+    vpa:
+      enabled: true
+      updateMode: "Off"
   reconciliation-engine:
     replicas: 2
     tag: prod
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 1000m, memory: 512Mi }
+    vpa:
+      enabled: true
+      updateMode: "Off"
   warehouse-service:
     replicas: 2
     tag: prod
@@ -115,9 +151,24 @@ services:
   stream-processor:
     replicas: 2
     tag: prod
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 1000m, memory: 512Mi }
+    vpa:
+      enabled: true
+      updateMode: "Off"
   reverse-etl-orchestrator:
     replicas: 2
     tag: prod
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    vpa:
+      enabled: true
+      updateMode: "Off"
+
+vpa:
+  enabled: true
 
 istio:
   enabled: true
