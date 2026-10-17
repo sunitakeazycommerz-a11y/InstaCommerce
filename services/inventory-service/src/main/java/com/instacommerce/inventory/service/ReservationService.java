@@ -149,6 +149,13 @@ public class ReservationService {
         List<Map<String, Object>> itemsList = new ArrayList<>();
         for (ReservationLineItem item : items) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
+            if (stock.getReserved() < item.getQuantity() || stock.getOnHand() < item.getQuantity()) {
+                throw new InsufficientStockException(
+                    item.getProductId(),
+                    Math.min(stock.getReserved(), stock.getOnHand()),
+                    item.getQuantity()
+                );
+            }
             stock.setOnHand(stock.getOnHand() - item.getQuantity());
             stock.setReserved(stock.getReserved() - item.getQuantity());
             stockItemRepository.save(stock);
@@ -254,7 +261,7 @@ public class ReservationService {
             .toList();
         for (ReservationLineItem item : items) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
-            stock.setReserved(stock.getReserved() - item.getQuantity());
+            stock.setReserved(Math.max(0, stock.getReserved() - item.getQuantity()));
             stockItemRepository.save(stock);
         }
     }
