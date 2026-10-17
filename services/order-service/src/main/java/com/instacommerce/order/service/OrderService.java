@@ -149,11 +149,14 @@ public class OrderService {
             "Order",
             saved.getId().toString(),
             Map.of("orderUserId", saved.getUserId(), "reason", reason));
-        outboxService.publish("Order", saved.getId().toString(), "OrderCancelled",
-            Map.of("orderId", saved.getId(), "userId", saved.getUserId(),
-                "paymentId", saved.getPaymentId() != null ? saved.getPaymentId() : "",
-                "totalCents", saved.getTotalCents(), "currency", saved.getCurrency(),
-                "reason", reason));
+        Map<String, Object> userCancelPayload = new LinkedHashMap<>();
+        userCancelPayload.put("orderId", saved.getId());
+        userCancelPayload.put("userId", saved.getUserId());
+        userCancelPayload.put("paymentId", saved.getPaymentId());
+        userCancelPayload.put("totalCents", saved.getTotalCents());
+        userCancelPayload.put("currency", saved.getCurrency());
+        userCancelPayload.put("reason", reason);
+        outboxService.publish("Order", saved.getId().toString(), "OrderCancelled", userCancelPayload);
         // Payment refund should be handled by a consumer of the OrderCancelled event
     }
 
@@ -175,11 +178,14 @@ public class OrderService {
             "Order",
             saved.getId().toString(),
             Map.of("orderUserId", saved.getUserId(), "reason", reason));
-        outboxService.publish("Order", saved.getId().toString(), "OrderCancelled",
-            Map.of("orderId", saved.getId(), "userId", saved.getUserId(),
-                "paymentId", saved.getPaymentId() != null ? saved.getPaymentId() : "",
-                "totalCents", saved.getTotalCents(), "currency", saved.getCurrency(),
-                "reason", reason));
+        Map<String, Object> cancelPayload = new LinkedHashMap<>();
+        cancelPayload.put("orderId", saved.getId());
+        cancelPayload.put("userId", saved.getUserId());
+        cancelPayload.put("paymentId", saved.getPaymentId());
+        cancelPayload.put("totalCents", saved.getTotalCents());
+        cancelPayload.put("currency", saved.getCurrency());
+        cancelPayload.put("reason", reason);
+        outboxService.publish("Order", saved.getId().toString(), "OrderCancelled", cancelPayload);
         // Payment refund should be handled by a consumer of the OrderCancelled event
         // (e.g., payment-service listens and issues void/refund via PSP)
     }
@@ -228,14 +234,14 @@ public class OrderService {
             Map<String, Object> failedPayload = new java.util.LinkedHashMap<>();
             failedPayload.put("orderId", saved.getId());
             failedPayload.put("userId", saved.getUserId());
-            failedPayload.put("paymentId", saved.getPaymentId() != null ? saved.getPaymentId() : "");
+            failedPayload.put("paymentId", saved.getPaymentId());
             failedPayload.put("reason", note != null ? note : "Fulfillment failure");
             outboxService.publish("Order", saved.getId().toString(), "OrderFailed", failedPayload);
         } else if (newStatus == OrderStatus.DELIVERED) {
             Map<String, Object> deliveredPayload = new java.util.LinkedHashMap<>();
             deliveredPayload.put("orderId", saved.getId().toString());
             deliveredPayload.put("userId", saved.getUserId().toString());
-            deliveredPayload.put("paymentId", saved.getPaymentId() != null ? saved.getPaymentId() : "");
+            deliveredPayload.put("paymentId", saved.getPaymentId() != null ? saved.getPaymentId().toString() : null);
             deliveredPayload.put("totalCents", saved.getTotalCents());
             deliveredPayload.put("currency", saved.getCurrency());
             deliveredPayload.put("deliveredAt", java.time.Instant.now().toString());

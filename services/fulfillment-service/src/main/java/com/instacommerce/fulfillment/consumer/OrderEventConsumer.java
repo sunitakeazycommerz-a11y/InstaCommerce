@@ -30,11 +30,27 @@ public class OrderEventConsumer {
             pickService.createPickTask(payload);
             logger.info("Pick task created for order event key={}", record.key());
         } else if ("OrderCancelled".equals(event.eventType())) {
-            if (event.payload() != null && event.payload().has("orderId")) {
-                UUID orderId = UUID.fromString(event.payload().get("orderId").asText());
-                String reason = event.payload().has("reason") ? event.payload().get("reason").asText() : "order-cancelled";
-                pickService.cancelPickTask(orderId, reason);
-                logger.info("Pick task cancelled for orderId={} key={}", orderId, record.key());
+            String orderIdStr = null;
+            if (event.payload() != null) {
+                if (event.payload().hasNonNull("orderId")) {
+                    orderIdStr = event.payload().get("orderId").asText();
+                } else if (event.payload().hasNonNull("order_id")) {
+                    orderIdStr = event.payload().get("order_id").asText();
+                }
+            }
+            if ((orderIdStr == null || orderIdStr.isBlank()) && record.key() != null && !record.key().isBlank()) {
+                orderIdStr = record.key();
+            }
+            if (orderIdStr != null && !orderIdStr.isBlank()) {
+                try {
+                    UUID orderId = UUID.fromString(orderIdStr);
+                    String reason = (event.payload() != null && event.payload().hasNonNull("reason"))
+                            ? event.payload().get("reason").asText() : "order-cancelled";
+                    pickService.cancelPickTask(orderId, reason);
+                    logger.info("Pick task cancelled for orderId={} key={}", orderId, record.key());
+                } catch (IllegalArgumentException ex) {
+                    logger.warn("Invalid orderId format in OrderCancelled event: {}", orderIdStr);
+                }
             }
         }
     }

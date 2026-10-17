@@ -77,12 +77,18 @@ public class LocationUpdateConsumer {
             BigDecimal speed = null;
             if (event.hasNonNull("speedKmh")) {
                 speed = new BigDecimal(event.path("speedKmh").asText());
+            } else if (event.hasNonNull("speed_kmh")) {
+                speed = new BigDecimal(event.path("speed_kmh").asText());
             } else if (event.hasNonNull("speed")) {
                 speed = new BigDecimal(event.path("speed").asText());
             }
 
             BigDecimal heading = null;
-            if (event.hasNonNull("heading")) {
+            if (event.hasNonNull("headingDegrees")) {
+                heading = new BigDecimal(event.path("headingDegrees").asText());
+            } else if (event.hasNonNull("heading_degrees")) {
+                heading = new BigDecimal(event.path("heading_degrees").asText());
+            } else if (event.hasNonNull("heading")) {
                 heading = new BigDecimal(event.path("heading").asText());
             }
 
