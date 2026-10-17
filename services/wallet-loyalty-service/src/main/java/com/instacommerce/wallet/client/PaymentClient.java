@@ -68,7 +68,9 @@ public class PaymentClient {
 
         /** Returns true if the payment has been completed successfully. */
         public boolean isCompleted() {
-            return "COMPLETED".equalsIgnoreCase(status);
+            return "COMPLETED".equalsIgnoreCase(status)
+                    || "CAPTURED".equalsIgnoreCase(status)
+                    || "AUTHORIZED".equalsIgnoreCase(status);
         }
     }
 }

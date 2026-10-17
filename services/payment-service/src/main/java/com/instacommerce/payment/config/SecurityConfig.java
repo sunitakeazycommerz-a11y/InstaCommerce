@@ -54,9 +54,13 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
                 .requestMatchers("/actuator/**").hasRole("ADMIN")
-                .requestMatchers("/error", "/payments/webhook").permitAll()
-                .requestMatchers(HttpMethod.POST, "/payments/*/capture", "/payments/*/void").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
-                .requestMatchers(HttpMethod.POST, "/payments/*/refund").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
+                .requestMatchers("/error", "/payments/webhook", "/api/payments/webhook", "/api/v1/payments/webhook").permitAll()
+                .requestMatchers(HttpMethod.POST, "/payments/*/capture", "/payments/*/void",
+                    "/api/payments/*/capture", "/api/payments/*/void",
+                    "/api/v1/payments/*/capture", "/api/v1/payments/*/void").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
+                .requestMatchers(HttpMethod.POST, "/payments/*/refund",
+                    "/api/payments/*/refund",
+                    "/api/v1/payments/*/refund").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)

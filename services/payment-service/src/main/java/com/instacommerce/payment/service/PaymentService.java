@@ -204,6 +204,21 @@ public class PaymentService {
         return PaymentMapper.toResponse(payment);
     }
 
+    @Transactional(readOnly = true)
+    public PaymentResponse getByReference(String reference) {
+        try {
+            UUID paymentId = UUID.fromString(reference);
+            return paymentRepository.findById(paymentId)
+                .or(() -> paymentRepository.findByPspReference(reference))
+                .map(PaymentMapper::toResponse)
+                .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+        } catch (IllegalArgumentException ex) {
+            return paymentRepository.findByPspReference(reference)
+                .map(PaymentMapper::toResponse)
+                .orElseThrow(() -> new PaymentNotFoundException(reference));
+        }
+    }
+
     private long resolveCaptureAmount(Payment payment, Long amountCents) {
         long maxAmount = payment.getAmountCents();
         if (amountCents == null) {

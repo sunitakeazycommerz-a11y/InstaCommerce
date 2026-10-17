@@ -9,7 +9,10 @@ public record PaymentResponse(
     boolean authorized,
     String declineReason,
     @JsonIgnore
-    String pspReference
+    String pspReference,
+    String paymentReference,
+    long amountCents,
+    String currency
 ) {
     public PaymentResponse(UUID paymentId, String status, String pspReference) {
         this(
@@ -17,7 +20,23 @@ public record PaymentResponse(
             status,
             "AUTHORIZED".equalsIgnoreCase(status) || "CAPTURED".equalsIgnoreCase(status),
             null,
-            pspReference
+            pspReference,
+            paymentId != null ? paymentId.toString() : null,
+            0L,
+            "INR"
+        );
+    }
+
+    public PaymentResponse(UUID paymentId, String status, String pspReference, long amountCents, String currency) {
+        this(
+            paymentId,
+            status,
+            "AUTHORIZED".equalsIgnoreCase(status) || "CAPTURED".equalsIgnoreCase(status),
+            null,
+            pspReference,
+            paymentId != null ? paymentId.toString() : null,
+            amountCents,
+            currency != null ? currency : "INR"
         );
     }
 }

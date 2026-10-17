@@ -7,4 +7,8 @@ public class PaymentNotFoundException extends ApiException {
     public PaymentNotFoundException(UUID paymentId) {
         super(HttpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND", "Payment not found: " + paymentId);
     }
+
+    public PaymentNotFoundException(String reference) {
+        super(HttpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND", "Payment not found: " + reference);
+    }
 }
