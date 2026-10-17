@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CartItemAdded",
+  "type": "object",
+  "required": ["cartId", "userId", "productId", "productName", "unitPriceCents", "quantity", "addedAt"],
+  "properties": {
+    "cartId": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "productId": { "type": "string", "format": "uuid" },
+    "productName": { "type": "string" },
+    "unitPriceCents": { "type": "integer", "minimum": 0 },
+    "quantity": { "type": "integer", "minimum": 1 },
+    "addedAt": { "type": "string", "format": "date-time" }
+  }
+}

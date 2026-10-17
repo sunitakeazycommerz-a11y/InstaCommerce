@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CartItemRemoved",
+  "type": "object",
+  "required": ["cartId", "userId", "productId", "removedAt"],
+  "properties": {
+    "cartId": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "productId": { "type": "string", "format": "uuid" },
+    "productName": { "type": ["string", "null"] },
+    "removedAt": { "type": "string", "format": "date-time" }
+  }
+}

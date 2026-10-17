@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DeliveryFailed",
+  "type": "object",
+  "required": ["orderId", "deliveryId", "reason", "failedAt"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "deliveryId": { "type": "string", "format": "uuid" },
+    "riderId": { "type": ["string", "null"], "format": "uuid" },
+    "reason": { "type": "string" },
+    "failedAt": { "type": "string", "format": "date-time" }
+  }
+}

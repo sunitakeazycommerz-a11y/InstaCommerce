@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProductDeactivated",
+  "type": "object",
+  "required": ["productId", "sku", "reason", "deactivatedAt"],
+  "properties": {
+    "productId": { "type": "string", "format": "uuid" },
+    "sku": { "type": "string" },
+    "reason": { "type": ["string", "null"] },
+    "deactivatedAt": { "type": "string", "format": "date-time" }
+  }
+}

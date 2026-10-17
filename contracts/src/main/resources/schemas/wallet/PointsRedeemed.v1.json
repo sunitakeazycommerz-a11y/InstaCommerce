@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PointsRedeemed",
+  "type": "object",
+  "required": [
+    "userId",
+    "points",
+    "referenceType",
+    "referenceId"
+  ],
+  "properties": {
+    "transactionId": { "type": ["string", "null"] },
+    "accountId": { "type": ["string", "null"], "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "points": { "type": "integer", "minimum": 1 },
+    "pointsBalance": { "type": ["integer", "null"] },
+    "referenceType": { "type": "string" },
+    "referenceId": { "type": "string" },
+    "timestamp": { "type": ["string", "null"], "format": "date-time" }
+  }
+}
