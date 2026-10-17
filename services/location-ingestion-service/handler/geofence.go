@@ -7,13 +7,67 @@ import (
 	"time"
 )
 
+const (
+	// DefaultGeofenceTopic is the standard Kafka topic for rider geofence transitions.
+	DefaultGeofenceTopic = "rider.geofence.events"
+)
+
 // GeofenceEvent is emitted when a rider enters or exits a monitored zone.
 type GeofenceEvent struct {
-	RiderID   string
-	EventType string // ENTERED_STORE, EXITED_ZONE, NEAR_DELIVERY
-	ZoneID    string
-	H3Index   string
-	Timestamp time.Time
+	RiderID   string    `json:"rider_id"`
+	EventType string    `json:"event_type"` // ENTERED_STORE, EXITED_ZONE, NEAR_DELIVERY, ENTERED_RESTRICTED
+	ZoneID    string    `json:"zone_id"`
+	H3Index   string    `json:"h3_index"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// GeofenceEventPayload represents the domain payload of a geofence transition.
+type GeofenceEventPayload struct {
+	RiderID   string    `json:"rider_id"`
+	ZoneID    string    `json:"zone_id"`
+	EventType string    `json:"event_type"`
+	H3Index   string    `json:"h3_index"`
+	Timestamp time.Time `json:"timestamp"`
+	Lat       float64   `json:"lat"`
+	Lng       float64   `json:"lng"`
+}
+
+// GeofenceEventEnvelope wraps a GeofenceEvent according to canonical EventEnvelope.v1.json.
+type GeofenceEventEnvelope struct {
+	ID            string               `json:"id"`
+	EventID       string               `json:"eventId"`
+	EventType     string               `json:"eventType"`
+	AggregateType string               `json:"aggregateType"`
+	AggregateID   string               `json:"aggregateId"`
+	EventTime     string               `json:"eventTime"`
+	SchemaVersion string               `json:"schemaVersion"`
+	SourceService string               `json:"source_service"`
+	CorrelationID string               `json:"correlation_id,omitempty"`
+	Payload       GeofenceEventPayload `json:"payload"`
+}
+
+// ToEnvelope converts a GeofenceEvent and GPS coordinates to a canonical EventEnvelope.
+func (e GeofenceEvent) ToEnvelope(lat, lng float64) GeofenceEventEnvelope {
+	id := fmt.Sprintf("geo_%s_%d", e.RiderID, e.Timestamp.UnixNano())
+	return GeofenceEventEnvelope{
+		ID:            id,
+		EventID:       id,
+		EventType:     "RiderGeofenceTransition",
+		AggregateType: "Rider",
+		AggregateID:   e.RiderID,
+		EventTime:     e.Timestamp.UTC().Format(time.RFC3339Nano),
+		SchemaVersion: "v1",
+		SourceService: "location-ingestion-service",
+		Payload: GeofenceEventPayload{
+			RiderID:   e.RiderID,
+			ZoneID:    e.ZoneID,
+			EventType: e.EventType,
+			H3Index:   e.H3Index,
+			Timestamp: e.Timestamp.UTC(),
+			Lat:       lat,
+			Lng:       lng,
+		},
+	}
 }
 
 // ZoneType classifies a geofenced area.

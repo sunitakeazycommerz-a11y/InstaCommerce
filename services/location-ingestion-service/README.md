@@ -588,10 +588,7 @@ consistency gap where analytics show a position that dispatch cannot query.
    `GeofenceChecker` uses Haversine distance (not actual H3 cell membership).
    Replace with `uber/h3-go` for production hexagonal geofencing.
 
-2. **Geofence events are log-only.** `GeofenceChecker.Check()` emits events to
-   structured logs but does not publish them to Kafka. Per the iter3 review,
-   a `rider.geofence.events` topic is recommended for downstream consumption
-   by `routing-eta-service` and `fulfillment-service`.
+2. **Geofence event publishing.** Geofence boundary transitions (`ENTERED_STORE`, `NEAR_DELIVERY`, `EXITED_ZONE`, `ENTERED_RESTRICTED`) are serialized into canonical `EventEnvelope.v1.json` payloads and published to the `rider.geofence.events` topic either asynchronously via an internal non-blocking queue or synchronously via `LocationHandlerOption`. Downstream consumers (`routing-eta-service`, `rider-fleet-service`, `fulfillment-service`) consume this topic for automated state progression.
 
 3. **No dual Kafka path.** All updates go through the batched
    `rider.location.updates` topic. The iter3 review recommends a
