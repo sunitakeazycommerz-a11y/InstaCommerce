@@ -25,6 +25,7 @@ dependencies {
     implementation("com.google.cloud.sql:postgres-socket-factory:1.15.0")
     implementation("io.github.resilience4j:resilience4j-spring-boot3:2.2.0")
     implementation("com.github.ben-manes.caffeine:caffeine")
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("net.javacrumbs.shedlock:shedlock-spring:5.10.2")
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.2")
