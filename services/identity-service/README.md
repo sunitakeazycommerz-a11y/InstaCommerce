@@ -233,7 +233,7 @@ graph TB
 
 `SecurityConfig` installs filters in this order (before `UsernamePasswordAuthenticationFilter`):
 
-1. **`InternalServiceAuthFilter`** — if `X-Internal-Service` + `X-Internal-Token` headers match, sets `SecurityContext` with `ROLE_INTERNAL_SERVICE` + `ROLE_ADMIN`.
+1. **`InternalServiceAuthFilter`** — if `X-Internal-Service` + `X-Internal-Token` headers match, sets `SecurityContext` with `ROLE_INTERNAL_SERVICE` (never granting `ROLE_ADMIN`).
 2. **`JwtAuthenticationFilter`** — if `Authorization: Bearer <token>` present, validates JWT and sets `SecurityContext` with user's roles. Skips `/auth/login`, `/auth/register`, `/auth/refresh`, `/.well-known/**`, `/actuator/**`.
 
 If neither filter authenticates the request, Spring Security's `authorizeHttpRequests` rules apply: permit-all for public paths, `authenticated()` for everything else.
@@ -742,7 +742,7 @@ Tests use JUnit 5 (via `useJUnitPlatform()`), Spring Boot Test, and Spring Secur
 |---|---|
 | **Public → identity-service** | Istio TLS termination → Istio mTLS sidecar → `SecurityConfig` filter chain |
 | **JWT validation** | `JwtAuthenticationFilter`: RS256 signature + `iss` + `aud` checks |
-| **Internal service calls** | `InternalServiceAuthFilter`: `X-Internal-Service` + `X-Internal-Token` headers; grants `ROLE_INTERNAL_SERVICE` + `ROLE_ADMIN` |
+| **Internal service calls** | `InternalServiceAuthFilter`: `X-Internal-Service` + `X-Internal-Token` headers; grants `ROLE_INTERNAL_SERVICE` |
 | **Admin endpoints** | `@PreAuthorize("hasRole('ADMIN')")` on `AdminController` methods |
 | **CORS** | Configurable origins via `IDENTITY_CORS_ORIGINS`; credentials allowed; 1-hour preflight cache |
 | **CSRF** | Disabled (stateless API — no cookies) |
@@ -752,27 +752,25 @@ Tests use JUnit 5 (via `useJUnitPlatform()`), Spring Boot Test, and Spring Secur
 
 | Limiter | Limit | Scope |
 |---|---|---|
-| `loginLimiter` | 5 requests / 60 seconds | Per IP address |
-| `registerLimiter` | 3 requests / 60 seconds | Per IP address |
+| `loginLimiter` | 5 requests / 60 seconds | Per IP address (distributed Redis Lua token bucket with Caffeine fallback) |
+| `registerLimiter` | 3 requests / 60 seconds | Per IP address (distributed Redis Lua token bucket with Caffeine fallback) |
 
-Implemented via Resilience4j `RateLimiterRegistry` + Caffeine cache (max 10,000 entries, 5-min access expiry). Rate limit exceeded → `429 Too Many Requests` with `Retry-After: 60` header.
+Implemented via Redis Lua token bucket script (`RATE_LIMIT_SCRIPT`) backed by Resilience4j `RateLimiterRegistry` + Caffeine cache fallback. Rate limit exceeded → `429 Too Many Requests` with `Retry-After: 60` header.
 
-### 13.4 Account Lockout
+### 13.4 Account Lockout & Support Unlock
 
-10 consecutive failed login attempts → `locked_until` set to `now + 30 minutes`. Lockout state is persisted in the `users` table (cross-pod). Successful login resets `failed_attempts` to 0.
+5 consecutive failed login attempts → `locked_until` set to `now + 15 minutes` in DB and Redis lockout key `identity:failed_logins:{email}:{ip}`. Emits `AccountLocked.v1.json` domain event to transactional outbox. Customer support unlock is available via `POST /admin/users/{id}/unlock`, resetting counters and emitting `AccountUnlocked.v1.json`.
 
-### 13.5 Known Security Gaps
+### 13.5 Security Controls & Remediations
 
-These are documented in the Iter 3 principal engineering review (`docs/reviews/iter3/services/edge-identity.md` and `docs/reviews/iter3/platform/security-trust-boundaries.md`):
-
-| # | Gap | Severity | Notes |
+| # | Control / Former Gap | Status | Notes |
 |---|---|---|---|
-| 1 | Rate limiting is **pod-local** (Caffeine) — bypassed under multi-replica deployment | 🔴 Critical | Attacker gets N × limit across N pods. Account lockout (DB-persisted) is the backstop. |
-| 2 | Single flat `INTERNAL_SERVICE_TOKEN` shared across all ~28 services | 🔴 Critical | Any compromised pod can impersonate any other. See Iter 3 remediation plan. |
-| 3 | `InternalServiceAuthFilter` uses `String.equals()` — timing side-channel | 🔴 Critical | Should use `MessageDigest.isEqual()` or `subtle.ConstantTimeCompare`. |
-| 4 | `InternalServiceAuthFilter` grants `ROLE_ADMIN` to every internal caller | 🔴 Critical | Any service can invoke admin endpoints via internal token. |
-| 5 | Default fallback token `dev-internal-token-change-in-prod` | 🟠 High | Reachable if `INTERNAL_SERVICE_TOKEN` env var is unset in production. |
-| 6 | No JWT key rotation path | 🟠 High | Single key pair with no rotation or revocation mechanism. |
+| 1 | Distributed Rate Limiting | ✅ Resolved (#491) | Redis Lua token bucket prevents pod replica multiplication. |
+| 2 | Per-service token scoping | ✅ In Progress (#493) | Per-service tokens configured in `allowedCallers` map. |
+| 3 | Timing side-channel | ✅ Resolved | Constant-time `MessageDigest.isEqual()` used for all token checks. |
+| 4 | Overbroad `ROLE_ADMIN` grant | ✅ Resolved (#496) | `InternalServiceAuthFilter` strictly grants `ROLE_INTERNAL_SERVICE`. |
+| 5 | Default fallback token | 🟠 Controlled | Warn logged; production deployments enforce secret-injected tokens. |
+| 6 | Multi-key JWKS rotation | ✅ Resolved (#495) | Supports 7-day overlapping grace period and `docs/runbooks/jwks-key-rotation-runbook.md`. |
 
 ---
 
