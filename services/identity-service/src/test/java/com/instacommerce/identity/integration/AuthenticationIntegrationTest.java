@@ -126,6 +126,11 @@ class AuthenticationIntegrationTest {
         assertThat(user.getRoles()).contains("CUSTOMER");
         assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
         assertThat(user.getFailedAttempts()).isZero();
+
+        Integer outboxCount = jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM outbox_events WHERE aggregate_type = 'User' AND event_type = 'UserRegistered' AND CAST(payload AS text) LIKE '%new@example.com%'",
+            Integer.class);
+        assertThat(outboxCount).isEqualTo(1);
     }
 
     // -- shouldAuthenticateWithValidCredentials -----------------------------------
@@ -194,5 +199,10 @@ class AuthenticationIntegrationTest {
         assertThat(user.getFailedAttempts()).isEqualTo(10);
         assertThat(user.getLockedUntil()).isNotNull();
         assertThat(user.getLockedUntil()).isAfter(Instant.now());
+
+        Integer lockOutboxCount = jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM outbox_events WHERE aggregate_type = 'User' AND event_type = 'AccountLocked' AND CAST(payload AS text) LIKE '%lock@example.com%'",
+            Integer.class);
+        assertThat(lockOutboxCount).isEqualTo(1);
     }
 }
