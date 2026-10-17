@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/cart")
+@RequestMapping({"/cart", "/api/carts"})
 public class CartController {
     private final CartService cartService;
 
@@ -30,6 +30,11 @@ public class CartController {
     @GetMapping
     public ResponseEntity<CartResponse> getCart(Authentication authentication) {
         UUID userId = extractUserId(authentication);
+        return ResponseEntity.ok(cartService.getCart(userId));
+    }
+
+    @GetMapping("/{userId}")
+    public ResponseEntity<CartResponse> getCartByUserId(@PathVariable UUID userId) {
         return ResponseEntity.ok(cartService.getCart(userId));
     }
 
@@ -63,9 +68,20 @@ public class CartController {
         return ResponseEntity.noContent().build();
     }
 
+    @DeleteMapping("/{userId}")
+    public ResponseEntity<Void> clearCartByUserId(@PathVariable UUID userId) {
+        cartService.clearCart(userId);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/validate")
     public ResponseEntity<CartResponse> validateCart(Authentication authentication) {
         UUID userId = extractUserId(authentication);
+        return ResponseEntity.ok(cartService.validateCart(userId));
+    }
+
+    @GetMapping({"/{userId}/validate", "/validate/{userId}"})
+    public ResponseEntity<CartResponse> validateCartByUserId(@PathVariable UUID userId) {
         return ResponseEntity.ok(cartService.validateCart(userId));
     }
 
