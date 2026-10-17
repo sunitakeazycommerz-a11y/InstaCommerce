@@ -168,6 +168,37 @@ class ReservationIntegrationTest {
         assertThat(updated.getReserved()).isEqualTo(0);
     }
 
+    @Test
+    void shouldCancelConfirmedReservationAndRestoreOnHandStock() {
+        UUID productId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+
+        createStockItem(productId, storeId, 100, 0);
+
+        ReserveRequest request = new ReserveRequest(
+            "confirm-cancel-key-" + UUID.randomUUID(),
+            storeId,
+            List.of(new InventoryItemRequest(productId, 10))
+        );
+        ReserveResponse reservation = reservationService.reserve(request);
+
+        // Confirm reservation: onHand becomes 90, reserved becomes 0
+        reservationService.confirm(reservation.reservationId());
+        StockItem confirmedStock = stockItemRepository.findByProductIdAndStoreId(productId, storeId).orElseThrow();
+        assertThat(confirmedStock.getOnHand()).isEqualTo(90);
+        assertThat(confirmedStock.getReserved()).isEqualTo(0);
+
+        // Cancel confirmed reservation (saga compensation): onHand restored back to 100
+        reservationService.cancel(reservation.reservationId());
+
+        Reservation cancelled = reservationRepository.findById(reservation.reservationId()).orElseThrow();
+        assertThat(cancelled.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
+
+        StockItem restoredStock = stockItemRepository.findByProductIdAndStoreId(productId, storeId).orElseThrow();
+        assertThat(restoredStock.getOnHand()).isEqualTo(100);
+        assertThat(restoredStock.getReserved()).isEqualTo(0);
+    }
+
     // -- shouldRejectReservationWhenInsufficientStock -----------------------------
 
     @Test

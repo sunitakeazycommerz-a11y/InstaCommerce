@@ -231,6 +231,15 @@ public class OrderService {
             failedPayload.put("paymentId", saved.getPaymentId() != null ? saved.getPaymentId() : "");
             failedPayload.put("reason", note != null ? note : "Fulfillment failure");
             outboxService.publish("Order", saved.getId().toString(), "OrderFailed", failedPayload);
+        } else if (newStatus == OrderStatus.DELIVERED) {
+            Map<String, Object> deliveredPayload = new java.util.LinkedHashMap<>();
+            deliveredPayload.put("orderId", saved.getId().toString());
+            deliveredPayload.put("userId", saved.getUserId().toString());
+            deliveredPayload.put("paymentId", saved.getPaymentId() != null ? saved.getPaymentId() : "");
+            deliveredPayload.put("totalCents", saved.getTotalCents());
+            deliveredPayload.put("currency", saved.getCurrency());
+            deliveredPayload.put("deliveredAt", java.time.Instant.now().toString());
+            outboxService.publish("Order", saved.getId().toString(), "OrderDelivered", deliveredPayload);
         }
     }
 

@@ -3,6 +3,7 @@ package com.instacommerce.fulfillment.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.fulfillment.service.PickService;
+import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +29,13 @@ public class OrderEventConsumer {
             OrderPlacedPayload payload = objectMapper.treeToValue(event.payload(), OrderPlacedPayload.class);
             pickService.createPickTask(payload);
             logger.info("Pick task created for order event key={}", record.key());
+        } else if ("OrderCancelled".equals(event.eventType())) {
+            if (event.payload() != null && event.payload().has("orderId")) {
+                UUID orderId = UUID.fromString(event.payload().get("orderId").asText());
+                String reason = event.payload().has("reason") ? event.payload().get("reason").asText() : "order-cancelled";
+                pickService.cancelPickTask(orderId, reason);
+                logger.info("Pick task cancelled for orderId={} key={}", orderId, record.key());
+            }
         }
     }
 }

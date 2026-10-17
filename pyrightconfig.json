@@ -1,0 +1,15 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": [
+    "services/ai-inference-service",
+    "services/ai-orchestrator-service",
+    "data-platform-jobs",
+    "scripts"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    ".venv"
+  ]
+}

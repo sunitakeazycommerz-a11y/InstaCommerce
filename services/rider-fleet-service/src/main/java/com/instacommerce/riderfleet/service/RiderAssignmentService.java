@@ -186,4 +186,62 @@ public class RiderAssignmentService {
                 }
             });
     }
+
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
+    @Transactional
+    public void completeDelivery(UUID orderId) {
+        Optional<RiderAssignment> assignmentOpt = assignmentRepository.findByOrderId(orderId);
+        if (assignmentOpt.isEmpty()) {
+            logger.info("No rider assignment found to complete for order={}", orderId);
+            return;
+        }
+        RiderAssignment assignment = assignmentOpt.get();
+        UUID riderId = assignment.getRiderId();
+
+        riderRepository.findById(riderId).ifPresent(rider -> {
+            if (rider.getStatus() == RiderStatus.ON_DELIVERY) {
+                rider.setStatus(RiderStatus.ACTIVE);
+                riderRepository.save(rider);
+            }
+        });
+
+        availabilityRepository.findByRiderId(riderId).ifPresent(availability -> {
+            availability.setAvailable(true);
+            availabilityRepository.save(availability);
+        });
+
+        outboxService.publish("Rider", riderId.toString(), "DeliveryCompleted",
+            Map.of("riderId", riderId, "orderId", orderId, "completedAt", java.time.Instant.now().toString()));
+        logger.info("Delivery completed for order={}, rider={} released back to ACTIVE", orderId, riderId);
+    }
+
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
+    @Transactional
+    public void cancelAssignment(UUID orderId, String reason) {
+        Optional<RiderAssignment> assignmentOpt = assignmentRepository.findByOrderId(orderId);
+        if (assignmentOpt.isEmpty()) {
+            logger.info("No rider assignment found to cancel for order={}", orderId);
+            return;
+        }
+        RiderAssignment assignment = assignmentOpt.get();
+        UUID riderId = assignment.getRiderId();
+
+        riderRepository.findById(riderId).ifPresent(rider -> {
+            if (rider.getStatus() == RiderStatus.ON_DELIVERY) {
+                rider.setStatus(RiderStatus.ACTIVE);
+                riderRepository.save(rider);
+            }
+        });
+
+        availabilityRepository.findByRiderId(riderId).ifPresent(availability -> {
+            availability.setAvailable(true);
+            availabilityRepository.save(availability);
+        });
+
+        outboxService.publish("Rider", riderId.toString(), "RiderAssignmentCancelled",
+            Map.of("riderId", riderId, "orderId", orderId, "reason", reason != null ? reason : ""));
+        logger.info("Assignment cancelled for order={}, rider={} released back to ACTIVE", orderId, riderId);
+    }
 }

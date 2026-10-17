@@ -185,6 +185,14 @@ public class ReservationService {
             log.info("Reservation {} is already cancelled; returning idempotently", reservationId);
             return;
         }
+        if (reservation.getStatus() == ReservationStatus.CONFIRMED) {
+            log.info("Releasing confirmed reservation {} back to on-hand inventory", reservationId);
+            releaseConfirmed(reservation);
+            reservation.setStatus(ReservationStatus.CANCELLED);
+            reservationRepository.save(reservation);
+            publishStockReleasedEvent(reservation);
+            return;
+        }
         if (reservation.getStatus() == ReservationStatus.PENDING
             && reservation.getExpiresAt().isBefore(Instant.now())) {
             expireReservation(reservation);
@@ -247,6 +255,17 @@ public class ReservationService {
         for (ReservationLineItem item : items) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
             stock.setReserved(stock.getReserved() - item.getQuantity());
+            stockItemRepository.save(stock);
+        }
+    }
+
+    private void releaseConfirmed(Reservation reservation) {
+        List<ReservationLineItem> items = reservation.getLineItems().stream()
+            .sorted(Comparator.comparing(ReservationLineItem::getProductId))
+            .toList();
+        for (ReservationLineItem item : items) {
+            StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
+            stock.setOnHand(stock.getOnHand() + item.getQuantity());
             stockItemRepository.save(stock);
         }
     }

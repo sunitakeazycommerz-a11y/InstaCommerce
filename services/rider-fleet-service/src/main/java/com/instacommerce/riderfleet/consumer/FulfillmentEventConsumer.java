@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.riderfleet.service.RiderAssignmentService;
+import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +23,7 @@ public class FulfillmentEventConsumer {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = TopicNames.FULFILLMENT_EVENTS, groupId = "rider-fleet-service")
+    @KafkaListener(topics = {TopicNames.FULFILLMENT_EVENTS, TopicNames.ORDERS_EVENTS}, groupId = "rider-fleet-service")
     public void onFulfillmentEvent(ConsumerRecord<String, String> record) throws Exception {
         EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
         if ("OrderPacked".equals(envelope.eventType())) {
@@ -36,6 +37,34 @@ public class FulfillmentEventConsumer {
             riderAssignmentService.assignRider(
                 payload.orderId(), payload.storeId(), payload.pickupLat(), payload.pickupLng());
             logger.info("Rider assigned for packed order={}", payload.orderId());
+        } else if ("OrderDelivered".equals(envelope.eventType()) || "DeliveryCompleted".equals(envelope.eventType())) {
+            UUID orderId = resolveOrderId(envelope);
+            if (orderId != null) {
+                riderAssignmentService.completeDelivery(orderId);
+                logger.info("Rider delivery completed for order={}", orderId);
+            }
+        } else if ("OrderCancelled".equals(envelope.eventType()) || "DeliveryFailed".equals(envelope.eventType())) {
+            UUID orderId = resolveOrderId(envelope);
+            if (orderId != null) {
+                riderAssignmentService.cancelAssignment(orderId, envelope.eventType());
+                logger.info("Rider assignment cancelled for order={}", orderId);
+            }
         }
+    }
+
+    private UUID resolveOrderId(EventEnvelope envelope) {
+        if (envelope.payload() != null && !envelope.payload().isNull() && envelope.payload().has("orderId")) {
+            try {
+                return UUID.fromString(envelope.payload().get("orderId").asText());
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        if (envelope.aggregateId() != null && !envelope.aggregateId().isBlank()) {
+            try {
+                return UUID.fromString(envelope.aggregateId());
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return null;
     }
 }
