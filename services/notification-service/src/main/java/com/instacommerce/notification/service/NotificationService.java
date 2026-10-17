@@ -232,6 +232,13 @@ public class NotificationService {
         if (orderId != null) {
             variables.put("orderId", orderId);
         }
+        String reason = textValue(payload, "reason");
+        if (reason != null) {
+            variables.put("reason", reason);
+        }
+        if ("ETABreachRisk".equals(eventType)) {
+            variables.put("eta", resolveEta(payload));
+        }
         if ("OrderPlaced".equals(eventType)) {
             long total = longValue(payload, "totalCents");
             if (total == 0) {
