@@ -14,6 +14,8 @@ import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "deliveries")
@@ -45,7 +47,8 @@ public class Delivery {
     private BigDecimal dropoffLng;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(nullable = false, columnDefinition = "delivery_status")
     private DeliveryStatus status = DeliveryStatus.PENDING;
 
     @Column(name = "estimated_minutes")

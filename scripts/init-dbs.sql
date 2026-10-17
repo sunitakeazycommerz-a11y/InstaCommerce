@@ -15,3 +15,6 @@ CREATE DATABASE wallet_db;
 CREATE DATABASE audit_db;
 CREATE DATABASE fraud_db;
 CREATE DATABASE config_db;
+CREATE DATABASE reconciliation_db;
+CREATE DATABASE reverse_etl_db;
+

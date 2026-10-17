@@ -18,6 +18,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "reservations")
@@ -33,7 +35,8 @@ public class Reservation {
     private UUID storeId;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(nullable = false, columnDefinition = "reservation_status")
     private ReservationStatus status = ReservationStatus.PENDING;
 
     @Column(name = "expires_at", nullable = false)

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field
+from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
 logger = logging.getLogger("ai_inference.models.ranking")
@@ -61,7 +62,7 @@ class RankingFeatures(BaseModel):
     product_id: Optional[str] = Field(default=None, description="Product identifier (passthrough)")
 
 
-class RankingResponse(BaseModel):
+class RankingResponse(MLBaseModel):
     """Ranking result for a list of products."""
     ranked_items: List[Dict[str, Any]] = Field(
         default_factory=list,
@@ -162,11 +163,20 @@ class RankingModel:
 
     def predict(self, features_list: List[RankingFeatures]) -> RankingResponse:
         """Score and rank a list of products."""
+        if not features_list:
+            return RankingResponse(
+                ranked_items=[],
+                model_version=self._version,
+                method="empty",
+            )
         start = time.perf_counter()
         RANKING_BATCH_SIZE.observe(len(features_list))
         try:
             if self._model is not None:
-                return self._predict_ml(features_list)
+                try:
+                    return self._predict_ml(features_list)
+                except Exception as ex:
+                    logger.warning("ML ranking failed, falling back to heuristics: %s", ex)
             return self._rule_based_fallback(features_list)
         finally:
             RANKING_LATENCY.labels(model_version=self._version).observe(

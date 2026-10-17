@@ -1,11 +1,12 @@
 CREATE TABLE delivery_tracking (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id          UUID DEFAULT gen_random_uuid(),
     delivery_id UUID           NOT NULL REFERENCES deliveries(id),
     latitude    DECIMAL(10, 8) NOT NULL,
     longitude   DECIMAL(11, 8) NOT NULL,
     speed_kmh   DECIMAL(6, 2),
     heading     DECIMAL(6, 2),
-    recorded_at TIMESTAMPTZ    NOT NULL DEFAULT now()
+    recorded_at TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    PRIMARY KEY (id, recorded_at)
 ) PARTITION BY RANGE (recorded_at);
 
 -- Create partitions for the next 6 months

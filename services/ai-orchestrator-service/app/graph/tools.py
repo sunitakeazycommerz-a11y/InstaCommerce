@@ -257,6 +257,8 @@ class ToolRegistry:
             headers["X-Idempotency-Key"] = str(uuid.uuid4())
 
         if self._settings.internal_service_token:
+            headers["X-Internal-Service"] = "ai-orchestrator-service"
+            headers["X-Internal-Token"] = self._settings.internal_service_token
             headers["Authorization"] = f"Bearer {self._settings.internal_service_token}"
 
         if self._client is None:

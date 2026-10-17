@@ -1,0 +1,41 @@
+# EnvoyFilter: Strip internal trust headers at ingress
+#
+# Security rationale: headers like x-internal-token and x-user-id are set
+# exclusively by internal services after authentication. If an external client
+# can forge them, any downstream service that trusts those headers without
+# re-validating is vulnerable to privilege escalation. This filter removes
+# them unconditionally at the istio-ingressgateway before any request reaches
+# the mesh, making it impossible for external traffic to supply them.
+#
+# Applied to: istio-ingressgateway (workloadSelector matches the gateway pod)
+# Namespace:  istio-system (where the ingressgateway lives)
+# Timing:     HTTP_CONNECTION_MANAGER listener filter – earliest possible point.
+
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: strip-internal-headers
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: instacommerce
+    app.kubernetes.io/component: security
+spec:
+  # Target only the ingress gateway pods, not every sidecar in the mesh.
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+
+  configPatches:
+    # Patch the HTTP Connection Manager on the inbound listener so the headers
+    # are stripped before any route matching or filter-chain processing.
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+      patch:
+        operation: MERGE
+        value:
+          request_headers_to_remove:
+            - x-internal-token
+            - x-internal-service
+            - x-user-id
+            - x-user-roles

@@ -30,6 +30,8 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, UUID>,
 
     Page<AuditEvent> findByEventType(String eventType, Pageable pageable);
 
+    List<AuditEvent> findByCreatedAtBetweenOrderByCreatedAt(Instant from, Instant to);
+
     @Query("SELECT a FROM AuditEvent a WHERE a.sequenceNumber IS NOT NULL " +
            "AND (:from IS NULL OR a.createdAt >= :from) " +
            "AND (:to IS NULL OR a.createdAt < :to) ORDER BY a.sequenceNumber ASC")

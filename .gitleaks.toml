@@ -10,6 +10,7 @@ id = "generic-api-key"
   description = "Ignore documentation placeholder examples for token-like fields"
   paths = [
     '''(?:^|/)old_docs/01-identity-access\.md$''',
+    '''(?:^|/)docs/archive/legacy_specs/01-identity-access\.md$''',
     '''(?:^|/)services/order-service/README\.md$''',
     '''(?:^|/)services/payment-service/README\.md$'''
   ]

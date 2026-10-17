@@ -147,13 +147,14 @@ public class RiderAssignmentService {
             .filter(ra -> riderMap.get(ra.getRiderId()).getStatus() == RiderStatus.ACTIVE)
             .map(ra -> {
                 Rider r = riderMap.get(ra.getRiderId());
+                double lat = ra.getCurrentLat() != null ? ra.getCurrentLat().doubleValue() : 0.0;
+                double lng = ra.getCurrentLng() != null ? ra.getCurrentLng().doubleValue() : 0.0;
+                String vehicle = r.getVehicleType() != null ? r.getVehicleType().name().toLowerCase() : "scooter";
                 return new DispatchOptimizerClient.RiderState(
-                    ra.getRiderId(),
-                    ra.getCurrentLat(),
-                    ra.getCurrentLng(),
-                    r.getRatingAvg(),
+                    ra.getRiderId().toString(),
+                    new DispatchOptimizerClient.Position(lat, lng),
                     0,
-                    r.getVehicleType().name(),
+                    vehicle,
                     true
                 );
             })
@@ -163,15 +164,26 @@ public class RiderAssignmentService {
             return Optional.empty();
         }
 
+        double oLat = pickupLat != null ? pickupLat.doubleValue() : 0.0;
+        double oLng = pickupLng != null ? pickupLng.doubleValue() : 0.0;
+
         List<DispatchOptimizerClient.OrderRequest> orderRequests = List.of(
             new DispatchOptimizerClient.OrderRequest(
-                orderId, storeId, pickupLat, pickupLng, null, null
+                orderId.toString(),
+                new DispatchOptimizerClient.Position(oLat, oLng)
             )
         );
 
         var request = new DispatchOptimizerClient.OptimizationRequest(riderStates, orderRequests);
         return dispatchOptimizerClient.requestAssignment(request)
             .filter(result -> result.assignments() != null && !result.assignments().isEmpty())
-            .map(result -> result.assignments().get(0).riderId());
+            .flatMap(result -> {
+                String assignedRiderId = result.assignments().get(0).riderId();
+                try {
+                    return Optional.of(UUID.fromString(assignedRiderId));
+                } catch (IllegalArgumentException ex) {
+                    return Optional.empty();
+                }
+            });
     }
 }

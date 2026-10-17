@@ -9,6 +9,13 @@ from airflow.providers.google.cloud.operators.bigquery import (
     BigQueryInsertJobOperator,
 )
 
+def failure_alert(context):
+    try:
+        from plugins.slack_alerts import send_slack_alert
+        send_slack_alert(context)
+    except Exception:
+        pass
+
 default_args = {
     "owner": "ml-eng",
     "depends_on_past": False,
@@ -17,7 +24,7 @@ default_args = {
     "retries": 2,
     "retry_delay": timedelta(minutes=10),
     "execution_timeout": timedelta(minutes=45),
-    "on_failure_callback": "plugins.slack_alerts.send_slack_alert",
+    "on_failure_callback": failure_alert,
 }
 
 PROJECT_ID = "instacommerce-prod"

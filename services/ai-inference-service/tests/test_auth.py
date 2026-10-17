@@ -8,10 +8,8 @@ from unittest.mock import patch
 @pytest.fixture
 def auth_app():
     with patch.dict("os.environ", {"INTERNAL_SERVICE_TOKEN": "test-secret-token"}):
-        import importlib
-        import app.main as main_module
-        importlib.reload(main_module)
-        yield main_module.app
+        from app.main import app
+        yield app
 
 
 @pytest.mark.asyncio

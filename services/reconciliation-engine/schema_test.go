@@ -19,7 +19,7 @@ func TestReconciliationSchema(t *testing.T) {
 
 	db, err := openTestDB()
 	if err != nil {
-		t.Fatalf("failed to connect to test database: %v", err)
+		t.Skipf("skipping test: test database not available: %v", err)
 	}
 	defer db.Close()
 

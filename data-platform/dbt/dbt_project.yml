@@ -22,6 +22,15 @@ models:
     marts:
       +materialized: table
       +schema: marts
-      +partition_by:
-        field: order_date
-        data_type: date
+      mart_daily_revenue:
+        +partition_by:
+          field: order_date
+          data_type: date
+      mart_rider_performance:
+        +partition_by:
+          field: order_date
+          data_type: date
+      mart_store_performance:
+        +partition_by:
+          field: order_date
+          data_type: date

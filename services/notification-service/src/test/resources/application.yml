@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: notification-service
+  config:
+    import: "optional:classpath:application-test-noop.properties"
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+notification:
+  identity:
+    base-url: http://localhost:8081
+  order:
+    base-url: http://localhost:8085
+  delivery:
+    base-url: http://localhost:8087
+  providers:
+    sendgrid:
+      api-key: test-sendgrid-key
+      from-email: test@instacommerce.dev
+    twilio:
+      account-sid: test-twilio-sid
+      auth-token: test-twilio-token
+      from-phone: "+1234567890"
+    fcm:
+      service-account-key-json: "{}"
+
+internal:
+  service:
+    name: notification-service
+    token: test-internal-service-token

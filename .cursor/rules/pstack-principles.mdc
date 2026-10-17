@@ -1,0 +1,33 @@
+---
+description: Core software engineering principles adapted from pstack (poteto-mode) for high-rigor, high-craft development.
+globs: **/*
+alwaysApply: true
+---
+
+# Engineering Principles (pstack / poteto-mode)
+
+Follow these non-negotiable principles when writing, refactoring, or reviewing code:
+
+1. **Fix Root Causes**:
+   - Never bolt defensive checks, fallback null-checks, or special-case branches onto symptom sites.
+   - Trace upstream to where the invariant was broken and fix it at the source.
+
+2. **Boundary Discipline & Deep Modules**:
+   - Keep interfaces narrow and simple; hide complex mechanisms inside the module boundary.
+   - Do not leak internal data structures, locks, or implementation details to callers.
+
+3. **Prove It Works (Verifiable Units)**:
+   - Every change must have a falsifiable verification step (a failing-then-passing test, baseline vs. treatment measurement, or concrete output diff).
+   - Never declare done based on "it should work" or self-assurances.
+
+4. **Sequence Small, Landable Units**:
+   - Decompose multi-step tasks into atomic units.
+   - Verify each unit before starting the next rather than batching checks at the very end.
+
+5. **Model the Ubiquitous Domain**:
+   - Honor domain terms and aggregate invariants defined in `GLOSSARY.md` and `contracts/`.
+   - Avoid generic bags of primitives (`Map<String, Object>`); use strongly typed domain objects.
+
+6. **Subtract Before You Add**:
+   - Clean up dead code, redundant comments, and obsolete abstractions before adding new ones.
+   - Code quantity is a liability; favor minimal, high-leverage implementations.

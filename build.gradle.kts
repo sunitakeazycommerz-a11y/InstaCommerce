@@ -17,9 +17,21 @@ subprojects {
     version = "0.1.0-SNAPSHOT"
 
     apply(plugin = "java")
+    apply(plugin = "eclipse")
     apply(plugin = "io.spring.dependency-management")
 
+    tasks.withType<JavaCompile>().configureEach {
+        options.release.set(21)
+    }
+
+    plugins.withId("org.springframework.boot") {
+        dependencies {
+            "testImplementation"("org.springframework.boot:spring-boot-starter-test-classic")
+        }
+    }
+
     configurations.configureEach {
+        exclude(group = "org.springframework.cloud", module = "spring-cloud-context")
         resolutionStrategy.dependencySubstitution {
             substitute(module("org.lz4:lz4-java"))
                 .using(module("at.yawk.lz4:lz4-java:1.10.1"))
@@ -35,6 +47,7 @@ subprojects {
         }
         dependencies {
             dependency("tools.jackson.core:jackson-annotations:3.1.0")
+            dependency("com.fasterxml.jackson.core:jackson-annotations:2.21")
             dependency("tools.jackson.core:jackson-core:3.1.0")
             dependency("tools.jackson.core:jackson-databind:3.1.0")
             dependency("tools.jackson.datatype:jackson-datatype-jdk8:3.1.0")

@@ -38,20 +38,36 @@ flowchart LR
     Envelope --> Consumers
 ```
 
-Every event published to Kafka is wrapped in a standard envelope:
+Every event published to Kafka conforms to `EventEnvelope.v1.json`. The canonical Java representation (`EventEnvelope.java`) and outbox relay emit and deserialize both `camelCase` and `snake_case` keys seamlessly via `@JsonAlias`:
 
 ```json
 {
-  "event_id": "550e8400-e29b-41d4-a716-446655440000",
-  "event_type": "OrderPlaced",
-  "aggregate_id": "order-12345",
-  "schema_version": "v1",
+  "eventId": "550e8400-e29b-41d4-a716-446655440000",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "eventType": "OrderPlaced",
+  "aggregateType": "Order",
+  "aggregateId": "order-12345",
+  "schemaVersion": "v1",
   "source_service": "order-service",
+  "sourceService": "order-service",
   "correlation_id": "req-abc-123",
-  "timestamp": "2024-01-15T10:30:00Z",
+  "correlationId": "req-abc-123",
+  "eventTime": "2026-03-15T10:30:00Z",
   "payload": { ... }
 }
 ```
+
+| Canonical Field | Aliases Accepted | Type | Description |
+|---|---|---|---|
+| `eventId` / `id` | `event_id` | String / UUID | Globally unique identifier for event deduplication |
+| `eventType` | `event_type`, `type` | String | Domain event discriminator (e.g. `OrderPlaced`, `PaymentCaptured`) |
+| `aggregateType` | `aggregate_type` | String | Root aggregate entity type (e.g. `Order`, `Payment`, `Cart`) |
+| `aggregateId` | `aggregate_id` | String | Business identifier of the aggregate instance |
+| `eventTime` | `event_time`, `timestamp`, `event_timestamp` | ISO-8601 UTC Instant | Timestamp when the domain event occurred |
+| `schemaVersion` | `schema_version` | String | Contract schema version (default `v1`) |
+| `sourceService` | `source_service`, `service` | String | Microservice that produced the event |
+| `correlationId` | `correlation_id` | String | Distributed tracing / request correlation identifier |
+| `payload` | — | Object / JSON | Domain event payload validated against JSON Schema |
 
 ---
 
@@ -186,6 +202,75 @@ contracts/
 | `StoreCreated` | `warehouse/StoreCreated.v1.json` | v1 | New store/dark store created |
 | `StoreStatusChanged` | `warehouse/StoreStatusChanged.v1.json` | v1 | Store status changed (open/closed/maintenance) |
 | `StoreDeleted` | `warehouse/StoreDeleted.v1.json` | v1 | Store decommissioned |
+
+### Cart (`cart.events`)
+
+| Event | Schema / Payload | Version | Description |
+|---|---|---|---|
+| `CartCreated` | Cart state snapshot | v1 | User initialized or cloned a cart |
+| `CartItemAdded` | Cart items & quantity | v1 | Item added to active cart |
+| `CartItemUpdated` | Updated quantities | v1 | Item quantity modified |
+| `CartItemRemoved` | Remaining cart items | v1 | Item removed from cart |
+| `CartCleared` | Empty cart identifier | v1 | Cart emptied |
+
+### Pricing & Promotions (`pricing.events`, `promotion.events`)
+
+| Event | Schema / Payload | Version | Description |
+|---|---|---|---|
+| `PriceUpdated` | SKU, store, price | v1 | Base or surge price change published |
+| `PromotionCreated` | Promotion metadata & rules | v1 | New campaign or coupon code created |
+| `PromotionUpdated` | Active rules & budget | v1 | Campaign details or budget updated |
+| `PromotionDeactivated` | Campaign identifier | v1 | Campaign deactivated or expired |
+
+### Wallet & Loyalty (`wallet.events`)
+
+| Event | Schema / Payload | Version | Description |
+|---|---|---|---|
+| `PointsEarned` | User ID, points, order | v1 | Loyalty points earned on delivered order |
+| `PointsRedeemed` | User ID, points redeemed | v1 | Loyalty points converted to discount |
+| `WalletCredited` | User ID, amount, type | v1 | Cashback, top-up, or refund credit |
+| `WalletDebited` | User ID, amount, type | v1 | Balance applied to payment |
+
+### Routing & Logistics (`delivery.events`, `routing.events`, `rider.geofence.events`)
+
+| Event | Schema / Payload | Version | Description |
+|---|---|---|---|
+| `DELIVERY_CREATED` | Delivery tracking payload | v1 | Delivery leg instantiated for dispatch |
+| `DELIVERY_STATUS_UPDATED` | Status, ETA, rider | v1 | Transition between dispatched, in-transit, arrived |
+| `DELIVERY_COMPLETED` | Proof of delivery | v1 | Order delivered and verified |
+| `RiderGeofenceEntered` | Store ID, rider ID, radius | v1 | Rider entered dark store pickup geofence |
+| `RiderGeofenceExited` | Store ID, rider ID | v1 | Rider departed dark store with package |
+
+---
+
+## Canonical Kafka Topic Registry (`TopicNames.java`)
+
+All Java services, Go relay, and consumers reference this single source of truth:
+
+| Constant | Kafka Topic | Primary Publisher | Primary Consumers |
+|---|---|---|---|
+| `IDENTITY_EVENTS` | `identity.events` | `identity-service` | Audit, notification, stream-processor |
+| `CATALOG_EVENTS` | `catalog.events` | `catalog-service` | Search, pricing, data-platform |
+| `ORDERS_EVENTS` | `orders.events` | `order-service` | Fulfillment, wallet, inventory, data-platform |
+| `PAYMENTS_EVENTS` | `payments.events` | `payment-service` | Order, wallet, reconciliation, audit |
+| `INVENTORY_EVENTS` | `inventory.events` | `inventory-service` | Warehouse, search, catalog, mobile-bff |
+| `FULFILLMENT_EVENTS` | `fulfillment.events` | `fulfillment-service` | Rider fleet, order, routing, notifications |
+| `RIDER_EVENTS` | `rider.events` | `rider-fleet-service` | Routing ETA, dispatch optimizer |
+| `DELIVERY_EVENTS` | `delivery.events` | `routing-eta-service` | Audit trail, notification, rider fleet |
+| `ROUTING_EVENTS` | `routing.events` | `routing-eta-service` | Dispatch optimizer, mobile-bff |
+| `RIDER_GEOFENCE_EVENTS` | `rider.geofence.events` | `location-ingestion-service` | Routing ETA, fulfillment |
+| `CART_EVENTS` | `cart.events` | `cart-service` | Audit trail, AI orchestrator, analytics |
+| `PRICING_EVENTS` | `pricing.events` | `pricing-service` | Search, catalog, cart |
+| `PROMOTION_EVENTS` | `promotion.events` | `pricing-service` | Cart, checkout orchestrator |
+| `WALLET_EVENTS` | `wallet.events` | `wallet-loyalty-service` | Checkout orchestrator, audit trail |
+| `FRAUD_EVENTS` | `fraud.events` | `fraud-detection-service` | Checkout, payment, audit trail |
+| `NOTIFICATION_EVENTS` | `notification.events` | `notification-service` | Audit trail, analytics |
+| `SEARCH_EVENTS` | `search.events` | `search-service` | AI inference, analytics |
+| `WAREHOUSE_EVENTS` | `warehouse.events` | `warehouse-service` | Inventory, routing, dispatch |
+| `RECONCILIATION_EVENTS` | `reconciliation.events` | `reconciliation-engine` | Ledger, payment, finance platform |
+| `AI_ORCHESTRATOR_EVENTS` | `ai-orchestrator.events` | `ai-orchestrator-service` | Audit trail, stream processor |
+| `*_DLT` | `{topic}.DLT` | Any DeadLetterPublishingRecoverer | Ops alerting, replay tooling |
+
 
 ---
 

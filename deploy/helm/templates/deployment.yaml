@@ -69,7 +69,21 @@ spec:
           env:
             {{- range $k, $v := $svc.env }}
             - name: {{ $k }}
+              {{- if kindIs "map" $v }}
+              {{- if hasKey $v "secretKeyRef" }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $v.secretKeyRef.name | quote }}
+                  key: {{ $v.secretKeyRef.key | quote }}
+              {{- else if hasKey $v "valueFrom" }}
+              valueFrom:
+                {{- toYaml $v.valueFrom | nindent 16 }}
+              {{- else }}
               value: {{ $v | quote }}
+              {{- end }}
+              {{- else }}
+              value: {{ $v | quote }}
+              {{- end }}
             {{- end }}
           readinessProbe:
             httpGet:

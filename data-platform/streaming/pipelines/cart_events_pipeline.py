@@ -107,6 +107,7 @@ class CartSessionAggregator(beam.CombineFn):
             "max_cart_value_cents": 0,
             "total_items": 0,
             "sku_ids": [],
+            "zone_id": "UNKNOWN",
         }
 
     def add_input(self, acc, element):
@@ -116,6 +117,8 @@ class CartSessionAggregator(beam.CombineFn):
             acc["max_cart_value_cents"] = cart_val
         acc["total_items"] = max(acc["total_items"], element.get("item_count", 0))
         acc["sku_ids"].extend(element.get("sku_ids", []))
+        if element.get("zone_id"):
+            acc["zone_id"] = element["zone_id"]
         return acc
 
     def merge_accumulators(self, accumulators):
@@ -124,6 +127,7 @@ class CartSessionAggregator(beam.CombineFn):
             "max_cart_value_cents": 0,
             "total_items": 0,
             "sku_ids": [],
+            "zone_id": "UNKNOWN",
         }
         for acc in accumulators:
             merged["event_types"].extend(acc["event_types"])
@@ -132,6 +136,8 @@ class CartSessionAggregator(beam.CombineFn):
             )
             merged["total_items"] = max(merged["total_items"], acc["total_items"])
             merged["sku_ids"].extend(acc["sku_ids"])
+            if acc.get("zone_id") and acc["zone_id"] != "UNKNOWN":
+                merged["zone_id"] = acc["zone_id"]
         return merged
 
     def extract_output(self, acc):
@@ -143,6 +149,7 @@ class CartSessionAggregator(beam.CombineFn):
             "total_items": acc["total_items"],
             "unique_skus": list(set(acc["sku_ids"])),
             "event_count": len(acc["event_types"]),
+            "zone_id": acc.get("zone_id", "UNKNOWN"),
         }
 
 

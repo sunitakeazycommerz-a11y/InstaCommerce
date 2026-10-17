@@ -2,6 +2,7 @@ package com.instacommerce.notification.service;
 
 import com.instacommerce.notification.domain.model.NotificationChannel;
 import com.samskivert.mustache.Mustache;
+import com.samskivert.mustache.Template;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -14,7 +15,7 @@ import org.springframework.stereotype.Service;
 public class TemplateService {
     private final ResourceLoader resourceLoader;
     private final Mustache.Compiler compiler;
-    private final ConcurrentHashMap<String, String> templateCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Template> compiledCache = new ConcurrentHashMap<>();
 
     public TemplateService(ResourceLoader resourceLoader) {
         this.resourceLoader = resourceLoader;
@@ -23,8 +24,8 @@ public class TemplateService {
 
     public String render(NotificationChannel channel, String templateId, Map<String, Object> variables) {
         String path = templatePath(channel, templateId);
-        String template = templateCache.computeIfAbsent(path, this::loadTemplate);
-        return compiler.compile(template).execute(variables);
+        Template template = compiledCache.computeIfAbsent(path, p -> compiler.compile(loadTemplate(p)));
+        return template.execute(variables);
     }
 
     private String loadTemplate(String path) {

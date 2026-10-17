@@ -17,6 +17,9 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
 
     Optional<Order> findByIdempotencyKey(String idempotencyKey);
 
+    @Query("SELECT o FROM Order o LEFT JOIN FETCH o.items WHERE o.id = :id")
+    Optional<Order> findByIdWithItems(@Param("id") UUID id);
+
     @Modifying
     @Query("update Order o set o.userId = :placeholder, o.userErased = true where o.userId = :userId")
     int anonymizeByUserId(@Param("userId") UUID userId, @Param("placeholder") UUID placeholder);

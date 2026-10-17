@@ -6,6 +6,13 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+def failure_alert(context):
+    try:
+        from plugins.slack_alerts import send_slack_alert
+        send_slack_alert(context)
+    except Exception:
+        pass
+
 default_args = {
     "owner": "data-eng",
     "depends_on_past": False,
@@ -14,7 +21,7 @@ default_args = {
     "retries": 1,
     "retry_delay": timedelta(minutes=2),
     "execution_timeout": timedelta(minutes=10),
-    "on_failure_callback": "plugins.slack_alerts.send_slack_alert",
+    "on_failure_callback": failure_alert,
 }
 
 PROJECT_ID = "instacommerce-prod"
@@ -34,8 +41,8 @@ CRITICAL_TOPICS = [
 CRITICAL_TABLES = [
     f"{PROJECT_ID}.staging.stg_orders",
     f"{PROJECT_ID}.staging.stg_payments",
-    f"{PROJECT_ID}.staging.stg_inventory",
-    f"{PROJECT_ID}.marts.fct_orders",
+    f"{PROJECT_ID}.staging.stg_inventory_movements",
+    f"{PROJECT_ID}.marts.mart_daily_revenue",
 ]
 
 with DAG(
@@ -93,14 +100,28 @@ with DAG(
         alerts = []
 
         for table_ref in CRITICAL_TABLES:
-            query = f"""
-                SELECT TIMESTAMP_DIFF(
-                    CURRENT_TIMESTAMP(),
-                    MAX(_loaded_at),
-                    MINUTE
-                ) AS minutes_since_update
-                FROM `{table_ref}`
-            """
+            if "staging" in table_ref:
+                query = f"""
+                    SELECT TIMESTAMP_DIFF(
+                        CURRENT_TIMESTAMP(),
+                        TIMESTAMP(MAX(_cdc_updated_at)),
+                        MINUTE
+                    ) AS minutes_since_update
+                    FROM `{table_ref}`
+                """
+            else:
+                parts = table_ref.split(".")
+                dataset_name = parts[-2] if len(parts) >= 2 else "marts"
+                table_name = parts[-1]
+                query = f"""
+                    SELECT TIMESTAMP_DIFF(
+                        CURRENT_TIMESTAMP(),
+                        TIMESTAMP_MILLIS(last_modified_time),
+                        MINUTE
+                    ) AS minutes_since_update
+                    FROM `{PROJECT_ID}.{dataset_name}.__TABLES__`
+                    WHERE table_id = '{table_name}'
+                """
             try:
                 results = list(client.query(query).result())
                 if results:
@@ -136,8 +157,8 @@ with DAG(
                 continue
 
             latest = sorted(latest_run, key=lambda r: r.execution_date)[-1]
-            if latest.end_date:
-                duration = (latest.end_date - latest.execution_date).total_seconds() / 60
+            if latest.end_date and latest.start_date:
+                duration = (latest.end_date - latest.start_date).total_seconds() / 60
                 if duration > DBT_SLA_THRESHOLD_MINUTES:
                     alerts.append(
                         f"{dag_id}: took {duration:.0f}min (SLA: {DBT_SLA_THRESHOLD_MINUTES}min)"

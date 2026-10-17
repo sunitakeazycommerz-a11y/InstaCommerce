@@ -96,7 +96,7 @@ public class AuthService {
         return new AuthResponse(accessToken, refreshToken, tokenService.accessTokenTtlSeconds(), "Bearer");
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = {InvalidCredentialsException.class, UserInactiveException.class})
     public AuthResponse login(LoginRequest request, String ipAddress, String userAgent, String traceId) {
         rateLimitService.checkLogin(ipAddress);
         return authMetrics.getLoginTimer().record(() -> {

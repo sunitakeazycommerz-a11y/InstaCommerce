@@ -69,6 +69,16 @@ class LedgerEntryRepositoryIntegrationTest {
         registry.add("internal.service.token", () -> "test-internal-service-token");
     }
 
+    @org.junit.jupiter.api.BeforeAll
+    static void runMigrations() {
+        POSTGRES.start();
+        org.flywaydb.core.Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations("classpath:db/migration")
+            .load()
+            .migrate();
+    }
+
     @MockitoBean
     private PaymentGateway paymentGateway;
 

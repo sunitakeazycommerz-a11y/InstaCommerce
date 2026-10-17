@@ -4,16 +4,19 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.catalog.domain.model.OutboxEvent;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 @Primary
 @Component
+@ConditionalOnBean(KafkaTemplate.class)
 public class KafkaOutboxEventPublisher implements OutboxEventPublisher {
     private static final Logger log = LoggerFactory.getLogger(KafkaOutboxEventPublisher.class);
     private static final String TOPIC = "catalog.events";
@@ -51,13 +54,21 @@ public class KafkaOutboxEventPublisher implements OutboxEventPublisher {
 
     private Map<String, Object> buildEnvelope(OutboxEvent event) {
         Map<String, Object> envelope = new LinkedHashMap<>();
-        envelope.put("eventId", event.getId().toString());
+        String eventId = event.getEventId() != null ? event.getEventId().toString() : event.getId().toString();
+        envelope.put("id", eventId);
+        envelope.put("eventId", eventId);
         envelope.put("eventType", event.getEventType());
         envelope.put("aggregateType", event.getAggregateType());
         envelope.put("aggregateId", event.getAggregateId());
-        envelope.put("eventTime", event.getCreatedAt().toString());
-        envelope.put("schemaVersion", "v1");
-        envelope.put("sourceService", "catalog-service");
+        Instant time = event.getEventTimestamp() != null ? event.getEventTimestamp() : event.getCreatedAt();
+        envelope.put("eventTime", time != null ? time.toString() : Instant.now().toString());
+        envelope.put("schemaVersion", event.getSchemaVersion() != null ? event.getSchemaVersion() : "v1");
+        envelope.put("source_service", event.getSourceService() != null ? event.getSourceService() : "catalog-service");
+        envelope.put("sourceService", event.getSourceService() != null ? event.getSourceService() : "catalog-service");
+        if (event.getCorrelationId() != null) {
+            envelope.put("correlation_id", event.getCorrelationId());
+            envelope.put("correlationId", event.getCorrelationId());
+        }
         envelope.put("payload", parsePayload(event.getPayload()));
         return envelope;
     }

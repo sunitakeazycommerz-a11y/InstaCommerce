@@ -31,7 +31,7 @@ public class DomainEventConsumer {
         this.ingestionService = ingestionService;
         this.objectMapper = objectMapper;
         this.kafkaTemplate = kafkaTemplate;
-        this.dltTopic = env.getProperty("audit.dlt-topic", "audit.DLT");
+        this.dltTopic = env.getProperty("audit.dlt-topic", TopicNames.AUDIT_DLT);
     }
 
     @KafkaListener(
@@ -53,7 +53,9 @@ public class DomainEventConsumer {
                     TopicNames.AI_ORCHESTRATOR_EVENTS,
                     TopicNames.RECONCILIATION_EVENTS,
                     TopicNames.WALLET_EVENTS,
-                    TopicNames.FRAUD_EVENTS
+                    TopicNames.FRAUD_EVENTS,
+                    TopicNames.CART_EVENTS,
+                    TopicNames.DELIVERY_EVENTS
             },
             groupId = "${spring.kafka.consumer.group-id}",
             concurrency = "3"
@@ -71,25 +73,44 @@ public class DomainEventConsumer {
     }
 
     private AuditEventRequest transformToAuditEvent(String topic, JsonNode envelope) {
-        String eventType = envelope.has("eventType") ? envelope.get("eventType").asText() : "UNKNOWN";
-        String sourceService = deriveSourceService(topic);
+        String eventType = envelope.has("eventType") ? envelope.get("eventType").asText()
+                : envelope.has("event_type") ? envelope.get("event_type").asText() : "UNKNOWN";
+
+        String sourceService = null;
+        if (envelope.has("source_service") && !envelope.get("source_service").isNull()) {
+            sourceService = envelope.get("source_service").asText();
+        } else if (envelope.has("sourceService") && !envelope.get("sourceService").isNull()) {
+            sourceService = envelope.get("sourceService").asText();
+        } else {
+            sourceService = deriveSourceService(topic);
+        }
 
         UUID actorId = null;
         if (envelope.has("userId") && !envelope.get("userId").isNull()) {
-            actorId = UUID.fromString(envelope.get("userId").asText());
+            try {
+                actorId = UUID.fromString(envelope.get("userId").asText());
+            } catch (IllegalArgumentException ignored) {
+            }
         }
 
-        String actorType = envelope.has("actorType") ? envelope.get("actorType").asText() : "SYSTEM";
+        String actorType = envelope.has("actorType") ? envelope.get("actorType").asText()
+                : envelope.has("actor_type") ? envelope.get("actor_type").asText() : "SYSTEM";
 
-        String aggregateType = envelope.has("aggregateType") ? envelope.get("aggregateType").asText() : null;
-        String aggregateId = envelope.has("aggregateId") ? envelope.get("aggregateId").asText() : null;
+        String aggregateType = envelope.has("aggregateType") ? envelope.get("aggregateType").asText()
+                : envelope.has("aggregate_type") ? envelope.get("aggregate_type").asText() : null;
+        String aggregateId = envelope.has("aggregateId") ? envelope.get("aggregateId").asText()
+                : envelope.has("aggregate_id") ? envelope.get("aggregate_id").asText() : null;
 
-        String correlationId = envelope.has("correlationId") ? envelope.get("correlationId").asText() : null;
+        String correlationId = envelope.has("correlation_id") ? envelope.get("correlation_id").asText()
+                : envelope.has("correlationId") ? envelope.get("correlationId").asText() : null;
+
         String action = envelope.has("action") ? envelope.get("action").asText() : eventType;
 
         Map<String, Object> details = null;
-        if (envelope.has("payload")) {
+        if (envelope.has("payload") && !envelope.get("payload").isNull()) {
             details = objectMapper.convertValue(envelope.get("payload"), Map.class);
+        } else if (envelope.isObject()) {
+            details = objectMapper.convertValue(envelope, Map.class);
         }
 
         return new AuditEventRequest(
@@ -108,16 +129,21 @@ public class DomainEventConsumer {
     }
 
     private String deriveSourceService(String topic) {
-        // topic format: "service.events" -> extract service name
         int dotIndex = topic.indexOf('.');
         if (dotIndex <= 0) {
             return topic;
         }
         String service = topic.substring(0, dotIndex);
         if ("orders".equals(service)) {
-            service = "order";
+            return "order-service";
         } else if ("payments".equals(service)) {
-            service = "payment";
+            return "payment-service";
+        } else if ("delivery".equals(service) || "routing".equals(service)) {
+            return "routing-eta-service";
+        } else if ("reconciliation".equals(service)) {
+            return "reconciliation-engine";
+        } else if (service.endsWith("-service") || service.endsWith("-engine")) {
+            return service;
         }
         return service + "-service";
     }

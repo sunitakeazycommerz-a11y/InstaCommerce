@@ -27,6 +27,7 @@
   - `cd data-platform/dbt && dbt run --select marts`
   - `cd data-platform/dbt && dbt test`
   - Run one dbt model/test slice: `cd data-platform/dbt && dbt test --select <model-or-selector>`
+- Code walkthrough and navigation: Use `./scripts/lsp-walkthrough status` to check installed LSPs (`jdtls`, `gopls`, `pyright`), and `./scripts/lsp-walkthrough outline <file>` or `walkthrough <file>` for structural symbol analysis.
 - `.github/workflows/ci.yml` is the source of truth for what PRs actually execute. CI has build/test jobs plus security gates (Gitleaks, Trivy, dependency review), but no dedicated repo-wide lint task is wired into the workflow.
 
 ## High-level architecture
@@ -54,5 +55,7 @@
 ## Additional Copilot customizations in this repo
 
 - Repo-wide cross-cutting guidance lives here; path-specific rules live under `.github/instructions/`.
-- Specialized guide agents live under `.github/agents/` for architecture, review, coding best practices, and efficient tool use.
-- Reusable task skills live under `.github/skills/` for the same areas when you want a deeper workflow than a one-line instruction file can provide.
+- Ubiquitous language, service registry, and domain definitions live in `GLOSSARY.md`.
+- Automated drift and consistency scanner lives in `./scripts/check-monorepo-consistency.sh`.
+- Specialized guide agents live under `.github/agents/` (and `.agents/agents/`) including `monorepo-consistency`, `architecture-guide`, `code-walkthrough`, `coding-best-practices-guide`, and `review-guide`.
+- Reusable task skills live under `.github/skills/` (and `.agents/skills/`) covering code review, architecture review, domain modeling, codebase design, PR authoring, tool use, doc search, unit testing, integration testing, pipelines, CD/GitOps, infra, automation, conventions, drift remediation, and bug diagnosis.

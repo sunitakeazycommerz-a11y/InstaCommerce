@@ -212,7 +212,6 @@ func (c *CDCConsumer) runConsumerLoop(ctx context.Context) {
 			c.logger.Warn("failed to process cdc message", "error", err, "offset", msg.Offset)
 			c.metrics.eventsFailed++
 		} else {
-			c.metrics.eventsProcessed++
 			c.metrics.lastProcessedLSN = msg.Offset
 		}
 
@@ -230,8 +229,6 @@ func (c *CDCConsumer) processMessage(msg kafka.Message) error {
 	if err := json.Unmarshal(msg.Value, &event); err != nil {
 		return fmt.Errorf("failed to unmarshal debezium event: %w", err)
 	}
-
-	c.metrics.eventsReceived++
 
 	// Extract operation and data
 	op := event.Envelope.Op
@@ -283,6 +280,9 @@ func (c *CDCConsumer) processRunRecord(after map[string]interface{}, tsMs int64)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	c.metrics.eventsReceived++
+	c.metrics.eventsProcessed++
 
 	// Get or create daily snapshot
 	snapshot, exists := c.dailySnapshots[entry.RunDate]
@@ -351,6 +351,9 @@ func (c *CDCConsumer) processMismatchRecord(after map[string]interface{}, tsMs i
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	c.metrics.eventsReceived++
+	c.metrics.eventsProcessed++
 
 	// For now, store mismatches in a temporary structure
 	// In production, these would be aggregated and used to trigger reconciliation

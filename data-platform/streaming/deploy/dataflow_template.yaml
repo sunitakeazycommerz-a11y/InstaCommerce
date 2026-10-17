@@ -12,7 +12,7 @@ order_events:
   template: gs://instacommerce-dataflow/templates/order-events
   parameters:
     kafka_bootstrap: kafka-bootstrap:9092
-    kafka_topic: order.events
+    kafka_topic: orders.events
     output_table_volume: analytics.realtime_order_volume
     output_table_sla: analytics.sla_compliance
     temp_location: gs://instacommerce-dataflow/temp
@@ -27,7 +27,7 @@ payment_events:
   template: gs://instacommerce-dataflow/templates/payment-events
   parameters:
     kafka_bootstrap: kafka-bootstrap:9092
-    kafka_topic: payment.events
+    kafka_topic: payments.events
     output_table: analytics.payment_metrics
     temp_location: gs://instacommerce-dataflow/temp
   machine_type: n1-standard-4
@@ -41,7 +41,7 @@ rider_location:
   template: gs://instacommerce-dataflow/templates/rider-location
   parameters:
     kafka_bootstrap: kafka-bootstrap:9092
-    kafka_topic: rider.location
+    kafka_topic: rider.location.updates
     output_table: analytics.rider_utilization
     temp_location: gs://instacommerce-dataflow/temp
   machine_type: n1-standard-4

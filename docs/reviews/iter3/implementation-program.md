@@ -430,7 +430,53 @@ Use AI where it is defensible, reversible, and observable.
 
 ---
 
-## 17. Bottom-line recommendation
+## 17. Implementation wave execution log
+
+This section records completed implementation waves against the program defined above.
+
+### Wave 29 — CI Fixes, Contract Hardening & GDPR Erasure
+
+| Field | Value |
+|---|---|
+| Date | 2026-03-13 |
+| Branch | `feat/wave29-ci-fixes-contract-hardening` |
+| Entry | Wave 0 and Wave 1 prerequisite gaps identified during iteration-3 review |
+| Exit | 6 tracks completed (A-F) |
+
+**Tracks delivered:**
+
+- **A:** CI fixes (checkout test, notification build, Go Docker gating)
+- **B:** Payment webhook durable publish-before-dedupe pattern
+- **C:** Stream processor Redis-based event-ID deduplication
+- **D:** AI orchestrator audit-trail Kafka integration
+- **E:** GDPR erasure (notification subject/body anonymization)
+- **F:** Inventory storeId VARCHAR-to-UUID alignment
+
+### Wave 30 — Contract Governance, Money-Path Safety & Production Hardening
+
+| Field | Value |
+|---|---|
+| Date | 2026-03-14 |
+| Branch | `feat/wave30-contract-governance-production-hardening` |
+| Entry | Wave 29 complete; contract drift and money-path gaps still open |
+| Exit | 6 tracks completed (A-F); 3 Wave-29 gaps closed |
+
+**Tracks delivered:**
+
+- **A (P0):** Contract & topic governance -- shared `TopicNames` constants and `EventEnvelope` record in `contracts/`; 9 consumers across 6 services migrated; singular/plural topic split resolved
+- **B (P0):** Money-path safety -- coupon `@Version` + unique redemption index; loyalty `redeemPoints()` idempotency fix + `LoyaltyAccount` `@Version`; wallet `reference_type` CHECK constraint expanded; `PointsExpiryJob` pagination fix
+- **C (P1):** CORS `setAllowedOriginPatterns()` fix across 16 Java services
+- **D (Low):** Fulfillment dead code cleanup -- removed deprecated inline dispatch (`RiderAssignmentService`, dispatch config, related tests)
+- **E (Low):** Rider `@Version` optimistic locking + order-service legacy checkout removal (22 files deleted)
+- **F (P1):** Feature flag bulk override cache (Caffeine, 10s TTL) + reconciliation-engine Dockerfile fix + AI audit envelope `eventId`/`schemaVersion`
+
+**Gaps closed from Wave 29:** fulfillment deprecated dispatch code, rider missing `@Version`, order-service legacy checkout dead code.
+
+**Remaining gaps:** See [`WAVE-30-IMPLEMENTATION.md`](WAVE-30-IMPLEMENTATION.md) for the full gap list (9 items, including P0 outbox relay wiring, VirtualService port mismatch, and test coverage).
+
+---
+
+## 18. Bottom-line recommendation
 
 Do **not** treat this as one long refactor program. Treat it as a series of gated hardening waves where each wave buys the right to start the next one.
 

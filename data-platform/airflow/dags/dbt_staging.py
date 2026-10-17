@@ -7,6 +7,13 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 
+def failure_alert(context):
+    try:
+        from plugins.slack_alerts import send_slack_alert
+        send_slack_alert(context)
+    except Exception:
+        pass
+
 default_args = {
     "owner": "data-eng",
     "depends_on_past": False,
@@ -15,7 +22,7 @@ default_args = {
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
     "execution_timeout": timedelta(minutes=30),
-    "on_failure_callback": "plugins.slack_alerts.send_slack_alert",
+    "on_failure_callback": failure_alert,
 }
 
 DBT_PROJECT_DIR = "/opt/airflow/dbt"

@@ -57,6 +57,7 @@ flowchart LR
 |------|----------|-------------|
 | 1 | [`../README.md`](../README.md) | Service inventory, tech stack, quick-start commands, top-level architecture diagram |
 | 2 | **This file** | Navigation hub — you are here |
+| 2b | [`repo-truth/README.md`](repo-truth/README.md) | Ground truth reality audit — implemented runtime truth vs aspirational target design |
 | 3 | [`architecture/HLD.md`](architecture/HLD.md) | C4 system context, bounded contexts, NFRs (p99 < 300 ms checkout, 99.95 % availability) |
 | 4 | [`architecture/LLD.md`](architecture/LLD.md) | Order/payment state machines, checkout saga (Temporal), Kafka event flow, class diagrams |
 | 5 | [`architecture/DATA-FLOW.md`](architecture/DATA-FLOW.md) | Outbox → Debezium → Kafka → BigQuery pipeline, ML feature flow, GDPR erasure |
@@ -160,6 +161,16 @@ flowchart TB
 |----------|------|-------|
 | API Gateway & BFF Design | [`reviews/api-gateway-bff-design.md`](reviews/api-gateway-bff-design.md) | Edge routing, BFF patterns, gateway responsibilities |
 | Data Platform & ML Design | [`reviews/data-platform-ml-design.md`](reviews/data-platform-ml-design.md) | Data lake, streaming, feature store, ML platform architecture |
+
+### Repository Ground Truth & Reality Audits
+
+| Document | Path | Scope |
+|----------|------|-------|
+| Ground Truth Hub | [`repo-truth/README.md`](repo-truth/README.md) | Code-backed ground truth distinguishing implemented runtime reality from target design |
+| Canonical Truth Sources | [`repo-truth/01-repo-truth.md`](repo-truth/01-repo-truth.md) | Fleet shape (20 Java, 8 Go, 2 Python), synchronous request plane, and transactional core |
+| Service Fleet Audit | [`repo-truth/02-service-fleet.md`](repo-truth/02-service-fleet.md) | Nine-cluster inventory: Implemented vs Scaffold vs Transitional maturity across 30 services |
+| Data & ML Platform Truth | [`repo-truth/03-data-ml-platform.md`](repo-truth/03-data-ml-platform.md) | Contracts, event schemas, dbt layers, streaming pipelines, and ML feature serving |
+| Risks, Gaps & Readiness | [`repo-truth/04-risks-gaps-and-readiness.md`](repo-truth/04-risks-gaps-and-readiness.md) | Edge tier status, documentation drift, operational event plane, and recovery playbooks |
 
 ---
 
@@ -526,3 +537,15 @@ checked-in documents):
 
 These comparisons are relevant only as directional signals for prioritising
 the wave-based implementation program — not as claims of feature parity.
+
+---
+
+## 14. Documentation Archive
+
+Historical design artifacts, pre-wave specifications, iteration snapshots, and completed wave delivery packages are archived under [`docs/archive/`](archive/README.md):
+- **[`legacy_specs/`](archive/README.md#2-archive-inventory):** Inception-phase specifications and early reviews (formerly `old_docs/`).
+- **[`reviews/iter3_backup/`](archive/README.md#2-archive-inventory):** Wave 30 snapshot of the Iteration 3 review suite.
+- **[`waves/`](archive/README.md#2-archive-inventory):** Completed delivery manifests, execution plans, and runbooks for Waves 34, 36, 39, 40, and 41.
+- **[`migrations/`](archive/README.md#2-archive-inventory):** Historical Spring Boot 4 platform upgrade specifications.
+
+See [`docs/archive/README.md`](archive/README.md) for complete archival inventory and canonical document mappings.

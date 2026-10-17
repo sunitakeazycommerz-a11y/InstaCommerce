@@ -53,26 +53,37 @@ type slaMetrics struct {
 	windowOrders  *prometheus.GaugeVec
 }
 
+var (
+	slaMetricsInstance *slaMetrics
+	slaMetricsOnce     sync.Once
+)
+
 func newSLAMetrics() *slaMetrics {
-	return &slaMetrics{
-		slaPercent: promauto.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "sla_window_percent",
-			Help: "Current SLA compliance percentage per zone (30-min window)",
-		}, []string{"zone_id"}),
+	slaMetricsOnce.Do(func() {
+		slaMetricsInstance = &slaMetrics{
+			slaPercent: promauto.NewGaugeVec(prometheus.GaugeOpts{
+				Name: "sla_window_percent",
+				Help: "Current SLA compliance percentage per zone (30-min window)",
+			}, []string{"zone_id"}),
 
-		alertsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "sla_alerts_total",
-			Help: "Total SLA breach alerts emitted per zone",
-		}, []string{"zone_id"}),
+			alertsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "sla_alerts_total",
+				Help: "Total SLA breach alerts emitted per zone",
+			}, []string{"zone_id"}),
 
-		windowOrders: promauto.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "sla_window_orders",
-			Help: "Total orders in current SLA window per zone",
-		}, []string{"zone_id"}),
-	}
+			windowOrders: promauto.NewGaugeVec(prometheus.GaugeOpts{
+				Name: "sla_window_orders",
+				Help: "Total orders in current SLA window per zone",
+			}, []string{"zone_id"}),
+		}
+	})
+	return slaMetricsInstance
 }
 
 func NewSLAMonitor(threshold float64, logger *slog.Logger) *SLAMonitor {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	m := &SLAMonitor{
 		windows:   make(map[string]*SLAWindow),
 		threshold: threshold,

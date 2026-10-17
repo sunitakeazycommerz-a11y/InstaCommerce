@@ -40,7 +40,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * Validates timing-safe token comparison, role restrictions,
  * IDOR protection, actuator lockdown, and webhook error messages.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK, properties = {
+    "management.prometheus.metrics.export.enabled=true"
+})
 @Testcontainers(disabledWithoutDocker = true)
 class SecurityHardeningTest {
 
@@ -73,6 +75,16 @@ class SecurityHardeningTest {
         registry.add("stripe.api-key", () -> "test-stripe-key");
         registry.add("stripe.webhook-secret", () -> "test-webhook-secret");
         registry.add("internal.service.token", () -> TEST_TOKEN);
+    }
+
+    @org.junit.jupiter.api.BeforeAll
+    static void runMigrations() {
+        POSTGRES.start();
+        org.flywaydb.core.Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations("classpath:db/migration")
+            .load()
+            .migrate();
     }
 
     @Autowired

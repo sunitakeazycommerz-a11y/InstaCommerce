@@ -296,8 +296,8 @@ verify_service_health() {
 
   log_info "Testing health endpoint on pod: $test_pod"
 
-  # Exec into pod and curl health endpoint
-  if kubectl exec -n "$NAMESPACE" "$test_pod" -- curl -s http://localhost:8080/health &> /dev/null; then
+  # Exec into pod and curl health endpoint (support both Spring Boot /actuator/health and /health)
+  if kubectl exec -n "$NAMESPACE" "$test_pod" -- sh -c 'curl -fs http://localhost:8080/actuator/health || curl -fs http://localhost:8080/health' &> /dev/null; then
     log_success "Service health endpoint responding"
     record_result "Service health check" true
   else

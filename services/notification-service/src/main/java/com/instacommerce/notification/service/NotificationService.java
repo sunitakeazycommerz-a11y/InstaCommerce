@@ -186,7 +186,11 @@ public class NotificationService {
         if (userContact == null) {
             return null;
         }
-        return channel == NotificationChannel.SMS ? userContact.phone() : userContact.email();
+        return switch (channel) {
+            case EMAIL -> userContact.email();
+            case SMS -> userContact.phone();
+            case PUSH -> null;
+        };
     }
 
     private Optional<UUID> resolveUserId(JsonNode payload) {
@@ -315,15 +319,17 @@ public class NotificationService {
     }
 
     private String resolveEventId(ConsumerRecord<String, String> record, EventEnvelope envelope) {
-        String eventId = record.key();
+        String eventId = envelope != null ? envelope.id() : null;
         if (eventId == null || eventId.isBlank()) {
-            eventId = envelope.id();
-        }
-        if ((eventId == null || eventId.isBlank()) && envelope.aggregateId() != null) {
-            eventId = envelope.aggregateId() + ":" + envelope.eventType();
+            if (envelope != null && envelope.aggregateId() != null && envelope.eventType() != null) {
+                eventId = envelope.aggregateId() + ":" + envelope.eventType();
+            }
         }
         if (eventId == null || eventId.isBlank()) {
-            eventId = envelope.eventType() + ":" + record.partition() + ":" + record.offset();
+            eventId = record.key();
+        }
+        if (eventId == null || eventId.isBlank()) {
+            eventId = (envelope != null ? envelope.eventType() : "UNKNOWN") + ":" + record.partition() + ":" + record.offset();
         }
         return eventId.length() > 64 ? hash(eventId) : eventId;
     }

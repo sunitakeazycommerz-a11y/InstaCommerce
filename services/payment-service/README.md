@@ -757,7 +757,7 @@ Operators should watch the following during and after rollout:
 
 When `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` is `true`, the `WebhookEventProcessor` writes a transactional outbox event whenever a Stripe `charge.refunded` webhook transitions a payment to `REFUNDED` or `PARTIALLY_REFUNDED`. This closes the gap where webhook-driven refund state changes were applied to the local database and ledger but never published to Kafka, leaving downstream consumers (order-service, fulfillment-service, reconciliation-engine, data-platform) unaware of the refund completion.
 
-The outbox row is written inside the same `@Transactional` boundary (in `WebhookEventProcessor`) as the payment status update and ledger entries, so the event is guaranteed to be published if and only if the local state change commits. The outbox-relay service picks up the event and delivers it to the `payment.events` Kafka topic like any other payment domain event.
+The outbox row is written inside the same `@Transactional` boundary (in `WebhookEventProcessor`) as the payment status update and ledger entries, so the event is guaranteed to be published if and only if the local state change commits. The outbox-relay service picks up the event and delivers it to the canonical `payments.events` (aliased as `payment.events`) Kafka topic like any other payment domain event.
 
 If a refund webhook arrives while the payment is still in a transient pre-refund state (`AUTHORIZE_PENDING`, `AUTHORIZED`, `CAPTURE_PENDING`, `VOID_PENDING`), the handler throws and rolls back the dedup marker so Stripe retries later instead of silently dropping an out-of-order event.
 
@@ -769,7 +769,7 @@ If a refund webhook arrives while the payment is still in a transient pre-refund
 
 ### Rollout
 
-1. **Enable in dev** — `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED: "true"` is already set in `values-dev.yaml`. Trigger test refunds via Stripe and verify that `PaymentRefunded` events appear on the `payment.events` Kafka topic.
+1. **Enable in dev** — `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED: "true"` is already set in `values-dev.yaml`. Trigger test refunds via Stripe and verify that `PaymentRefunded` events appear on the `payments.events` Kafka topic.
 2. **Enable in prod** — flip `PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED` to `"true"` in `values-prod.yaml` once dev validation is complete and monitoring confirms no anomalies.
 3. **Rollback** — set the flag back to `"false"` and redeploy. The webhook handler continues to apply refund state changes and ledger entries locally; only the outbox write is skipped. No data migration or cleanup is required. Downstream consumers will stop receiving new webhook-driven refund events but will not lose previously delivered events.
 
@@ -791,7 +791,7 @@ Operators should watch the following during and after rollout:
 | `payment.webhook.refund{outcome="transient_deferred"}` | Spikes after enablement | Investigate out-of-order webhooks, delayed capture settlement, or stuck payment state transitions |
 | `payment.webhook.refund{outcome="terminal_rejected"}` | Unexpected sustained increases | Investigate late/duplicate Stripe events or payment state-machine inconsistencies |
 | Outbox relay lag | Time between outbox row creation and Kafka delivery | High lag means downstream consumers see delayed refund events |
-| `payment.events` consumer lag (downstream) | Consumer group lag on downstream services | Sustained growth after enabling may indicate processing issues |
+| `payments.events` consumer lag (downstream) | Consumer group lag on downstream services | Sustained growth after enabling may indicate processing issues |
 | Ledger balance check | `SUM(debits) = SUM(credits)` invariant | Any imbalance after enabling requires immediate investigation |
 | Stripe webhook error rate | 4xx/5xx responses to Stripe webhook delivery | A spike may indicate the outbox write is causing transaction failures |
 

@@ -58,15 +58,39 @@ public class DispatchOptimizerClient {
         return factory;
     }
 
-    public record RiderState(UUID riderId, BigDecimal lat, BigDecimal lng, BigDecimal rating,
-                             int currentOrders, String vehicleType, boolean isAvailable) {}
+    public record Position(
+        @com.fasterxml.jackson.annotation.JsonProperty("lat") double lat,
+        @com.fasterxml.jackson.annotation.JsonProperty("lng") double lng
+    ) {}
 
-    public record OrderRequest(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng,
-                               BigDecimal dropoffLat, BigDecimal dropoffLng) {}
+    public record RiderState(
+        @com.fasterxml.jackson.annotation.JsonProperty("id") String id,
+        @com.fasterxml.jackson.annotation.JsonProperty("position") Position position,
+        @com.fasterxml.jackson.annotation.JsonProperty("active_orders") int activeOrders,
+        @com.fasterxml.jackson.annotation.JsonProperty("vehicle_type") String vehicleType,
+        @com.fasterxml.jackson.annotation.JsonProperty("is_available") boolean isAvailable
+    ) {}
 
-    public record OptimizationRequest(List<RiderState> riders, List<OrderRequest> orders) {}
+    public record OrderRequest(
+        @com.fasterxml.jackson.annotation.JsonProperty("id") String id,
+        @com.fasterxml.jackson.annotation.JsonProperty("position") Position position
+    ) {}
 
-    public record Assignment(UUID orderId, UUID riderId, int estimatedMinutes) {}
+    public record OptimizationRequest(
+        @com.fasterxml.jackson.annotation.JsonProperty("riders") List<RiderState> riders,
+        @com.fasterxml.jackson.annotation.JsonProperty("orders") List<OrderRequest> orders
+    ) {}
 
-    public record OptimizationResult(List<Assignment> assignments, List<String> unassignedOrders) {}
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    public record Assignment(
+        @com.fasterxml.jackson.annotation.JsonProperty("rider_id") String riderId,
+        @com.fasterxml.jackson.annotation.JsonProperty("order_ids") List<String> orderIds,
+        @com.fasterxml.jackson.annotation.JsonProperty("estimated_eta_minutes") Double estimatedEtaMinutes
+    ) {}
+
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    public record OptimizationResult(
+        @com.fasterxml.jackson.annotation.JsonProperty("assignments") List<Assignment> assignments,
+        @com.fasterxml.jackson.annotation.JsonProperty("unassigned_orders") List<String> unassignedOrders
+    ) {}
 }

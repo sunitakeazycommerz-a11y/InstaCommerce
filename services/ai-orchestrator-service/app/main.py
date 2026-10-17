@@ -1316,7 +1316,6 @@ app.state.tracer = init_telemetry(app)
 
 from app.auth import InternalServiceAuthMiddleware
 from app.api.handlers import router as v2_router, set_audit_publisher
-app.add_middleware(InternalServiceAuthMiddleware)
 app.include_router(v2_router)
 
 
@@ -1373,49 +1372,60 @@ def _rate_limited_response(scope: str, principal: str, meta: Dict[str, Any]) -> 
 
 @app.middleware("http")
 async def enforce_agent_guardrails(request: Request, call_next):
-    if not request.url.path.startswith("/agent/"):
+    if not request.url.path.startswith(("/agent/", "/v2/agent/")) or request.url.path == "/v2/agent/health":
         return await call_next(request)
 
     client_ip = _extract_client_ip(request)
-    ip_allowed, ip_meta = request.app.state.agent_ip_rate_limiter.allow(client_ip)
-    if not ip_allowed:
-        return _rate_limited_response("ip", client_ip, ip_meta)
+    ip_limiter = getattr(request.app.state, "agent_ip_rate_limiter", None)
+    ip_meta: Dict[str, Any] = {}
+    if ip_limiter:
+        ip_allowed, ip_meta = ip_limiter.allow(client_ip)
+        if not ip_allowed:
+            return _rate_limited_response("ip", client_ip, ip_meta)
 
     user_subject = await _extract_user_subject(request)
     user_meta: Optional[Dict[str, Any]] = None
-    if user_subject:
-        user_allowed, user_meta = request.app.state.agent_user_rate_limiter.allow(user_subject)
+    user_limiter = getattr(request.app.state, "agent_user_rate_limiter", None)
+    if user_subject and user_limiter:
+        user_allowed, user_meta = user_limiter.allow(user_subject)
         if not user_allowed:
             return _rate_limited_response("user", user_subject, user_meta)
 
-    semaphore = request.app.state.agent_request_semaphore
+    semaphore = getattr(request.app.state, "agent_request_semaphore", None)
     acquired = False
-    try:
-        await asyncio.wait_for(
-            semaphore.acquire(),
-            timeout=max(settings.agent_queue_acquire_timeout_ms, 1) / 1000.0,
-        )
-        acquired = True
-    except asyncio.TimeoutError:
-        log_event("agent_backpressure_rejected", level=logging.WARNING, path=request.url.path)
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Agent service is saturated; retry shortly"},
-            headers={"Retry-After": "1"},
-        )
+    if semaphore:
+        try:
+            await asyncio.wait_for(
+                semaphore.acquire(),
+                timeout=max(settings.agent_queue_acquire_timeout_ms, 1) / 1000.0,
+            )
+            acquired = True
+        except asyncio.TimeoutError:
+            log_event("agent_backpressure_rejected", level=logging.WARNING, path=request.url.path)
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Agent service is saturated; retry shortly"},
+                headers={"Retry-After": "1"},
+            )
 
     try:
         response = await call_next(request)
     finally:
-        if acquired:
+        if acquired and semaphore:
             semaphore.release()
 
-    response.headers["X-Agent-IP-Limit"] = str(ip_meta.get("limit", 0))
-    response.headers["X-Agent-IP-Remaining"] = str(int(ip_meta.get("remaining_tokens", 0)))
+    if ip_meta:
+        response.headers["X-Agent-IP-Limit"] = str(ip_meta.get("limit", 0))
+        response.headers["X-Agent-IP-Remaining"] = str(int(ip_meta.get("remaining_tokens", 0)))
     if user_meta:
         response.headers["X-Agent-User-Limit"] = str(user_meta.get("limit", 0))
         response.headers["X-Agent-User-Remaining"] = str(int(user_meta.get("remaining_tokens", 0)))
     return response
+
+
+# Register InternalServiceAuthMiddleware as the outermost layer so unauthenticated requests
+# are rejected before consuming rate-limiter tokens or semaphore concurrency slots.
+app.add_middleware(InternalServiceAuthMiddleware)
 
 
 @app.get("/health")

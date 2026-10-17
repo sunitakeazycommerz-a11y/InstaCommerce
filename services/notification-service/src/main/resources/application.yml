@@ -51,7 +51,7 @@ notification:
     base-url: ${ORDER_SERVICE_URL:http://localhost:8085}
   delivery:
     default-eta-minutes: ${NOTIFICATION_DEFAULT_ETA_MINUTES:15}
-  dlt-topic: ${NOTIFICATION_DLT_TOPIC:notifications.DLT}
+  dlt-topic: ${NOTIFICATION_DLT_TOPIC:notification.events.DLT}
   retry:
     batch-size: ${NOTIFICATION_RETRY_BATCH_SIZE:100}
 

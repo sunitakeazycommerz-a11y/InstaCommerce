@@ -34,77 +34,78 @@ canary:
           histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="{{ .ServiceName }}",region="us-west-1"}[5m])) by (le))
         successCondition: result < 2.0
 
-# Fulfillment Service - Dark-store pilot
-fulfillment-service:
-  enabled: true
-  replicaCount: 3
-  image:
-    tag: canary-sf
-  canary:
+services:
+  # Fulfillment Service - Dark-store pilot
+  fulfillment-service:
     enabled: true
-    weight: 100
-  resources:
-    requests:
-      cpu: 500m
-      memory: 1Gi
-    limits:
-      cpu: 2000m
-      memory: 4Gi
-  env:
-    REGION: us-west-1
-    DARK_STORE_PILOT_ENABLED: "true"
-    FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "false"
-  slo:
-    orderPackingTimeP99Seconds: 300
-    orderDispatchTimeP99Seconds: 120
+    replicas: 3
+    replicaCount: 3
+    tag: canary-sf
+    canary:
+      enabled: true
+      weight: 100
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    env:
+      REGION: us-west-1
+      DARK_STORE_PILOT_ENABLED: "true"
+      FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "false"
+    slo:
+      orderPackingTimeP99Seconds: 300
+      orderDispatchTimeP99Seconds: 120
 
-# Warehouse Service - Dark-store pilot  
-warehouse-service:
-  enabled: true
-  replicaCount: 2
-  image:
-    tag: canary-sf
-  canary:
+  # Warehouse Service - Dark-store pilot  
+  warehouse-service:
     enabled: true
-    weight: 100
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      cpu: 1000m
-      memory: 2Gi
-  env:
-    REGION: us-west-1
-    DARK_STORE_PILOT_ENABLED: "true"
-    INVENTORY_SYNC_INTERVAL_SECONDS: "60"
-  slo:
-    inventoryAccuracyPercent: 99.0
-    pickTimeP99Seconds: 180
+    replicas: 2
+    replicaCount: 2
+    tag: canary-sf
+    canary:
+      enabled: true
+      weight: 100
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    env:
+      REGION: us-west-1
+      DARK_STORE_PILOT_ENABLED: "true"
+      INVENTORY_SYNC_INTERVAL_SECONDS: "60"
+    slo:
+      inventoryAccuracyPercent: 99.0
+      pickTimeP99Seconds: 180
 
-# Rider Fleet Service - Dark-store pilot
-rider-fleet-service:
-  enabled: true
-  replicaCount: 3
-  image:
-    tag: canary-sf
-  canary:
+  # Rider Fleet Service - Dark-store pilot
+  rider-fleet-service:
     enabled: true
-    weight: 100
-  resources:
-    requests:
-      cpu: 500m
-      memory: 1Gi
-    limits:
-      cpu: 2000m
-      memory: 4Gi
-  env:
-    REGION: us-west-1
-    DARK_STORE_PILOT_ENABLED: "true"
-    RIDER_ASSIGNMENT_TIMEOUT_MS: "500"
-  slo:
-    riderAssignmentP99Ms: 500
-    etaAccuracyMinutes: 15
+    replicas: 3
+    replicaCount: 3
+    tag: canary-sf
+    canary:
+      enabled: true
+      weight: 100
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    env:
+      REGION: us-west-1
+      DARK_STORE_PILOT_ENABLED: "true"
+      RIDER_ASSIGNMENT_TIMEOUT_MS: "500"
+    slo:
+      riderAssignmentP99Ms: 500
+      etaAccuracyMinutes: 15
 
 # Monitoring configuration
 monitoring:

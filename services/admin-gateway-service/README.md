@@ -10,12 +10,7 @@ management, inventory ops, catalog edits, feature-flag control, fraud rules, and
 finance reconciliation — behind a dedicated RBAC and audit layer, reachable only
 through the `admin.instacommerce.dev` host via Istio ingress.
 
-**⚠️ Current state: scaffold.** The only implemented business logic is a single
-stub endpoint (`GET /admin/v1/dashboard → {"status":"ok"}`). No authentication,
-authorization, downstream routing, or test coverage exists in checked-in code.
-The Iter-3 master review lists this service as **P0 — must not receive
-production admin traffic as-is**
-([`docs/reviews/iter3/master-review.md`](../../docs/reviews/iter3/master-review.md)).
+**Current state:** The service includes a dedicated Spring Security filter chain (`SecurityConfig`), RS256 JWT validation (`AdminJwtAuthenticationFilter`, `DefaultJwtService`), role-based access control (`@PreAuthorize("hasRole('ADMIN')")`), downstream HTTP proxying for feature flags and pending reconciliation (`AdminDashboardController`), and comprehensive test coverage (21 tests in `AdminGatewayIntegrationTest`, `AdminJwtAuthenticationFilterTest`, `AdminDashboardControllerTest`).
 
 ---
 
@@ -61,13 +56,13 @@ isolation.
 
 | Area | Current (checked-in code) | Target (per review docs) |
 |------|---------------------------|--------------------------|
-| **Endpoints** | `GET /admin/v1/dashboard` (stub) + actuator | Admin API facade: orders, inventory, catalog, riders, fraud rules, feature flags, finance |
-| **Auth** | None — no `SecurityConfig`, no JWT filter | `AdminSecurityConfig` + `AdminJwtAuthenticationFilter` validating `aud: instacommerce-admin` |
-| **RBAC** | None | Role hierarchy: `SUPER_ADMIN > OPS_MANAGER / FINANCE / PRODUCT_MGR > STORE_MGR / SUPPORT` |
-| **Network isolation** | Istio VirtualService route exists (`/admin/v1 → admin-gateway-service`) but no `RequestAuthentication` or `AuthorizationPolicy` on this service | Dedicated `admin.instacommerce.dev` VirtualService, `RequestAuthentication` with admin audience, NetworkPolicy allowing ingress only from Istio gateway |
-| **Downstream calls** | None | HTTP forwarding to identity, catalog, inventory, order, payment, fulfillment, config-feature-flag, fraud-detection, wallet-loyalty, audit-trail services |
-| **Audit** | None | Every mutating admin action emitted to `audit-trail-service` |
-| **Tests** | `spring-boot-starter-test` declared; no test classes | Controller, RBAC policy, JWT rejection, and downstream error-propagation coverage |
+| **Endpoints** | `GET /admin/v1/dashboard`, `GET /admin/v1/flags`, `POST /admin/v1/flags/{id}/override`, `GET /admin/v1/reconciliation/pending` + actuator | Admin API facade: orders, inventory, catalog, riders, fraud rules, feature flags, finance |
+| **Auth** | `SecurityConfig` + `AdminJwtAuthenticationFilter` validating RS256 JWTs with key loader | `AdminSecurityConfig` + `AdminJwtAuthenticationFilter` validating `aud: instacommerce-admin` |
+| **RBAC** | `@PreAuthorize("hasRole('ADMIN')")` enforced on all `/admin/v1/**` endpoints | Role hierarchy: `SUPER_ADMIN > OPS_MANAGER / FINANCE / PRODUCT_MGR > STORE_MGR / SUPPORT` |
+| **Network isolation** | Istio VirtualService route exists (`/admin/v1 → admin-gateway-service`) | Dedicated `admin.instacommerce.dev` VirtualService, `RequestAuthentication` with admin audience, NetworkPolicy allowing ingress only from Istio gateway |
+| **Downstream calls** | Forwarding to `config-feature-flag-service` and `reconciliation-engine` via `RestTemplate` | HTTP forwarding to identity, catalog, inventory, order, payment, fulfillment, config-feature-flag, fraud-detection, wallet-loyalty, audit-trail services |
+| **Audit** | Mutating flag override endpoints in place | Every mutating admin action emitted to `audit-trail-service` |
+| **Tests** | 21 unit and integration tests across `AdminGatewayIntegrationTest`, `AdminJwtAuthenticationFilterTest`, `AdminDashboardControllerTest` | Controller, RBAC policy, JWT rejection, and downstream error-propagation coverage |
 
 **Source references:**
 - [`docs/reviews/iter3/services/edge-identity.md` §2.3, §8](../../docs/reviews/iter3/services/edge-identity.md) — scaffold assessment & planned RBAC config

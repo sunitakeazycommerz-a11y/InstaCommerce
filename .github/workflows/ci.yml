@@ -369,19 +369,19 @@ jobs:
       - name: Download dependencies
         working-directory: services/${{ matrix.service }}
         run: go mod download
-      - name: Build (skip tests - migration in progress)
-        working-directory: services/${{ matrix.service }}
-        run: go build ./...
       - name: Build
         working-directory: services/${{ matrix.service }}
         run: go build ./...
+      - name: Test with race detector
+        working-directory: services/${{ matrix.service }}
+        run: go test -race ./...
 
       - name: Set up Docker Buildx
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
+        if: matrix.service != 'go-shared' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Container Registry
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
+        if: matrix.service != 'go-shared' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -389,14 +389,14 @@ jobs:
           password: ${{ secrets.GCP_SA_KEY }}
 
       - name: Build Docker image
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
+        if: matrix.service != 'go-shared' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
             -f services/${{ matrix.service }}/Dockerfile \
             services/${{ matrix.service }}
 
       - name: Trivy vulnerability scan
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
+        if: matrix.service != 'go-shared' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
@@ -405,7 +405,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Push Docker image
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
+        if: matrix.service != 'go-shared' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         run: |
           docker push ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
 
@@ -421,9 +421,11 @@ jobs:
         service: ${{ fromJson(needs.detect-changes.outputs.python_services) }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: '3.12'
       - name: Install dependencies
         run: |
           cd services/${{ matrix.service }}
@@ -432,19 +434,38 @@ jobs:
       - name: Run tests
         run: |
           cd services/${{ matrix.service }}
-          pytest -v tests/ || echo "No tests found, skipping"
+          if [ -d "tests" ]; then
+            pytest -v tests/
+          else
+            echo "No tests directory found, skipping"
+          fi
       - name: Docker build
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         run: |
-          docker build -t ${{ matrix.service }}:${{ github.sha }} services/${{ matrix.service }}
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
+            -f services/${{ matrix.service }}/Dockerfile \
+            services/${{ matrix.service }}
       - name: Trivy scan
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          image-ref: '${{ matrix.service }}:${{ github.sha }}'
+          image-ref: '${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}'
           format: 'table'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+      - name: Authenticate to Google Cloud
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER || vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT || vars.GCP_SERVICE_ACCOUNT }}
+      - name: Configure Docker auth
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
+        run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+      - name: Push to Artifact Registry
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
+        run: docker push ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
 
   contract-validation:
     needs: detect-changes
@@ -492,7 +513,7 @@ jobs:
           fi
 
   deploy-dev:
-    needs: [detect-changes, security-scan, build-test, go-build-test, contract-validation]
+    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation]
     if: >-
       github.event_name == 'push'
       && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
@@ -517,7 +538,8 @@ jobs:
             ["outbox-relay-service"]="outbox-relay"
             ["payment-webhook-service"]="payment-webhook"
             ["reconciliation-engine"]="reconciliation-engine"
-            ["stream-processor-service"]="stream-processor-service"
+            ["reverse-etl-orchestrator"]="reverse-etl-orchestrator"
+            ["stream-processor-service"]="stream-processor"
           )
 
           while IFS= read -r svc; do
@@ -529,6 +551,11 @@ jobs:
             [[ -z "$svc" || "$svc" == "go-shared" ]] && continue
             deploy_services+=("${go_service_to_helm[$svc]:-$svc}")
           done < <(echo '${{ needs.detect-changes.outputs.changed_go_services }}' | jq -r '.[]')
+
+          while IFS= read -r svc; do
+            [[ -z "$svc" ]] && continue
+            deploy_services+=("$svc")
+          done < <(echo '${{ needs.detect-changes.outputs.changed_python_services }}' | jq -r '.[]')
 
           for svc in "${deploy_services[@]}"; do
             [[ -n "${seen_services[$svc]}" ]] && continue

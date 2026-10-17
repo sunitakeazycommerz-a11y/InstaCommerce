@@ -47,6 +47,7 @@ public class PickTask {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, columnDefinition = "pick_task_status")
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.NAMED_ENUM)
     private PickTaskStatus status = PickTaskStatus.PENDING;
 
     @Column(name = "started_at")

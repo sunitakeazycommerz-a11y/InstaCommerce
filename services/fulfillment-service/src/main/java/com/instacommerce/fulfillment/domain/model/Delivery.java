@@ -33,6 +33,7 @@ public class Delivery {
     private Rider rider;
 
     @Enumerated(EnumType.STRING)
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.NAMED_ENUM)
     @Column(nullable = false, columnDefinition = "delivery_status")
     private DeliveryStatus status = DeliveryStatus.ASSIGNED;
 

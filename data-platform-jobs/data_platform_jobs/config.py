@@ -32,7 +32,7 @@ def load_settings() -> JobSettings:
     marts_dataset = os.getenv("DATA_PLATFORM_BQ_DATASET_MARTS", "marts")
     features_dataset = os.getenv("DATA_PLATFORM_BQ_DATASET_FEATURES", "features")
     kafka_bootstrap = os.getenv("DATA_PLATFORM_KAFKA_BOOTSTRAP", "localhost:9092")
-    kafka_topics = _split_csv(os.getenv("DATA_PLATFORM_KAFKA_TOPICS", "order.events,payment.events"))
+    kafka_topics = _split_csv(os.getenv("DATA_PLATFORM_KAFKA_TOPICS", "orders.events,payments.events"))
     kafka_consumer_group = os.getenv("DATA_PLATFORM_KAFKA_CONSUMER_GROUP", "data-platform-batch-loader")
     kafka_max_messages = int(os.getenv("DATA_PLATFORM_KAFKA_MAX_MESSAGES", "5000"))
     batch_window_minutes = int(os.getenv("DATA_PLATFORM_BATCH_WINDOW_MINUTES", "15"))

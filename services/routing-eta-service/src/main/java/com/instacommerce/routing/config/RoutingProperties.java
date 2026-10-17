@@ -48,6 +48,15 @@ public class RoutingProperties {
         private double roadDistanceMultiplier = 1.4;
         private double peakSpeedMultiplier = 0.6;
         private double nightSpeedMultiplier = 1.2;
+        private String timezone = "Asia/Kolkata";
+
+        public String getTimezone() {
+            return timezone;
+        }
+
+        public void setTimezone(String timezone) {
+            this.timezone = timezone;
+        }
 
         public int getAverageSpeedKmh() {
             return averageSpeedKmh;

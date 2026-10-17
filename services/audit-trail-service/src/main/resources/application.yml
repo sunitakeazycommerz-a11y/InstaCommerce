@@ -52,6 +52,12 @@ audit:
   partition:
     retention-days: ${AUDIT_PARTITION_RETENTION_DAYS:365}
     future-months: ${AUDIT_PARTITION_FUTURE_MONTHS:3}
+  archive:
+    bucket-name: ${AUDIT_ARCHIVE_BUCKET_NAME:instacommerce-audit-archive-dev}
+    gcs-project-id: ${AUDIT_ARCHIVE_GCS_PROJECT_ID:instacommerce-dev}
+    kms-key-id: ${AUDIT_ARCHIVE_KMS_KEY_ID:}
+    enable-encryption: ${AUDIT_ARCHIVE_ENABLE_ENCRYPTION:true}
+    retention-days: ${AUDIT_ARCHIVE_RETENTION_DAYS:2557}
   dlt-topic: ${AUDIT_DLT_TOPIC:audit.DLT}
 
 management:

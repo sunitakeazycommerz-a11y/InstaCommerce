@@ -19,6 +19,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 @ExtendWith(MockitoExtension.class)
+@org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
 class AdminJwtAuthenticationFilterTest {
     @Mock
     private JwtService jwtService;
@@ -50,9 +51,9 @@ class AdminJwtAuthenticationFilterTest {
         when(jwtService.validateAccessToken("validToken")).thenReturn(jws);
         when(jws.getPayload()).thenReturn(claims);
         when(claims.getSubject()).thenReturn("admin-user-1");
-        when(jwtService.extractAuthorities(claims)).thenReturn(java.util.List.of(
+        doReturn(java.util.List.of(
             new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN")
-        ));
+        )).when(jwtService).extractAuthorities(claims);
 
         filter.doFilterInternal(request, response, filterChain);
 

@@ -13,6 +13,10 @@ spring:
         jdbc:
           enabled: false
 management:
+  prometheus:
+    metrics:
+      export:
+        enabled: true
   endpoints:
     access:
       default: read-only

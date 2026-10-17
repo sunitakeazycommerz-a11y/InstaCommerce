@@ -11,12 +11,20 @@ import json
 import logging
 import os
 import random
+import threading
 import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+
+from app.models import (
+    DemandModel, DemandFeatures, DemandResponse,
+    PersonalizationModel, PersonalizationFeatures, PersonalizationResponse,
+    CLVModel, CLVFeatures, CLVResponse,
+    DynamicPricingModel, PricingFeatures, PricingResponse,
+)
 
 logger = logging.getLogger("ai_inference")
 
@@ -195,28 +203,31 @@ class InferenceCache:
         self._max_items = max(0, max_items)
         self._ttl_seconds = max(0.0, ttl_seconds)
         self._store: "OrderedDict[str, tuple[float, Dict[str, Any]]]" = OrderedDict()
+        self._lock = threading.Lock()
 
     def get(self, key: str) -> Optional[Dict[str, Any]]:
         if self._max_items <= 0:
             return None
-        entry = self._store.get(key)
-        if not entry:
-            return None
-        expires_at, value = entry
-        if expires_at and expires_at < time.monotonic():
-            self._store.pop(key, None)
-            return None
-        self._store.move_to_end(key)
-        return value
+        with self._lock:
+            entry = self._store.get(key)
+            if not entry:
+                return None
+            expires_at, value = entry
+            if expires_at and expires_at < time.monotonic():
+                self._store.pop(key, None)
+                return None
+            self._store.move_to_end(key)
+            return value
 
     def set(self, key: str, value: Dict[str, Any]) -> None:
         if self._max_items <= 0:
             return
         expires_at = time.monotonic() + self._ttl_seconds if self._ttl_seconds > 0 else 0.0
-        self._store[key] = (expires_at, value)
-        self._store.move_to_end(key)
-        while len(self._store) > self._max_items:
-            self._store.popitem(last=False)
+        with self._lock:
+            self._store[key] = (expires_at, value)
+            self._store.move_to_end(key)
+            while len(self._store) > self._max_items:
+                self._store.popitem(last=False)
 
 
 class FeatureStoreClient:
@@ -419,21 +430,25 @@ def safe_sigmoid(value: float) -> float:
     return 1.0 / (1.0 + exp(-value))
 
 
-class EtaRequest(BaseModel):
+class InferenceBaseModel(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class EtaRequest(InferenceBaseModel):
     distance_km: float = Field(..., ge=0, le=200)
     item_count: int = Field(..., ge=0, le=200)
     traffic_factor: float = Field(..., ge=0.5, le=3.0)
     model_version: Optional[str] = None
 
 
-class EtaResponse(BaseModel):
+class EtaResponse(InferenceBaseModel):
     eta_minutes: float
     feature_contributions: Dict[str, float]
     bias: float
     model_version: str
 
 
-class RankingRequest(BaseModel):
+class RankingRequest(InferenceBaseModel):
     relevance_score: float = Field(..., ge=0, le=1)
     price_score: float = Field(..., ge=0, le=1)
     availability_score: float = Field(..., ge=0, le=1)
@@ -441,7 +456,7 @@ class RankingRequest(BaseModel):
     model_version: Optional[str] = None
 
 
-class RankingResponse(BaseModel):
+class RankingResponse(InferenceBaseModel):
     ranking_score: float
     raw_score: float
     feature_contributions: Dict[str, float]
@@ -449,7 +464,7 @@ class RankingResponse(BaseModel):
     model_version: str
 
 
-class FraudRequest(BaseModel):
+class FraudRequest(InferenceBaseModel):
     order_amount: float = Field(..., ge=0, le=10000)
     chargeback_rate: float = Field(..., ge=0, le=1)
     device_risk: float = Field(..., ge=0, le=1)
@@ -457,7 +472,7 @@ class FraudRequest(BaseModel):
     model_version: Optional[str] = None
 
 
-class FraudResponse(BaseModel):
+class FraudResponse(InferenceBaseModel):
     fraud_probability: float
     raw_score: float
     feature_contributions: Dict[str, float]
@@ -465,7 +480,7 @@ class FraudResponse(BaseModel):
     model_version: str
 
 
-class BatchInferenceItem(BaseModel):
+class BatchInferenceItem(InferenceBaseModel):
     model_name: Literal["eta", "ranking", "fraud"]
     payload: Dict[str, Any] = Field(default_factory=dict)
     model_version: Optional[str] = None
@@ -473,18 +488,18 @@ class BatchInferenceItem(BaseModel):
     use_feature_store: bool = False
 
 
-class BatchInferenceRequest(BaseModel):
+class BatchInferenceRequest(InferenceBaseModel):
     items: List[BatchInferenceItem] = Field(..., min_length=1, max_length=100)
 
 
-class BatchInferenceResult(BaseModel):
+class BatchInferenceResult(InferenceBaseModel):
     model_name: str
     model_version: Optional[str] = None
     output: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 
-class BatchInferenceResponse(BaseModel):
+class BatchInferenceResponse(InferenceBaseModel):
     results: List[BatchInferenceResult]
 
 
@@ -720,6 +735,10 @@ async def lifespan(app_instance: FastAPI):
     app_instance.state.registry = registry
     app_instance.state.cache = cache
     app_instance.state.feature_store = feature_store
+    app_instance.state.demand_model = DemandModel()
+    app_instance.state.personalization_model = PersonalizationModel()
+    app_instance.state.clv_model = CLVModel()
+    app_instance.state.pricing_model = DynamicPricingModel()
     try:
         yield
     finally:
@@ -741,15 +760,18 @@ def metrics() -> Response:
 
 @app.get("/models")
 def list_models() -> Dict[str, Any]:
-    return {"models": app.state.registry.summary()}
+    registry = getattr(app.state, "registry", None)
+    return {"models": registry.summary() if registry else {}}
 
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
+    registry = getattr(app.state, "registry", None)
+    feature_store = getattr(app.state, "feature_store", None)
     return {
         "status": "ok",
-        "models": app.state.registry.summary(),
-        "feature_store": app.state.feature_store.health(),
+        "models": registry.summary() if registry else {},
+        "feature_store": feature_store.health() if feature_store else {"status": "ok"},
     }
 
 
@@ -842,3 +864,84 @@ def batch_inference(request: BatchInferenceRequest) -> BatchInferenceResponse:
     feature_store = app.state.feature_store
     results = [process_batch_item(item, registry, cache, feature_store) for item in request.items]
     return BatchInferenceResponse(results=results)
+
+
+@app.post("/inference/demand", response_model=DemandResponse)
+def demand_inference(features: DemandFeatures) -> DemandResponse:
+    start = time.perf_counter()
+    status = "error"
+    version_label = "demand-tft-v1"
+    try:
+        model: DemandModel = app.state.demand_model
+        version_label = model.version
+        response = model.predict(features)
+        status = "success"
+        return response
+    finally:
+        REQUEST_COUNT.labels(
+            endpoint="/inference/demand", model="demand", version=version_label, status=status
+        ).inc()
+        REQUEST_LATENCY.labels(endpoint="/inference/demand", model="demand", version=version_label).observe(
+            time.perf_counter() - start
+        )
+
+
+@app.post("/inference/personalization", response_model=PersonalizationResponse)
+def personalization_inference(features: PersonalizationFeatures) -> PersonalizationResponse:
+    start = time.perf_counter()
+    status = "error"
+    version_label = "pers-ncf-v1"
+    try:
+        model: PersonalizationModel = app.state.personalization_model
+        version_label = model.version
+        response = model.predict(features)
+        status = "success"
+        return response
+    finally:
+        REQUEST_COUNT.labels(
+            endpoint="/inference/personalization", model="personalization", version=version_label, status=status
+        ).inc()
+        REQUEST_LATENCY.labels(endpoint="/inference/personalization", model="personalization", version=version_label).observe(
+            time.perf_counter() - start
+        )
+
+
+@app.post("/inference/clv", response_model=CLVResponse)
+def clv_inference(features: CLVFeatures) -> CLVResponse:
+    start = time.perf_counter()
+    status = "error"
+    version_label = "clv-bg-nbd-v1"
+    try:
+        model: CLVModel = app.state.clv_model
+        version_label = model.version
+        response = model.predict(features)
+        status = "success"
+        return response
+    finally:
+        REQUEST_COUNT.labels(
+            endpoint="/inference/clv", model="clv", version=version_label, status=status
+        ).inc()
+        REQUEST_LATENCY.labels(endpoint="/inference/clv", model="clv", version=version_label).observe(
+            time.perf_counter() - start
+        )
+
+
+@app.post("/inference/pricing", response_model=PricingResponse)
+def pricing_inference(features: PricingFeatures) -> PricingResponse:
+    start = time.perf_counter()
+    status = "error"
+    version_label = "pricing-bandit-v1"
+    try:
+        model: DynamicPricingModel = app.state.pricing_model
+        version_label = model.version
+        response = model.predict(features)
+        status = "success"
+        return response
+    finally:
+        REQUEST_COUNT.labels(
+            endpoint="/inference/pricing", model="pricing", version=version_label, status=status
+        ).inc()
+        REQUEST_LATENCY.labels(endpoint="/inference/pricing", model="pricing", version=version_label).observe(
+            time.perf_counter() - start
+        )
+

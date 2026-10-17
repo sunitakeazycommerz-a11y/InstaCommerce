@@ -1,4 +1,5 @@
 global:
+  gcpProject: "instacommerce-prod"
   image:
     registry: asia-south1-docker.pkg.dev/instacommerce/images
     pullPolicy: IfNotPresent
@@ -619,7 +620,7 @@ services:
       targetCPU: 70
 
   outbox-relay-order:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -636,7 +637,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-payment:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -653,7 +654,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-cart:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -670,7 +671,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-fulfillment:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -687,7 +688,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-inventory:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -704,7 +705,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-identity:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -721,7 +722,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-catalog:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -738,7 +739,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-rider-fleet:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -755,7 +756,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-warehouse:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -772,7 +773,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-pricing:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -789,7 +790,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-wallet-loyalty:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -806,7 +807,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-fraud-detection:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -823,7 +824,7 @@ services:
       HEALTH_PORT: "8103"
 
   outbox-relay-routing-eta:
-    image: instacommerce/outbox-relay-service
+    image: outbox-relay-service
     port: 8103
     replicas: 1
     readinessPath: /health/ready
@@ -904,7 +905,7 @@ services:
       targetCPU: 70
 
   stream-processor:
-    image: instacommerce/stream-processor-service
+    image: stream-processor-service
     port: 8108
     replicas: 1
     readinessPath: /health/ready
@@ -919,7 +920,7 @@ services:
       HEALTH_PORT: "8108"
 
   reverse-etl-orchestrator:
-    image: instacommerce/reverse-etl-orchestrator
+    image: reverse-etl-orchestrator
     port: 8080
     replicas: 2
     readinessPath: /health/ready

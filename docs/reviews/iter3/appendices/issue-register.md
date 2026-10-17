@@ -312,6 +312,7 @@
 | **Remediation Direction** | Add `SecurityConfig` with JWT validation; implement request authentication filter; add circuit breaker for downstream calls; add observability (metrics, traces) |
 | **Owner Class** | Service Team (BFF) + Security |
 | **Wave** | Wave 1 |
+| **Status** | ✅ RESOLVED — Implemented WebFlux `MobileBffSecurityConfig` (RS256 JWT validation, identity-service JWKS), `UserContextPropagationFilter` (`X-User-Id`, `X-User-Roles` propagation), `MobileBffProperties`, and 9 passing integration tests |
 | **Dependencies** | Identity service JWKS endpoint must be reachable |
 
 ---

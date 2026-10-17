@@ -20,7 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -103,7 +103,7 @@ class AdminGatewayIntegrationTest {
     mvc.perform(get("/admin/v1/dashboard")
         .contentType(MediaType.APPLICATION_JSON))
         .andExpect(status().isUnauthorized())
-        .andExpect(jsonPath("$.code").value("TOKEN_INVALID"));
+        .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
   }
 
   @Test
@@ -155,6 +155,7 @@ class AdminGatewayIntegrationTest {
     return Jwts.builder()
         .subject(subject)
         .issuer("instacommerce-identity")
+        .claim("roles", java.util.List.of("ROLE_ADMIN"))
         .audience()
         .add(audience)
         .and()

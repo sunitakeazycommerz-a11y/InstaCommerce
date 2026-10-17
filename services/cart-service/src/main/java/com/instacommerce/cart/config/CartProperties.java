@@ -55,7 +55,7 @@ public class CartProperties {
     }
 
     public static class Kafka {
-        private String cartEventsTopic = "cart-events";
+        private String cartEventsTopic = "cart.events";
 
         public String getCartEventsTopic() {
             return cartEventsTopic;

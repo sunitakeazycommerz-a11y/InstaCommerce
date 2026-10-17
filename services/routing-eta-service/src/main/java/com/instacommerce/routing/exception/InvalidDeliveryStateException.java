@@ -6,7 +6,7 @@ import org.springframework.http.HttpStatus;
 public class InvalidDeliveryStateException extends ApiException {
 
     public InvalidDeliveryStateException(DeliveryStatus current, DeliveryStatus target) {
-        super(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_DELIVERY_STATE",
+        super(HttpStatus.UNPROCESSABLE_CONTENT, "INVALID_DELIVERY_STATE",
             "Cannot transition from " + current + " to " + target);
     }
 }

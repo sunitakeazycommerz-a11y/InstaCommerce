@@ -82,9 +82,8 @@ public class RetryableNotificationSender {
                 log.setStatus(NotificationStatus.FAILED);
                 logRepository.save(log);
                 metrics.incrementFailed();
-                if (request != null) {
-                    dlqPublisher.publish(request, "Retries exhausted");
-                }
+                NotificationRequest req = request != null ? request : fallbackRequest(log);
+                dlqPublisher.publish(req, "Retries exhausted");
                 return;
             }
             Duration backoff = BACKOFF[Math.min(currentRetry, BACKOFF.length - 1)];
@@ -100,9 +99,20 @@ public class RetryableNotificationSender {
             log.setAttempts(log.getRetryCount() + 1);
             logRepository.save(log);
             metrics.incrementFailed();
-            if (request != null) {
-                dlqPublisher.publish(request, ex.getMessage());
-            }
+            NotificationRequest req = request != null ? request : fallbackRequest(log);
+            dlqPublisher.publish(req, ex.getMessage());
         }
+    }
+
+    private NotificationRequest fallbackRequest(NotificationLog log) {
+        return new NotificationRequest(
+            log.getEventId(),
+            log.getEventType() != null ? log.getEventType() : "UNKNOWN",
+            log.getUserId(),
+            log.getChannel(),
+            log.getTemplateId(),
+            log.getRecipient(),
+            java.util.Map.of()
+        );
     }
 }

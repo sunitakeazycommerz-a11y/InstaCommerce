@@ -51,4 +51,14 @@ management:
 internal:
   service:
     name: ${spring.application.name}
-    token: ${INTERNAL_SERVICE_TOKEN}
+    token: ${INTERNAL_SERVICE_TOKEN:}
+
+mobile-bff:
+  jwt:
+    issuer: ${MOBILE_BFF_JWT_ISSUER:instacommerce-identity}
+    public-key: ${sm://jwt-rsa-public-key:${MOBILE_BFF_JWT_PUBLIC_KEY:}}
+  upstream:
+    catalog-url: ${CATALOG_SERVICE_URL:http://catalog-service:8082}
+    search-url: ${SEARCH_SERVICE_URL:http://search-service:8086}
+    feature-flag-url: ${FEATURE_FLAG_SERVICE_URL:http://config-feature-flag-service:8096}
+    timeout-ms: ${UPSTREAM_TIMEOUT_MS:2000}

@@ -20,7 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -32,10 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 @Testcontainers
-@EmbeddedKafka(partitions = 1, brokerProperties = {
-    "listeners=PLAINTEXT://localhost:9092",
-    "port=9092"
-})
+@EmbeddedKafka(partitions = 1)
 @TestPropertySource(properties = {
     "spring.jpa.hibernate.ddl-auto=validate",
     "spring.flyway.enabled=true",
@@ -50,6 +47,26 @@ class NotificationServiceIntegrationTest {
       .withDatabaseName("test_notifications")
       .withUsername("test")
       .withPassword("test");
+
+  @org.springframework.test.context.DynamicPropertySource
+  static void registerProperties(org.springframework.test.context.DynamicPropertyRegistry registry) {
+    postgres.start();
+    registry.add("spring.datasource.url", postgres::getJdbcUrl);
+    registry.add("spring.datasource.username", postgres::getUsername);
+    registry.add("spring.datasource.password", postgres::getPassword);
+    registry.add("spring.cloud.gcp.secretmanager.enabled", () -> "false");
+    registry.add("spring.cloud.gcp.sql.enabled", () -> "false");
+  }
+
+  @org.junit.jupiter.api.BeforeAll
+  static void runMigrations() {
+    postgres.start();
+    org.flywaydb.core.Flyway.configure()
+        .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+        .locations("classpath:db/migration")
+        .load()
+        .migrate();
+  }
 
   @Autowired
   private NotificationService notificationService;
@@ -256,18 +273,6 @@ class NotificationServiceIntegrationTest {
 
   private ConsumerRecord<String, String> createConsumerRecord(
       String topic, String key, String value) {
-    return new ConsumerRecord<>(
-        topic,
-        0,
-        0L,
-        System.currentTimeMillis(),
-        TimestampType.CREATE_TIME,
-        0,
-        0,
-        key,
-        value,
-        null,
-        null
-    );
+    return new ConsumerRecord<>(topic, 0, 0L, key, value);
   }
 }
