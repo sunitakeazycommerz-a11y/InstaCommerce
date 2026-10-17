@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WalletDebited",
+  "type": "object",
+  "required": [
+    "transactionId",
+    "walletId",
+    "userId",
+    "amountCents",
+    "balanceCents",
+    "referenceType"
+  ],
+  "properties": {
+    "transactionId": { "type": "string" },
+    "walletId": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "amountCents": { "type": "integer", "minimum": 0 },
+    "balanceCents": { "type": "integer", "minimum": 0 },
+    "referenceType": { "type": "string" },
+    "referenceId": { "type": "string" },
+    "timestamp": { "type": ["string", "null"], "format": "date-time" }
+  }
+}

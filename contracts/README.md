@@ -102,14 +102,19 @@ contracts/
     │
     └── resources/schemas/             # JSON Schema event definitions
         ├── README.md
+        ├── cart/
         ├── catalog/
-        ├── orders/
-        ├── payments/
-        ├── inventory/
+        ├── common/
+        ├── fraud/
         ├── fulfillment/
         ├── identity/
-        ├── fraud/
+        ├── inventory/
+        ├── orders/
+        ├── payments/
+        ├── pricing/
         ├── rider/
+        ├── routing/
+        ├── wallet/
         └── warehouse/
 ```
 
@@ -179,6 +184,7 @@ contracts/
 | `OrderModified` | `fulfillment/OrderModified.v1.json` | v1 | Order items modified or substituted |
 | `DeliveryCompleted` | `fulfillment/DeliveryCompleted.v1.json` | v1 | Delivery confirmed complete |
 | `DeliveryStatus` | `fulfillment/DeliveryStatus.v1.json` | v1 | Canonical delivery lifecycle states enum |
+| `DeliveryFailed` | `fulfillment/DeliveryFailed.v1.json` | v1 | Delivery failed notification with root cause |
 
 ### Catalog (`catalog.events`)
 
@@ -186,11 +192,14 @@ contracts/
 |-------|--------|---------|-------------|
 | `ProductCreated` | `catalog/ProductCreated.v1.json` | v1 | New product added to catalog |
 | `ProductUpdated` | `catalog/ProductUpdated.v1.json` | v1 | Product details updated |
+| `ProductDeactivated` | `catalog/ProductDeactivated.v1.json` | v1 | Product deactivated from catalog |
 
 ### Identity (`identity.events`)
 
 | Event | Schema | Version | Description |
 |-------|--------|---------|-------------|
+| `UserRegistered` | `identity/UserRegistered.v1.json` | v1 | New user registered |
+| `AccountLocked` | `identity/AccountLocked.v1.json` | v1 | Security lockdown triggered on user account |
 | `UserErased` | `identity/UserErased.v1.json` | v1 | User data erased (GDPR right-to-be-forgotten) |
 
 ### Fraud (`fraud.events`)
@@ -207,6 +216,7 @@ contracts/
 | `RiderOnboarded` | `rider/RiderOnboarded.v1.json` | v1 | Rider onboarding completed |
 | `RiderActivated` | `rider/RiderActivated.v1.json` | v1 | Rider activated for deliveries |
 | `RiderAssigned` | `rider/RiderAssigned.v1.json` | v1 | Rider assigned to order |
+| `RiderReleased` | `rider/RiderReleased.v1.json` | v1 | Rider assignment released |
 | `RiderSuspended` | `rider/RiderSuspended.v1.json` | v1 | Rider account suspended |
 
 ### Warehouse (`warehouse.events`)
@@ -219,31 +229,28 @@ contracts/
 
 ### Cart (`cart.events`)
 
-| Event | Schema / Payload | Version | Description |
+| Event | Schema | Version | Description |
 |---|---|---|---|
-| `CartCreated` | Cart state snapshot | v1 | User initialized or cloned a cart |
-| `CartItemAdded` | Cart items & quantity | v1 | Item added to active cart |
-| `CartItemUpdated` | Updated quantities | v1 | Item quantity modified |
-| `CartItemRemoved` | Remaining cart items | v1 | Item removed from cart |
-| `CartCleared` | Empty cart identifier | v1 | Cart emptied |
+| `CartItemAdded` | `cart/CartItemAdded.v1.json` | v1 | Item added to active cart |
+| `CartItemRemoved` | `cart/CartItemRemoved.v1.json` | v1 | Item removed from cart |
+| `CartCleared` | `cart/CartCleared.v1.json` | v1 | Cart emptied |
 
 ### Pricing & Promotions (`pricing.events`, `promotion.events`)
 
-| Event | Schema / Payload | Version | Description |
+| Event | Schema | Version | Description |
 |---|---|---|---|
-| `PriceUpdated` | SKU, store, price | v1 | Base or surge price change published |
-| `PromotionCreated` | Promotion metadata & rules | v1 | New campaign or coupon code created |
-| `PromotionUpdated` | Active rules & budget | v1 | Campaign details or budget updated |
-| `PromotionDeactivated` | Campaign identifier | v1 | Campaign deactivated or expired |
+| `PromotionCreated` | `pricing/PromotionCreated.v1.json` | v1 | New promotional campaign created |
+| `PromotionUpdated` | `pricing/PromotionUpdated.v1.json` | v1 | Promotion discount rules or limits updated |
+| `PromotionDeactivated` | `pricing/PromotionDeactivated.v1.json` | v1 | Promotion campaign deactivated |
 
 ### Wallet & Loyalty (`wallet.events`)
 
-| Event | Schema / Payload | Version | Description |
+| Event | Schema | Version | Description |
 |---|---|---|---|
-| `PointsEarned` | User ID, points, order | v1 | Loyalty points earned on delivered order |
-| `PointsRedeemed` | User ID, points redeemed | v1 | Loyalty points converted to discount |
-| `WalletCredited` | User ID, amount, type | v1 | Cashback, top-up, or refund credit |
-| `WalletDebited` | User ID, amount, type | v1 | Balance applied to payment |
+| `PointsEarned` | `wallet/PointsEarned.v1.json` | v1 | Loyalty points earned on delivered order |
+| `PointsRedeemed` | `wallet/PointsRedeemed.v1.json` | v1 | Loyalty points converted to discount |
+| `WalletCredited` | `wallet/WalletCredited.v1.json` | v1 | Cashback, top-up, or refund credit |
+| `WalletDebited` | `wallet/WalletDebited.v1.json` | v1 | Balance debited from wallet |
 
 ### Routing & Logistics (`delivery.events`, `routing.events`, `rider.geofence.events`)
 
