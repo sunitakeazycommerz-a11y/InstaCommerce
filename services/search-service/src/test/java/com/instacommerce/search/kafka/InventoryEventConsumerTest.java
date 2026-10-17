@@ -93,4 +93,63 @@ class InventoryEventConsumerTest {
 
         verifyNoInteractions(searchIndexService);
     }
+
+    @Test
+    void stockConfirmed_itemsReachZero_setsOutOfStock() {
+        UUID prod1 = UUID.randomUUID();
+        UUID prod2 = UUID.randomUUID();
+
+        Map<String, Object> item1 = Map.of(
+            "productId", prod1.toString(),
+            "quantity", 2,
+            "remainingAvailable", 0,
+            "inStock", false
+        );
+        Map<String, Object> item2 = Map.of(
+            "productId", prod2.toString(),
+            "quantity", 1,
+            "remainingAvailable", 5,
+            "inStock", true
+        );
+
+        Map<String, Object> payload = Map.of(
+            "reservationId", UUID.randomUUID().toString(),
+            "items", java.util.List.of(item1, item2)
+        );
+
+        Map<String, Object> event = Map.of(
+            "eventType", "StockConfirmed",
+            "payload", payload
+        );
+
+        consumer.handleInventoryEvent(event);
+
+        verify(searchIndexService).updateStockStatus(prod1, false);
+        verify(searchIndexService).updateStockStatus(prod2, true);
+    }
+
+    @Test
+    void stockReleased_marksItemsInStock() {
+        UUID prod1 = UUID.randomUUID();
+        UUID prod2 = UUID.randomUUID();
+
+        Map<String, Object> item1 = Map.of("productId", prod1.toString(), "quantity", 3);
+        Map<String, Object> item2 = Map.of("productId", prod2.toString(), "quantity", 1);
+
+        Map<String, Object> payload = Map.of(
+            "reservationId", UUID.randomUUID().toString(),
+            "reason", "CANCELLED",
+            "items", java.util.List.of(item1, item2)
+        );
+
+        Map<String, Object> event = Map.of(
+            "eventType", "StockReleased",
+            "payload", payload
+        );
+
+        consumer.handleInventoryEvent(event);
+
+        verify(searchIndexService).updateStockStatus(prod1, true);
+        verify(searchIndexService).updateStockStatus(prod2, true);
+    }
 }

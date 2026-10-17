@@ -2,6 +2,7 @@ package com.instacommerce.search.kafka;
 
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.search.service.SearchIndexService;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -37,6 +38,8 @@ public class InventoryEventConsumer {
         switch (eventType) {
             case "StockAdjusted" -> handleStockAdjusted(payload);
             case "LowStockAlert" -> handleLowStockAlert(payload);
+            case "StockConfirmed" -> handleStockConfirmed(payload);
+            case "StockReleased" -> handleStockReleased(payload);
             default -> log.debug("Ignoring unhandled inventory event type={}", eventType);
         }
     }
@@ -61,5 +64,60 @@ public class InventoryEventConsumer {
         }
         boolean inStock = currentQuantity.intValue() > 0;
         searchIndexService.updateStockStatus(productId, inStock);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void handleStockConfirmed(Map<String, Object> payload) {
+        Object itemsObj = payload.get("items");
+        if (itemsObj instanceof List<?> itemsList) {
+            for (Object obj : itemsList) {
+                if (obj instanceof Map<?, ?> itemMap) {
+                    processConfirmedItem((Map<String, Object>) itemMap);
+                }
+            }
+        } else if (payload.containsKey("productId")) {
+            processConfirmedItem(payload);
+        }
+    }
+
+    private void processConfirmedItem(Map<String, Object> item) {
+        Object pidObj = item.get("productId");
+        if (pidObj == null) {
+            return;
+        }
+        UUID productId = UUID.fromString(pidObj.toString());
+        Boolean inStock = (Boolean) item.get("inStock");
+        if (inStock != null) {
+            searchIndexService.updateStockStatus(productId, inStock);
+            return;
+        }
+        Number remainingAvailable = (Number) item.get("remainingAvailable");
+        if (remainingAvailable != null) {
+            searchIndexService.updateStockStatus(productId, remainingAvailable.intValue() > 0);
+            return;
+        }
+        Number remainingOnHand = (Number) item.get("remainingOnHand");
+        if (remainingOnHand != null) {
+            searchIndexService.updateStockStatus(productId, remainingOnHand.intValue() > 0);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void handleStockReleased(Map<String, Object> payload) {
+        Object itemsObj = payload.get("items");
+        if (itemsObj instanceof List<?> itemsList) {
+            for (Object obj : itemsList) {
+                if (obj instanceof Map<?, ?> itemMap) {
+                    Object pidObj = ((Map<?, ?>) itemMap).get("productId");
+                    if (pidObj != null) {
+                        UUID productId = UUID.fromString(pidObj.toString());
+                        searchIndexService.updateStockStatus(productId, true);
+                    }
+                }
+            }
+        } else if (payload.containsKey("productId")) {
+            UUID productId = UUID.fromString(payload.get("productId").toString());
+            searchIndexService.updateStockStatus(productId, true);
+        }
     }
 }

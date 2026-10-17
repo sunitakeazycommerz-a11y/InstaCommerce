@@ -146,28 +146,31 @@ public class ReservationService {
         List<ReservationLineItem> items = reservation.getLineItems().stream()
             .sorted(Comparator.comparing(ReservationLineItem::getProductId))
             .toList();
+        List<Map<String, Object>> itemsList = new ArrayList<>();
         for (ReservationLineItem item : items) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
             stock.setOnHand(stock.getOnHand() - item.getQuantity());
             stock.setReserved(stock.getReserved() - item.getQuantity());
             stockItemRepository.save(stock);
             checkLowStock(stock, reservation.getStoreId());
+
+            int available = stock.getOnHand() - stock.getReserved();
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("productId", item.getProductId().toString());
+            m.put("quantity", item.getQuantity());
+            m.put("remainingOnHand", stock.getOnHand());
+            m.put("remainingAvailable", available);
+            m.put("inStock", available > 0);
+            itemsList.add(m);
         }
         reservation.setStatus(ReservationStatus.CONFIRMED);
         reservationRepository.save(reservation);
 
         // Publish StockConfirmed event
-        List<Map<String, Object>> itemsList = items.stream()
-            .map(item -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("productId", item.getProductId().toString());
-                m.put("quantity", item.getQuantity());
-                return m;
-            })
-            .toList();
         Map<String, Object> eventPayload = new LinkedHashMap<>();
         eventPayload.put("reservationId", reservationId.toString());
         eventPayload.put("orderId", reservation.getIdempotencyKey());
+        eventPayload.put("storeId", reservation.getStoreId().toString());
         eventPayload.put("items", itemsList);
         eventPayload.put("confirmedAt", Instant.now().toString());
         outboxService.publish("Reservation", reservationId.toString(),
@@ -222,12 +225,14 @@ public class ReservationService {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("productId", item.getProductId().toString());
                 m.put("quantity", item.getQuantity());
+                m.put("inStock", true);
                 return m;
             })
             .toList();
         Map<String, Object> eventPayload = new LinkedHashMap<>();
         eventPayload.put("reservationId", reservation.getId().toString());
         eventPayload.put("orderId", reservation.getIdempotencyKey());
+        eventPayload.put("storeId", reservation.getStoreId().toString());
         eventPayload.put("items", itemsList);
         eventPayload.put("releasedAt", Instant.now().toString());
         eventPayload.put("reason", reservation.getStatus().name());
