@@ -3,6 +3,7 @@ package inventory.v1;
 
 option java_package = "com.instacommerce.contracts.inventory.v1";
 option java_multiple_files = true;
+option go_package = "github.com/instacommerce/go-shared/pkg/proto/inventory/v1;inventoryv1";
 
 import "common/v1/money.proto";
 

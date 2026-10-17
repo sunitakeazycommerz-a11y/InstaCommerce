@@ -3,6 +3,7 @@ package common.v1;
 
 option java_package = "com.instacommerce.contracts.common.v1";
 option java_multiple_files = true;
+option go_package = "github.com/instacommerce/go-shared/pkg/proto/common/v1;commonv1";
 
 message Money {
   int64  amount_minor = 1;

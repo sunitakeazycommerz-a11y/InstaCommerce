@@ -83,10 +83,22 @@ contracts/
     │   │   └── money.proto            # Shared Money type
     │   ├── catalog/v1/
     │   │   └── catalog_service.proto  # Catalog gRPC service
+    │   ├── cart/v1/
+    │   │   └── cart_service.proto     # Cart gRPC service
+    │   ├── fulfillment/v1/
+    │   │   └── fulfillment_service.proto # Fulfillment gRPC service
     │   ├── inventory/v1/
     │   │   └── inventory_service.proto # Inventory gRPC service
-    │   └── payment/v1/
-    │       └── payment_service.proto  # Payment gRPC service
+    │   ├── order/v1/
+    │   │   └── order_service.proto    # Order gRPC service
+    │   ├── payment/v1/
+    │   │   └── payment_service.proto  # Payment gRPC service
+    │   ├── rider/v1/
+    │   │   └── rider_service.proto    # Rider fleet gRPC service
+    │   ├── routing/v1/
+    │   │   └── routing_service.proto  # Routing & ETA gRPC service
+    │   └── wallet/v1/
+    │       └── wallet_service.proto   # Wallet & loyalty gRPC service
     │
     └── resources/schemas/             # JSON Schema event definitions
         ├── README.md
@@ -280,8 +292,14 @@ All Java services, Go relay, and consumers reference this single source of truth
 |---------|-----------|-------------|
 | `common.v1.Money` | `common/v1/money.proto` | Shared monetary value type (amount + currency) |
 | `CatalogService` | `catalog/v1/catalog_service.proto` | Product CRUD, search, category management |
+| `CartService` | `cart/v1/cart_service.proto` | Cart management, item updates, cart checkout validation |
+| `FulfillmentService` | `fulfillment/v1/fulfillment_service.proto` | Order fulfillment tasks, pick waves, packing verification |
 | `InventoryService` | `inventory/v1/inventory_service.proto` | Stock queries, reservations, adjustments |
+| `OrderService` | `order/v1/order_service.proto` | Order lifecycle, status queries, cancellations |
 | `PaymentService` | `payment/v1/payment_service.proto` | Payment authorization, capture, refund |
+| `RiderService` | `rider/v1/rider_service.proto` | Rider shifts, geofence status, automated dispatch assignments |
+| `RoutingService` | `routing/v1/routing_service.proto` | Distance matrix, dynamic route optimization, delivery ETA calculation |
+| `WalletService` | `wallet/v1/wallet_service.proto` | Wallet balance, credit/debit transactions, customer loyalty points |
 
 ---
 

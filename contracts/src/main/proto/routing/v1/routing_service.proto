@@ -1,0 +1,63 @@
+syntax = "proto3";
+package routing.v1;
+
+option java_package = "com.instacommerce.contracts.routing.v1";
+option java_multiple_files = true;
+option go_package = "github.com/instacommerce/go-shared/pkg/proto/routing/v1;routingv1";
+
+service RoutingService {
+  rpc CalculateETA(CalculateETARequest) returns (CalculateETAResponse);
+  rpc GetDistanceMatrix(DistanceMatrixRequest) returns (DistanceMatrixResponse);
+  rpc OptimizeRoute(OptimizeRouteRequest) returns (OptimizeRouteResponse);
+}
+
+message GeoCoordinate {
+  double latitude = 1;
+  double longitude = 2;
+}
+
+message CalculateETARequest {
+  GeoCoordinate origin = 1;
+  GeoCoordinate destination = 2;
+  string vehicle_type = 3;
+}
+
+message CalculateETAResponse {
+  int32 eta_minutes = 1;
+  double distance_meters = 2;
+  double traffic_delay_seconds = 3;
+}
+
+message DistanceMatrixRequest {
+  repeated GeoCoordinate origins = 1;
+  repeated GeoCoordinate destinations = 2;
+}
+
+message MatrixElement {
+  int32 origin_index = 1;
+  int32 destination_index = 2;
+  double distance_meters = 3;
+  int32 duration_seconds = 4;
+}
+
+message DistanceMatrixResponse {
+  repeated MatrixElement elements = 1;
+}
+
+message RouteWaypoint {
+  string stop_id = 1;
+  GeoCoordinate coordinate = 2;
+  int32 sequence = 3;
+}
+
+message OptimizeRouteRequest {
+  GeoCoordinate start_location = 1;
+  repeated RouteWaypoint waypoints = 2;
+  GeoCoordinate end_location = 3;
+}
+
+message OptimizeRouteResponse {
+  repeated RouteWaypoint ordered_waypoints = 1;
+  double total_distance_meters = 2;
+  int32 total_duration_seconds = 3;
+}

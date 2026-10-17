@@ -1,0 +1,70 @@
+syntax = "proto3";
+package fulfillment.v1;
+
+option java_package = "com.instacommerce.contracts.fulfillment.v1";
+option java_multiple_files = true;
+option go_package = "github.com/instacommerce/go-shared/pkg/proto/fulfillment/v1;fulfillmentv1";
+
+service FulfillmentService {
+  rpc CreateFulfillmentTask(CreateFulfillmentTaskRequest) returns (CreateFulfillmentTaskResponse);
+  rpc GetFulfillmentStatus(GetFulfillmentStatusRequest) returns (GetFulfillmentStatusResponse);
+  rpc AssignPickWave(AssignPickWaveRequest) returns (AssignPickWaveResponse);
+  rpc CompletePacking(CompletePackingRequest) returns (CompletePackingResponse);
+}
+
+message FulfillmentItem {
+  string product_id = 1;
+  int32 quantity = 2;
+  string warehouse_bin = 3;
+}
+
+message CreateFulfillmentTaskRequest {
+  string order_id = 1;
+  string store_id = 2;
+  repeated FulfillmentItem items = 3;
+}
+
+message CreateFulfillmentTaskResponse {
+  string task_id = 1;
+  string status = 2;
+}
+
+message GetFulfillmentStatusRequest {
+  string task_id = 1;
+  string order_id = 2;
+}
+
+message GetFulfillmentStatusResponse {
+  string task_id = 1;
+  string order_id = 2;
+  string status = 3;
+  string picker_id = 4;
+  string wave_id = 5;
+  int64 created_at = 6;
+  int64 updated_at = 7;
+}
+
+message AssignPickWaveRequest {
+  string wave_id = 1;
+  string picker_id = 2;
+  repeated string task_ids = 3;
+}
+
+message AssignPickWaveResponse {
+  string wave_id = 1;
+  bool assigned = 2;
+  int32 task_count = 3;
+}
+
+message CompletePackingRequest {
+  string task_id = 1;
+  string packer_id = 2;
+  int32 bag_count = 3;
+  string bag_tag = 4;
+}
+
+message CompletePackingResponse {
+  string task_id = 1;
+  bool completed = 2;
+  string status = 3;
+}

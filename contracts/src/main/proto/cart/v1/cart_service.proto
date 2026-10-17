@@ -1,0 +1,53 @@
+syntax = "proto3";
+package cart.v1;
+
+option java_package = "com.instacommerce.contracts.cart.v1";
+option java_multiple_files = true;
+option go_package = "github.com/instacommerce/go-shared/pkg/proto/cart/v1;cartv1";
+
+import "common/v1/money.proto";
+
+service CartService {
+  rpc GetCart(GetCartRequest) returns (GetCartResponse);
+  rpc ValidateCart(ValidateCartRequest) returns (ValidateCartResponse);
+  rpc ClearCart(ClearCartRequest) returns (ClearCartResponse);
+}
+
+message CartItem {
+  string product_id = 1;
+  int32 quantity = 2;
+  common.v1.Money price = 3;
+}
+
+message GetCartRequest {
+  string user_id = 1;
+}
+
+message GetCartResponse {
+  string user_id = 1;
+  string store_id = 2;
+  repeated CartItem items = 3;
+  common.v1.Money subtotal = 4;
+  int64 updated_at = 5;
+}
+
+message ValidateCartRequest {
+  string user_id = 1;
+}
+
+message ValidateCartResponse {
+  string user_id = 1;
+  string store_id = 2;
+  bool is_valid = 3;
+  repeated CartItem items = 4;
+  repeated string validation_errors = 5;
+}
+
+message ClearCartRequest {
+  string user_id = 1;
+}
+
+message ClearCartResponse {
+  string user_id = 1;
+  bool cleared = 2;
+}

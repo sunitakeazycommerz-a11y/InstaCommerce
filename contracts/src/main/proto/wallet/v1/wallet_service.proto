@@ -1,0 +1,56 @@
+syntax = "proto3";
+package wallet.v1;
+
+option java_package = "com.instacommerce.contracts.wallet.v1";
+option java_multiple_files = true;
+option go_package = "github.com/instacommerce/go-shared/pkg/proto/wallet/v1;walletv1";
+
+import "common/v1/money.proto";
+
+service WalletService {
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+  rpc CreditWallet(CreditWalletRequest) returns (CreditWalletResponse);
+  rpc DebitWallet(DebitWalletRequest) returns (DebitWalletResponse);
+}
+
+message GetBalanceRequest {
+  string user_id = 1;
+}
+
+message GetBalanceResponse {
+  string user_id = 1;
+  common.v1.Money available_balance = 2;
+  common.v1.Money locked_balance = 3;
+  int32 loyalty_points = 4;
+}
+
+message CreditWalletRequest {
+  string idempotency_key = 1;
+  string user_id = 2;
+  common.v1.Money amount = 3;
+  string reference_type = 4;
+  string reference_id = 5;
+  string description = 6;
+}
+
+message CreditWalletResponse {
+  string transaction_id = 1;
+  bool credited = 2;
+  common.v1.Money updated_balance = 3;
+}
+
+message DebitWalletRequest {
+  string idempotency_key = 1;
+  string user_id = 2;
+  common.v1.Money amount = 3;
+  string reference_type = 4;
+  string reference_id = 5;
+  string description = 6;
+}
+
+message DebitWalletResponse {
+  string transaction_id = 1;
+  bool debited = 2;
+  string failure_reason = 3;
+  common.v1.Money updated_balance = 4;
+}

@@ -3,6 +3,7 @@ package catalog.v1;
 
 option java_package = "com.instacommerce.contracts.catalog.v1";
 option java_multiple_files = true;
+option go_package = "github.com/instacommerce/go-shared/pkg/proto/catalog/v1;catalogv1";
 
 import "common/v1/money.proto";
 
