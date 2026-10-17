@@ -130,10 +130,10 @@ class ItemQuantity(BaseModel):
 class AssistContext(BaseModel):
     order_id: Optional[UUID] = None
     product_id: Optional[UUID] = None
-    store_id: Optional[str] = Field(None, min_length=1, max_length=64)
+    store_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     items: List[ItemQuantity] = Field(default_factory=list, max_length=50)
-    category: Optional[str] = Field(None, min_length=1, max_length=64)
-    coupon_code: Optional[str] = Field(None, min_length=1, max_length=64)
+    category: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    coupon_code: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
 class AssistRequest(BaseModel):
@@ -1384,7 +1384,7 @@ async def enforce_agent_guardrails(request: Request, call_next):
             return _rate_limited_response("ip", client_ip, ip_meta)
 
     user_subject = await _extract_user_subject(request)
-    user_meta: Optional[Dict[str, Any]] = None
+    user_meta: Dict[str, Any] = {}
     user_limiter = getattr(request.app.state, "agent_user_rate_limiter", None)
     if user_subject and user_limiter:
         user_allowed, user_meta = user_limiter.allow(user_subject)

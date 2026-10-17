@@ -73,7 +73,7 @@ def _should_escalate(state: AgentState) -> str:
 def build_graph(
     settings: Optional[Settings] = None,
     tool_registry: Optional[ToolRegistry] = None,
-) -> StateGraph:
+) -> Any:
     """Construct and compile the LangGraph state machine.
 
     Parameters
