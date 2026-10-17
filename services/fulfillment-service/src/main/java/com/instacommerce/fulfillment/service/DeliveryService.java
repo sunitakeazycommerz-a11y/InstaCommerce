@@ -131,9 +131,9 @@ public class DeliveryService {
             if (delivery.getStatus() == DeliveryStatus.DELIVERED) {
                 return "DELIVERED";
             }
-            if (delivery.getStatus() == DeliveryStatus.ASSIGNED
+            if (delivery.getStatus().isAssigned()
                 || delivery.getStatus() == DeliveryStatus.PICKED_UP
-                || delivery.getStatus() == DeliveryStatus.IN_TRANSIT) {
+                || delivery.getStatus().isInTransit()) {
                 return "OUT_FOR_DELIVERY";
             }
         }

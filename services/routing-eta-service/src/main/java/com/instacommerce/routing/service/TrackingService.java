@@ -91,7 +91,7 @@ public class TrackingService {
     }
 
     private void maybeTriggerNearDestination(Delivery delivery, BigDecimal latitude, BigDecimal longitude) {
-        if (delivery.getStatus() != DeliveryStatus.EN_ROUTE) {
+        if (delivery.getStatus() != DeliveryStatus.EN_ROUTE && delivery.getStatus() != DeliveryStatus.IN_TRANSIT) {
             return;
         }
         double distanceKm = haversineDistance(
