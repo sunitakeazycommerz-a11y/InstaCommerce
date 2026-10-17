@@ -36,6 +36,15 @@ public class CouponActivityImpl implements CouponActivity {
             Void.class);
     }
 
+    @Override
+    @CircuitBreaker(name = "pricingService", fallbackMethod = "rollbackUsageFallback")
+    public void rollbackUsage(String code, String userId) {
+        log.info("Rolling back coupon usage code={} userId={}", code, userId);
+        restTemplate.postForObject("/pricing/coupons/rollback-usage",
+            Map.of("code", code, "userId", userId),
+            Void.class);
+    }
+
     private void redeemCouponFallback(String code, String userId, String orderId, long discountCents, Exception e) {
         log.warn("Circuit breaker fallback for pricingService redeemCoupon code={} userId={}: {}",
                 code, userId, e.getMessage());
@@ -48,5 +57,12 @@ public class CouponActivityImpl implements CouponActivity {
                 code, userId, e.getMessage());
         throw new ServiceUnavailableException("pricingService",
                 "Pricing service unavailable for unredeemCoupon code=" + code, e);
+    }
+
+    private void rollbackUsageFallback(String code, String userId, Exception e) {
+        log.warn("Circuit breaker fallback for pricingService rollbackUsage code={} userId={}: {}",
+                code, userId, e.getMessage());
+        throw new ServiceUnavailableException("pricingService",
+                "Pricing service unavailable for rollbackUsage code=" + code, e);
     }
 }

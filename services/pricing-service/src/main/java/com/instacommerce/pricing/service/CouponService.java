@@ -122,19 +122,33 @@ public class CouponService {
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public void unredeemCoupon(String code, UUID userId, UUID orderId) {
-        Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)
-                .orElseThrow(() -> new CouponNotFoundException(code));
+        var couponOpt = couponRepository.findByCodeIgnoreCaseForUpdate(code);
+        if (couponOpt.isEmpty()) {
+            log.warn("Cannot un-redeem non-existent coupon code={}", code);
+            return;
+        }
+        Coupon coupon = couponOpt.get();
 
-        couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(coupon.getId(), userId, orderId)
-                .ifPresent(redemption -> {
-                    couponRedemptionRepository.delete(redemption);
-                    if (coupon.getTotalRedeemed() > 0) {
-                        coupon.setTotalRedeemed(coupon.getTotalRedeemed() - 1);
-                        couponRepository.save(coupon);
-                    }
-                    promotionService.rollbackPromotionUsage(coupon.getPromotion().getId());
-                    log.info("Un-redeemed coupon code={} userId={} orderId={}", code, userId, orderId);
-                });
+        var redemptionOpt = (orderId != null)
+                ? couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(coupon.getId(), userId, orderId)
+                : couponRedemptionRepository.findTopByCouponIdAndUserIdOrderByRedeemedAtDesc(coupon.getId(), userId);
+
+        redemptionOpt.ifPresent(redemption -> {
+            couponRedemptionRepository.delete(redemption);
+            if (coupon.getTotalRedeemed() > 0) {
+                coupon.setTotalRedeemed(coupon.getTotalRedeemed() - 1);
+                couponRepository.save(coupon);
+            }
+            promotionService.rollbackPromotionUsage(coupon.getPromotion().getId());
+            log.info("Un-redeemed coupon code={} userId={} orderId={}", code, userId, orderId);
+        });
+    }
+
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
+    @Transactional
+    public void rollbackUsage(String code, UUID userId) {
+        unredeemCoupon(code, userId, null);
     }
 
     @Transactional

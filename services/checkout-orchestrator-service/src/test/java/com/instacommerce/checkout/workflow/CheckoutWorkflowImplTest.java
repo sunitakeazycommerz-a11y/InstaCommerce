@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -337,5 +338,123 @@ class CheckoutWorkflowImplTest {
 
         // No inventory release needed since reservation was never made
         verify(inventoryActivity, never()).releaseStock(any());
+    }
+
+    @Test
+    void shouldCompensateCouponAndOrderAndInventoryWhenPaymentCaptureFails() {
+        String couponCode = "SAVE20";
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, couponCode, DELIVERY_ADDRESS_ID);
+
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
+
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+
+        when(paymentActivity.authorizePayment(eq(8000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 12));
+
+        // Payment capture fails with exception
+        doThrow(new RuntimeException("Payment capture timeout"))
+            .when(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED");
+        assertThat(response.status()).contains("Payment capture timeout");
+
+        // Verify coupon was redeemed first
+        verify(couponActivity).redeemCoupon(couponCode, USER_ID, ORDER_ID, 2000L);
+
+        // Verify saga compensation rollbacks in order: coupon rollback, order cancel, inventory release
+        verify(couponActivity).rollbackUsage(couponCode, USER_ID);
+        verify(orderActivity).cancelOrder(ORDER_ID);
+        verify(inventoryActivity).releaseStock(RESERVATION_ID);
+
+        // Verify payment compensation: capture was attempted so refund is initiated
+        verify(paymentActivity).refundPayment(eq(PAYMENT_ID), eq(8000L), anyString());
+    }
+
+    @Test
+    void shouldCompensateCouponWhenInventoryConfirmationFails() {
+        String couponCode = "SAVE20";
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, couponCode, DELIVERY_ADDRESS_ID);
+
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
+
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+
+        when(paymentActivity.authorizePayment(eq(8000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 12));
+
+        // Stock confirmation fails with exception
+        doThrow(new RuntimeException("Warehouse unreachable"))
+            .when(inventoryActivity).confirmStock(RESERVATION_ID);
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED");
+        assertThat(response.status()).contains("Warehouse unreachable");
+
+        // Verify coupon rollback was triggered
+        verify(couponActivity).rollbackUsage(couponCode, USER_ID);
+        verify(orderActivity).cancelOrder(ORDER_ID);
+        verify(inventoryActivity).releaseStock(RESERVATION_ID);
+        verify(paymentActivity).voidPayment(eq(PAYMENT_ID), anyString());
+    }
+
+    @Test
+    void shouldCompensateWhenCouponRedemptionFails() {
+        String couponCode = "SAVE20";
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, couponCode, DELIVERY_ADDRESS_ID);
+
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
+
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+
+        when(paymentActivity.authorizePayment(eq(8000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 12));
+
+        // Coupon redemption throws exception
+        doThrow(new RuntimeException("Coupon already used"))
+            .when(couponActivity).redeemCoupon(eq(couponCode), eq(USER_ID), eq(ORDER_ID), eq(2000L));
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED");
+        assertThat(response.status()).contains("Coupon already used");
+
+        // Rollback should NOT be invoked since redemption failed before compensation registration
+        verify(couponActivity, never()).rollbackUsage(any(), any());
+        verify(orderActivity).cancelOrder(ORDER_ID);
+        verify(inventoryActivity).releaseStock(RESERVATION_ID);
     }
 }

@@ -196,10 +196,9 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                     orderResult.orderId(),
                     pricingResult.discountCents());
                 saga.addCompensation(
-                    couponActivity::unredeemCoupon,
+                    couponActivity::rollbackUsage,
                     request.couponCode(),
-                    request.userId(),
-                    orderResult.orderId());
+                    request.userId());
             }
 
             // Step 6: Confirm inventory reservation + capture payment
