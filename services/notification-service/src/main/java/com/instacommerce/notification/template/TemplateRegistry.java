@@ -9,6 +9,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class TemplateRegistry {
     private final Map<String, TemplateDefinition> definitions = Map.ofEntries(
+        Map.entry("OrderCreated", new TemplateDefinition("order_confirmed",
+            List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Order received")),
         Map.entry("OrderPlaced", new TemplateDefinition("order_confirmed",
             List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Order confirmed")),
         Map.entry("OrderPacked", new TemplateDefinition("order_packed",
