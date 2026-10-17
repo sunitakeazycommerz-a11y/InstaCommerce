@@ -33,8 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AuthService {
     private static final String TARGET_TYPE_USER = "User";
-    private static final int MAX_FAILED_ATTEMPTS = 10;
-    private static final long LOCKOUT_DURATION_MINUTES = 30;
+    private static final int MAX_FAILED_ATTEMPTS = 5;
+    private static final long LOCKOUT_DURATION_MINUTES = 15;
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -45,6 +45,30 @@ public class AuthService {
     private final AuthMetrics authMetrics;
     private final UserService userService;
     private final OutboxService outboxService;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AuthService(UserRepository userRepository,
+                       RefreshTokenRepository refreshTokenRepository,
+                       PasswordEncoder passwordEncoder,
+                       TokenService tokenService,
+                       AuditService auditService,
+                       RateLimitService rateLimitService,
+                       AuthMetrics authMetrics,
+                       UserService userService,
+                       OutboxService outboxService,
+                       org.springframework.beans.factory.ObjectProvider<org.springframework.data.redis.core.StringRedisTemplate> redisTemplateProvider) {
+        this.userRepository = userRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.tokenService = tokenService;
+        this.auditService = auditService;
+        this.rateLimitService = rateLimitService;
+        this.authMetrics = authMetrics;
+        this.userService = userService;
+        this.outboxService = outboxService;
+        this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;
+    }
 
     public AuthService(UserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
@@ -55,15 +79,7 @@ public class AuthService {
                        AuthMetrics authMetrics,
                        UserService userService,
                        OutboxService outboxService) {
-        this.userRepository = userRepository;
-        this.refreshTokenRepository = refreshTokenRepository;
-        this.passwordEncoder = passwordEncoder;
-        this.tokenService = tokenService;
-        this.auditService = auditService;
-        this.rateLimitService = rateLimitService;
-        this.authMetrics = authMetrics;
-        this.userService = userService;
-        this.outboxService = outboxService;
+        this(userRepository, refreshTokenRepository, passwordEncoder, tokenService, auditService, rateLimitService, authMetrics, userService, outboxService, null);
     }
 
     @Transactional
@@ -113,6 +129,31 @@ public class AuthService {
         rateLimitService.checkLogin(ipAddress);
         return authMetrics.getLoginTimer().record(() -> {
             String email = normalizeEmail(request.email());
+            String lockoutKey = "identity:failed_logins:" + email + ":" + (ipAddress != null ? ipAddress : "unknown");
+
+            // Check Redis IP/username rate lockout
+            if (redisTemplate != null) {
+                try {
+                    String attemptsStr = redisTemplate.opsForValue().get(lockoutKey);
+                    if (attemptsStr != null && Integer.parseInt(attemptsStr) >= MAX_FAILED_ATTEMPTS) {
+                        authMetrics.incrementLoginFailure();
+                        auditService.logAction(null,
+                            "USER_LOGIN_LOCKED_REDIS",
+                            TARGET_TYPE_USER,
+                            email,
+                            Map.of("reason", "EXCESSIVE_FAILED_ATTEMPTS_PER_IP", "attempts", attemptsStr),
+                            ipAddress,
+                            userAgent,
+                            traceId);
+                        throw new UserInactiveException();
+                    }
+                } catch (UserInactiveException e) {
+                    throw e;
+                } catch (Exception e) {
+                    // Fall back to database lockout
+                }
+            }
+
             Optional<User> userOptional = userRepository.findByEmailIgnoreCase(email);
             if (userOptional.isPresent()) {
                 User u = userOptional.get();
@@ -130,6 +171,17 @@ public class AuthService {
                 }
             }
             if (userOptional.isEmpty() || !passwordEncoder.matches(request.password(), userOptional.get().getPasswordHash())) {
+                if (redisTemplate != null) {
+                    try {
+                        Long count = redisTemplate.opsForValue().increment(lockoutKey);
+                        if (count != null && count == 1) {
+                            redisTemplate.expire(lockoutKey, java.time.Duration.ofMinutes(LOCKOUT_DURATION_MINUTES));
+                        }
+                    } catch (Exception e) {
+                        // Ignore redis error
+                    }
+                }
+
                 if (userOptional.isPresent()) {
                     User u = userOptional.get();
                     u.setFailedAttempts(u.getFailedAttempts() + 1);
@@ -173,6 +225,14 @@ public class AuthService {
             user.setFailedAttempts(0);
             user.setLockedUntil(null);
             userRepository.save(user);
+
+            if (redisTemplate != null) {
+                try {
+                    redisTemplate.delete(lockoutKey);
+                } catch (Exception e) {
+                    // Ignore redis error
+                }
+            }
             String accessToken = tokenService.generateAccessToken(user);
             String refreshToken = tokenService.generateRefreshToken();
             String refreshHash = tokenService.hashRefreshToken(refreshToken);

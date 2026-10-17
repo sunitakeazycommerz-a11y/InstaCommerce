@@ -18,6 +18,7 @@ import com.instacommerce.identity.repository.UserRepository;
 import com.instacommerce.identity.service.AuthService;
 import com.instacommerce.identity.service.RateLimitService;
 import com.instacommerce.identity.service.TokenService;
+import com.instacommerce.identity.service.UserService;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -78,6 +79,9 @@ class AuthenticationIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private UserService userService;
 
     private final AtomicInteger refreshTokenCounter = new AtomicInteger(0);
 
@@ -177,26 +181,27 @@ class AuthenticationIntegrationTest {
     // -- shouldLockAccountAfterMaxFailedAttempts ----------------------------------
 
     @Test
-    void shouldLockAccountAfterMaxFailedAttempts() {
+    void shouldLockAccountAfterMaxFailedAttemptsAndSupportAdminUnlock() {
         authService.register(
             new RegisterRequest("lock@example.com", "Password1"),
             "127.0.0.1", "test-agent", "trace-1");
 
         LoginRequest badLogin = new LoginRequest("lock@example.com", "WrongPassword1", null);
 
-        // 10 failed login attempts (MAX_FAILED_ATTEMPTS = 10)
-        for (int i = 0; i < 10; i++) {
-            assertThatThrownBy(() -> authService.login(badLogin, "127.0.0.1", "test-agent", "trace"))
+        // 5 failed login attempts (MAX_FAILED_ATTEMPTS = 5)
+        for (int i = 0; i < 5; i++) {
+            final int attempt = i;
+            assertThatThrownBy(() -> authService.login(badLogin, "127.0.0.1", "test-agent", "trace-" + attempt))
                 .isInstanceOf(InvalidCredentialsException.class);
         }
 
-        // 11th attempt should be rejected due to account lock
-        assertThatThrownBy(() -> authService.login(badLogin, "127.0.0.1", "test-agent", "trace-11"))
+        // 6th attempt should be rejected due to account lock
+        assertThatThrownBy(() -> authService.login(badLogin, "127.0.0.1", "test-agent", "trace-6"))
             .isInstanceOf(UserInactiveException.class);
 
         // Verify user is locked
         User user = userRepository.findByEmailIgnoreCase("lock@example.com").orElseThrow();
-        assertThat(user.getFailedAttempts()).isEqualTo(10);
+        assertThat(user.getFailedAttempts()).isEqualTo(5);
         assertThat(user.getLockedUntil()).isNotNull();
         assertThat(user.getLockedUntil()).isAfter(Instant.now());
 
@@ -204,5 +209,25 @@ class AuthenticationIntegrationTest {
             "SELECT count(*) FROM outbox_events WHERE aggregate_type = 'User' AND event_type = 'AccountLocked' AND CAST(payload AS text) LIKE '%lock@example.com%'",
             Integer.class);
         assertThat(lockOutboxCount).isEqualTo(1);
+
+        // Customer support / admin unlock
+        userService.unlockUser(user.getId(), "127.0.0.1", "admin-agent", "trace-unlock");
+
+        // Verify user is unlocked in DB
+        User unlockedUser = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(unlockedUser.getFailedAttempts()).isZero();
+        assertThat(unlockedUser.getLockedUntil()).isNull();
+
+        // Verify AccountUnlocked event published to outbox
+        Integer unlockOutboxCount = jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM outbox_events WHERE aggregate_type = 'User' AND event_type = 'AccountUnlocked' AND CAST(payload AS text) LIKE '%lock@example.com%'",
+            Integer.class);
+        assertThat(unlockOutboxCount).isEqualTo(1);
+
+        // Subsequent valid login succeeds
+        LoginRequest validLogin = new LoginRequest("lock@example.com", "Password1", "device-1");
+        AuthResponse loginResponse = authService.login(validLogin, "127.0.0.1", "test-agent", "trace-valid");
+        assertThat(loginResponse).isNotNull();
+        assertThat(loginResponse.accessToken()).isEqualTo("test-access-token");
     }
 }

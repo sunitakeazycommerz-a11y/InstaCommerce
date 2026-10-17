@@ -200,6 +200,7 @@ contracts/
 |-------|--------|---------|-------------|
 | `UserRegistered` | `identity/UserRegistered.v1.json` | v1 | New user registered |
 | `AccountLocked` | `identity/AccountLocked.v1.json` | v1 | Security lockdown triggered on user account |
+| `AccountUnlocked` | `identity/AccountUnlocked.v1.json` | v1 | User account unlocked by customer support or admin |
 | `UserErased` | `identity/UserErased.v1.json` | v1 | User data erased (GDPR right-to-be-forgotten) |
 
 ### Fraud (`fraud.events`)
