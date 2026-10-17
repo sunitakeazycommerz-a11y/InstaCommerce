@@ -97,16 +97,13 @@ public class CheckoutController {
         try {
             result = workflow.checkout(request);
         } catch (WorkflowExecutionAlreadyStarted ex) {
-            log.warn("Duplicate checkout workflow detected, returning existing workflowId={}", workflowId);
-            String existingStatus = "UNKNOWN";
-            try {
-                CheckoutWorkflow existingWorkflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
-                existingStatus = existingWorkflow.getStatus();
-            } catch (WorkflowException statusEx) {
-                log.warn("Failed to query existing checkout workflow status workflowId={}", workflowId, statusEx);
+            return handleAlreadyStarted(workflowId);
+        } catch (WorkflowException ex) {
+            if (ex.getCause() instanceof WorkflowExecutionAlreadyStarted
+                    || (ex.getMessage() != null && ex.getMessage().contains("WorkflowExecutionAlreadyStarted"))) {
+                return handleAlreadyStarted(workflowId);
             }
-            return ResponseEntity.accepted().body(
-                new CheckoutResponse(null, "CHECKOUT_ALREADY_IN_PROGRESS: " + existingStatus, 0, 0));
+            throw ex;
         }
 
         // Persist idempotency key + response in its own short TX (connection returned immediately)
@@ -120,5 +117,18 @@ public class CheckoutController {
         CheckoutWorkflow workflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
         String status = workflow.getStatus();
         return ResponseEntity.ok(Map.of("workflowId", workflowId, "status", status));
+    }
+
+    private ResponseEntity<CheckoutResponse> handleAlreadyStarted(String workflowId) {
+        log.warn("Duplicate checkout workflow detected, returning existing workflowId={}", workflowId);
+        String existingStatus = "UNKNOWN";
+        try {
+            CheckoutWorkflow existingWorkflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
+            existingStatus = existingWorkflow.getStatus();
+        } catch (WorkflowException statusEx) {
+            log.warn("Failed to query existing checkout workflow status workflowId={}", workflowId, statusEx);
+        }
+        return ResponseEntity.accepted().body(
+            new CheckoutResponse(null, "CHECKOUT_ALREADY_IN_PROGRESS: " + existingStatus, 0, 0));
     }
 }

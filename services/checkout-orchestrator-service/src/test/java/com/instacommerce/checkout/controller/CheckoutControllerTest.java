@@ -98,6 +98,33 @@ class CheckoutControllerTest {
     }
 
     @Test
+    void returnsAcceptedWithStatusWhenWorkflowExceptionWrapsAlreadyStarted() {
+        CheckoutRequest request = request();
+        String workflowId = "checkout-user-123-idem-123";
+        when(idempotencyKeyRepository.findByIdempotencyKey("idem-123")).thenReturn(Optional.empty());
+        when(workflowClient.newWorkflowStub(eq(CheckoutWorkflow.class), any(WorkflowOptions.class))).thenReturn(workflow);
+        WorkflowExecutionAlreadyStarted inner = new WorkflowExecutionAlreadyStarted(
+            WorkflowExecution.newBuilder().setWorkflowId(workflowId).setRunId("run-123").build(),
+            CheckoutWorkflow.class.getSimpleName(),
+            null
+        );
+        when(workflow.checkout(any(CheckoutRequest.class))).thenThrow(new io.temporal.client.WorkflowServiceException(
+            WorkflowExecution.newBuilder().setWorkflowId(workflowId).setRunId("run-123").build(),
+            CheckoutWorkflow.class.getSimpleName(),
+            inner
+        ));
+        when(workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId)).thenReturn(existingWorkflow);
+        when(existingWorkflow.getStatus()).thenReturn("RESERVING_INVENTORY");
+
+        ResponseEntity<CheckoutResponse> response = controller.initiateCheckout(request, "user-123", "idem-123");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).contains("CHECKOUT_ALREADY_IN_PROGRESS");
+        assertThat(response.getBody().status()).contains("RESERVING_INVENTORY");
+    }
+
+    @Test
     void replacesExpiredIdempotencyKeyBeforeSavingFreshResult() throws Exception {
         CheckoutRequest request = request();
         CheckoutResponse freshResponse = CheckoutResponse.success("order-456", 3199, 14);
