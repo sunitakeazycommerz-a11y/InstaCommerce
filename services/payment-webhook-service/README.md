@@ -297,7 +297,7 @@ flowchart LR
     subgraph "Stripe (StripeVerifier)"
         S1["Header: Stripe-Signature<br/>t=unix_timestamp,v1=hex_hmac"]
         S2["Signed payload:<br/>HMAC-SHA256(secret, timestamp + '.' + body)"]
-        S3["Replay protection:<br/>|now - timestamp| ≤ tolerance<br/>(default 300s)"]
+        S3["Replay protection:<br/>|now - timestamp| ≤ tolerance<br/>(default 30s)"]
         S1 --> S2 --> S3
     end
     subgraph "Razorpay (RazorpayVerifier)"
@@ -316,7 +316,7 @@ flowchart LR
 
 | PSP | Algorithm | Replay Protection | Header |
 |---|---|---|---|
-| Stripe | HMAC-SHA256 over `"<timestamp>.<body>"` | Timestamp tolerance (configurable, default 5 min) | `Stripe-Signature` |
+| Stripe | HMAC-SHA256 over `"<timestamp>.<body>"` | Timestamp tolerance (configurable, default 30s) | `Stripe-Signature` |
 | Razorpay | HMAC-SHA256 over raw body | None (relies on HTTPS + IP allowlisting) | `X-Razorpay-Signature` |
 | PhonePe | SHA-256 over `body + saltKey + saltIndex` | Salt index validation | `X-Verify` |
 
@@ -477,7 +477,7 @@ All configuration is environment-variable driven (`main.go:loadConfig()`). No co
 | `PORT` / `SERVER_PORT` | `8106` | HTTP listen port |
 | `WEBHOOK_SECRET` / `STRIPE_WEBHOOK_SECRET` | — (required) | PSP webhook signing secret |
 | `WEBHOOK_SIGNATURE_HEADER` | `Stripe-Signature` | Signature header name for `main.go` handler |
-| `WEBHOOK_TOLERANCE_SECONDS` | `300` | Max signature age in seconds (Stripe replay protection) |
+| `WEBHOOK_TOLERANCE_SECONDS` | `30` | Max signature age in seconds (Stripe replay protection) |
 | `MAX_BODY_BYTES` | `1048576` (1 MiB) | Max request body size |
 | `DEDUPE_TTL_SECONDS` | `86400` (24h) | Deduplication window |
 | `DEDUPE_CLEANUP_SECONDS` | `60` | In-memory expired-entry cleanup interval |

@@ -38,7 +38,7 @@ import (
 const (
 	defaultPort               = "8106"
 	defaultSignatureHeader    = "Stripe-Signature"
-	defaultSignatureTolerance = 300
+	defaultSignatureTolerance = 30
 	defaultMaxBodyBytes       = 1 << 20
 	defaultDedupeTTLSeconds   = 86400
 	defaultCleanupSeconds     = 60
