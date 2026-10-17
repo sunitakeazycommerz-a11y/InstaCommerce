@@ -177,6 +177,7 @@ contracts/
 | `OrderPacked` | `fulfillment/OrderPacked.v1.json` | v1 | Order packing completed |
 | `RiderAssigned` | `fulfillment/RiderAssigned.v1.json` | v1 | Rider assigned to order |
 | `DeliveryCompleted` | `fulfillment/DeliveryCompleted.v1.json` | v1 | Delivery confirmed complete |
+| `DeliveryStatus` | `fulfillment/DeliveryStatus.v1.json` | v1 | Canonical delivery lifecycle states enum |
 
 ### Catalog (`catalog.events`)
 

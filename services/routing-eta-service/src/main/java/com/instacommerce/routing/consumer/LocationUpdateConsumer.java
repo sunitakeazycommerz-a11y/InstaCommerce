@@ -25,7 +25,8 @@ public class LocationUpdateConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(LocationUpdateConsumer.class);
     private static final List<DeliveryStatus> ACTIVE_STATUSES = List.of(
-        DeliveryStatus.RIDER_ASSIGNED, DeliveryStatus.PICKED_UP, DeliveryStatus.EN_ROUTE);
+        DeliveryStatus.RIDER_ASSIGNED, DeliveryStatus.ASSIGNED, DeliveryStatus.PICKED_UP,
+        DeliveryStatus.EN_ROUTE, DeliveryStatus.IN_TRANSIT, DeliveryStatus.NEAR_DESTINATION);
 
     private final TrackingService trackingService;
     private final ObjectMapper objectMapper;

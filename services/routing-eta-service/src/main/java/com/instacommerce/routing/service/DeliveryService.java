@@ -24,7 +24,8 @@ public class DeliveryService {
 
     private static final Logger log = LoggerFactory.getLogger(DeliveryService.class);
     private static final Set<DeliveryStatus> ACTIVE_STATUSES = Set.of(
-        DeliveryStatus.RIDER_ASSIGNED, DeliveryStatus.PICKED_UP, DeliveryStatus.EN_ROUTE);
+        DeliveryStatus.RIDER_ASSIGNED, DeliveryStatus.ASSIGNED, DeliveryStatus.PICKED_UP,
+        DeliveryStatus.EN_ROUTE, DeliveryStatus.IN_TRANSIT, DeliveryStatus.NEAR_DESTINATION);
 
     private final DeliveryRepository deliveryRepository;
     private final ETAService etaService;
@@ -89,7 +90,7 @@ public class DeliveryService {
         validateTransition(delivery.getStatus(), newStatus);
         delivery.setStatus(newStatus);
 
-        if (newStatus == DeliveryStatus.RIDER_ASSIGNED && delivery.getStartedAt() == null) {
+        if ((newStatus == DeliveryStatus.RIDER_ASSIGNED || newStatus == DeliveryStatus.ASSIGNED) && delivery.getStartedAt() == null) {
             delivery.setStartedAt(Instant.now());
         }
 
@@ -175,10 +176,10 @@ public class DeliveryService {
 
     private void validateTransition(DeliveryStatus current, DeliveryStatus target) {
         boolean valid = switch (current) {
-            case PENDING -> target == DeliveryStatus.RIDER_ASSIGNED || target == DeliveryStatus.FAILED;
-            case RIDER_ASSIGNED -> target == DeliveryStatus.PICKED_UP || target == DeliveryStatus.FAILED;
-            case PICKED_UP -> target == DeliveryStatus.EN_ROUTE || target == DeliveryStatus.FAILED;
-            case EN_ROUTE -> target == DeliveryStatus.NEAR_DESTINATION || target == DeliveryStatus.FAILED;
+            case PENDING -> target == DeliveryStatus.RIDER_ASSIGNED || target == DeliveryStatus.ASSIGNED || target == DeliveryStatus.FAILED;
+            case RIDER_ASSIGNED, ASSIGNED -> target == DeliveryStatus.PICKED_UP || target == DeliveryStatus.FAILED;
+            case PICKED_UP -> target == DeliveryStatus.EN_ROUTE || target == DeliveryStatus.IN_TRANSIT || target == DeliveryStatus.FAILED;
+            case EN_ROUTE, IN_TRANSIT -> target == DeliveryStatus.NEAR_DESTINATION || target == DeliveryStatus.DELIVERED || target == DeliveryStatus.FAILED;
             case NEAR_DESTINATION -> target == DeliveryStatus.DELIVERED || target == DeliveryStatus.FAILED;
             case DELIVERED, FAILED -> false;
         };
