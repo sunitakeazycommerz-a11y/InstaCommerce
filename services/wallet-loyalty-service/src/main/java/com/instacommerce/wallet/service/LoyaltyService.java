@@ -91,7 +91,7 @@ public class LoyaltyService {
                 "Loyalty account not found for user: " + userId));
 
         if (account.getPointsBalance() < points) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "INSUFFICIENT_POINTS",
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "INSUFFICIENT_POINTS",
                 String.format("Insufficient points: available=%d, requested=%d", account.getPointsBalance(), points));
         }
 

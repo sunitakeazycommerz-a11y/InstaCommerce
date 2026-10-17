@@ -62,8 +62,8 @@ class ConfigFeatureFlagIntegrationTest {
   @BeforeEach
   void setUp() {
     flagRepository.deleteAll();
-    if (redisTemplate != null) {
-      redisTemplate.getConnectionFactory().getConnection().flushAll();
+    if (redisTemplate != null && redisTemplate.getConnectionFactory() != null) {
+      redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
     }
   }
 

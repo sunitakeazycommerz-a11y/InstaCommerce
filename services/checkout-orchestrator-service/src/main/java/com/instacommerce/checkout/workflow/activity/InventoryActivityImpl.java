@@ -45,12 +45,14 @@ public class InventoryActivityImpl implements InventoryActivity {
             null, Void.class, reservationId);
     }
 
+    @SuppressWarnings("unused")
     private InventoryReservationResult reserveStockFallback(List<CartItem> items, Exception e) {
         log.warn("Circuit breaker fallback for inventoryService reserveStock items={}: {}", items.size(), e.getMessage());
         throw new ServiceUnavailableException("inventoryService",
                 "Inventory service unavailable for reserveStock", e);
     }
 
+    @SuppressWarnings("unused")
     private void releaseStockFallback(String reservationId, Exception e) {
         log.warn("Circuit breaker fallback for inventoryService releaseStock reservation={}: {}",
                 reservationId, e.getMessage());
@@ -58,6 +60,7 @@ public class InventoryActivityImpl implements InventoryActivity {
                 "Inventory service unavailable for releaseStock reservation=" + reservationId, e);
     }
 
+    @SuppressWarnings("unused")
     private void confirmStockFallback(String reservationId, Exception e) {
         log.warn("Circuit breaker fallback for inventoryService confirmStock reservation={}: {}",
                 reservationId, e.getMessage());

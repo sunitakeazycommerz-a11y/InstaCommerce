@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/audit")
+@RequestMapping("/audit/events")
 public class AuditIngestionController {
 
     private final AuditIngestionService ingestionService;
@@ -23,13 +23,13 @@ public class AuditIngestionController {
         this.ingestionService = ingestionService;
     }
 
-    @PostMapping("/events")
+    @PostMapping
     public ResponseEntity<AuditEventResponse> ingest(@Valid @RequestBody AuditEventRequest request) {
         AuditEventResponse response = ingestionService.ingest(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    @PostMapping("/events/batch")
+    @PostMapping("/batch")
     public ResponseEntity<Void> ingestBatch(@Valid @Size(max = 1000) @RequestBody List<AuditEventRequest> requests) {
         ingestionService.ingestBatch(requests);
         return ResponseEntity.status(HttpStatus.CREATED).build();

@@ -82,6 +82,7 @@ public class SendGridEmailProvider implements NotificationProvider {
         }
     }
 
+    @SuppressWarnings("unused")
     private String emailFallback(NotificationSendRequest request, Exception ex) {
         logger.warn("notification.circuit_breaker_open provider=email recipient={}", request.recipient(), ex);
         throw new ProviderTemporaryException("Email provider circuit breaker open", ex);

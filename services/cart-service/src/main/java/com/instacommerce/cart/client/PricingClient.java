@@ -62,6 +62,7 @@ public class PricingClient {
         }
     }
 
+    @SuppressWarnings("unused")
     private PriceResponse getPriceFallback(UUID productId, Exception e) {
         log.warn("Circuit breaker fallback for pricingService getPrice productId={}: {}", productId, e.getMessage());
         if (e instanceof ApiException apiEx) {

@@ -6,7 +6,6 @@ import com.instacommerce.fulfillment.domain.model.PickItem;
 import com.instacommerce.fulfillment.domain.model.PickTask;
 import com.instacommerce.fulfillment.event.MissingItemEvent;
 import java.util.Map;
-import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;

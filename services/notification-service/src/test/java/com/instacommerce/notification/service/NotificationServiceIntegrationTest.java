@@ -2,27 +2,20 @@ package com.instacommerce.notification.service;
 
 import static org.assertj.core.api.Assertions.*;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.events.EventEnvelope;
-import com.instacommerce.notification.domain.model.NotificationChannel;
-import com.instacommerce.notification.domain.model.NotificationLog;
-import com.instacommerce.notification.domain.model.NotificationStatus;
 import com.instacommerce.notification.repository.NotificationLogRepository;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.record.TimestampType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -76,9 +69,6 @@ class NotificationServiceIntegrationTest {
 
   @Autowired
   private ObjectMapper objectMapper;
-
-  @Autowired
-  private KafkaTemplate<String, String> kafkaTemplate;
 
   @BeforeEach
   void setUp() {

@@ -36,6 +36,7 @@ public class OrderActivityImpl implements OrderActivity {
             Map.of("reason", "CHECKOUT_SAGA_ROLLBACK"), Void.class, orderId);
     }
 
+    @SuppressWarnings("unused")
     private OrderCreationResult createOrderFallback(OrderCreateRequest request, Exception e) {
         log.warn("Circuit breaker fallback for orderService createOrder userId={}: {}",
                 request.userId(), e.getMessage());
@@ -43,6 +44,7 @@ public class OrderActivityImpl implements OrderActivity {
                 "Order service unavailable for createOrder", e);
     }
 
+    @SuppressWarnings("unused")
     private void cancelOrderFallback(String orderId, Exception e) {
         log.warn("Circuit breaker fallback for orderService cancelOrder orderId={}: {}",
                 orderId, e.getMessage());

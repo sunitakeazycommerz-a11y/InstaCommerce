@@ -62,6 +62,7 @@ public class PaymentActivityImpl implements PaymentActivity {
             ), Void.class, paymentId);
     }
 
+    @SuppressWarnings("unused")
     private PaymentAuthResult authorizePaymentFallback(long amountCents, String paymentMethodId,
                                                         String idempotencyKey, Exception e) {
         log.warn("Circuit breaker fallback for paymentService authorizePayment amount={}: {}",
@@ -70,6 +71,7 @@ public class PaymentActivityImpl implements PaymentActivity {
                 "Payment service unavailable for authorizePayment", e);
     }
 
+    @SuppressWarnings("unused")
     private void capturePaymentFallback(String paymentId, String idempotencyKey, Exception e) {
         log.warn("Circuit breaker fallback for paymentService capturePayment paymentId={}: {}",
                 paymentId, e.getMessage());
@@ -77,6 +79,7 @@ public class PaymentActivityImpl implements PaymentActivity {
                 "Payment service unavailable for capturePayment paymentId=" + paymentId, e);
     }
 
+    @SuppressWarnings("unused")
     private void voidPaymentFallback(String paymentId, String idempotencyKey, Exception e) {
         log.warn("Circuit breaker fallback for paymentService voidPayment paymentId={}: {}",
                 paymentId, e.getMessage());
@@ -84,6 +87,7 @@ public class PaymentActivityImpl implements PaymentActivity {
                 "Payment service unavailable for voidPayment paymentId=" + paymentId, e);
     }
 
+    @SuppressWarnings("unused")
     private void refundPaymentFallback(String paymentId, long amountCents, String idempotencyKey, Exception e) {
         log.warn("Circuit breaker fallback for paymentService refundPayment paymentId={}: {}",
                 paymentId, e.getMessage());

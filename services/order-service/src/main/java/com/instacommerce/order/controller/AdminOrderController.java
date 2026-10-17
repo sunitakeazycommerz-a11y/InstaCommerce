@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/admin/orders")
+@RequestMapping("/admin/orders/{id}")
 public class AdminOrderController {
     private final OrderService orderService;
 
@@ -27,7 +27,7 @@ public class AdminOrderController {
         this.orderService = orderService;
     }
 
-    @PostMapping("/{id}/cancel")
+    @PostMapping("/cancel")
     @PreAuthorize("hasRole('ADMIN')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void cancelOrder(@PathVariable UUID id,
@@ -37,13 +37,13 @@ public class AdminOrderController {
         orderService.cancelOrder(id, request.reason(), changedBy, toUserId(principal));
     }
 
-    @GetMapping("/{id}")
+    @GetMapping
     @PreAuthorize("hasRole('ADMIN')")
     public OrderResponse getOrder(@PathVariable UUID id) {
         return orderService.getOrder(id, null, true);
     }
 
-    @PostMapping("/{id}/status")
+    @PostMapping("/status")
     @PreAuthorize("hasRole('ADMIN')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void updateStatus(@PathVariable UUID id,

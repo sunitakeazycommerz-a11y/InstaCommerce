@@ -68,6 +68,7 @@ public class RestOrderLookupClient implements OrderLookupClient {
         }
     }
 
+    @SuppressWarnings("unused")
     private Optional<OrderSnapshot> findOrderFallback(UUID orderId, Exception e) {
         log.warn("Circuit breaker fallback for orderService findOrder orderId={}: {}", orderId, e.getMessage());
         return Optional.empty();

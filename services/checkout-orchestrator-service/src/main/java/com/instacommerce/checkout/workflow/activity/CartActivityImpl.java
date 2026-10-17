@@ -32,12 +32,14 @@ public class CartActivityImpl implements CartActivity {
         restTemplate.delete("/api/carts/{userId}", userId);
     }
 
+    @SuppressWarnings("unused")
     private CartValidationResult validateCartFallback(String userId, Exception e) {
         log.warn("Circuit breaker fallback for cartService validateCart userId={}: {}", userId, e.getMessage());
         throw new ServiceUnavailableException("cartService",
                 "Cart service unavailable for validateCart userId=" + userId, e);
     }
 
+    @SuppressWarnings("unused")
     private void clearCartFallback(String userId, Exception e) {
         log.warn("Circuit breaker fallback for cartService clearCart userId={}: {}", userId, e.getMessage());
         throw new ServiceUnavailableException("cartService",

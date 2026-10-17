@@ -26,6 +26,7 @@ public class PricingActivityImpl implements PricingActivity {
         return restTemplate.postForObject("/pricing/calculate", request, PricingResult.class);
     }
 
+    @SuppressWarnings("unused")
     private PricingResult calculatePriceFallback(PricingRequest request, Exception e) {
         log.warn("Circuit breaker fallback for pricingService calculatePrice userId={}: {}",
                 request.userId(), e.getMessage());

@@ -3,7 +3,6 @@ package com.instacommerce.wallet.client;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,7 +19,6 @@ class RestOrderLookupClientTest {
 
     private MockWebServer mockServer;
     private RestOrderLookupClient client;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() throws Exception {

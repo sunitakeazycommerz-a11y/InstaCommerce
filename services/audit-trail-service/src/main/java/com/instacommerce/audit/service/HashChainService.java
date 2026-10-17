@@ -5,15 +5,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
 public class HashChainService {
 
-    private static final Logger log = LoggerFactory.getLogger(HashChainService.class);
     static final String GENESIS_SEED = "INSTACOMMERCE_AUDIT_GENESIS";
 
     private final JdbcTemplate jdbcTemplate;

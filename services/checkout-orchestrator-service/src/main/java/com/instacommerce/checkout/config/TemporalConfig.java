@@ -24,7 +24,7 @@ public class TemporalConfig {
         WorkflowServiceStubsOptions options = WorkflowServiceStubsOptions.newBuilder()
             .setTarget(properties.getServiceAddress())
             .build();
-        return WorkflowServiceStubs.newInstance(options);
+        return WorkflowServiceStubs.newServiceStubs(options);
     }
 
     @Bean

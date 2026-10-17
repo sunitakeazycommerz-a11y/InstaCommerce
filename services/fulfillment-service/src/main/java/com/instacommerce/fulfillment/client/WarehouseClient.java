@@ -54,6 +54,7 @@ public class WarehouseClient {
                 new java.math.BigDecimal(lng.toString()));
     }
 
+    @SuppressWarnings("unused")
     private StoreCoordinates getStoreCoordinatesFallback(String storeId, Exception e) {
         logger.warn("Circuit breaker fallback for warehouseService getStoreCoordinates storeId={}: {}",
                 storeId, e.getMessage());

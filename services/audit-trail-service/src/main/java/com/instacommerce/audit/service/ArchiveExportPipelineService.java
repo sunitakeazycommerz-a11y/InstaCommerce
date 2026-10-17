@@ -23,7 +23,6 @@ import org.apache.parquet.schema.Types;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,8 +41,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class ArchiveExportPipelineService {
 
   private static final Logger log = LoggerFactory.getLogger(ArchiveExportPipelineService.class);
-  private static final int BATCH_SIZE = 10000; // Events per Parquet file
-  private static final long MAX_FILE_SIZE_BYTES = 1024 * 1024 * 1024; // 1GB max per file
 
   @Value("${audit.archive.bucket-name:instacommerce-audit-archive-dev}")
   private String archiveBucketName;
@@ -62,15 +59,12 @@ public class ArchiveExportPipelineService {
 
   private final AuditEventRepository auditEventRepository;
   private final AuditArchiveManifestRepository manifestRepository;
-  private final HashChainService hashChainService;
 
   public ArchiveExportPipelineService(
       AuditEventRepository auditEventRepository,
-      AuditArchiveManifestRepository manifestRepository,
-      HashChainService hashChainService) {
+      AuditArchiveManifestRepository manifestRepository) {
     this.auditEventRepository = auditEventRepository;
     this.manifestRepository = manifestRepository;
-    this.hashChainService = hashChainService;
   }
 
   /**
@@ -335,34 +329,16 @@ public class ArchiveExportPipelineService {
   }
 
   /**
-   * Internal class to represent a Parquet archive file
+   * Internal record to represent a Parquet archive file
    */
-  private static class ArchiveFile {
-    private final int archiveYear;
-    private final int archiveMonth;
-    private final String gcsPath;
-    private final byte[] content;
-    private final long compressedSizeBytes;
-    private final String checksumSha256;
-    private final long rowCount;
-
-    public ArchiveFile(
-        int archiveYear,
-        int archiveMonth,
-        String gcsPath,
-        byte[] content,
-        long compressedSizeBytes,
-        String checksumSha256,
-        long rowCount) {
-      this.archiveYear = archiveYear;
-      this.archiveMonth = archiveMonth;
-      this.gcsPath = gcsPath;
-      this.content = content;
-      this.compressedSizeBytes = compressedSizeBytes;
-      this.checksumSha256 = checksumSha256;
-      this.rowCount = rowCount;
-    }
-
+  private record ArchiveFile(
+      int archiveYear,
+      int archiveMonth,
+      String gcsPath,
+      byte[] content,
+      long compressedSizeBytes,
+      String checksumSha256,
+      long rowCount) {
     public int getArchiveYear() { return archiveYear; }
     public int getArchiveMonth() { return archiveMonth; }
     public String getGcsPath() { return gcsPath; }

@@ -7,7 +7,6 @@ import com.instacommerce.cart.domain.model.CartItem;
 import com.instacommerce.cart.dto.request.AddItemRequest;
 import com.instacommerce.cart.dto.response.CartItemResponse;
 import com.instacommerce.cart.dto.response.CartResponse;
-import com.instacommerce.cart.exception.CartNotFoundException;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;

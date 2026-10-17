@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/admin")
+@RequestMapping("/admin/users")
 public class AdminController {
     private final UserService userService;
     private final NotificationPreferenceService notificationPreferenceService;
@@ -25,19 +25,19 @@ public class AdminController {
         this.notificationPreferenceService = notificationPreferenceService;
     }
 
-    @GetMapping("/users")
+    @GetMapping
     @PreAuthorize("hasRole('ADMIN')")
     public Page<UserResponse> listUsers(@PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
         return userService.listUsers(pageable);
     }
 
-    @GetMapping("/users/{id}")
+    @GetMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public UserResponse getUser(@PathVariable UUID id) {
         return userService.getUserById(id);
     }
 
-    @GetMapping("/users/{id}/notification-preferences")
+    @GetMapping("/{id}/notification-preferences")
     @PreAuthorize("hasRole('ADMIN')")
     public NotificationPreferenceResponse getNotificationPreferences(@PathVariable UUID id) {
         return notificationPreferenceService.getPreferences(id);

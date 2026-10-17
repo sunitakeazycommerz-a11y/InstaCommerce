@@ -40,6 +40,7 @@ public class RestOrderClient implements OrderClient {
         restTemplate.postForLocation(baseUrl + "/admin/orders/" + orderId + "/status", request);
     }
 
+    @SuppressWarnings("unused")
     private void updateStatusFallback(UUID orderId, String status, String note, Exception e) {
         logger.warn("Circuit breaker fallback for orderService updateStatus orderId={} status={}: {}",
                 orderId, status, e.getMessage());

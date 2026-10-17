@@ -73,6 +73,7 @@ public class TwilioSmsProvider implements NotificationProvider {
         }
     }
 
+    @SuppressWarnings("unused")
     private String smsFallback(NotificationSendRequest request, Exception ex) {
         logger.warn("notification.circuit_breaker_open provider=sms recipient={}", request.recipient(), ex);
         throw new ProviderTemporaryException("SMS provider circuit breaker open", ex);

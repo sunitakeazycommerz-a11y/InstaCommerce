@@ -4,6 +4,6 @@ import org.springframework.http.HttpStatus;
 
 public class PaymentDeclinedException extends ApiException {
     public PaymentDeclinedException(String message) {
-        super(HttpStatus.UNPROCESSABLE_ENTITY, "PAYMENT_DECLINED", message);
+        super(HttpStatus.UNPROCESSABLE_CONTENT, "PAYMENT_DECLINED", message);
     }
 }

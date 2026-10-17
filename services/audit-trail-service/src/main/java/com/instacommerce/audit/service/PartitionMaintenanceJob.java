@@ -50,8 +50,6 @@ public class PartitionMaintenanceJob {
                 "WHERE inhparent = 'audit_events'::regclass",
                 String.class);
 
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy_MM");
-
         for (String partitionName : partitions) {
             // Partition names follow pattern: audit_events_YYYY_MM
             String suffix = partitionName.replace("audit_events_", "");
