@@ -1,0 +1,47 @@
+[
+  {
+    "order_id": "ord-0001",
+    "user_id": "usr-1001",
+    "total_cents": 2499,
+    "status": "DELIVERED",
+    "store_id": "store-blr-01",
+    "placed_at": "2026-03-15T10:30:00Z",
+    "item_count": 4
+  },
+  {
+    "order_id": "ord-0002",
+    "user_id": "usr-1002",
+    "total_cents": 4500,
+    "status": "PLACED",
+    "store_id": "store-blr-01",
+    "placed_at": "2026-03-15T10:35:12Z",
+    "item_count": 6
+  },
+  {
+    "order_id": "ord-0003",
+    "user_id": "usr-1003",
+    "total_cents": 1250,
+    "status": "PACKED",
+    "store_id": "store-mum-02",
+    "placed_at": "2026-03-15T10:40:05Z",
+    "item_count": 2
+  },
+  {
+    "order_id": "ord-0004",
+    "user_id": "usr-1001",
+    "total_cents": 8900,
+    "status": "OUT_FOR_DELIVERY",
+    "store_id": "store-del-01",
+    "placed_at": "2026-03-15T10:42:30Z",
+    "item_count": 11
+  },
+  {
+    "order_id": "ord-0005",
+    "user_id": "usr-1004",
+    "total_cents": 1500,
+    "status": "CANCELLED",
+    "store_id": "store-blr-02",
+    "placed_at": "2026-03-15T10:45:00Z",
+    "item_count": 1
+  }
+]

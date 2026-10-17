@@ -1,0 +1,42 @@
+[
+  {
+    "payment_id": "pay-0001",
+    "order_id": "ord-0001",
+    "status": "SUCCESS",
+    "method": "UPI",
+    "amount_cents": 2499,
+    "latency_ms": 230
+  },
+  {
+    "payment_id": "pay-0002",
+    "order_id": "ord-0002",
+    "status": "SUCCESS",
+    "method": "CREDIT_CARD",
+    "amount_cents": 4500,
+    "latency_ms": 480
+  },
+  {
+    "payment_id": "pay-0003",
+    "order_id": "ord-0003",
+    "status": "PROCESSING",
+    "method": "WALLET",
+    "amount_cents": 1250,
+    "latency_ms": 110
+  },
+  {
+    "payment_id": "pay-0004",
+    "order_id": "ord-0004",
+    "status": "SUCCESS",
+    "method": "NET_BANKING",
+    "amount_cents": 8900,
+    "latency_ms": 1250
+  },
+  {
+    "payment_id": "pay-0005",
+    "order_id": "ord-0005",
+    "status": "REFUNDED",
+    "method": "UPI",
+    "amount_cents": 1500,
+    "latency_ms": 320
+  }
+]

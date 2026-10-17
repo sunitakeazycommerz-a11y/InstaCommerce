@@ -1,0 +1,42 @@
+[
+  {
+    "sku_id": "sku-org-milk-1l",
+    "store_id": "store-blr-01",
+    "event_type": "STOCK_RECEIVED",
+    "quantity_on_hand": 120,
+    "category": "Dairy & Eggs",
+    "quantity_change": 50
+  },
+  {
+    "sku_id": "sku-fuji-apple-1kg",
+    "store_id": "store-blr-01",
+    "event_type": "STOCK_SOLD",
+    "quantity_on_hand": 45,
+    "category": "Fresh Produce",
+    "quantity_change": -3
+  },
+  {
+    "sku_id": "sku-sourdough-bread",
+    "store_id": "store-mum-02",
+    "event_type": "STOCK_ADJUSTED",
+    "quantity_on_hand": 20,
+    "category": "Bakery",
+    "quantity_change": -1
+  },
+  {
+    "sku_id": "sku-cold-brew-250ml",
+    "store_id": "store-del-01",
+    "event_type": "STOCK_EXPIRED",
+    "quantity_on_hand": 5,
+    "category": "Beverages",
+    "quantity_change": -4
+  },
+  {
+    "sku_id": "sku-greek-yogurt-400g",
+    "store_id": "store-blr-02",
+    "event_type": "STOCK_RETURNED",
+    "quantity_on_hand": 38,
+    "category": "Dairy & Eggs",
+    "quantity_change": 2
+  }
+]

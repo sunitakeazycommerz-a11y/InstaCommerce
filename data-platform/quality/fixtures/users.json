@@ -1,0 +1,37 @@
+[
+  {
+    "user_id": "usr-1001",
+    "email": "alice.johnson@instacommerce.test",
+    "phone_number": "+919876543210",
+    "account_status": "ACTIVE",
+    "created_at": "2026-01-10T08:00:00Z"
+  },
+  {
+    "user_id": "usr-1002",
+    "email": "rahul.sharma@example.com",
+    "phone_number": "+919123456789",
+    "account_status": "ACTIVE",
+    "created_at": "2026-01-15T09:30:00Z"
+  },
+  {
+    "user_id": "usr-1003",
+    "email": "priya.nair@customer.org",
+    "phone_number": "+919988776655",
+    "account_status": "INACTIVE",
+    "created_at": "2026-02-01T14:20:00Z"
+  },
+  {
+    "user_id": "usr-1004",
+    "email": "david.miller@domain.io",
+    "phone_number": "+14155552671",
+    "account_status": "SUSPENDED",
+    "created_at": "2026-02-18T18:45:00Z"
+  },
+  {
+    "user_id": "usr-1005",
+    "email": "sara.connor@cyberdyne.net",
+    "phone_number": "+12125550199",
+    "account_status": "DELETED",
+    "created_at": "2026-03-01T11:10:00Z"
+  }
+]
