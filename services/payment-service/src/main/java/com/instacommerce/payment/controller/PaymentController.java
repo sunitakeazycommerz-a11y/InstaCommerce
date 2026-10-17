@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/payments")
+@RequestMapping({"/payments", "/api/payments", "/api/v1/payments"})
 public class PaymentController {
     private final PaymentService paymentService;
 
@@ -46,7 +46,11 @@ public class PaymentController {
 
     @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     @GetMapping("/{id}")
-    public PaymentResponse get(@PathVariable UUID id) {
-        return paymentService.get(id);
+    public PaymentResponse get(@PathVariable String id) {
+        try {
+            return paymentService.get(UUID.fromString(id));
+        } catch (IllegalArgumentException ex) {
+            return paymentService.getByReference(id);
+        }
     }
 }

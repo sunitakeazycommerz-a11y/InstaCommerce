@@ -11,7 +11,9 @@ public final class PaymentMapper {
         return new PaymentResponse(
             payment.getId(),
             payment.getStatus().name(),
-            payment.getPspReference()
+            payment.getPspReference(),
+            payment.getAmountCents(),
+            payment.getCurrency()
         );
     }
 }
