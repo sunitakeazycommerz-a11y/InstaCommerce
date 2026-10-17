@@ -7,5 +7,5 @@ import java.util.UUID;
 public record UnredeemCouponRequest(
     @NotBlank String code,
     @NotNull UUID userId,
-    @NotNull UUID orderId
+    UUID orderId
 ) {}

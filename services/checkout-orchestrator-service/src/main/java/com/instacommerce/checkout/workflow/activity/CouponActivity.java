@@ -10,4 +10,7 @@ public interface CouponActivity {
 
     @ActivityMethod
     void unredeemCoupon(String code, String userId, String orderId);
+
+    @ActivityMethod
+    void rollbackUsage(String code, String userId);
 }

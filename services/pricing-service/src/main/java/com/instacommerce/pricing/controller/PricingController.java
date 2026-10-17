@@ -3,6 +3,7 @@ package com.instacommerce.pricing.controller;
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
 import com.instacommerce.pricing.dto.request.QuoteValidationRequest;
 import com.instacommerce.pricing.dto.request.RedeemCouponRequest;
+import com.instacommerce.pricing.dto.request.RollbackCouponUsageRequest;
 import com.instacommerce.pricing.dto.request.UnredeemCouponRequest;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
@@ -65,6 +66,13 @@ public class PricingController {
     @RateLimiter(name = "pricingLimiter")
     public ResponseEntity<Void> unredeemCoupon(@Valid @RequestBody UnredeemCouponRequest request) {
         couponService.unredeemCoupon(request.code(), request.userId(), request.orderId());
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/coupons/rollback-usage")
+    @RateLimiter(name = "pricingLimiter")
+    public ResponseEntity<Void> rollbackUsage(@Valid @RequestBody RollbackCouponUsageRequest request) {
+        couponService.rollbackUsage(request.code(), request.userId());
         return ResponseEntity.ok().build();
     }
 
