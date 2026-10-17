@@ -119,3 +119,77 @@ services:
     replicas: 2
     tag: prod
 
+istio:
+  enabled: true
+  gateway:
+    hosts:
+      - api.instacommerce.com
+      - m.instacommerce.com
+      - admin.instacommerce.com
+  requestAuthentications:
+    - name: ingress-gateway-jwt-prod
+      selector:
+        istio: ingressgateway
+      jwtRules:
+        - issuer: instacommerce-identity
+          jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local:8081/.well-known/jwks.json
+          forwardOriginalToken: true
+    - name: mobile-bff-service-jwt-prod
+      selector:
+        app: mobile-bff-service
+      jwtRules:
+        - issuer: instacommerce-identity
+          jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local:8081/.well-known/jwks.json
+          forwardOriginalToken: true
+    - name: admin-gateway-service-jwt-prod
+      selector:
+        app: admin-gateway-service
+      jwtRules:
+        - issuer: instacommerce-identity
+          jwksUri: http://identity-service.{{ .Release.Namespace }}.svc.cluster.local:8081/.well-known/jwks.json
+          audiences: ["instacommerce-admin"]
+          forwardOriginalToken: true
+  authorizationPolicies:
+    - name: ingress-admin-host-isolation-prod
+      selector:
+        istio: ingressgateway
+      action: DENY
+      rules:
+        - from:
+            - source:
+                notRequestPrincipals: ["instacommerce-identity/*"]
+          to:
+            - operation:
+                hosts: ["admin.instacommerce.com"]
+        - to:
+            - operation:
+                hosts: ["admin.instacommerce.com"]
+          when:
+            - key: request.auth.claims[aud]
+              notValues: ["instacommerce-admin"]
+    - name: admin-gateway-rbac-policy-prod
+      selector:
+        app: admin-gateway-service
+      action: ALLOW
+      rules:
+        - from:
+            - source:
+                requestPrincipals: ["instacommerce-identity/*"]
+          when:
+            - key: request.auth.claims[aud]
+              values: ["instacommerce-admin"]
+    - name: mobile-bff-access-policy-prod
+      selector:
+        app: mobile-bff-service
+      action: ALLOW
+      rules:
+        - to:
+            - operation:
+                paths: ["/actuator/health/*", "/actuator/prometheus", "/api/v1/catalog/*", "/api/v1/products/*", "/api/v1/categories/*"]
+        - from:
+            - source:
+                requestPrincipals: ["instacommerce-identity/*"]
+          when:
+            - key: request.auth.claims[iss]
+              values: ["instacommerce-identity"]
+
