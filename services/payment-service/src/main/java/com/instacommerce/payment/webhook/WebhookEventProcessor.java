@@ -165,6 +165,8 @@ public class WebhookEventProcessor {
             try {
                 ProcessedWebhookEvent processed = new ProcessedWebhookEvent();
                 processed.setEventId(eventId);
+                processed.setPspEventId(eventId);
+                processed.setExternalPaymentReference(pspReference);
                 processed.setEventType(type);
                 processed.setRawPayload(rawPayload);
                 processedWebhookEventRepository.saveAndFlush(processed);

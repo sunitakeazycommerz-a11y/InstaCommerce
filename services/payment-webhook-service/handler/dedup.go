@@ -61,6 +61,34 @@ func (s *IdempotencyStore) Mark(eventID string) {
 	s.seen[eventID] = time.Now().Add(s.ttl)
 }
 
+// CheckAndMark atomically checks if eventID has been seen within the TTL window,
+// and if not, marks it and returns false (meaning not duplicate, acquired).
+// If the event was already seen within TTL, it returns true (meaning duplicate).
+func (s *IdempotencyStore) CheckAndMark(eventID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	expiry, ok := s.seen[eventID]
+	if ok && time.Now().Before(expiry) {
+		return true
+	}
+
+	// Evict oldest entry when at capacity.
+	if len(s.seen) >= s.maxSize {
+		s.evictOldestLocked()
+	}
+	s.seen[eventID] = time.Now().Add(s.ttl)
+	return false
+}
+
+// Remove deletes eventID from the store, allowing subsequent retries
+// (e.g. if downstream Kafka publishing failed).
+func (s *IdempotencyStore) Remove(eventID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.seen, eventID)
+}
+
 // Close stops the background cleanup goroutine. It is safe to call multiple
 // times.
 func (s *IdempotencyStore) Close() {

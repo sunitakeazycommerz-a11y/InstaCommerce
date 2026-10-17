@@ -647,14 +647,14 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	isDuplicate, err := h.dedupe.Check(ctx, event.ID)
+	acquired, err := h.dedupe.CheckAndSet(ctx, event.ID)
 	if err != nil {
 		status = http.StatusServiceUnavailable
 		h.metrics.dedupeErrors.Inc()
 		writeError(w, status, "dedupe unavailable")
 		return
 	}
-	if isDuplicate {
+	if !acquired {
 		status = http.StatusOK
 		h.metrics.dedupeDuplicates.Inc()
 		writeJSON(w, status, statusResponse{Status: "duplicate", EventID: event.ID, Duplicate: true})
@@ -687,6 +687,7 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	span.End()
 
 	if publishErr != nil {
+		_ = h.dedupe.Remove(ctx, event.ID)
 		h.metrics.publishErrors.Inc()
 		status = http.StatusServiceUnavailable
 		writeError(w, status, "failed to publish event")
@@ -694,11 +695,6 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.metrics.publishSuccess.Inc()
-
-	if err := h.dedupe.Set(ctx, event.ID); err != nil {
-		h.metrics.dedupeErrors.Inc()
-		loggerWithTrace(ctx, h.logger).Warn("failed to set dedupe after publish", "error", err, "event_id", event.ID)
-	}
 
 	status = http.StatusAccepted
 	writeJSON(w, status, statusResponse{Status: "accepted", EventID: event.ID})

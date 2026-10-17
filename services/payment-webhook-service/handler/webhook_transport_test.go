@@ -209,3 +209,72 @@ func TestSchemaVersionValue(t *testing.T) {
 		t.Errorf("SchemaVersion = %d, expected >= 2 for raw_psp_payload support", SchemaVersion)
 	}
 }
+
+// TestIdempotencyStore_ConcurrentCheckAndMark verifies that concurrent attempts
+// to check and mark the same event ID result in exactly one success (false) and
+// all other attempts detecting duplicate (true), eliminating the race window.
+func TestIdempotencyStore_ConcurrentCheckAndMark(t *testing.T) {
+	store := NewIdempotencyStore(10*time.Minute, 1000, time.Hour)
+	defer store.Close()
+
+	const concurrency = 20
+	const eventID = "evt_concurrent_race_test"
+
+	start := make(chan struct{})
+	results := make(chan bool, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			<-start
+			results <- store.CheckAndMark(eventID)
+		}()
+	}
+
+	close(start)
+
+	var acquiredCount int
+	var duplicateCount int
+	for i := 0; i < concurrency; i++ {
+		isDup := <-results
+		if !isDup {
+			acquiredCount++
+		} else {
+			duplicateCount++
+		}
+	}
+
+	if acquiredCount != 1 {
+		t.Fatalf("expected exactly 1 goroutine to acquire lock (not duplicate), got %d", acquiredCount)
+	}
+	if duplicateCount != concurrency-1 {
+		t.Fatalf("expected %d duplicates, got %d", concurrency-1, duplicateCount)
+	}
+}
+
+// TestIdempotencyStore_RemoveOnPublishFailure verifies that if publishing fails,
+// removing the event ID allows subsequent retries to succeed.
+func TestIdempotencyStore_RemoveOnPublishFailure(t *testing.T) {
+	store := NewIdempotencyStore(10*time.Minute, 1000, time.Hour)
+	defer store.Close()
+
+	eventID := "evt_retry_test"
+
+	// First attempt acquires
+	if isDup := store.CheckAndMark(eventID); isDup {
+		t.Fatalf("expected first attempt to acquire, got duplicate")
+	}
+
+	// Immediate replay without rollback is duplicate
+	if isDup := store.CheckAndMark(eventID); !isDup {
+		t.Fatalf("expected replay to be duplicate")
+	}
+
+	// On failure, rollback / remove
+	store.Remove(eventID)
+
+	// Now retry can acquire again
+	if isDup := store.CheckAndMark(eventID); isDup {
+		t.Fatalf("expected retry after removal to acquire, got duplicate")
+	}
+}
+
