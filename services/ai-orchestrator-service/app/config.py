@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -48,11 +48,11 @@ class Settings(BaseSettings):
     internal_service_token: Optional[str] = None
     user_id_header_name: str = "X-User-Id"
 
-    catalog_service_url: AnyHttpUrl = "http://catalog-service:8080"
-    pricing_service_url: AnyHttpUrl = "http://pricing-service:8087"
-    inventory_service_url: AnyHttpUrl = "http://inventory-service:8080"
-    cart_service_url: AnyHttpUrl = "http://cart-service:8088"
-    order_service_url: AnyHttpUrl = "http://order-service:8080"
+    catalog_service_url: Union[AnyHttpUrl, str] = "http://catalog-service:8080"
+    pricing_service_url: Union[AnyHttpUrl, str] = "http://pricing-service:8087"
+    inventory_service_url: Union[AnyHttpUrl, str] = "http://inventory-service:8080"
+    cart_service_url: Union[AnyHttpUrl, str] = "http://cart-service:8088"
+    order_service_url: Union[AnyHttpUrl, str] = "http://order-service:8080"
 
     llm_api_url: Optional[AnyHttpUrl] = None
     llm_api_key: Optional[str] = None

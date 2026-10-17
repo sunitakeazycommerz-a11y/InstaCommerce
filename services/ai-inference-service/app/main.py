@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from math import exp
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Literal
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Literal, cast
 import hashlib
 import json
 import logging
@@ -270,13 +270,13 @@ class RedisFeatureStoreClient(FeatureStoreClient):
     def get_features(self, entity_id: str, feature_names: Sequence[str]) -> Dict[str, float]:
         key = self._key(entity_id)
         if feature_names:
-            values = self._client.hmget(key, list(feature_names))
+            values = cast(List[Any], self._client.hmget(key, list(feature_names)))
             return {
                 name: float(value)
                 for name, value in zip(feature_names, values)
                 if value is not None
             }
-        data = self._client.hgetall(key)
+        data = cast(Dict[str, Any], self._client.hgetall(key))
         return {name: float(value) for name, value in data.items()}
 
     def health(self) -> Dict[str, str]:
@@ -541,10 +541,13 @@ def parse_model_request(model_name: str, payload: Mapping[str, Any]) -> BaseMode
 
 def build_features_for_model(model_name: str, request: BaseModel) -> Dict[str, float]:
     if model_name == "eta":
+        assert isinstance(request, EtaRequest)
         return eta_features(request)
     if model_name == "ranking":
+        assert isinstance(request, RankingRequest)
         return ranking_features(request)
     if model_name == "fraud":
+        assert isinstance(request, FraudRequest)
         return fraud_features(request)
     raise ValueError("unknown_model")
 
