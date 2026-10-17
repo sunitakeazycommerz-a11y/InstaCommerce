@@ -38,8 +38,8 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST, "/pricing/calculate").permitAll()
-                .requestMatchers(HttpMethod.GET, "/pricing/products/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/pricing/calculate", "/api/pricing/calculate").permitAll()
+                .requestMatchers(HttpMethod.GET, "/pricing/products/**", "/api/pricing/products/**").permitAll()
                 .requestMatchers("/actuator/**", "/error").permitAll()
                 .requestMatchers("/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
