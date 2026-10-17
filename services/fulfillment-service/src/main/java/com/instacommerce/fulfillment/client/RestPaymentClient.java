@@ -40,6 +40,7 @@ public class RestPaymentClient implements PaymentClient {
         restTemplate.postForObject(baseUrl + "/payments/" + paymentId + "/refund", request, Object.class);
     }
 
+    @SuppressWarnings("unused")
     private void refundFallback(UUID paymentId, long amountCents, String reason, String idempotencyKey, Exception e) {
         logger.warn("Circuit breaker fallback for paymentService refund paymentId={} amount={}: {}",
                 paymentId, amountCents, e.getMessage());

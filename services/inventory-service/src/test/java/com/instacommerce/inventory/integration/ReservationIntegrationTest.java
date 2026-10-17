@@ -94,7 +94,7 @@ class ReservationIntegrationTest {
         UUID productId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID();
 
-        StockItem stock = createStockItem(productId, storeId, 100, 0);
+        createStockItem(productId, storeId, 100, 0);
 
         ReserveRequest request = new ReserveRequest(
             "reserve-key-" + UUID.randomUUID(),

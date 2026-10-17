@@ -102,7 +102,6 @@ public class InventoryEventConsumer {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private void handleStockReleased(Map<String, Object> payload) {
         Object itemsObj = payload.get("items");
         if (itemsObj instanceof List<?> itemsList) {

@@ -114,7 +114,6 @@ public class FlagEvaluationService {
         }
     }
 
-    @SuppressWarnings("deprecation")
     static int computeBucket(UUID userId, String flagKey) {
         String input = userId.toString() + ":" + flagKey;
         int hash = Hashing.murmur3_32_fixed().hashString(input, StandardCharsets.UTF_8).asInt();

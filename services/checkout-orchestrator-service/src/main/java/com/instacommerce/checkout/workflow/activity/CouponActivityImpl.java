@@ -45,6 +45,7 @@ public class CouponActivityImpl implements CouponActivity {
             Void.class);
     }
 
+    @SuppressWarnings("unused")
     private void redeemCouponFallback(String code, String userId, String orderId, long discountCents, Exception e) {
         log.warn("Circuit breaker fallback for pricingService redeemCoupon code={} userId={}: {}",
                 code, userId, e.getMessage());
@@ -52,6 +53,7 @@ public class CouponActivityImpl implements CouponActivity {
                 "Pricing service unavailable for redeemCoupon code=" + code, e);
     }
 
+    @SuppressWarnings("unused")
     private void unredeemCouponFallback(String code, String userId, String orderId, Exception e) {
         log.warn("Circuit breaker fallback for pricingService unredeemCoupon code={} userId={}: {}",
                 code, userId, e.getMessage());
@@ -59,6 +61,7 @@ public class CouponActivityImpl implements CouponActivity {
                 "Pricing service unavailable for unredeemCoupon code=" + code, e);
     }
 
+    @SuppressWarnings("unused")
     private void rollbackUsageFallback(String code, String userId, Exception e) {
         log.warn("Circuit breaker fallback for pricingService rollbackUsage code={} userId={}: {}",
                 code, userId, e.getMessage());

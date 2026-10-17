@@ -11,7 +11,6 @@ import com.instacommerce.catalog.exception.DuplicateSkuException;
 import com.instacommerce.catalog.exception.ProductNotFoundException;
 import com.instacommerce.catalog.repository.CategoryRepository;
 import com.instacommerce.catalog.repository.ProductRepository;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;

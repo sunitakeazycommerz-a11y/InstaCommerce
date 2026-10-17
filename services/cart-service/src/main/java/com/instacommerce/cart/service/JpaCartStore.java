@@ -12,8 +12,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -21,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class JpaCartStore implements CartStore {
-    private static final Logger log = LoggerFactory.getLogger(JpaCartStore.class);
     private static final String AGGREGATE_TYPE = "CART";
     private static final String EVENT_ITEM_ADDED = "ITEM_ADDED";
     private static final String EVENT_ITEM_REMOVED = "ITEM_REMOVED";

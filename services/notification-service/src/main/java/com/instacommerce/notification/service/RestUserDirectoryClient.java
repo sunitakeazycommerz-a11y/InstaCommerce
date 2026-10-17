@@ -45,6 +45,7 @@ public class RestUserDirectoryClient implements UserDirectoryClient {
         return Optional.of(new UserContact(response.id(), response.email(), response.phone(), name, null));
     }
 
+    @SuppressWarnings("unused")
     private Optional<UserContact> findUserFallback(UUID userId, Exception e) {
         logger.warn("Circuit breaker fallback for identityService findUser userId={}: {}", userId, e.getMessage());
         return Optional.empty();

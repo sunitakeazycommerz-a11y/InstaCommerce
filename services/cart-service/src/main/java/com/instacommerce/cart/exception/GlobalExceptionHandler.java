@@ -77,7 +77,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<ErrorResponse> handleIllegalState(IllegalStateException ex,
                                                             HttpServletRequest request) {
-        return ResponseEntity.unprocessableEntity()
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
             .body(buildError("CART_INVALID", ex.getMessage(), List.of(), request));
     }
 

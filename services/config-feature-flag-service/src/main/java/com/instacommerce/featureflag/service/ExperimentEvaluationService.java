@@ -160,7 +160,6 @@ public class ExperimentEvaluationService {
         return variants.get(variants.size() - 1);
     }
 
-    @SuppressWarnings("deprecation")
     private int computeBucket(String assignmentKey, String experimentKey, Long switchbackWindow, int totalWeight) {
         String input = assignmentKey + ":" + experimentKey;
         if (switchbackWindow != null) {

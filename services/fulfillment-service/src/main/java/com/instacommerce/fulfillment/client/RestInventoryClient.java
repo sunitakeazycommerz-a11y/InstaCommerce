@@ -40,6 +40,7 @@ public class RestInventoryClient implements InventoryClient {
         restTemplate.postForObject(baseUrl + "/inventory/adjust", request, Object.class);
     }
 
+    @SuppressWarnings("unused")
     private void releaseStockFallback(UUID productId, String storeId, int quantity, String reason,
                                       String referenceId, Exception e) {
         logger.warn("Circuit breaker fallback for inventoryService releaseStock product={} store={} qty={}: {}",

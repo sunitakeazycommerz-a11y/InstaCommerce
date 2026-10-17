@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/users")
+@RequestMapping("/users/me")
 public class UserController {
     private final UserService userService;
     private final UserDeletionService userDeletionService;
@@ -39,23 +39,23 @@ public class UserController {
         this.notificationPreferenceService = notificationPreferenceService;
     }
 
-    @GetMapping("/me")
+    @GetMapping
     public UserResponse getMe() {
         return userService.getCurrentUser();
     }
 
-    @GetMapping("/me/notification-preferences")
+    @GetMapping("/notification-preferences")
     public NotificationPreferenceResponse getNotificationPreferences() {
         return notificationPreferenceService.getPreferences(userService.getCurrentUserId());
     }
 
-    @PutMapping("/me/notification-preferences")
+    @PutMapping("/notification-preferences")
     public NotificationPreferenceResponse updateNotificationPreferences(
         @RequestBody NotificationPreferenceRequest request) {
         return notificationPreferenceService.updatePreferences(userService.getCurrentUserId(), request);
     }
 
-    @PostMapping("/me/password")
+    @PostMapping("/password")
     public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request,
                                                HttpServletRequest httpRequest) {
         String traceId = traceIdProvider.resolveTraceId(httpRequest);
@@ -66,7 +66,7 @@ public class UserController {
         return ResponseEntity.noContent().build();
     }
 
-    @DeleteMapping("/me")
+    @DeleteMapping
     public ResponseEntity<Void> deleteMe(HttpServletRequest request) {
         UUID userId = userService.getCurrentUserId();
         String traceId = traceIdProvider.resolveTraceId(request);

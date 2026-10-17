@@ -3,11 +3,9 @@ package com.instacommerce.riderfleet.client;
 import com.instacommerce.riderfleet.config.RiderFleetProperties;
 import com.instacommerce.riderfleet.security.InternalServiceAuthInterceptor;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
-import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,6 +44,7 @@ public class DispatchOptimizerClient {
         }
     }
 
+    @SuppressWarnings("unused")
     private Optional<OptimizationResult> requestAssignmentFallback(OptimizationRequest request, Exception ex) {
         logger.warn("Dispatch optimizer circuit breaker fallback triggered: {}", ex.getMessage());
         return Optional.empty();

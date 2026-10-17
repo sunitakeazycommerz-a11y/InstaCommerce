@@ -6,7 +6,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.admingateway.config.AdminGatewayTestConfig;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.KeyFactory;
@@ -45,15 +44,12 @@ class AdminGatewayIntegrationTest {
   private ObjectMapper objectMapper;
 
   private PrivateKey privateKey;
-  private String publicKeyPem;
 
   @BeforeEach
   void setUp() throws Exception {
     // Load test RSA keys from classpath resources
     String privateKeyPem = new String(Files.readAllBytes(
         Paths.get("src/test/resources/test-private-key.pem")));
-    publicKeyPem = new String(Files.readAllBytes(
-        Paths.get("src/test/resources/test-public-key.pem")));
 
     privateKey = parsePrivateKey(privateKeyPem);
   }
@@ -160,7 +156,7 @@ class AdminGatewayIntegrationTest {
         .add(audience)
         .and()
         .expiration(Date.from(expiresAt))
-        .signWith(privateKey, SignatureAlgorithm.RS256)
+        .signWith(privateKey)
         .compact();
   }
 

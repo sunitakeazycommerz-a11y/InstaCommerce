@@ -2,10 +2,7 @@ package com.instacommerce.featureflag.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
-import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -16,7 +13,6 @@ import org.springframework.cache.CacheManager;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
-import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.PatternTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Component;
@@ -26,7 +22,6 @@ import org.springframework.stereotype.Component;
 public class FlagCacheInvalidator implements MessageListener {
 
     private static final Logger log = LoggerFactory.getLogger(FlagCacheInvalidator.class);
-    private static final long REDIS_TIMEOUT_MS = 5000L;
 
     private final RedisMessageListenerContainer listenerContainer;
     private final CacheManager cacheManager;

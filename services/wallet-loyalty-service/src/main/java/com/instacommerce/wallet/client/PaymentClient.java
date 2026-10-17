@@ -53,6 +53,7 @@ public class PaymentClient {
         return response;
     }
 
+    @SuppressWarnings("unused")
     private PaymentResponse verifyPaymentFallback(String paymentReference, Exception e) {
         log.warn("Circuit breaker fallback for paymentService verifyPayment reference={}: {}",
                 paymentReference, e.getMessage());

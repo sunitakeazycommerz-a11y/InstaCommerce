@@ -6,10 +6,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.catalog.domain.model.Category;
-import com.instacommerce.catalog.domain.model.OutboxEvent;
 import com.instacommerce.catalog.domain.model.Product;
 import com.instacommerce.catalog.dto.request.CreateProductRequest;
-import com.instacommerce.catalog.dto.response.ProductResponse;
 import com.instacommerce.catalog.repository.CategoryRepository;
 import com.instacommerce.catalog.repository.OutboxEventRepository;
 import com.instacommerce.catalog.repository.ProductRepository;

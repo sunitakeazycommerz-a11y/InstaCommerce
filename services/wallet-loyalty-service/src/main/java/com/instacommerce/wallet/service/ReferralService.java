@@ -48,15 +48,15 @@ public class ReferralService {
                 "Referral code not found: " + code));
 
         if (!referralCode.isActive()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "REFERRAL_INACTIVE",
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "REFERRAL_INACTIVE",
                 "Referral code is no longer active");
         }
         if (referralCode.getUses() >= referralCode.getMaxUses()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "REFERRAL_MAX_USES",
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "REFERRAL_MAX_USES",
                 "Referral code has reached maximum uses");
         }
         if (referralCode.getUserId().equals(newUserId)) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "REFERRAL_SELF_USE",
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "REFERRAL_SELF_USE",
                 "Cannot use your own referral code");
         }
         redemptionRepository.findByReferredUserId(newUserId).ifPresent(existing -> {

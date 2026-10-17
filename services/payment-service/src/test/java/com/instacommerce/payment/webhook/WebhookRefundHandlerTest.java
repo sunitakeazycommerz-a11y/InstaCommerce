@@ -67,7 +67,6 @@ class WebhookRefundHandlerTest {
     private WebhookEventProcessor processorOutboxEnabled;
     private WebhookEventProcessor processorOutboxDisabled;
     private WebhookEventHandler handlerOutboxEnabled;
-    private WebhookEventHandler handlerOutboxDisabled;
 
     @BeforeEach
     void setUp() {
@@ -82,8 +81,6 @@ class WebhookRefundHandlerTest {
         ReflectionTestUtils.setField(processorOutboxDisabled, "entityManager", entityManager);
         handlerOutboxEnabled = new WebhookEventHandler(
             objectMapper, processedWebhookEventRepository, processorOutboxEnabled);
-        handlerOutboxDisabled = new WebhookEventHandler(
-            objectMapper, processedWebhookEventRepository, processorOutboxDisabled);
     }
 
     // --- Helpers ---
@@ -135,28 +132,6 @@ class WebhookRefundHandlerTest {
               }
             }
             """.formatted(eventId, PSP_REF, amountRefunded);
-    }
-
-    private String refundWebhookPayloadWithEntries(String eventId, long amountRefunded,
-                                                    String[][] refundEntries) {
-        ObjectNode root = objectMapper.createObjectNode();
-        root.put("id", eventId);
-        root.put("type", "charge.refunded");
-        ObjectNode dataObj = root.putObject("data").putObject("object");
-        dataObj.put("payment_intent", PSP_REF);
-        dataObj.put("amount_refunded", amountRefunded);
-        ObjectNode refundsObj = dataObj.putObject("refunds");
-        ArrayNode arr = refundsObj.putArray("data");
-        for (String[] entry : refundEntries) {
-            ObjectNode refundNode = arr.addObject();
-            refundNode.put("id", entry[0]);
-            refundNode.put("amount", Long.parseLong(entry[1]));
-            refundNode.put("status", entry.length > 2 ? entry[2] : "succeeded");
-            if (entry.length > 3) {
-                refundNode.putObject("metadata").put("internalRefundId", entry[3]);
-            }
-        }
-        return root.toString();
     }
 
     private ObjectNode objectNodeWithRefundEntries(long amountRefunded, String[][] refundEntries) {

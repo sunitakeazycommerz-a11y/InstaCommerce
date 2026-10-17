@@ -47,6 +47,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
+    @SuppressWarnings("unchecked")
     void shouldReturnFeatureFlags() throws Exception {
         Map<String, Object> flags = Map.of("feature-a", true, "feature-b", false);
         when(restTemplate.exchange(
@@ -65,6 +66,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
+    @SuppressWarnings("unchecked")
     void shouldHandleFeatureFlagsServiceError() throws Exception {
         when(restTemplate.exchange(
                 anyString(),
@@ -94,6 +96,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
+    @SuppressWarnings("unchecked")
     void shouldReturnPendingReconciliation() throws Exception {
         Map<String, Object> pending = Map.of(
             "items", new Object[]{

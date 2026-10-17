@@ -100,62 +100,74 @@ public class ResilientPaymentGatewayDecorator implements PaymentGateway {
     // Fallback methods — specific variant for CB-open, generic for re-throw
     // -----------------------------------------------------------------------
 
+    @SuppressWarnings("unused")
     private GatewayAuthResult authorizeFallback(GatewayAuthRequest request,
                                                 CallNotPermittedException ex) {
         throw gatewayUnavailable(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayAuthResult authorizeFallback(GatewayAuthRequest request, Exception ex) {
         throw rethrow(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayCaptureResult captureFallback(String pspReference, long amountCents,
                                                  String idempotencyKey,
                                                  CallNotPermittedException ex) {
         throw gatewayUnavailable(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayCaptureResult captureFallback(String pspReference, long amountCents,
                                                  String idempotencyKey, Exception ex) {
         throw rethrow(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayVoidResult voidAuthFallback(String pspReference, String idempotencyKey,
                                                CallNotPermittedException ex) {
         throw gatewayUnavailable(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayVoidResult voidAuthFallback(String pspReference, String idempotencyKey,
                                                Exception ex) {
         throw rethrow(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayRefundResult refundFallback(String pspReference, long amountCents,
                                                String idempotencyKey, UUID internalRefundId,
                                                CallNotPermittedException ex) {
         throw gatewayUnavailable(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayRefundResult refundFallback(String pspReference, long amountCents,
                                                String idempotencyKey, UUID internalRefundId,
                                                Exception ex) {
         throw rethrow(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayStatusResult getStatusFallback(String pspReference,
                                                   CallNotPermittedException ex) {
         throw gatewayUnavailable(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayStatusResult getStatusFallback(String pspReference, Exception ex) {
         throw rethrow(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayRefundStatusResult getRefundStatusFallback(String pspRefundId,
                                                               CallNotPermittedException ex) {
         throw gatewayUnavailable(ex);
     }
 
+    @SuppressWarnings("unused")
     private GatewayRefundStatusResult getRefundStatusFallback(String pspRefundId, Exception ex) {
         throw rethrow(ex);
     }
