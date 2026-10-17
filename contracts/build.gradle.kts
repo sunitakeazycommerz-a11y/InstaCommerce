@@ -10,6 +10,13 @@ dependencies {
     implementation("javax.annotation:javax.annotation-api:1.3.2")
     implementation("com.fasterxml.jackson.core:jackson-annotations:2.18.6")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.18.6")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("org.assertj:assertj-core:3.25.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 sourceSets {

@@ -6,6 +6,8 @@
   "properties": {
     "orderId": { "type": "string", "format": "uuid" },
     "userId": { "type": "string", "format": "uuid" },
-    "deliveredAt": { "type": "string", "format": "date-time" }
+    "riderId": { "type": "string", "format": "uuid" },
+    "deliveredAt": { "type": "string", "format": "date-time" },
+    "deliveryDurationMinutes": { "type": "integer" }
   }
 }

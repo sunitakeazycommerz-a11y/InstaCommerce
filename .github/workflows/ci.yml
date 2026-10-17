@@ -491,7 +491,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
       - name: Build contracts (proto + schemas)
-        run: ./gradlew :contracts:build --no-daemon
+        run: ./gradlew :contracts:build :contracts:test --no-daemon
       - name: Validate JSON event schemas
         run: |
           echo "Validating all JSON schema files are well-formed..."
@@ -502,6 +502,21 @@ jobs:
             fi
           done
           echo "All JSON schema files are valid."
+          echo "Validating schema title uniqueness across domains..."
+          python3 -c "import json, glob, sys
+          titles = {}
+          for path in glob.glob('contracts/src/main/resources/schemas/**/*.json', recursive=True):
+              with open(path) as f:
+                  data = json.load(f)
+                  title = data.get('title')
+                  if title:
+                      titles.setdefault(title, []).append(path)
+          duplicates = {t: p for t, p in titles.items() if len(p) > 1}
+          if duplicates:
+              print(f'FAIL: Duplicate schema titles found across domains: {duplicates}')
+              sys.exit(1)
+          print(f'SUCCESS: All {len(titles)} JSON schema titles are globally unique.')
+          "
       - name: Check for breaking proto changes
         if: github.event_name == 'pull_request'
         run: |
