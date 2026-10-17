@@ -34,7 +34,7 @@ with DAG(
     dag_id="dbt_marts",
     default_args=default_args,
     description="Run dbt mart models daily at 02:00 UTC",
-    schedule_interval="0 2 * * *",
+    schedule="0 2 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["dbt", "marts", "data-platform"],

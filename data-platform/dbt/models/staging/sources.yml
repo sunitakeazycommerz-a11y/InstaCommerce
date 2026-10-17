@@ -17,7 +17,7 @@ sources:
           warn_after: {count: 30, period: minute}
           error_after: {count: 2, period: hour}
       - name: users
-        description: "CDC from user-service PostgreSQL"
+        description: "CDC from identity-service PostgreSQL"
         loaded_at_field: _cdc_updated_at
         freshness:
           warn_after: {count: 1, period: hour}
@@ -29,7 +29,7 @@ sources:
           warn_after: {count: 1, period: hour}
           error_after: {count: 6, period: hour}
       - name: deliveries
-        description: "CDC from delivery-service PostgreSQL"
+        description: "CDC from fulfillment-service PostgreSQL"
         loaded_at_field: _cdc_updated_at
         freshness:
           warn_after: {count: 30, period: minute}

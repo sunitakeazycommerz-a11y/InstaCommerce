@@ -49,7 +49,7 @@ with DAG(
     dag_id="monitoring_alerts",
     default_args=default_args,
     description="Monitor data pipeline health every 15 minutes",
-    schedule_interval="*/15 * * * *",
+    schedule="*/15 * * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["monitoring", "alerts", "data-platform"],

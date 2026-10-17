@@ -73,7 +73,7 @@ with DAG(
     dag_id="ml_training",
     default_args=default_args,
     description="Train, evaluate, and promote ML models daily at 04:00 UTC",
-    schedule_interval="0 4 * * *",
+    schedule="0 4 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["ml", "training", "vertex-ai", "data-platform"],
