@@ -83,7 +83,18 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    void shouldOverrideFeatureFlag() throws Exception {
+    void shouldRejectFeatureFlagOverrideWithoutSuperAdminRole() throws Exception {
+        mockMvc.perform(post("/admin/v1/flags/feature-a/override")
+                .with(csrf())
+                .contentType("application/json")
+                .content("{\"value\": true, \"ttlSeconds\": 600}"))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @WithMockUser(username = "superadmin", roles = {"ADMIN", "SUPER_ADMIN"})
+    void shouldOverrideFeatureFlagWithSuperAdminRole() throws Exception {
         mockMvc.perform(post("/admin/v1/flags/feature-a/override")
                 .with(csrf())
                 .contentType("application/json")

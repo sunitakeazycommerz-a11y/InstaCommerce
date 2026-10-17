@@ -14,7 +14,7 @@ import org.springframework.web.client.RestTemplate;
 
 @RestController
 @RequestMapping("/admin/v1")
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
 public class AdminDashboardController {
     private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
         new ParameterizedTypeReference<>() {};
@@ -52,6 +52,7 @@ public class AdminDashboardController {
     }
 
     @PostMapping("/flags/{id}/override")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
     public Map<String, Object> overrideFlag(@PathVariable String id, @RequestBody Map<String, Object> request) {
         return Map.of(
             "flagId", id,

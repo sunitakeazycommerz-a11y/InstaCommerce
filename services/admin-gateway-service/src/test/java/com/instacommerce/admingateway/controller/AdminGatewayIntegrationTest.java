@@ -71,9 +71,9 @@ class AdminGatewayIntegrationTest {
   }
 
   @Test
-  @DisplayName("POST /admin/v1/flags/{id}/override applies flag override")
-  void testFlagOverrideWithValidToken() throws Exception {
-    String validToken = generateValidToken("admin-user", "instacommerce-admin",
+  @DisplayName("POST /admin/v1/flags/{id}/override denied for admin without SUPER_ADMIN role")
+  void testFlagOverrideDeniedWithoutSuperAdminToken() throws Exception {
+    String adminToken = generateValidToken("admin-user", "instacommerce-admin",
         Instant.now().plus(1, ChronoUnit.HOURS));
 
     String requestBody = objectMapper.writeValueAsString(
@@ -84,7 +84,29 @@ class AdminGatewayIntegrationTest {
     );
 
     mvc.perform(post("/admin/v1/flags/new-checkout-flow/override")
-        .header("Authorization", "Bearer " + validToken)
+        .header("Authorization", "Bearer " + adminToken)
+        .contentType(MediaType.APPLICATION_JSON)
+        .content(requestBody))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+  }
+
+  @Test
+  @DisplayName("POST /admin/v1/flags/{id}/override applies flag override with SUPER_ADMIN role")
+  void testFlagOverrideWithSuperAdminToken() throws Exception {
+    String superAdminToken = generateValidToken("super-admin", "instacommerce-admin",
+        Instant.now().plus(1, ChronoUnit.HOURS),
+        java.util.List.of("ROLE_ADMIN", "ROLE_SUPER_ADMIN"));
+
+    String requestBody = objectMapper.writeValueAsString(
+        new java.util.HashMap<>(java.util.Map.of(
+            "value", true,
+            "ttlSeconds", 600
+        ))
+    );
+
+    mvc.perform(post("/admin/v1/flags/new-checkout-flow/override")
+        .header("Authorization", "Bearer " + superAdminToken)
         .contentType(MediaType.APPLICATION_JSON)
         .content(requestBody))
         .andExpect(status().isOk())
@@ -148,10 +170,14 @@ class AdminGatewayIntegrationTest {
   }
 
   private String generateValidToken(String subject, String audience, Instant expiresAt) {
+    return generateValidToken(subject, audience, expiresAt, java.util.List.of("ROLE_ADMIN"));
+  }
+
+  private String generateValidToken(String subject, String audience, Instant expiresAt, java.util.List<String> roles) {
     return Jwts.builder()
         .subject(subject)
         .issuer("instacommerce-identity")
-        .claim("roles", java.util.List.of("ROLE_ADMIN"))
+        .claim("roles", roles)
         .audience()
         .add(audience)
         .and()

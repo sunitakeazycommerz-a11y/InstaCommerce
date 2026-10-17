@@ -26,7 +26,7 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         objectMapper.writeValue(response.getWriter(), Map.of(
             "code", "ACCESS_DENIED",
-            "message", "ADMIN role is required to access this resource",
+            "message", "Insufficient permissions to access this resource",
             "timestamp", Instant.now().toString()));
     }
 }
