@@ -129,6 +129,13 @@ data-platform/
 │
 └── quality/                           # Data quality (Great Expectations)
     ├── run_quality_checks.py
+    ├── requirements.txt
+    ├── test_quality_checks.py
+    ├── fixtures/                      # Synthetic test fixtures for CI & offline validation
+    │   ├── orders.json
+    │   ├── payments.json
+    │   ├── inventory.json
+    │   └── users.json
     └── expectations/
         ├── orders_suite.yaml
         ├── payments_suite.yaml
@@ -366,7 +373,15 @@ Use the existing dbt and quality commands as the first-line validation loop for 
 cd data-platform/dbt && dbt deps
 cd data-platform/dbt && dbt test
 cd data-platform/dbt && dbt run --select marts
-python data-platform/quality/run_quality_checks.py
+
+# Run quality checks against synthetic test fixtures (CI & local offline mode)
+python data-platform/quality/run_quality_checks.py --fixtures
+
+# Run unit tests for quality expectations runner
+pytest data-platform/quality/test_quality_checks.py -v
+
+# Run quality checks against live BigQuery datasets (Airflow & staging)
+python data-platform/quality/run_quality_checks.py --project instacommerce-prod --dataset analytics
 ```
 
 ## Rollout and Rollback

@@ -41,6 +41,7 @@ jobs:
       changed_python_services: ${{ steps.set-python-matrix.outputs.changed_python_services }}
       cloud_publish_configured: ${{ steps.check-cloud-creds.outputs.configured }}
       contracts_changed: ${{ steps.filter.outputs.contracts }}
+      data_platform_changed: ${{ steps.filter.outputs['data-platform'] == 'true' || steps.filter.outputs.data_platform == 'true' || steps.filter.outputs.contracts == 'true' || steps.filter.outputs.migrations == 'true' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -69,6 +70,8 @@ jobs:
             config-feature-flag-service: 'services/config-feature-flag-service/**'
             mobile-bff-service: 'services/mobile-bff-service/**'
             admin-gateway-service: 'services/admin-gateway-service/**'
+            data-platform: 'data-platform/**'
+            migrations: 'services/*/src/main/resources/db/migration/**'
             contracts:
               - 'contracts/src/**'
               - 'contracts/build.gradle.kts'
@@ -512,8 +515,33 @@ jobs:
             echo "No breaking proto field removals detected."
           fi
 
+  data-platform-quality:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.data_platform_changed == 'true' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r data-platform/quality/requirements.txt
+      - name: Run Great Expectations quality checks
+        run: |
+          python3 data-platform/quality/run_quality_checks.py --fixtures
+      - name: Run quality check unit tests
+        run: |
+          pytest -v data-platform/quality/test_quality_checks.py
+
   deploy-dev:
-    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation]
+    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation, data-platform-quality]
     if: >-
       github.event_name == 'push'
       && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
