@@ -22,15 +22,18 @@ public class JwksController {
 
     @GetMapping("/jwks.json")
     public Map<String, Object> jwks() {
-        RSAPublicKey publicKey = keyLoader.getPublicKey();
-        Map<String, Object> jwk = new LinkedHashMap<>();
-        jwk.put("kty", "RSA");
-        jwk.put("use", "sig");
-        jwk.put("alg", "RS256");
-        jwk.put("kid", keyLoader.getKeyId());
-        jwk.put("n", toBase64Url(publicKey.getModulus()));
-        jwk.put("e", toBase64Url(publicKey.getPublicExponent()));
-        return Map.of("keys", List.of(jwk));
+        java.util.List<Map<String, Object>> keys = new java.util.ArrayList<>();
+        for (JwtKeyLoader.KeyEntry entry : keyLoader.getAllPublicKeys()) {
+            Map<String, Object> jwk = new LinkedHashMap<>();
+            jwk.put("kty", "RSA");
+            jwk.put("use", "sig");
+            jwk.put("alg", "RS256");
+            jwk.put("kid", entry.kid());
+            jwk.put("n", toBase64Url(entry.publicKey().getModulus()));
+            jwk.put("e", toBase64Url(entry.publicKey().getPublicExponent()));
+            keys.add(jwk);
+        }
+        return Map.of("keys", keys);
     }
 
     private static String toBase64Url(BigInteger value) {

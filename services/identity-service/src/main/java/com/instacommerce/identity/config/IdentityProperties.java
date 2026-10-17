@@ -74,6 +74,8 @@ public class IdentityProperties {
         @NotBlank
         private String privateKey;
 
+        private java.util.List<String> previousPublicKeys = new java.util.ArrayList<>();
+
         public String getIssuer() {
             return issuer;
         }
@@ -96,6 +98,14 @@ public class IdentityProperties {
 
         public void setPrivateKey(String privateKey) {
             this.privateKey = privateKey;
+        }
+
+        public java.util.List<String> getPreviousPublicKeys() {
+            return previousPublicKeys;
+        }
+
+        public void setPreviousPublicKeys(java.util.List<String> previousPublicKeys) {
+            this.previousPublicKeys = previousPublicKeys != null ? previousPublicKeys : new java.util.ArrayList<>();
         }
     }
 }

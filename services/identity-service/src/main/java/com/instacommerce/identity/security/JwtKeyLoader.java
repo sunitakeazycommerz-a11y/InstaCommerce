@@ -20,28 +20,68 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class JwtKeyLoader {
-    private final RSAPublicKey publicKey;
-    private final RSAPrivateKey privateKey;
-    private final String keyId;
+    public record KeyEntry(String kid, RSAPublicKey publicKey) {}
+
+    private final RSAPublicKey activePublicKey;
+    private final RSAPrivateKey activePrivateKey;
+    private final String activeKeyId;
+    private final java.util.Map<String, RSAPublicKey> verificationKeys;
+    private final java.util.List<KeyEntry> allPublicKeys;
 
     public JwtKeyLoader(IdentityProperties identityProperties) {
         String publicKeyValue = identityProperties.getJwt().getPublicKey();
         String privateKeyValue = identityProperties.getJwt().getPrivateKey();
-        this.privateKey = (RSAPrivateKey) parsePrivateKey(privateKeyValue);
-        this.publicKey = resolvePublicKey(publicKeyValue, this.privateKey);
-        this.keyId = computeKeyId(this.publicKey);
+        this.activePrivateKey = (RSAPrivateKey) parsePrivateKey(privateKeyValue);
+        this.activePublicKey = resolvePublicKey(publicKeyValue, this.activePrivateKey);
+        this.activeKeyId = computeKeyId(this.activePublicKey);
+
+        java.util.Map<String, RSAPublicKey> verKeys = new java.util.LinkedHashMap<>();
+        java.util.List<KeyEntry> allKeys = new java.util.ArrayList<>();
+
+        // Active key is primary for signing and verification
+        verKeys.put(this.activeKeyId, this.activePublicKey);
+        allKeys.add(new KeyEntry(this.activeKeyId, this.activePublicKey));
+
+        // Prior keys in rotation grace period
+        java.util.List<String> previousKeys = identityProperties.getJwt().getPreviousPublicKeys();
+        if (previousKeys != null) {
+            for (String prevKeyPem : previousKeys) {
+                if (prevKeyPem != null && !prevKeyPem.isBlank()) {
+                    RSAPublicKey prevPub = (RSAPublicKey) parsePublicKey(prevKeyPem);
+                    String prevKid = computeKeyId(prevPub);
+                    if (!verKeys.containsKey(prevKid)) {
+                        verKeys.put(prevKid, prevPub);
+                        allKeys.add(new KeyEntry(prevKid, prevPub));
+                    }
+                }
+            }
+        }
+
+        this.verificationKeys = java.util.Collections.unmodifiableMap(verKeys);
+        this.allPublicKeys = java.util.Collections.unmodifiableList(allKeys);
     }
 
     public RSAPublicKey getPublicKey() {
-        return publicKey;
+        return activePublicKey;
     }
 
     public RSAPrivateKey getPrivateKey() {
-        return privateKey;
+        return activePrivateKey;
     }
 
     public String getKeyId() {
-        return keyId;
+        return activeKeyId;
+    }
+
+    public RSAPublicKey getVerificationKey(String kid) {
+        if (kid == null) {
+            return activePublicKey;
+        }
+        return verificationKeys.get(kid);
+    }
+
+    public java.util.List<KeyEntry> getAllPublicKeys() {
+        return allPublicKeys;
     }
 
     private static PublicKey parsePublicKey(String keyValue) {

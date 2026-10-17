@@ -47,7 +47,18 @@ public class DefaultJwtService implements JwtService {
     @Override
     public Jws<Claims> validateAccessToken(String token) {
         return Jwts.parser()
-            .verifyWith(keyLoader.getPublicKey())
+            .keyLocator(header -> {
+                if (header instanceof io.jsonwebtoken.JwsHeader jwsHeader) {
+                    String kid = jwsHeader.getKeyId();
+                    if (kid != null) {
+                        java.security.interfaces.RSAPublicKey key = keyLoader.getVerificationKey(kid);
+                        if (key != null) {
+                            return key;
+                        }
+                    }
+                }
+                return keyLoader.getPublicKey();
+            })
             .requireIssuer(identityProperties.getJwt().getIssuer())
             .requireAudience("instacommerce-api")
             .build()
