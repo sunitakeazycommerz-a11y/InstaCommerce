@@ -68,6 +68,8 @@ type LocationMetrics struct {
 	UpdatesInvalid  *prometheus.CounterVec
 	UpdatesDropped  *prometheus.CounterVec
 	ProcessLatency  *prometheus.HistogramVec
+	GeofenceEmitted *prometheus.CounterVec
+	GeofenceDropped prometheus.Counter
 }
 
 // NewLocationMetrics creates and registers location ingestion metrics.
@@ -94,12 +96,24 @@ func NewLocationMetrics(reg prometheus.Registerer) *LocationMetrics {
 			Help:      "End-to-end processing latency in seconds, by source.",
 			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25},
 		}, []string{"source"}),
+		GeofenceEmitted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "location_handler",
+			Name:      "geofence_events_emitted_total",
+			Help:      "Total geofence transition events emitted, by event_type and zone_id.",
+		}, []string{"event_type", "zone_id"}),
+		GeofenceDropped: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "location_handler",
+			Name:      "geofence_events_dropped_total",
+			Help:      "Total geofence transition events dropped due to buffer overflow.",
+		}),
 	}
 	reg.MustRegister(
 		m.UpdatesReceived,
 		m.UpdatesInvalid,
 		m.UpdatesDropped,
 		m.ProcessLatency,
+		m.GeofenceEmitted,
+		m.GeofenceDropped,
 	)
 	return m
 }
@@ -111,15 +125,84 @@ type LatestPositionStore interface {
 	Update(ctx context.Context, update LocationUpdate) error
 }
 
+// GeofencePublisher abstracts publishing geofence transition events to a message bus.
+type GeofencePublisher interface {
+	PublishGeofenceEvent(ctx context.Context, envelope GeofenceEventEnvelope) error
+}
+
+// KafkaGeofencePublisher publishes geofence transition envelopes to Kafka.
+type KafkaGeofencePublisher struct {
+	producer KafkaProducer
+	topic    string
+	logger   *slog.Logger
+}
+
+// NewKafkaGeofencePublisher creates a new KafkaGeofencePublisher.
+func NewKafkaGeofencePublisher(producer KafkaProducer, topic string, logger *slog.Logger) *KafkaGeofencePublisher {
+	if topic == "" {
+		topic = DefaultGeofenceTopic
+	}
+	return &KafkaGeofencePublisher{
+		producer: producer,
+		topic:    topic,
+		logger:   logger,
+	}
+}
+
+// PublishGeofenceEvent serializes the envelope and publishes it to Kafka.
+func (p *KafkaGeofencePublisher) PublishGeofenceEvent(ctx context.Context, envelope GeofenceEventEnvelope) error {
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("geofence: marshal envelope: %w", err)
+	}
+	msg := KafkaMessage{
+		Key:   []byte(envelope.AggregateID),
+		Value: data,
+	}
+	return p.producer.PublishBatch(ctx, p.topic, []KafkaMessage{msg})
+}
+
+// LocationHandlerOption configures optional behavior on LocationHandler.
+type LocationHandlerOption func(*LocationHandler)
+
+// WithGeofencePublisher sets a custom GeofencePublisher.
+func WithGeofencePublisher(publisher GeofencePublisher) LocationHandlerOption {
+	return func(h *LocationHandler) {
+		h.geofencePublisher = publisher
+	}
+}
+
+// WithGeofenceProducer sets a KafkaProducer and topic for geofence event publishing.
+func WithGeofenceProducer(producer KafkaProducer, topic string) LocationHandlerOption {
+	return func(h *LocationHandler) {
+		if topic == "" {
+			topic = DefaultGeofenceTopic
+		}
+		h.geofencePublisher = NewKafkaGeofencePublisher(producer, topic, h.logger)
+	}
+}
+
+// WithSynchronousGeofence forces geofence event publishing to run synchronously on the handler thread.
+// Primarily used for unit testing.
+func WithSynchronousGeofence(sync bool) LocationHandlerOption {
+	return func(h *LocationHandler) {
+		h.synchronousGeo = sync
+	}
+}
+
 // LocationHandler processes GPS pings over HTTP and WebSocket, enriches them
 // with geofence events, batches them for Kafka, and stores the latest position
 // in Redis.
 type LocationHandler struct {
-	kafkaBatcher *LocationBatcher
-	redisStore   LatestPositionStore
-	geofencer    *GeofenceChecker
-	logger       *slog.Logger
-	metrics      *LocationMetrics
+	kafkaBatcher      *LocationBatcher
+	redisStore        LatestPositionStore
+	geofencer         *GeofenceChecker
+	logger            *slog.Logger
+	metrics           *LocationMetrics
+	geofencePublisher GeofencePublisher
+	geofenceQueue     chan GeofenceEventEnvelope
+	synchronousGeo    bool
+	workerCancel      context.CancelFunc
 }
 
 // NewLocationHandler creates a ready-to-use LocationHandler.
@@ -129,6 +212,7 @@ func NewLocationHandler(
 	geofencer *GeofenceChecker,
 	logger *slog.Logger,
 	metrics *LocationMetrics,
+	opts ...LocationHandlerOption,
 ) (*LocationHandler, error) {
 	if batcher == nil {
 		return nil, fmt.Errorf("handler: LocationBatcher must not be nil")
@@ -142,13 +226,51 @@ func NewLocationHandler(
 	if metrics == nil {
 		return nil, fmt.Errorf("handler: LocationMetrics must not be nil")
 	}
-	return &LocationHandler{
-		kafkaBatcher: batcher,
-		redisStore:   store,
-		geofencer:    geofencer,
-		logger:       logger,
-		metrics:      metrics,
-	}, nil
+	h := &LocationHandler{
+		kafkaBatcher:  batcher,
+		redisStore:    store,
+		geofencer:     geofencer,
+		logger:        logger,
+		metrics:       metrics,
+		geofenceQueue: make(chan GeofenceEventEnvelope, 1024),
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+
+	if h.geofencePublisher != nil && !h.synchronousGeo {
+		ctx, cancel := context.WithCancel(context.Background())
+		h.workerCancel = cancel
+		go h.geofenceWorker(ctx)
+	}
+
+	return h, nil
+}
+
+// Close gracefully stops any background workers.
+func (h *LocationHandler) Close() {
+	if h.workerCancel != nil {
+		h.workerCancel()
+	}
+}
+
+func (h *LocationHandler) geofenceWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case env, ok := <-h.geofenceQueue:
+			if !ok {
+				return
+			}
+			if err := h.geofencePublisher.PublishGeofenceEvent(ctx, env); err != nil {
+				h.logger.Error("failed to publish geofence event",
+					"rider_id", env.Payload.RiderID,
+					"event_type", env.Payload.EventType,
+					"error", err)
+			}
+		}
+	}
 }
 
 // HandleHTTP accepts a single JSON LocationUpdate via POST.
@@ -260,6 +382,29 @@ func (h *LocationHandler) processUpdate(ctx context.Context, update LocationUpda
 				"event_type", ev.EventType,
 				"zone_id", ev.ZoneID,
 				"h3_index", ev.H3Index)
+
+			if h.geofencePublisher != nil {
+				env := ev.ToEnvelope(update.Lat, update.Lng)
+				if h.metrics != nil && h.metrics.GeofenceEmitted != nil {
+					h.metrics.GeofenceEmitted.WithLabelValues(ev.EventType, ev.ZoneID).Inc()
+				}
+				if h.synchronousGeo {
+					if err := h.geofencePublisher.PublishGeofenceEvent(ctx, env); err != nil {
+						h.logger.ErrorContext(ctx, "failed to publish geofence event synchronously",
+							"rider_id", ev.RiderID, "error", err)
+					}
+				} else {
+					select {
+					case h.geofenceQueue <- env:
+					default:
+						if h.metrics != nil && h.metrics.GeofenceDropped != nil {
+							h.metrics.GeofenceDropped.Inc()
+						}
+						h.logger.WarnContext(ctx, "geofence queue full, dropped event",
+							"rider_id", ev.RiderID, "event_type", ev.EventType)
+					}
+				}
+			}
 		}
 	}
 
