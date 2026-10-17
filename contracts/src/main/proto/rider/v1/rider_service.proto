@@ -1,0 +1,66 @@
+syntax = "proto3";
+package rider.v1;
+
+option java_package = "com.instacommerce.contracts.rider.v1";
+option java_multiple_files = true;
+option go_package = "github.com/instacommerce/go-shared/pkg/proto/rider/v1;riderv1";
+
+service RiderService {
+  rpc GetRiderStatus(GetRiderStatusRequest) returns (GetRiderStatusResponse);
+  rpc UpdateRiderLocation(UpdateRiderLocationRequest) returns (UpdateRiderLocationResponse);
+  rpc AssignRiderDispatch(AssignRiderDispatchRequest) returns (AssignRiderDispatchResponse);
+  rpc UpdateShiftStatus(UpdateShiftStatusRequest) returns (UpdateShiftStatusResponse);
+}
+
+message RiderCoordinate {
+  double latitude = 1;
+  double longitude = 2;
+  double speed_mps = 3;
+  double heading_degrees = 4;
+}
+
+message GetRiderStatusRequest {
+  string rider_id = 1;
+}
+
+message GetRiderStatusResponse {
+  string rider_id = 1;
+  string status = 2;
+  string current_order_id = 3;
+  RiderCoordinate last_location = 4;
+  int64 updated_at = 5;
+}
+
+message UpdateRiderLocationRequest {
+  string rider_id = 1;
+  RiderCoordinate location = 2;
+  int64 timestamp = 3;
+}
+
+message UpdateRiderLocationResponse {
+  bool acknowledged = 1;
+}
+
+message AssignRiderDispatchRequest {
+  string rider_id = 1;
+  string order_id = 2;
+  string store_id = 3;
+  string delivery_address_id = 4;
+}
+
+message AssignRiderDispatchResponse {
+  string dispatch_id = 1;
+  bool assigned = 2;
+  string status = 3;
+}
+
+message UpdateShiftStatusRequest {
+  string rider_id = 1;
+  string shift_status = 2;
+}
+
+message UpdateShiftStatusResponse {
+  string rider_id = 1;
+  string current_status = 2;
+  bool updated = 3;
+}
