@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/correlation"
+	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -176,13 +178,9 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	healthHandler := otelhttp.NewHandler(
-		instrumentHandler("health", logger, metrics, http.HandlerFunc(handleHealth)),
-		"Health",
-	)
-	mux.Handle("/health", healthHandler)
-	mux.Handle("/health/ready", healthHandler)
-	mux.Handle("/health/live", healthHandler)
+	hHandler := health.NewHandler()
+	hHandler.SetReady(true)
+	hHandler.RegisterRoutes(mux)
 	mux.Handle("/metrics", promhttp.Handler())
 	assignHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleAssign(w, r, logger, metrics)
@@ -194,7 +192,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           mux,
+		Handler:           correlation.Middleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -239,14 +237,6 @@ func main() {
 	}
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
 
 func handleAssign(w http.ResponseWriter, r *http.Request, logger *slog.Logger, metrics *serviceMetrics) {
 	if r.Method != http.MethodPost {

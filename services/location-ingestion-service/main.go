@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/instacommerce/go-shared/pkg/correlation"
+	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
@@ -222,16 +224,36 @@ func main() {
 		batcher.Run(backgroundCtx)
 	}()
 
+	healthHandler := health.NewHandler(
+		health.Check{
+			Name: "redis",
+			Check: func(ctx context.Context) error {
+				if service.redis == nil {
+					return errors.New("redis disabled")
+				}
+				return service.redis.Ping(ctx).Err()
+			},
+		},
+		health.Check{
+			Name: "kafka",
+			Check: func(ctx context.Context) error {
+				if service.batcher.writer == nil {
+					return errors.New("kafka disabled")
+				}
+				return checkKafka(ctx, service.cfg.KafkaBrokers)
+			},
+		},
+	)
+	healthHandler.SetReady(true)
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/health/live", handleHealth)
-	mux.HandleFunc("/health/ready", service.handleReady)
-	mux.HandleFunc("/ready", service.handleReady)
+	healthHandler.RegisterRoutes(mux)
+	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
 	mux.HandleFunc("/ingest/location", service.handleHTTPIngest)
 	mux.HandleFunc("/ingest/ws", service.handleWSIngest)
 
-	handler := otelhttp.NewHandler(mux, "http.server")
+	handler := otelhttp.NewHandler(correlation.Middleware(mux), "http.server")
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -468,54 +490,6 @@ func (s *IngestService) handleWSIngest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (s *IngestService) handleReady(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	checks := make(map[string]string)
-	status := http.StatusOK
-
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-
-	if s.redis == nil {
-		checks["redis"] = "disabled"
-		status = http.StatusServiceUnavailable
-	} else if err := s.redis.Ping(ctx).Err(); err != nil {
-		checks["redis"] = "down"
-		status = http.StatusServiceUnavailable
-	} else {
-		checks["redis"] = "ok"
-	}
-
-	if s.batcher.writer == nil {
-		checks["kafka"] = "disabled"
-		status = http.StatusServiceUnavailable
-	} else if err := checkKafka(ctx, s.cfg.KafkaBrokers); err != nil {
-		checks["kafka"] = "down"
-		status = http.StatusServiceUnavailable
-	} else {
-		checks["kafka"] = "ok"
-	}
-
-	payload := map[string]any{
-		"status": statusText(status),
-		"checks": checks,
-	}
-	writeJSON(w, status, payload)
-}
 
 var errInvalidPayload = errors.New("invalid payload")
 
@@ -807,11 +781,4 @@ func splitCSV(value string) []string {
 		}
 	}
 	return out
-}
-
-func statusText(status int) string {
-	if status >= 200 && status < 300 {
-		return "ok"
-	}
-	return "unavailable"
 }

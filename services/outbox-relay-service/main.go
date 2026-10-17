@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/instacommerce/go-shared/pkg/correlation"
+	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
@@ -155,15 +157,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	healthHandler := health.NewHandler(
+		health.Check{
+			Name: "database",
+			Check: func(ctx context.Context) error {
+				return service.db.Ping(ctx)
+			},
+		},
+		health.Check{
+			Name: "kafka",
+			Check: func(ctx context.Context) error {
+				return service.checkKafka(ctx)
+			},
+		},
+	)
+	healthHandler.SetReady(true)
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", service.handleHealth)
-	mux.HandleFunc("/health/live", service.handleHealth)
-	mux.HandleFunc("/ready", service.handleReady)
-	mux.HandleFunc("/health/ready", service.handleReady)
+	healthHandler.RegisterRoutes(mux)
+	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           mux,
+		Handler:           correlation.Middleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -199,6 +215,7 @@ func main() {
 		}
 	}
 
+	healthHandler.SetReady(false)
 	service.shuttingDown.Store(true)
 	pollCancel()
 
@@ -620,41 +637,6 @@ func (s *relayService) fail(ctx context.Context, err error) error {
 	return err
 }
 
-func (s *relayService) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, statusResponse{Status: "ok"})
-}
-
-func (s *relayService) handleReady(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if s.shuttingDown.Load() {
-		writeError(w, http.StatusServiceUnavailable, "shutting down")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.ReadyTimeout)
-	defer cancel()
-
-	if err := s.db.Ping(ctx); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database unavailable")
-		return
-	}
-
-	if err := s.checkKafka(ctx); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "kafka unavailable")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, statusResponse{Status: "ready"})
-}
 
 func (s *relayService) checkKafka(ctx context.Context) error {
 	result := make(chan error, 1)

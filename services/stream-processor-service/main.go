@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/correlation"
+	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
@@ -131,20 +133,17 @@ func main() {
 	})
 
 	// HTTP server for health and metrics
+	hHandler := health.NewHandler()
+	hHandler.SetReady(true)
+
 	mux := http.NewServeMux()
-	healthHandler := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}
-	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/health/live", healthHandler)
-	mux.HandleFunc("/health/ready", healthHandler)
+	hHandler.RegisterRoutes(mux)
+	mux.HandleFunc("/ready", hHandler.ReadyHandler())
 	mux.Handle("/metrics", promhttp.Handler())
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
-		Handler:           mux,
+		Handler:           correlation.Middleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -163,6 +162,7 @@ func main() {
 	sig := <-sigCh
 	logger.Info("shutdown signal received", "signal", sig.String())
 
+	hHandler.SetReady(false)
 	cancel() // cancel context — consumers will drain and exit
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)

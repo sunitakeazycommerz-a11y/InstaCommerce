@@ -22,6 +22,8 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/instacommerce/go-shared/pkg/correlation"
+	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/robfig/cron/v3"
@@ -244,14 +246,12 @@ func main() {
 	// Initialize HTTP handlers
 	reconciliationHandler := api.NewReconciliationHandler(dbReconciler, logger)
 
-	ready := &atomic.Bool{}
+	healthHandler := health.NewHandler()
 	mux := http.NewServeMux()
 
 	// Health check endpoints
-	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/health/live", handleHealth)
-	mux.HandleFunc("/ready", handleReady(ready))
-	mux.HandleFunc("/health/ready", handleReady(ready))
+	healthHandler.RegisterRoutes(mux)
+	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
 	mux.Handle("/metrics", promhttp.Handler())
 
 	// Reconciliation API endpoints
@@ -275,7 +275,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           mux,
+		Handler:           correlation.Middleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -305,7 +305,7 @@ func main() {
 		}
 	}
 
-	ready.Store(true)
+	healthHandler.SetReady(true)
 
 	select {
 	case <-ctx.Done():
@@ -316,6 +316,7 @@ func main() {
 		}
 	}
 
+	healthHandler.SetReady(false)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -1060,29 +1061,6 @@ func newSummaryEvent(runID string, counts ReconciliationCounts) ReconciliationEv
 	}
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func handleReady(ready *atomic.Bool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		if !ready.Load() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
-	}
-}
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
