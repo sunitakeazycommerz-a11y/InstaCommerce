@@ -44,7 +44,7 @@ with DAG(
     dag_id="ml_feature_refresh",
     default_args=default_args,
     description="Recompute and push ML features every 4 hours",
-    schedule_interval="0 */4 * * *",
+    schedule="0 */4 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["ml", "feature-store", "data-platform"],

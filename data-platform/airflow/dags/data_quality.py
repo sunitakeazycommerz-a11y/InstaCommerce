@@ -56,7 +56,7 @@ with DAG(
     dag_id="data_quality",
     default_args=default_args,
     description="Great Expectations validation suites every 2 hours after staging",
-    schedule_interval="0 */2 * * *",
+    schedule="0 */2 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["data-quality", "great-expectations", "data-platform"],

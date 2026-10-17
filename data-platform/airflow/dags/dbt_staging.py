@@ -32,7 +32,7 @@ with DAG(
     dag_id="dbt_staging",
     default_args=default_args,
     description="Run dbt staging models every 2 hours",
-    schedule_interval="0 */2 * * *",
+    schedule="0 */2 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["dbt", "staging", "data-platform"],
