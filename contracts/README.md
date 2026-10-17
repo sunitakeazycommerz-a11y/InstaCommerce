@@ -137,9 +137,8 @@ contracts/
 | Event | Schema | Version | Description |
 |-------|--------|---------|-------------|
 | `OrderPlaced` | `orders/OrderPlaced.v1.json` | v1 | Order created with items, totals, payment reference |
-| `OrderPacked` | `orders/OrderPacked.v1.json` | v1 | Order picked and packed at store |
-| `OrderDispatched` | `orders/OrderDispatched.v1.json` | v1 | Order handed to rider for delivery |
-| `OrderDelivered` | `orders/OrderDelivered.v1.json` | v1 | Order delivered to customer |
+| `OrderCreated` | `orders/OrderCreated.v1.json` | v1 | Initial order creation record |
+| `OrderStatusChanged` | `orders/OrderStatusChanged.v1.json` | v1 | Generic status transition notification |
 | `OrderCancelled` | `orders/OrderCancelled.v1.json` | v1 | Order cancelled (by customer or system) |
 | `OrderFailed` | `orders/OrderFailed.v1.json` | v1 | Order processing failed |
 
@@ -174,8 +173,10 @@ contracts/
 | Event | Schema | Version | Description |
 |-------|--------|---------|-------------|
 | `PickTaskCreated` | `fulfillment/PickTaskCreated.v1.json` | v1 | Pick task assigned to store staff |
-| `OrderPacked` | `fulfillment/OrderPacked.v1.json` | v1 | Order packing completed |
-| `RiderAssigned` | `fulfillment/RiderAssigned.v1.json` | v1 | Rider assigned to order |
+| `OrderPacked` | `fulfillment/OrderPacked.v1.json` | v1 | Order picked and packed at store |
+| `OrderDispatched` | `fulfillment/OrderDispatched.v1.json` | v1 | Order handed to rider for delivery |
+| `OrderDelivered` | `fulfillment/OrderDelivered.v1.json` | v1 | Order delivered to customer |
+| `OrderModified` | `fulfillment/OrderModified.v1.json` | v1 | Order items modified or substituted |
 | `DeliveryCompleted` | `fulfillment/DeliveryCompleted.v1.json` | v1 | Delivery confirmed complete |
 | `DeliveryStatus` | `fulfillment/DeliveryStatus.v1.json` | v1 | Canonical delivery lifecycle states enum |
 
