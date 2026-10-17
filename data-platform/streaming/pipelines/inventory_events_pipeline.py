@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false, reportUnusedExpression=false
 """Inventory Events Pipeline — inventory velocity and stockout detection.
 
 Consumes inventory change events from Kafka, computes velocity (units sold per

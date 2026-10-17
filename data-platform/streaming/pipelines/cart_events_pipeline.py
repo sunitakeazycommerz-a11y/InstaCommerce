@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false, reportUnusedExpression=false
 """Cart Events Pipeline — cart abandonment rate (15-min session windows).
 
 Consumes cart lifecycle events from Kafka, groups them into user sessions

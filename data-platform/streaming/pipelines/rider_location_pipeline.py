@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false, reportUnusedExpression=false
 """Rider Location Pipeline — rider utilization per zone.
 
 Consumes rider GPS pings from Kafka, computes per-zone utilization metrics

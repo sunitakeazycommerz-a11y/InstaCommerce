@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false, reportUnusedExpression=false
 """Payment Events Pipeline — payment success rate monitoring.
 
 Consumes payment lifecycle events from Kafka, computes per-minute success/failure

@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import lightgbm as lgb
-import mlflow
-import mlflow.lightgbm
+import mlflow  # type: ignore
+import mlflow.lightgbm  # type: ignore
 import numpy as np
 import pandas as pd
 import shap
@@ -148,6 +148,8 @@ class SearchRankingTrainer:
                 best_ndcg = fold_ndcg
                 best_model = model
 
+        if best_model is None:
+            raise RuntimeError("Training failed to produce a valid model")
         self.model = best_model
         logger.info("Best NDCG@10 across folds: %.4f", best_ndcg)
         return best_model
@@ -158,16 +160,17 @@ class SearchRankingTrainer:
             raise RuntimeError("Model not trained yet")
 
         X = df[self.feature_columns]
-        y_true = df[self.config["training"]["label_column"]].values
-        group_col = self.config["training"]["group_column"]
-        scores = self.model.predict(X)
+        y_true = np.asarray(df[self.config["training"]["label_column"]].values)
+        group_col = str(self.config["training"]["group_column"])
+        scores_raw = self.model.predict(X)
+        scores: np.ndarray = np.asarray(scores_raw)
 
         ndcg_scores = []
         map_scores = []
         mrr_scores = []
 
         for qid in df[group_col].unique():
-            mask = df[group_col] == qid
+            mask = (df[group_col] == qid).to_numpy()
             q_scores = scores[mask]
             q_labels = y_true[mask]
 
@@ -203,7 +206,7 @@ class SearchRankingTrainer:
             "ndcg_at_10": float(np.mean(ndcg_scores)),
             "map_at_10": float(np.mean(map_scores)),
             "mrr": float(np.mean(mrr_scores)),
-            "num_queries": int(df[group_col].nunique()),
+            "num_queries": int(len(df[group_col].unique())),
         }
         logger.info("Evaluation metrics: %s", json.dumps(metrics, indent=2))
         return metrics
@@ -267,16 +270,17 @@ def main():
         df = trainer.load_data(query)
 
         # Train/eval split
-        val_split = config["training"].get("validation_split", 0.2)
-        unique_queries = df[config["training"]["group_column"]].unique()
+        val_split = float(config["training"].get("validation_split", 0.2))
+        group_key = str(config["training"]["group_column"])
+        unique_queries = list(df[group_key].unique())
         np.random.seed(42)
         np.random.shuffle(unique_queries)
         split_idx = int(len(unique_queries) * (1 - val_split))
-        train_queries = set(unique_queries[:split_idx])
-        test_queries = set(unique_queries[split_idx:])
+        train_queries = unique_queries[:split_idx]
+        test_queries = unique_queries[split_idx:]
 
-        train_df = df[df[config["training"]["group_column"]].isin(train_queries)]
-        test_df = df[df[config["training"]["group_column"]].isin(test_queries)]
+        train_df = pd.DataFrame(df[df[group_key].isin(train_queries)])
+        test_df = pd.DataFrame(df[df[group_key].isin(test_queries)])
 
         logger.info("Train: %d rows, Test: %d rows", len(train_df), len(test_df))
 

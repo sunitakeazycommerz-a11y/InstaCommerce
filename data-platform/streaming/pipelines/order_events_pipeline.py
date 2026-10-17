@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false, reportUnusedExpression=false
 """Order Events Streaming Pipeline — Kafka → BigQuery
 
 Aggregations: orders per minute (per store/zone), GMV, SLA compliance

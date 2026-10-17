@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import mlflow
+import mlflow  # type: ignore
 import numpy as np
 import pandas as pd
 import yaml
@@ -102,12 +102,8 @@ class PersonalizationTrainer:
         })
         df = df.copy()
         df["weight"] = df["interaction_type"].map(weights).fillna(1.0)
-        interaction = (
-            df.groupby(["user_id", "sku_id"])["weight"]
-            .sum()
-            .reset_index()
-            .rename(columns={"weight": "interaction_score"})
-        )
+        grouped = df.groupby(["user_id", "sku_id"], as_index=False)["weight"].sum()
+        interaction = pd.DataFrame(grouped).rename(columns={"weight": "interaction_score"})
         return interaction
 
     def _get_cold_start_tier(self, order_count: int) -> str:
@@ -133,9 +129,9 @@ class PersonalizationTrainer:
         hp = self.config["hyperparameters"]
         interaction_df = self._build_interaction_matrix(df)
 
-        embedding_dim = hp.get("embedding_dim", 64)
-        n_users = df["user_id"].nunique()
-        n_items = df["sku_id"].nunique()
+        embedding_dim = int(hp.get("embedding_dim", 64))
+        n_users = int(len(df["user_id"].unique()))
+        n_items = int(len(df["sku_id"].unique()))
 
         # Build user and item ID mappings
         user_ids = sorted(df["user_id"].unique())
@@ -208,7 +204,8 @@ class PersonalizationTrainer:
         all_items = list(self.item_embeddings.keys())
         item_matrix = np.array([self.item_embeddings[iid] for iid in all_items])
 
-        for user_id, user_df in user_interactions:
+        for user_id_val, user_df in user_interactions:
+            user_id = str(user_id_val)
             if user_id not in self.user_embeddings:
                 continue
 
@@ -241,7 +238,7 @@ class PersonalizationTrainer:
 
     def export(self, path: str):
         """Export embeddings and model artifacts."""
-        if not self.user_embeddings:
+        if not self.user_embeddings or self.user_tower is None or self.item_tower is None:
             raise RuntimeError("Model not trained yet")
 
         export_dir = Path(path)
@@ -305,8 +302,8 @@ def main():
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         cutoff_days = config["training"].get("test_days", 7)
         cutoff = df["timestamp"].max() - pd.Timedelta(days=cutoff_days)
-        train_df = df[df["timestamp"] <= cutoff]
-        test_df = df[df["timestamp"] > cutoff]
+        train_df = pd.DataFrame(df[df["timestamp"] <= cutoff])
+        test_df = pd.DataFrame(df[df["timestamp"] > cutoff])
         logger.info("Train: %d interactions, Test: %d interactions", len(train_df), len(test_df))
 
         # Train
