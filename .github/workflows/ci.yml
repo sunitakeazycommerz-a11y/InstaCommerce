@@ -42,6 +42,7 @@ jobs:
       cloud_publish_configured: ${{ steps.check-cloud-creds.outputs.configured }}
       contracts_changed: ${{ steps.filter.outputs.contracts }}
       data_platform_changed: ${{ steps.filter.outputs['data-platform'] == 'true' || steps.filter.outputs.data_platform == 'true' || steps.filter.outputs.contracts == 'true' || steps.filter.outputs.migrations == 'true' }}
+      ml_changed: ${{ steps.filter.outputs.ml }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -71,10 +72,9 @@ jobs:
             mobile-bff-service: 'services/mobile-bff-service/**'
             admin-gateway-service: 'services/admin-gateway-service/**'
             data-platform: 'data-platform/**'
+            ml: 'ml/**'
             migrations: 'services/*/src/main/resources/db/migration/**'
-            contracts:
-              - 'contracts/src/**'
-              - 'contracts/build.gradle.kts'
+            contracts: 'contracts/**'
             java-shared:
               - 'build.gradle.kts'
               - 'settings.gradle.kts'
@@ -116,7 +116,7 @@ jobs:
           [[ "${{ steps.filter.outputs.config-feature-flag-service }}" == "true" ]] && changed_services+=("config-feature-flag-service")
           [[ "${{ steps.filter.outputs.mobile-bff-service }}" == "true" ]] && changed_services+=("mobile-bff-service")
           [[ "${{ steps.filter.outputs.admin-gateway-service }}" == "true" ]] && changed_services+=("admin-gateway-service")
-          if [[ "${{ steps.filter.outputs.java-shared }}" == "true" ]]; then
+          if [[ "${{ steps.filter.outputs.java-shared }}" == "true" || "${{ steps.filter.outputs.contracts }}" == "true" ]]; then
             changed_services=("${all_services[@]}")
           fi
           if [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" ) ]]; then
@@ -554,9 +554,37 @@ jobs:
       - name: Run quality check unit tests
         run: |
           pytest -v data-platform/quality/test_quality_checks.py
+      - name: Validate dbt YAML schemas and models
+        run: |
+          python3 -c "import yaml, glob
+          for p in glob.glob('data-platform/dbt/**/*.yml', recursive=True):
+              with open(p) as f:
+                  yaml.safe_load(f)
+          print('All dbt YAML model and source definitions are syntactically valid.')
+          "
+
+  ml-validation:
+    name: ML Quality & Type Validation
+    needs: detect-changes
+    if: needs.detect-changes.outputs.ml_changed == 'true' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Pyright and validate ML types
+        run: |
+          npm install -g pyright@1.1.414
+          pyright ml
 
   deploy-dev:
-    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation, data-platform-quality]
+    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation, data-platform-quality, ml-validation]
     if: >-
       github.event_name == 'push'
       && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
