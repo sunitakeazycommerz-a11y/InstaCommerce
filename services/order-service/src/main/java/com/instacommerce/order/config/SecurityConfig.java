@@ -37,7 +37,7 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/**", "/error").permitAll()
+                .requestMatchers("/actuator/**", "/error", "/checkout", "/api/checkout").permitAll()
                 .requestMatchers("/admin/**").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions

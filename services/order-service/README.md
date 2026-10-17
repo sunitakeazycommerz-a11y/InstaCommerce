@@ -57,11 +57,11 @@ Order-service currently occupies a **hybrid orchestration + choreography** posit
 
 The `checkout-orchestrator-service` drives order creation via Temporal activities. Order-service acts as a participant, not an orchestrator, for the checkout money-path.
 
-### Legacy Direct Saga (deprecated, feature-flagged)
+### Legacy Direct Saga (decommissioned)
 
-Order-service contains its own `CheckoutWorkflowImpl` + `CheckoutController` on `POST /checkout` (port 8085). This path is **feature-gated** by `ORDER_CHECKOUT_DIRECT_SAGA_ENABLED` (default `true`). When disabled, the endpoint returns `410 Gone` with code `CHECKOUT_MOVED`.
+Direct checkout on `order-service` has been permanently decommissioned (Issue #517). Any request to `POST /checkout` or `POST /api/checkout` returns `410 Gone` with code `CHECKOUT_MOVED`.
+All checkout orchestration is exclusively owned and executed by `checkout-orchestrator-service` (port 8086), which validates prices via `pricing-service`, reserves inventory, and drives the distributed Temporal saga.
 
-> **⚠️ Critical correctness defect** (documented in `docs/reviews/iter3/services/transactional-core.md`): The order-service checkout path computes pricing inline from client-supplied `item.unitPriceCents()`, bypassing `pricing-service` validation entirely. It also lacks delivery-fee inclusion and server-side coupon application. The `checkout-orchestrator-service` is the only path that calls `pricing-service` for a locked price snapshot. Set `ORDER_CHECKOUT_DIRECT_SAGA_ENABLED=false` in production.
 
 ### Choreography (inbound events)
 
@@ -170,12 +170,8 @@ flowchart TD
         DM_AL[AuditLog]
     end
 
-    subgraph "Temporal Workflow (legacy)"
-        CW[CheckoutWorkflowImpl]
-        IA[InventoryActivitiesImpl]
-        PA[PaymentActivitiesImpl]
-        OA[OrderActivitiesImpl]
-        CA[CartActivitiesImpl]
+    subgraph "Legacy Direct Path (Tombstone)"
+        LCC["LegacyCheckoutController<br/>(returns 410 Gone)"]
     end
 
     subgraph Repositories
@@ -355,73 +351,25 @@ stateDiagram-v2
 
 **User cancellation guard:** `cancelOrderByUser()` restricts user-initiated cancellation to `PENDING` or `PLACED` status only, even though the state machine technically allows `CANCELLED` from `PACKING` and `PACKED`. Admin cancellation via `AdminOrderController` can cancel from any non-terminal pre-delivery state.
 
-### 5.2 Checkout Saga (Legacy Direct Path)
+### 5.2 Checkout Saga (Decommissioned — Reconciled to Orchestrator)
 
-The local Temporal workflow (`CheckoutWorkflowImpl`) implements an 8-step saga. `checkout-orchestrator-service` is the authoritative checkout path in production (see [§2](#2-current-hybrid-choreography-posture)).
+The legacy direct Temporal checkout workflow (`CheckoutWorkflowImpl`) previously located in `order-service` has been decommissioned and removed (Issue #517, ADR-001). All checkout saga orchestration is centrally handled by `checkout-orchestrator-service` (port 8086).
+
+Direct calls to `POST /checkout` or `POST /api/checkout` on `order-service` return `HTTP 410 Gone`:
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant CheckoutController
-    participant Temporal
-    participant InventoryActivities
-    participant PaymentActivities
-    participant OrderActivities
-    participant CartActivities
+    participant LegacyCheckoutController
+    participant CheckoutOrchestrator as checkout-orchestrator-service
 
-    Client->>CheckoutController: POST /checkout
-    CheckoutController->>CheckoutController: Rate limit check (10 req/60s per user)
-    CheckoutController->>Temporal: Start CheckoutWorkflow<br/>(workflowId = checkout-{idempotencyKey})
-
-    Note over Temporal: Step 1 — Validate pricing inline
-    Temporal->>Temporal: Compute subtotal from items<br/>Fail if discount > subtotal
-
-    Note over Temporal: Step 2 — Reserve inventory
-    Temporal->>InventoryActivities: reserveInventory(idempotencyKey, storeId, items)
-    InventoryActivities-->>Temporal: ReserveResult(reservationId)
-    Note right of Temporal: Compensation: cancelReservation(reservationId)
-
-    Note over Temporal: Step 3 — Authorize payment
-    Temporal->>PaymentActivities: authorizePayment(idempotencyKey, totalCents, currency)
-    PaymentActivities-->>Temporal: PaymentResult(paymentId)
-    Note right of Temporal: Compensation: voidPayment(paymentId)
-
-    Note over Temporal: Step 4 — Create order (PENDING)
-    Temporal->>OrderActivities: createOrder(CreateOrderCommand)
-    OrderActivities-->>Temporal: orderId
-    Note right of Temporal: Compensation: cancelOrder(orderId, SAGA_ROLLBACK)
-
-    Note over Temporal: Step 5 — Confirm reservation
-    Temporal->>InventoryActivities: confirmReservation(reservationId)
-
-    Note over Temporal: Step 6 — Capture payment
-    Temporal->>PaymentActivities: capturePayment(paymentId)
-
-    Note over Temporal: Step 7 — Clear cart (best-effort)
-    Temporal->>CartActivities: clearCart(userId)
-
-    Note over Temporal: Step 8 — Finalize order (PLACED)
-    Temporal->>OrderActivities: updateOrderStatus(orderId, PLACED)
-
-    Temporal-->>CheckoutController: CheckoutResult(orderId)
-    CheckoutController-->>Client: 200 OK {orderId, workflowId}
-
-    Note over Temporal: On failure at any step
-    Temporal->>Temporal: saga.compensate() — reverse order
-    Temporal-->>CheckoutController: CheckoutResult(errorMessage)
-    CheckoutController-->>Client: 422 Unprocessable Entity
+    Client->>LegacyCheckoutController: POST /checkout
+    LegacyCheckoutController-->>Client: 410 Gone<br/>{"code":"CHECKOUT_MOVED", "message":"Use checkout-orchestrator-service"}
+    Note over Client,CheckoutOrchestrator: Client redirects to checkout-orchestrator-service:8086
+    Client->>CheckoutOrchestrator: POST /api/v1/checkout
+    CheckoutOrchestrator-->>Client: 202 Accepted {checkoutId}
 ```
 
-**Activity retry configuration** (from `CheckoutWorkflowImpl`):
-
-| Activity | Start-to-Close Timeout | Max Attempts | Initial Backoff | Backoff Coefficient | Non-Retryable |
-|----------|------------------------|-------------|-----------------|---------------------|---------------|
-| `InventoryActivities` | 10 s | 3 | 1 s | 2.0 | `InsufficientStockException` |
-| `PaymentActivities` | 30 s | 3 | 2 s | default | `PaymentDeclinedException` |
-| `OrderActivities` | 10 s | 3 | default | default | — |
-| `CartActivities` | 5 s | 2 | default | default | — |
-
-**Workflow-level:** 5-minute execution timeout, `WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE`.
 
 ### 5.3 Event Flows
 
@@ -896,20 +844,18 @@ flowchart TD
 
 | Flag | Env Var | Default | Effect When `false` |
 |------|---------|---------|---------------------|
-| Direct saga checkout | `ORDER_CHECKOUT_DIRECT_SAGA_ENABLED` | `true` | `POST /checkout` returns `410 Gone`; Temporal `WorkflowClient`, `WorkerFactory`, and all activity beans are not created (`@ConditionalOnProperty`) |
+| Direct saga checkout | (decommissioned) | N/A | Fully removed (Issue #517). `POST /checkout` returns `410 Gone` with code `CHECKOUT_MOVED` via `LegacyCheckoutController`. |
 | Fulfillment consumer | `ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED` | `false` | `FulfillmentEventConsumer` bean not registered; no Kafka subscription to `fulfillment.events` |
 
-### Deprecation Plan for Legacy Checkout
+### Deprecation Status for Legacy Checkout
 
-Per `docs/reviews/iter3/services/transactional-core.md` §1.3:
+Per `docs/reviews/iter3/services/transactional-core.md` §1.3 and Issue #517:
 
-| Phase | Action | Gate |
-|-------|--------|------|
-| P1 (1 sprint) | Set `ORDER_CHECKOUT_DIRECT_SAGA_ENABLED=false` in production | API gateway routes to `checkout-orchestrator-service` |
-| P2 (1 sprint) | Verify zero traffic on `POST /checkout` (port 8085) for 7 days | Grafana metrics confirmation |
-| P3 | Delete `CheckoutWorkflowImpl`, activities, `CheckoutController`, `TemporalConfig`, `TemporalProperties`, `WorkerRegistration` | Zero `PENDING` orders from old path |
-
-**Rollback:** Re-enable the feature flag. No database migration needed.
+| Phase | Action | Status |
+|-------|--------|--------|
+| P1 | Set `ORDER_CHECKOUT_DIRECT_SAGA_ENABLED=false` | Completed |
+| P2 | Verify zero traffic on `POST /checkout` (port 8085) for 7 days | Completed |
+| P3 | Delete `CheckoutWorkflowImpl`, activities, `CheckoutController`, `TemporalConfig` & return `410 Gone` | Completed |
 
 ### Database Migrations
 
