@@ -28,7 +28,7 @@ public class AdminOrderController {
     }
 
     @PostMapping("/cancel")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void cancelOrder(@PathVariable UUID id,
                             @Valid @RequestBody CancelOrderRequest request,
@@ -38,13 +38,13 @@ public class AdminOrderController {
     }
 
     @GetMapping
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     public OrderResponse getOrder(@PathVariable UUID id) {
         return orderService.getOrder(id, null, true);
     }
 
     @PostMapping("/status")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void updateStatus(@PathVariable UUID id,
                              @Valid @RequestBody OrderStatusUpdateRequest request,
@@ -56,6 +56,13 @@ public class AdminOrderController {
     }
 
     private UUID toUserId(String principal) {
-        return principal == null ? null : UUID.fromString(principal);
+        if (principal == null || principal.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(principal);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 }
