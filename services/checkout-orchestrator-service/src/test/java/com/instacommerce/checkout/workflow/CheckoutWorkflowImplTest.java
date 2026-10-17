@@ -22,6 +22,7 @@ import com.instacommerce.checkout.dto.OrderCreationResult;
 import com.instacommerce.checkout.dto.PaymentAuthResult;
 import com.instacommerce.checkout.dto.PricingResult;
 import com.instacommerce.checkout.workflow.activity.CartActivity;
+import com.instacommerce.checkout.workflow.activity.CompensationDlqActivity;
 import com.instacommerce.checkout.workflow.activity.CouponActivity;
 import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
@@ -66,6 +67,7 @@ class CheckoutWorkflowImplTest {
     @Mock private PaymentActivity paymentActivity;
     @Mock private OrderActivity orderActivity;
     @Mock private CouponActivity couponActivity;
+    @Mock private CompensationDlqActivity dlqActivity;
 
     private MockedStatic<Workflow> workflowMock;
     private MockedStatic<io.temporal.workflow.Async> asyncMock;
@@ -120,6 +122,8 @@ class CheckoutWorkflowImplTest {
             .thenReturn(orderActivity);
         workflowMock.when(() -> Workflow.newActivityStub(eq(CouponActivity.class), any()))
             .thenReturn(couponActivity);
+        workflowMock.when(() -> Workflow.newActivityStub(eq(CompensationDlqActivity.class), any()))
+            .thenReturn(dlqActivity);
 
         // Mock Workflow.getLogger used for warn-level logging in error paths
         Logger mockLogger = mock(Logger.class);
@@ -456,5 +460,38 @@ class CheckoutWorkflowImplTest {
         verify(couponActivity, never()).rollbackUsage(any(), any());
         verify(orderActivity).cancelOrder(ORDER_ID);
         verify(inventoryActivity).releaseStock(RESERVATION_ID);
+    }
+
+    @Test
+    void shouldRouteFailedCompensationToDlq() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(10000L, 0L, 0L, 10000L, "INR", "quote-1", "token-1"));
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(eq(10000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(null, false, "INSUFFICIENT_FUNDS"));
+
+        // Poison pill: releaseStock throws unexpected error after retry exhaustion
+        doThrow(new RuntimeException("DB connection timeout during compensation"))
+            .when(inventoryActivity).releaseStock(RESERVATION_ID);
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED");
+        assertThat(response.status()).contains("Payment declined");
+
+        // Verify DLQ activity was invoked with the poison pill details
+        verify(dlqActivity).recordFailedCompensation(
+            eq(WORKFLOW_ID),
+            eq("releaseStock"),
+            eq(RESERVATION_ID),
+            eq("DB connection timeout during compensation"),
+            any()
+        );
     }
 }

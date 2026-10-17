@@ -13,6 +13,7 @@ import com.instacommerce.checkout.workflow.activity.PricingActivityImpl;
 import com.instacommerce.checkout.workflow.activity.InventoryActivityImpl;
 import com.instacommerce.checkout.workflow.activity.PaymentActivityImpl;
 import com.instacommerce.checkout.workflow.activity.OrderActivityImpl;
+import com.instacommerce.checkout.workflow.activity.CompensationDlqActivityImpl;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -43,7 +44,8 @@ public class TemporalConfig {
                                        InventoryActivityImpl inventoryActivity,
                                        PaymentActivityImpl paymentActivity,
                                        OrderActivityImpl orderActivity,
-                                       CouponActivityImpl couponActivity) {
+                                       CouponActivityImpl couponActivity,
+                                       CompensationDlqActivityImpl dlqActivity) {
         WorkerFactory factory = WorkerFactory.newInstance(workflowClient);
         Worker worker = factory.newWorker(temporalProperties.getTaskQueue());
         worker.registerWorkflowImplementationTypes(CheckoutWorkflowImpl.class);
@@ -53,7 +55,8 @@ public class TemporalConfig {
             inventoryActivity,
             paymentActivity,
             orderActivity,
-            couponActivity
+            couponActivity,
+            dlqActivity
         );
         return factory;
     }

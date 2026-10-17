@@ -36,6 +36,10 @@ import org.springframework.web.bind.annotation.RestController;
  * short, self-contained transactions that commit before the long-running Temporal workflow call
  * is made. This prevents HikariCP connection exhaustion during 5-minute workflow executions.
  */
+import com.instacommerce.checkout.domain.CompensationDlq;
+import com.instacommerce.checkout.repository.CompensationDlqRepository;
+import java.util.List;
+
 @RestController
 @RequestMapping("/checkout")
 public class CheckoutController {
@@ -44,20 +48,29 @@ public class CheckoutController {
     private final WorkflowClient workflowClient;
     private final String taskQueue;
     private final CheckoutIdempotencyService idempotencyService;
+    private final CompensationDlqRepository dlqRepository;
 
     public CheckoutController(WorkflowClient workflowClient,
                                @Value("${temporal.task-queue}") String taskQueue,
-                               CheckoutIdempotencyService idempotencyService) {
+                               CheckoutIdempotencyService idempotencyService,
+                               CompensationDlqRepository dlqRepository) {
         this.workflowClient = workflowClient;
         this.taskQueue = taskQueue;
         this.idempotencyService = idempotencyService;
+        this.dlqRepository = dlqRepository;
+    }
+
+    public CheckoutController(WorkflowClient workflowClient,
+                               String taskQueue,
+                               CheckoutIdempotencyService idempotencyService) {
+        this(workflowClient, taskQueue, idempotencyService, null);
     }
 
     public CheckoutController(WorkflowClient workflowClient,
                               String taskQueue,
                               CheckoutIdempotencyKeyRepository idempotencyKeyRepository,
                               ObjectMapper objectMapper) {
-        this(workflowClient, taskQueue, new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper));
+        this(workflowClient, taskQueue, new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper), null);
     }
 
     @PostMapping
@@ -130,5 +143,29 @@ public class CheckoutController {
         }
         return ResponseEntity.accepted().body(
             new CheckoutResponse(null, "CHECKOUT_ALREADY_IN_PROGRESS: " + existingStatus, 0, 0));
+    }
+
+    @GetMapping("/dlq")
+    public ResponseEntity<List<CompensationDlq>> listFailedCompensations() {
+        if (dlqRepository == null) {
+            return ResponseEntity.ok(List.of());
+        }
+        return ResponseEntity.ok(dlqRepository.findAll());
+    }
+
+    @PostMapping("/dlq/{id}/resolve")
+    public ResponseEntity<CompensationDlq> resolveFailedCompensation(
+            @PathVariable UUID id,
+            @RequestBody(required = false) Map<String, String> body) {
+        if (dlqRepository == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return dlqRepository.findById(id)
+            .map(entry -> {
+                String note = body != null && body.containsKey("note") ? body.get("note") : "Manually resolved via admin override";
+                entry.markResolved(note);
+                return ResponseEntity.ok(dlqRepository.save(entry));
+            })
+            .orElseGet(() -> ResponseEntity.notFound().build());
     }
 }
