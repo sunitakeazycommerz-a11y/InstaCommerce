@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/correlation"
+	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
@@ -204,17 +206,43 @@ func main() {
 		tracer:         otel.Tracer("payment-webhook-service"),
 	}
 
+	var healthChecks []health.Check
+	if !ready.secretSet {
+		healthChecks = append(healthChecks, health.Check{
+			Name: "secret",
+			Check: func(ctx context.Context) error {
+				return errors.New("webhook secret not configured")
+			},
+		})
+	}
+	if !ready.kafkaConfigured {
+		healthChecks = append(healthChecks, health.Check{
+			Name: "kafka",
+			Check: func(ctx context.Context) error {
+				return errors.New("kafka not configured")
+			},
+		})
+	}
+	if ready.redisClient != nil {
+		healthChecks = append(healthChecks, health.Check{
+			Name: "redis",
+			Check: func(ctx context.Context) error {
+				return ready.redisClient.Ping(ctx).Err()
+			},
+		})
+	}
+	healthHandler := health.NewHandler(healthChecks...)
+	healthHandler.SetReady(ready.secretSet && ready.kafkaConfigured)
+
 	mux := http.NewServeMux()
 	mux.Handle("/payments/webhook", handler)
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/health/live", handleHealth)
-	mux.HandleFunc("/ready", ready.handleReady)
-	mux.HandleFunc("/health/ready", ready.handleReady)
+	healthHandler.RegisterRoutes(mux)
+	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           otelhttp.NewHandler(mux, "payment-webhook"),
+		Handler:           otelhttp.NewHandler(correlation.Middleware(mux), "payment-webhook"),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
@@ -677,39 +705,6 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	loggerWithTrace(ctx, h.logger).Info("webhook accepted", "event_id", event.ID, "event_type", eventType)
 }
 
-func (r readiness) handleReady(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet && req.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !r.secretSet {
-		writeError(w, http.StatusServiceUnavailable, "webhook secret not configured")
-		return
-	}
-	if !r.kafkaConfigured {
-		writeError(w, http.StatusServiceUnavailable, "kafka not configured")
-		return
-	}
-	if r.redisClient != nil {
-		ctx, cancel := context.WithTimeout(req.Context(), r.redisTimeout)
-		defer cancel()
-		if err := r.redisClient.Ping(ctx).Err(); err != nil {
-			writeError(w, http.StatusServiceUnavailable, "redis unavailable")
-			return
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
-}
-
-func handleHealth(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet && req.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
 
 func verifySignature(payload []byte, signatureHeader, secret string, tolerance time.Duration) bool {
 	if secret == "" || signatureHeader == "" {

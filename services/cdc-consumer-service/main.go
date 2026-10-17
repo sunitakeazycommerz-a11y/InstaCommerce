@@ -16,12 +16,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
 
 	"cloud.google.com/go/bigquery"
+	"github.com/instacommerce/go-shared/pkg/correlation"
+	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/segmentio/kafka-go"
@@ -66,10 +67,6 @@ type Metrics struct {
 	consumerLag  *prometheus.GaugeVec
 	batchLatency prometheus.Histogram
 	dlqCount     prometheus.Counter
-}
-
-type readiness struct {
-	ready atomic.Bool
 }
 
 type batchItem struct {
@@ -171,8 +168,8 @@ func main() {
 		defer reader.Close()
 	}
 
-	ready := &readiness{}
-	server := startHTTPServer(cfg.Port, ready, logger)
+	healthHandler := health.NewHandler()
+	server := startHTTPServer(cfg.Port, healthHandler, logger)
 
 	errCh := make(chan error, 1)
 	reportErr := func(err error) {
@@ -201,7 +198,7 @@ func main() {
 		}
 	}()
 
-	ready.ready.Store(true)
+	healthHandler.SetReady(true)
 	logger.Info("cdc consumer service started",
 		"port", cfg.Port,
 		"group_id", cfg.KafkaGroupID,
@@ -222,7 +219,7 @@ func main() {
 		}
 	}
 
-	ready.ready.Store(false)
+	healthHandler.SetReady(false)
 	cancel()
 	signal.Stop(signalCh)
 	close(signalCh)
@@ -240,17 +237,15 @@ func main() {
 	logger.Info("cdc consumer service stopped")
 }
 
-func startHTTPServer(port string, ready *readiness, logger *slog.Logger) *http.Server {
+func startHTTPServer(port string, healthHandler *health.Handler, logger *slog.Logger) *http.Server {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/health/live", handleHealth)
-	mux.HandleFunc("/ready", ready.handleReady)
-	mux.HandleFunc("/health/ready", ready.handleReady)
+	healthHandler.RegisterRoutes(mux)
+	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
 	mux.Handle("/metrics", promhttp.Handler())
 
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           mux,
+		Handler:           correlation.Middleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -264,36 +259,6 @@ func startHTTPServer(port string, ready *readiness, logger *slog.Logger) *http.S
 		}
 	}()
 	return server
-}
-
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (r *readiness) handleReady(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet && req.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	if r.ready.Load() {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
-		return
-	}
-	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(payload)
 }
 
 func runConsumer(

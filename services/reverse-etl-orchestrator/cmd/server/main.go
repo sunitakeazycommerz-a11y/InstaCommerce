@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/api"
@@ -73,7 +74,7 @@ func main() {
 	// Start servers
 	apiServer := &http.Server{
 		Addr:         cfg.APIAddr,
-		Handler:      apiRouter,
+		Handler:      correlation.Middleware(apiRouter),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -81,7 +82,7 @@ func main() {
 
 	healthServer := &http.Server{
 		Addr:         cfg.HealthAddr,
-		Handler:      healthRouter,
+		Handler:      correlation.Middleware(healthRouter),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
 	}
