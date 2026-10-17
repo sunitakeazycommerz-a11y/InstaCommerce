@@ -30,12 +30,21 @@ public class FlagEvaluationController {
         this.bulkEvaluationService = bulkEvaluationService;
     }
 
+    @GetMapping
+    public ResponseEntity<Map<String, Object>> evaluateAll(
+            @RequestParam(required = false) String userId,
+            @RequestParam(required = false) Map<String, Object> context) {
+        Map<String, Object> evaluated = bulkEvaluationService.evaluateAllActiveFlags(userId, context);
+        return ResponseEntity.ok(evaluated);
+    }
+
     @GetMapping("/{key}")
     public ResponseEntity<FlagEvaluationResponse> evaluate(
             @PathVariable String key,
-            @RequestParam(required = false) UUID userId,
+            @RequestParam(required = false) String userId,
             @RequestParam(required = false) Map<String, Object> context) {
-        FlagEvaluationResponse response = flagEvaluationService.evaluate(key, userId, context);
+        UUID parsedUserId = BulkEvaluationService.parseUserId(userId);
+        FlagEvaluationResponse response = flagEvaluationService.evaluate(key, parsedUserId, context);
         return ResponseEntity.ok(response);
     }
 

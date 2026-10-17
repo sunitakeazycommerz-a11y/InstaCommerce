@@ -6,7 +6,7 @@ spring:
   application:
     name: config-feature-flag-service
   config:
-    import: optional:sm://
+    import: "optional:classpath:application-test-noop.properties"
   lifecycle:
     timeout-per-shutdown-phase: 30s
   datasource:
