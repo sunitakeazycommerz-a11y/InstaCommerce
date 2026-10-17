@@ -46,6 +46,13 @@ public class CatalogEventConsumer {
     private void handleProductUpsert(Map<String, Object> payload) {
         try {
             UUID productId = UUID.fromString((String) payload.get("productId"));
+            Object activeObj = payload.get("active");
+            if (activeObj instanceof Boolean active && !active) {
+                log.info("Product {} is inactive, deleting from search index", productId);
+                searchIndexService.deleteDocument(productId);
+                return;
+            }
+
             String name = (String) payload.get("name");
             String description = (String) payload.get("description");
             String brand = (String) payload.get("brand");

@@ -20,6 +20,13 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
     Optional<Payment> findByPspReference(String pspReference);
 
+    Optional<Payment> findByOrderId(UUID orderId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000")})
+    @Query("SELECT p FROM Payment p WHERE p.orderId = :orderId")
+    Optional<Payment> findByOrderIdForUpdate(@Param("orderId") UUID orderId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000")})
     @Query("SELECT p FROM Payment p WHERE p.pspReference = :pspReference")

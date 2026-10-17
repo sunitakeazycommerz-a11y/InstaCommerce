@@ -100,7 +100,7 @@ class WarehouseIntegrationTest {
     store.setZones(List.of(zone));
 
     StoreHours hours = new StoreHours();
-    hours.setDayOfWeek(LocalDate.now().getDayOfWeek().getValue());
+    hours.setDayOfWeek(LocalDate.now().getDayOfWeek().getValue() % 7);
     hours.setOpensAt(LocalTime.MIN);
     hours.setClosesAt(LocalTime.MAX);
     hours.setHoliday(false);

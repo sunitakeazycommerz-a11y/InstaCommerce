@@ -73,15 +73,28 @@ public class OrderCancelledEventConsumer {
         OrderCancelledEvent event = parsePayload(envelope);
 
         UUID paymentId = resolvePaymentId(event, envelope.id());
-        if (paymentId == null) {
-            log.info("OrderCancelled event has no paymentId yet, no financial action needed. eventId={}, orderId={}",
-                envelope.id(), event.orderId());
-            return;
+        Payment payment = null;
+        if (paymentId != null) {
+            payment = paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new IllegalStateException(
+                    "Payment not found for paymentId=%s, orderId=%s, eventId=%s"
+                        .formatted(paymentId, event.orderId(), envelope.id())));
+        } else {
+            String orderIdStr = event.orderId() != null && !event.orderId().isBlank()
+                ? event.orderId() : envelope.aggregateId();
+            if (orderIdStr != null && !orderIdStr.isBlank()) {
+                try {
+                    UUID orderUuid = UUID.fromString(orderIdStr);
+                    payment = paymentRepository.findByOrderId(orderUuid).orElse(null);
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+            if (payment == null) {
+                log.info("OrderCancelled event has no active payment found. eventId={}, orderId={}",
+                    envelope.id(), orderIdStr);
+                return;
+            }
         }
-        Payment payment = paymentRepository.findById(paymentId)
-            .orElseThrow(() -> new IllegalStateException(
-                "Payment not found for paymentId=%s, orderId=%s, eventId=%s"
-                    .formatted(paymentId, event.orderId(), envelope.id())));
         String orderId = event.orderId() != null ? event.orderId() : envelope.aggregateId();
         String idempotencyKey = orderId + "-cancellation-refund";
 
