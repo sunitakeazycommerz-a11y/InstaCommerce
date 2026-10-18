@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
+	"github.com/instacommerce/location-ingestion-service/handler"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
@@ -128,7 +129,7 @@ func (h H3Stub) Index(lat, lng float64) string {
 	if !h.enabled {
 		return ""
 	}
-	return fmt.Sprintf("h3stub-%d-%.5f-%.5f", h.resolution, lat, lng)
+	return handler.LatLngToH3Res8(lat, lng)
 }
 
 func (h H3Stub) GeofenceHit(lat, lng float64) bool {
@@ -149,13 +150,14 @@ type KafkaBatcher struct {
 }
 
 type IngestService struct {
-	cfg     Config
-	logger  *slog.Logger
-	metrics *Metrics
-	redis   *redis.Client
-	batcher *KafkaBatcher
-	tracer  trace.Tracer
-	h3      H3Stub
+	cfg         Config
+	logger      *slog.Logger
+	metrics     *Metrics
+	redis       *redis.Client
+	batcher     *KafkaBatcher
+	tracer      trace.Tracer
+	h3          H3Stub
+	rateLimiter *handler.ConnectionRateLimiter
 }
 
 func main() {
@@ -212,6 +214,7 @@ func main() {
 			enabled:    cfg.H3Resolution > 0,
 			resolution: cfg.H3Resolution,
 		},
+		rateLimiter: handler.NewConnectionRateLimiter(100.0, 200.0, 20000),
 	}
 	if cfg.H3Resolution > 0 {
 		logger.Info("h3 geofence stub enabled", "resolution", cfg.H3Resolution)
@@ -434,6 +437,18 @@ func (s *IngestService) handleWSIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.rateLimiter != nil && !s.rateLimiter.Allow() {
+		s.metrics.dropTotal.WithLabelValues("websocket", "rate_limit").Inc()
+		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(errorResponse{Error: "connection rate limit exceeded; apply exponential backoff"})
+		return
+	}
+	if s.rateLimiter != nil {
+		defer s.rateLimiter.ReleaseConn()
+	}
+
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
@@ -450,7 +465,31 @@ func (s *IngestService) handleWSIngest(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	conn.SetReadLimit(s.cfg.WebSocketReadMax)
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
 	ctx := r.Context()
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+
+	go func() {
+		ticker := time.NewTicker(25 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-ticker.C:
+				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	for {
 		select {
@@ -552,6 +591,9 @@ func normalizeLocation(input LocationInput) (LocationUpdate, error) {
 	if input.Accuracy != nil && *input.Accuracy < 0 {
 		return LocationUpdate{}, fmt.Errorf("%w: accuracy must be >= 0", errInvalidPayload)
 	}
+	if input.Accuracy != nil && *input.Accuracy > 50.0 {
+		return LocationUpdate{}, fmt.Errorf("%w: accuracy exceeds 50m limit (poor GPS fix)", errInvalidPayload)
+	}
 
 	var ts time.Time
 	if input.Timestamp == nil || *input.Timestamp <= 0 {
@@ -572,6 +614,17 @@ func normalizeLocation(input LocationInput) (LocationUpdate, error) {
 }
 
 func (s *IngestService) storeLatest(ctx context.Context, update LocationUpdate) error {
+	key := s.cfg.RedisKeyPrefix + update.RiderID
+
+	// Check out-of-order pings (Issue #597)
+	existingMs, err := s.redis.HGet(ctx, key, "timestamp_ms").Int64()
+	if err == nil && existingMs > 0 {
+		if update.Timestamp.UnixMilli() <= existingMs {
+			s.metrics.dropTotal.WithLabelValues(update.Source, "out_of_order").Inc()
+			return fmt.Errorf("out of order ping: %d <= %d", update.Timestamp.UnixMilli(), existingMs)
+		}
+	}
+
 	fields := map[string]any{
 		"lat":          update.Lat,
 		"lng":          update.Lng,
@@ -590,7 +643,6 @@ func (s *IngestService) storeLatest(ctx context.Context, update LocationUpdate) 
 		fields["h3_index"] = update.H3Index
 	}
 
-	key := s.cfg.RedisKeyPrefix + update.RiderID
 	if err := s.redis.HSet(ctx, key, fields).Err(); err != nil {
 		return err
 	}
@@ -598,6 +650,12 @@ func (s *IngestService) storeLatest(ctx context.Context, update LocationUpdate) 
 		if err := s.redis.Expire(ctx, key, s.cfg.RedisTTL).Err(); err != nil {
 			return err
 		}
+	}
+
+	// Maintain H3 spatial index set in Redis (Issue #607)
+	if update.H3Index != "" {
+		_ = s.redis.SAdd(ctx, "riders:h3:"+update.H3Index, update.RiderID).Err()
+		_ = s.redis.Expire(ctx, "riders:h3:"+update.H3Index, s.cfg.RedisTTL*2).Err()
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +31,7 @@ type LocationUpdate struct {
 	Heading    float64   `json:"heading_degrees"`
 	Timestamp  time.Time `json:"timestamp"`
 	BatteryPct float64   `json:"battery_pct"`
+	H3Index    string    `json:"h3_index,omitempty"`
 }
 
 // Validate checks that all required fields are present and within physically
@@ -46,6 +48,9 @@ func (u *LocationUpdate) Validate() error {
 	}
 	if u.Accuracy < 0 {
 		return fmt.Errorf("location: accuracy must be >= 0")
+	}
+	if u.Accuracy > 50.0 {
+		return fmt.Errorf("location: accuracy %.1fm exceeds 50m threshold (poor GPS fix)", u.Accuracy)
 	}
 	if u.Speed < 0 {
 		return fmt.Errorf("location: speed must be >= 0")
@@ -190,6 +195,20 @@ func WithSynchronousGeofence(sync bool) LocationHandlerOption {
 	}
 }
 
+// WithTelemetrySmoother sets a custom RiderTelemetrySmoother for velocity outlier and Kalman filtering.
+func WithTelemetrySmoother(smoother *RiderTelemetrySmoother) LocationHandlerOption {
+	return func(h *LocationHandler) {
+		h.telemetrySmoother = smoother
+	}
+}
+
+// WithConnectionRateLimiter sets a custom ConnectionRateLimiter for WebSocket connection throttling.
+func WithConnectionRateLimiter(limiter *ConnectionRateLimiter) LocationHandlerOption {
+	return func(h *LocationHandler) {
+		h.rateLimiter = limiter
+	}
+}
+
 // LocationHandler processes GPS pings over HTTP and WebSocket, enriches them
 // with geofence events, batches them for Kafka, and stores the latest position
 // in Redis.
@@ -203,6 +222,8 @@ type LocationHandler struct {
 	geofenceQueue     chan GeofenceEventEnvelope
 	synchronousGeo    bool
 	workerCancel      context.CancelFunc
+	telemetrySmoother *RiderTelemetrySmoother
+	rateLimiter       *ConnectionRateLimiter
 }
 
 // NewLocationHandler creates a ready-to-use LocationHandler.
@@ -227,12 +248,14 @@ func NewLocationHandler(
 		return nil, fmt.Errorf("handler: LocationMetrics must not be nil")
 	}
 	h := &LocationHandler{
-		kafkaBatcher:  batcher,
-		redisStore:    store,
-		geofencer:     geofencer,
-		logger:        logger,
-		metrics:       metrics,
-		geofenceQueue: make(chan GeofenceEventEnvelope, 1024),
+		kafkaBatcher:      batcher,
+		redisStore:        store,
+		geofencer:         geofencer,
+		logger:            logger,
+		metrics:           metrics,
+		geofenceQueue:     make(chan GeofenceEventEnvelope, 1024),
+		telemetrySmoother: NewRiderTelemetrySmoother(),
+		rateLimiter:       NewConnectionRateLimiter(100.0, 200.0, 20000),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -311,8 +334,18 @@ func (h *LocationHandler) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleWebSocket upgrades the connection and reads a continuous stream of
-// LocationUpdate JSON messages.
+// LocationUpdate JSON messages. Throttles excessive concurrent connections (Issue #618).
 func (h *LocationHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	if h.rateLimiter != nil && !h.rateLimiter.Allow() {
+		h.metrics.UpdatesDropped.WithLabelValues("websocket", "rate_limit").Inc()
+		w.Header().Set("Retry-After", "5")
+		h.writeError(w, http.StatusTooManyRequests, "connection rate limit exceeded; apply exponential backoff")
+		return
+	}
+	if h.rateLimiter != nil {
+		defer h.rateLimiter.ReleaseConn()
+	}
+
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
@@ -330,8 +363,33 @@ func (h *LocationHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request
 }
 
 // handleWebSocketConn reads messages from conn until the connection is closed
-// or ctx is cancelled.
+// or ctx is cancelled, keeping the connection alive with ping/pong frames.
 func (h *LocationHandler) handleWebSocketConn(ctx context.Context, conn *websocket.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+
+	go func() {
+		ticker := time.NewTicker(25 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-ticker.C:
+				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -363,14 +421,35 @@ func (h *LocationHandler) handleWebSocketConn(ctx context.Context, conn *websock
 	}
 }
 
-// processUpdate validates an update, runs geofence checks, persists to Redis,
-// and enqueues to Kafka.
+// processUpdate validates an update, smooths telemetry / rejects velocity anomalies,
+// indexes to H3, runs geofence checks, persists to Redis, and enqueues to Kafka.
 func (h *LocationHandler) processUpdate(ctx context.Context, update LocationUpdate, source string) error {
 	start := time.Now()
 
 	if err := update.Validate(); err != nil {
 		h.metrics.UpdatesInvalid.WithLabelValues(source, "validation").Inc()
 		return fmt.Errorf("handler: %w", err)
+	}
+
+	// 1. Out-of-order check, velocity outlier anomaly detection, and Kalman smoothing (Issues #597, #613)
+	if h.telemetrySmoother != nil {
+		smoothed, err := h.telemetrySmoother.Filter(update)
+		if err != nil {
+			if errors.Is(err, ErrOutOfOrderPing) {
+				h.metrics.UpdatesInvalid.WithLabelValues(source, "out_of_order").Inc()
+			} else if errors.Is(err, ErrVelocityOutlier) {
+				h.metrics.UpdatesInvalid.WithLabelValues(source, "velocity_outlier").Inc()
+			} else {
+				h.metrics.UpdatesInvalid.WithLabelValues(source, "telemetry_filter").Inc()
+			}
+			return fmt.Errorf("handler: %w", err)
+		}
+		update = smoothed
+	}
+
+	// 2. Compute H3 Resolution 8 spatial index (Issue #607)
+	if update.H3Index == "" {
+		update.H3Index = LatLngToH3Res8(update.Lat, update.Lng)
 	}
 
 	// Geofence detection (non-blocking, best-effort).
