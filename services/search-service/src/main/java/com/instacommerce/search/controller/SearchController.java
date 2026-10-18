@@ -35,8 +35,8 @@ public class SearchController {
             @RequestParam(required = false) String category,
             @RequestParam(required = false) @Min(0) Long minPriceCents,
             @RequestParam(required = false) @Min(0) Long maxPriceCents,
-            @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+            @RequestParam(defaultValue = "0") @Min(0) @Max(50) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         SearchResponse response = searchService.search(query, brand, category, minPriceCents, maxPriceCents, page, size);
         return ResponseEntity.ok(response);
     }

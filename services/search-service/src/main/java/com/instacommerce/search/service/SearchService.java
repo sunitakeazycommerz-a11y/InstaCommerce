@@ -34,10 +34,12 @@ public class SearchService {
                condition = "#query != null && !#query.isBlank()")
     public SearchResponse search(String query, String brand, String category,
                                  Long minPrice, Long maxPrice, int page, int size) {
-        log.info("Executing search query='{}' brand='{}' category='{}' page={} size={}", query, brand, category, page, size);
+        int safePage = Math.min(Math.max(0, page), 50);
+        int safeSize = Math.min(Math.max(1, size), 50);
+        log.info("Executing search query='{}' brand='{}' category='{}' page={} size={}", query, brand, category, safePage, safeSize);
 
         Page<Object[]> results = searchDocumentRepository.fullTextSearch(
-                query, brand, category, minPrice, maxPrice, PageRequest.of(page, size));
+                query, brand, category, minPrice, maxPrice, PageRequest.of(safePage, safeSize));
 
         List<SearchResult> searchResults = results.getContent().stream()
                 .map(this::mapToSearchResult)

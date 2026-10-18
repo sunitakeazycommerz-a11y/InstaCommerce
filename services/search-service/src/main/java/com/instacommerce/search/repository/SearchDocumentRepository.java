@@ -49,9 +49,9 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
     @Query(value = """
             SELECT sd.name AS suggestion, sd.category, sd.product_id
             FROM search_documents sd
-            WHERE sd.name ILIKE :prefix || '%'
+            WHERE lower(sd.name) LIKE lower(:prefix) || '%'
               AND sd.in_stock = TRUE
-            ORDER BY sd.name
+            ORDER BY lower(sd.name)
             LIMIT :limit
             """, nativeQuery = true)
     List<Object[]> autocomplete(@Param("prefix") String prefix, @Param("limit") int limit);
