@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/instacommerce/dispatch-optimizer-service/handler"
+	"github.com/instacommerce/dispatch-optimizer-service/optimizer"
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/prometheus/client_golang/prometheus"
@@ -188,6 +190,22 @@ func main() {
 	mux.Handle("/optimize/assign", otelhttp.NewHandler(
 		instrumentHandler("optimize_assign", logger, metrics, assignHandler),
 		"OptimizeAssign",
+	))
+
+	solver := optimizer.NewSolver(optimizer.SolverConfig{})
+	matcher := optimizer.NewBipartiteMatcher(nil, solver)
+	publisher := &handler.NoopEventPublisher{Logger: logger}
+
+	v2AssignHandler := handler.HandleAssignV2(solver, logger)
+	mux.Handle("/v2/optimize/assign", otelhttp.NewHandler(
+		instrumentHandler("v2_optimize_assign", logger, metrics, v2AssignHandler),
+		"OptimizeAssignV2",
+	))
+
+	dispatchAssignHandler := handler.HandleDispatchAssign(matcher, publisher, logger)
+	mux.Handle("/dispatch/assign", otelhttp.NewHandler(
+		instrumentHandler("dispatch_assign", logger, metrics, dispatchAssignHandler),
+		"DispatchAssign",
 	))
 
 	server := &http.Server{
