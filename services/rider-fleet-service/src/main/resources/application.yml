@@ -38,6 +38,10 @@ spring:
   cache:
     caffeine:
       spec: maximumSize=1000,expireAfterWrite=60s
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
 
 rider-fleet:
   jwt:
