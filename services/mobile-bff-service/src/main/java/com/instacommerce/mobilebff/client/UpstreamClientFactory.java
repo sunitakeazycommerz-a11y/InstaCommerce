@@ -22,7 +22,12 @@ public class UpstreamClientFactory {
         var upstream = properties.getUpstream();
         int timeoutMs = upstream.getTimeoutMs();
 
-        HttpClient httpClient = HttpClient.create()
+        reactor.netty.resources.ConnectionProvider connectionProvider = reactor.netty.resources.ConnectionProvider.builder("mobile-bff-upstream")
+            .maxIdleTime(Duration.ofSeconds(500))
+            .evictInBackground(Duration.ofSeconds(60))
+            .build();
+
+        HttpClient httpClient = HttpClient.create(connectionProvider)
             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, timeoutMs)
             .responseTimeout(Duration.ofMillis(timeoutMs))
             .doOnConnected(conn -> conn

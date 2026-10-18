@@ -53,8 +53,29 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = header.substring(7);
         try {
             Jws<Claims> jws = jwtService.validateAccessToken(token);
+            String subject = jws.getPayload().getSubject();
+            if (subject != null) {
+                org.slf4j.MDC.put("userId", subject);
+                org.slf4j.MDC.put("user_id", subject);
+            }
+            Object storeClaim = jws.getPayload().get("store_id");
+            if (storeClaim == null) {
+                storeClaim = jws.getPayload().get("storeId");
+            }
+            if (storeClaim != null) {
+                org.slf4j.MDC.put("storeId", storeClaim.toString());
+                org.slf4j.MDC.put("store_id", storeClaim.toString());
+            }
+            Object tenantClaim = jws.getPayload().get("tenant_id");
+            if (tenantClaim == null) {
+                tenantClaim = jws.getPayload().get("tenantId");
+            }
+            if (tenantClaim != null) {
+                org.slf4j.MDC.put("tenantId", tenantClaim.toString());
+                org.slf4j.MDC.put("tenant_id", tenantClaim.toString());
+            }
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                jws.getPayload().getSubject(),
+                subject,
                 token,
                 jwtService.extractAuthorities(jws.getPayload()));
             authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));

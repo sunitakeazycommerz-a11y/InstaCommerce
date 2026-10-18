@@ -18,6 +18,11 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/instacommerce/go-shared/pkg/correlation"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // CircuitState represents the state of the circuit breaker.
@@ -178,22 +183,23 @@ func WithLogger(l *slog.Logger) Option {
 //   - CircuitBreaker threshold: 5 consecutive failures
 //   - CircuitBreaker reset timeout: 30s
 func NewClient(opts ...Option) *Client {
+	baseTransport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	c := &Client{
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-				DialContext: (&net.Dialer{
-					Timeout:   10 * time.Second,
-					KeepAlive: 30 * time.Second,
-				}).DialContext,
-				ForceAttemptHTTP2:     true,
-				MaxIdleConns:          100,
-				MaxIdleConnsPerHost:   100,
-				IdleConnTimeout:       90 * time.Second,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ExpectContinueTimeout: 1 * time.Second,
-			},
+			Timeout:   30 * time.Second,
+			Transport: otelhttp.NewTransport(baseTransport),
 		},
 		circuitBreaker: newCircuitBreaker(5, 30*time.Second),
 		maxRetries:     3,
@@ -213,6 +219,25 @@ func NewClient(opts ...Option) *Client {
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if !c.circuitBreaker.allow() {
 		return nil, fmt.Errorf("httpclient: circuit breaker is open for %s %s", req.Method, req.URL)
+	}
+
+	if req.Header == nil {
+		req.Header = make(http.Header)
+	}
+
+	// Propagate OpenTelemetry W3C tracecontext (traceparent, tracestate, baggage)
+	prop := otel.GetTextMapPropagator()
+	prop.Inject(ctx, propagation.HeaderCarrier(req.Header))
+	if req.Header.Get("traceparent") == "" {
+		propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(req.Header))
+	}
+	if req.Header.Get("baggage") == "" {
+		propagation.Baggage{}.Inject(ctx, propagation.HeaderCarrier(req.Header))
+	}
+
+	// Inject correlation ID if present in context and not already set in header
+	if cid := correlation.FromContext(ctx); cid != "" && req.Header.Get(correlation.Header) == "" {
+		req.Header.Set(correlation.Header, cid)
 	}
 
 	var (

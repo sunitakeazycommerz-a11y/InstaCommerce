@@ -188,9 +188,20 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 		StartOffset:    kafka.FirstOffset,
 	})
 
+	dispatcher := processor.NewStreamDispatcher(
+		processor.DefaultStreamConfig(),
+		logger,
+		handler,
+		func(ctx context.Context, msg kafka.Message) error {
+			return reader.CommitMessages(ctx, msg)
+		},
+	)
+	dispatcher.Start(ctx)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer dispatcher.Stop()
 		defer func() {
 			if err := reader.Close(); err != nil {
 				logger.Error("kafka reader close error", "topic", topic, "error", err)
@@ -225,17 +236,11 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 				continue
 			}
 
-			if err := handler(ctx, msg); err != nil {
-				logger.Error("process message error", "topic", topic, "offset", msg.Offset, "error", err)
-				// Non-fatal: log and continue
-				continue
-			}
-
-			if err := reader.CommitMessages(ctx, msg); err != nil {
+			if err := dispatcher.Submit(ctx, msg); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
 				}
-				logger.Error("commit message error", "topic", topic, "offset", msg.Offset, "error", err)
+				logger.Error("dispatcher submit error", "topic", topic, "error", err)
 			}
 		}
 	}()

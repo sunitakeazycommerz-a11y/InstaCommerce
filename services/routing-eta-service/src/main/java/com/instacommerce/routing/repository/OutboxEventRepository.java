@@ -13,4 +13,8 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
     @Modifying
     @Query("DELETE FROM OutboxEvent e WHERE e.sent = true AND e.createdAt < :cutoff")
     int deleteSentEventsBefore(@Param("cutoff") Instant cutoff);
+
+    @Modifying
+    @Query(value = "DELETE FROM outbox_events WHERE id IN (SELECT id FROM outbox_events WHERE sent = true AND created_at < :cutoff LIMIT 1000)", nativeQuery = true)
+    int deleteBatchSentEventsBefore(@Param("cutoff") Instant cutoff);
 }

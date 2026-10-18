@@ -20,6 +20,7 @@ dependencies {
     implementation("net.javacrumbs.shedlock:shedlock-spring:5.10.0")
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.10.0")
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+    implementation("io.github.resilience4j:resilience4j-spring-boot3:2.2.0")
     implementation("io.github.resilience4j:resilience4j-ratelimiter:2.2.0")
     implementation("io.jsonwebtoken:jjwt-api:0.12.5")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")

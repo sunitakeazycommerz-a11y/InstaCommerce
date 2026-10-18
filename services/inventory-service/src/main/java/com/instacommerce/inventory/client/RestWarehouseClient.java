@@ -5,6 +5,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.instacommerce.inventory.exception.StoreInactiveException;
 import com.instacommerce.inventory.exception.StoreNotFoundException;
 import com.instacommerce.inventory.security.InternalServiceAuthInterceptor;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -14,6 +16,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 @Component
@@ -46,6 +49,8 @@ public class RestWarehouseClient implements WarehouseClient {
     }
 
     @Override
+    @CircuitBreaker(name = "warehouseService", fallbackMethod = "validateStoreActiveFallback")
+    @Retry(name = "warehouseService")
     public void validateStoreActive(UUID storeId) {
         if (storeId == null) {
             throw new IllegalArgumentException("storeId cannot be null");
@@ -58,6 +63,22 @@ public class RestWarehouseClient implements WarehouseClient {
             log.warn("Dark store {} is not active (current status: {})", storeId, status);
             throw new StoreInactiveException(storeId, status);
         }
+    }
+
+    @SuppressWarnings("unused")
+    private void validateStoreActiveFallback(UUID storeId, Exception e) {
+        log.warn("Circuit breaker fallback for warehouseService validateStoreActive storeId={}: {}", storeId, e.getMessage());
+        if (e instanceof StoreNotFoundException notFound) {
+            throw notFound;
+        }
+        if (e instanceof StoreInactiveException inactive) {
+            throw inactive;
+        }
+        if (e instanceof IllegalArgumentException illegal) {
+            throw illegal;
+        }
+        log.error("Warehouse service unavailable for storeId={}", storeId, e);
+        throw new RestClientException("Warehouse service unavailable via circuit breaker: " + e.getMessage(), e);
     }
 
     @Override
