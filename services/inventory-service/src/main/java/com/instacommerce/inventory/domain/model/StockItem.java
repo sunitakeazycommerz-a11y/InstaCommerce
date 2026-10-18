@@ -31,6 +31,9 @@ public class StockItem {
     @Column(name = "reserved", nullable = false)
     private int reserved;
 
+    @Column(name = "is_frozen", nullable = false)
+    private boolean isFrozen;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -105,7 +108,18 @@ public class StockItem {
         this.version = version;
     }
 
+    public boolean isFrozen() {
+        return isFrozen;
+    }
+
+    public void setFrozen(boolean frozen) {
+        isFrozen = frozen;
+    }
+
     public void reserve(int quantity) {
+        if (this.isFrozen) {
+            throw new com.instacommerce.inventory.exception.StockFrozenException(productId, storeId);
+        }
         if (quantity <= 0) {
             throw new IllegalArgumentException("Reservation quantity must be strictly positive: " + quantity);
         }
