@@ -1,5 +1,5 @@
 server:
-  port: ${SERVER_PORT:8088}
+  port: ${SERVER_PORT:8090}
   shutdown: graceful
 
 spring:
@@ -47,7 +47,7 @@ cart:
     cart-events-topic: ${CART_EVENTS_TOPIC:cart.events}
 
 pricing-service:
-  base-url: ${PRICING_SERVICE_URL:http://pricing-service:8087}
+  base-url: ${PRICING_SERVICE_URL:http://pricing-service:8089}
 
 management:
   tracing:

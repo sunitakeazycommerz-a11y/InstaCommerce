@@ -32,15 +32,26 @@ public class CouponService {
     private final CouponRedemptionRepository couponRedemptionRepository;
     private final PromotionRepository promotionRepository;
     private final PromotionService promotionService;
+    private final OutboxService outboxService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public CouponService(CouponRepository couponRepository,
+                         CouponRedemptionRepository couponRedemptionRepository,
+                         PromotionRepository promotionRepository,
+                         PromotionService promotionService,
+                         OutboxService outboxService) {
+        this.couponRepository = couponRepository;
+        this.couponRedemptionRepository = couponRedemptionRepository;
+        this.promotionRepository = promotionRepository;
+        this.promotionService = promotionService;
+        this.outboxService = outboxService;
+    }
 
     public CouponService(CouponRepository couponRepository,
                          CouponRedemptionRepository couponRedemptionRepository,
                          PromotionRepository promotionRepository,
                          PromotionService promotionService) {
-        this.couponRepository = couponRepository;
-        this.couponRedemptionRepository = couponRedemptionRepository;
-        this.promotionRepository = promotionRepository;
-        this.promotionService = promotionService;
+        this(couponRepository, couponRedemptionRepository, promotionRepository, promotionService, null);
     }
 
     public record CouponValidationResult(long discountCents, String couponCode) {}
@@ -114,6 +125,20 @@ public class CouponService {
         coupon.setTotalRedeemed(coupon.getTotalRedeemed() + 1);
         couponRepository.save(coupon);
         promotionService.recordPromotionUsage(coupon.getPromotion().getId());
+
+        java.util.Map<String, Object> eventPayload = new java.util.LinkedHashMap<>();
+        eventPayload.put("couponId", coupon.getId().toString());
+        eventPayload.put("couponCode", code);
+        eventPayload.put("userId", userId.toString());
+        eventPayload.put("orderId", orderId != null ? orderId.toString() : null);
+        eventPayload.put("discountCents", discountCents);
+        eventPayload.put("singleUse", coupon.isSingleUse());
+        eventPayload.put("totalRedeemed", coupon.getTotalRedeemed());
+        eventPayload.put("redeemedAt", Instant.now().toString());
+
+        if (outboxService != null) {
+            outboxService.recordEvent("Coupon", coupon.getId().toString(), "CouponRedeemed", eventPayload);
+        }
 
         log.info("Redeemed coupon code={} userId={} orderId={} discount={}", code, userId, orderId, discountCents);
     }

@@ -46,11 +46,11 @@ public class PricingController {
         return ResponseEntity.ok(response);
     }
 
-    @GetMapping("/products/{id}")
+    @GetMapping({"/products/{id}", "/api/v1/prices/{id}"})
     @RateLimiter(name = "pricingLimiter")
     public ResponseEntity<PricedItem> getProductPrice(@PathVariable UUID id) {
         long priceCents = pricingService.calculatePrice(id);
-        PricedItem item = new PricedItem(id, priceCents, 1, priceCents);
+        PricedItem item = new PricedItem(id, priceCents, 1, priceCents, "INR");
         return ResponseEntity.ok(item);
     }
 

@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CouponRedeemed",
+  "type": "object",
+  "required": [
+    "couponCode",
+    "userId",
+    "orderId",
+    "discountCents",
+    "redeemedAt"
+  ],
+  "properties": {
+    "couponId": { "type": ["string", "null"], "format": "uuid" },
+    "couponCode": { "type": "string" },
+    "userId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string", "format": "uuid" },
+    "discountCents": { "type": "integer", "minimum": 0 },
+    "singleUse": { "type": "boolean" },
+    "totalRedeemed": { "type": "integer", "minimum": 0 },
+    "redeemedAt": { "type": "string", "format": "date-time" }
+  }
+}

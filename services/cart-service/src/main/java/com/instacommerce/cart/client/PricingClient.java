@@ -1,5 +1,8 @@
 package com.instacommerce.cart.client;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.instacommerce.cart.exception.ApiException;
 import com.instacommerce.cart.security.InternalServiceAuthInterceptor;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -26,7 +29,7 @@ public class PricingClient {
     private final RestTemplate restTemplate;
     private final String baseUrl;
 
-    public PricingClient(@Value("${pricing-service.base-url:http://pricing-service:8087}") String baseUrl,
+    public PricingClient(@Value("${pricing-service.base-url:http://pricing-service:8089}") String baseUrl,
                          @Value("${internal.service.name:${spring.application.name}}") String serviceName,
                          @Value("${internal.service.token}") String serviceToken) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
@@ -73,8 +76,21 @@ public class PricingClient {
     }
 
     /**
-     * Response model for the pricing-service GET /api/v1/prices/{productId} endpoint.
+     * Response model for the pricing-service GET /pricing/products/{productId} endpoint.
      */
-    public record PriceResponse(UUID productId, long unitPriceCents, String currency) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record PriceResponse(
+        UUID productId,
+        @JsonProperty("unitPriceCents")
+        @JsonAlias({"unitPriceCents", "priceCents", "unit_price_cents", "price_cents"})
+        long unitPriceCents,
+        @JsonProperty("priceCents")
+        @JsonAlias({"priceCents", "unitPriceCents", "price_cents", "unit_price_cents"})
+        long priceCents,
+        String currency
+    ) {
+        public PriceResponse(UUID productId, long unitPriceCents, String currency) {
+            this(productId, unitPriceCents, unitPriceCents, currency);
+        }
     }
 }
