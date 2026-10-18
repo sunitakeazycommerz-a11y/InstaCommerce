@@ -1,0 +1,115 @@
+{
+  "settings": {
+    "number_of_shards": 3,
+    "number_of_replicas": 1,
+    "analysis": {
+      "filter": {
+        "autocomplete_filter": {
+          "type": "edge_ngram",
+          "min_gram": 2,
+          "max_gram": 20
+        },
+        "english_stemmer": {
+          "type": "stemmer",
+          "language": "english"
+        },
+        "hindi_stemmer": {
+          "type": "stemmer",
+          "language": "hindi"
+        }
+      },
+      "analyzer": {
+        "autocomplete_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": [
+            "lowercase",
+            "asciifolding",
+            "autocomplete_filter"
+          ]
+        },
+        "multilingual_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": [
+            "lowercase",
+            "asciifolding",
+            "english_stemmer",
+            "hindi_stemmer"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "productId": {
+        "type": "keyword"
+      },
+      "name": {
+        "type": "text",
+        "analyzer": "multilingual_analyzer",
+        "fields": {
+          "raw": {
+            "type": "keyword"
+          },
+          "autocomplete": {
+            "type": "text",
+            "analyzer": "autocomplete_analyzer",
+            "search_analyzer": "standard"
+          }
+        }
+      },
+      "description": {
+        "type": "text",
+        "analyzer": "multilingual_analyzer",
+        "fields": {
+          "stemmed": {
+            "type": "text",
+            "analyzer": "standard"
+          }
+        }
+      },
+      "brand": {
+        "type": "keyword"
+      },
+      "category": {
+        "type": "keyword"
+      },
+      "priceCents": {
+        "type": "long"
+      },
+      "imageUrl": {
+        "type": "keyword",
+        "index": false
+      },
+      "inStock": {
+        "type": "boolean"
+      },
+      "availableStoreIds": {
+        "type": "keyword"
+      },
+      "attributes": {
+        "type": "nested",
+        "properties": {
+          "key": {
+            "type": "keyword"
+          },
+          "value": {
+            "type": "keyword"
+          }
+        }
+      },
+      "embedding": {
+        "type": "dense_vector",
+        "dims": 384,
+        "index": true,
+        "similarity": "cosine"
+      },
+      "updatedAt": {
+        "type": "date"
+      }
+    }
+  }
+}

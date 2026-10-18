@@ -8,6 +8,10 @@ public record SearchResponse(
     long totalResults,
     int page,
     int totalPages,
-    Map<String, List<FacetValue>> facets
+    Map<String, List<FacetValue>> facets,
+    String didYouMean
 ) {
+    public SearchResponse(List<SearchResult> results, long totalResults, int page, int totalPages, Map<String, List<FacetValue>> facets) {
+        this(results, totalResults, page, totalPages, facets, null);
+    }
 }

@@ -67,6 +67,17 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
     List<Object[]> facetByBrand(@Param("query") String query);
 
     @Query(value = """
+            SELECT sd.brand, COUNT(*) AS cnt
+            FROM search_documents sd
+            WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
+              AND (sd.store_id = :storeId OR sd.store_id IS NULL)
+            GROUP BY sd.brand
+            ORDER BY cnt DESC
+            """, nativeQuery = true)
+    List<Object[]> facetByBrandAndStore(@Param("query") String query, @Param("storeId") UUID storeId);
+
+    @Query(value = """
             SELECT sd.category, COUNT(*) AS cnt
             FROM search_documents sd
             WHERE sd.search_vector @@ plainto_tsquery('english', :query)
@@ -75,4 +86,31 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
             ORDER BY cnt DESC
             """, nativeQuery = true)
     List<Object[]> facetByCategory(@Param("query") String query);
+
+    @Query(value = """
+            SELECT sd.category, COUNT(*) AS cnt
+            FROM search_documents sd
+            WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
+              AND (sd.store_id = :storeId OR sd.store_id IS NULL)
+            GROUP BY sd.category
+            ORDER BY cnt DESC
+            """, nativeQuery = true)
+    List<Object[]> facetByCategoryAndStore(@Param("query") String query, @Param("storeId") UUID storeId);
+
+    @Query(value = """
+            SELECT sd.id, sd.product_id, sd.name, sd.description, sd.brand, sd.category, sd.price_cents, sd.image_url, sd.in_stock, 0.5 AS rank
+            FROM search_documents sd
+            WHERE lower(sd.name) LIKE '%' || lower(:token) || '%'
+              AND sd.in_stock = TRUE
+            ORDER BY lower(sd.name)
+            """,
+            countQuery = """
+            SELECT COUNT(*)
+            FROM search_documents sd
+            WHERE lower(sd.name) LIKE '%' || lower(:token) || '%'
+              AND sd.in_stock = TRUE
+            """,
+            nativeQuery = true)
+    Page<Object[]> fuzzyFallbackSearch(@Param("token") String token, Pageable pageable);
 }

@@ -23,10 +23,18 @@ public class SearchService {
 
     private final SearchDocumentRepository searchDocumentRepository;
     private final TrendingService trendingService;
+    private final FacetedSearchService facetedSearchService;
 
-    public SearchService(SearchDocumentRepository searchDocumentRepository, TrendingService trendingService) {
+    public SearchService(SearchDocumentRepository searchDocumentRepository,
+                         TrendingService trendingService,
+                         FacetedSearchService facetedSearchService) {
         this.searchDocumentRepository = searchDocumentRepository;
         this.trendingService = trendingService;
+        this.facetedSearchService = facetedSearchService;
+    }
+
+    public SearchService(SearchDocumentRepository searchDocumentRepository, TrendingService trendingService) {
+        this(searchDocumentRepository, trendingService, new FacetedSearchService(searchDocumentRepository));
     }
 
     @Cacheable(value = "searchResults",
@@ -45,12 +53,35 @@ public class SearchService {
                 .map(this::mapToSearchResult)
                 .collect(Collectors.toList());
 
-        Map<String, List<FacetValue>> facets = buildFacets(query);
+        String didYouMean = null;
+        long totalResults = results.getTotalElements();
+        int totalPages = results.getTotalPages();
+
+        // Zero-result query fallback: execute fuzzy spelling correction and prefix match
+        if (searchResults.isEmpty() && query != null && !query.isBlank()) {
+            String trimmed = query.trim();
+            Page<Object[]> fallbackResults = searchDocumentRepository.fuzzyFallbackSearch(
+                    trimmed, PageRequest.of(safePage, safeSize));
+            if (!fallbackResults.isEmpty()) {
+                searchResults = fallbackResults.getContent().stream()
+                        .map(this::mapToSearchResult)
+                        .collect(Collectors.toList());
+                totalResults = fallbackResults.getTotalElements();
+                totalPages = fallbackResults.getTotalPages();
+                didYouMean = searchResults.get(0).name();
+                log.info("Zero exact matches for '{}'. Fallback found {} items, didYouMean='{}'",
+                        query, totalResults, didYouMean);
+            }
+        }
+
+        Map<String, List<FacetValue>> facets = (facetedSearchService != null)
+                ? facetedSearchService.computeStoreScopedFacets(query, null)
+                : buildFacets(query);
 
         // Record the query for trending asynchronously
         trendingService.recordQuery(query);
 
-        return new SearchResponse(searchResults, results.getTotalElements(), page, results.getTotalPages(), facets);
+        return new SearchResponse(searchResults, totalResults, page, totalPages, facets, didYouMean);
     }
 
     @Cacheable(value = "autocomplete", key = "#prefix + '_' + #limit",
