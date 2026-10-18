@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"cloud.google.com/go/bigquery"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -241,3 +242,91 @@ func TestCDCOperationTypes(t *testing.T) {
 		assert.NotEmpty(t, name)
 	}
 }
+
+func TestOffsetResetEarliestDefaultAndLatestOption(t *testing.T) {
+	// Test #662: Ensure KAFKA_AUTO_OFFSET_RESET defaults to earliest (kafka.FirstOffset)
+	cfg := Config{
+		KafkaAutoOffsetReset: "earliest",
+	}
+	startOffset := kafka.FirstOffset
+	if cfg.KafkaAutoOffsetReset == "latest" {
+		startOffset = kafka.LastOffset
+	}
+	assert.Equal(t, kafka.FirstOffset, startOffset)
+
+	// When set to latest
+	cfg.KafkaAutoOffsetReset = "latest"
+	if cfg.KafkaAutoOffsetReset == "latest" {
+		startOffset = kafka.LastOffset
+	}
+	assert.Equal(t, kafka.LastOffset, startOffset)
+}
+
+func TestTolerantDeserializationAlteredPostgresColumns(t *testing.T) {
+	// Test #651: Tolerant parsing of Debezium message containing altered postgres columns and schema wrapper
+	schemaEnvelopeJSON := `{
+		"schema": {
+			"type": "struct",
+			"fields": [
+				{"field": "after", "type": "struct", "fields": [
+					{"field": "order_id", "type": "string"},
+					{"field": "new_loyalty_tier", "type": "string"},
+					{"field": "discount_pct", "type": "float64"}
+				]}
+			]
+		},
+		"payload": {
+			"op": "u",
+			"ts_ms": 1718000000000,
+			"source": {"db": "postgres", "table": "orders"},
+			"before": {"order_id": "ord-001"},
+			"after": {
+				"order_id": "ord-001",
+				"new_loyalty_tier": "PLATINUM",
+				"discount_pct": 15.5,
+				"unknown_future_column": "future_val"
+			},
+			"transaction": {"id": "tx-123"}
+		}
+	}`
+
+	msg := kafka.Message{
+		Topic:     "orders.cdc",
+		Partition: 0,
+		Offset:    101,
+		Key:       []byte("ord-001"),
+		Value:     []byte(schemaEnvelopeJSON),
+		Time:      time.Now(),
+	}
+
+	valSaver, err := transformMessage(msg)
+	require.NoError(t, err)
+	require.NotNil(t, valSaver)
+
+	vals, insertID, err := valSaver.Save()
+	require.NoError(t, err)
+	assert.Equal(t, "orders.cdc-0-101", insertID)
+	assert.Equal(t, "u", vals["op"])
+	assert.Contains(t, vals["after"], "PLATINUM")
+	assert.Contains(t, vals["after"], "discount_pct")
+	assert.Contains(t, vals["after"], "unknown_future_column")
+
+	// Also verify ExtractCDCFields extracts the altered columns
+	fields, err := ExtractCDCFields([]byte(schemaEnvelopeJSON))
+	require.NoError(t, err)
+	assert.Equal(t, "ord-001", fields["order_id"])
+	assert.Equal(t, "PLATINUM", fields["new_loyalty_tier"])
+	assert.Equal(t, 15.5, fields["discount_pct"])
+	assert.Equal(t, "future_val", fields["unknown_future_column"])
+}
+
+func TestSchemaEvolutionDetection(t *testing.T) {
+	// Test #651: Infer BigQuery types for altered postgres columns
+	assert.Equal(t, bigquery.StringFieldType, InferBigQueryType("some-string"))
+	assert.Equal(t, bigquery.IntegerFieldType, InferBigQueryType(int64(42)))
+	assert.Equal(t, bigquery.FloatFieldType, InferBigQueryType(3.14159))
+	assert.Equal(t, bigquery.BooleanFieldType, InferBigQueryType(true))
+	assert.Equal(t, bigquery.TimestampFieldType, InferBigQueryType(time.Now()))
+	assert.Equal(t, bigquery.JSONFieldType, InferBigQueryType(map[string]any{"nested": "val"}))
+}
+

@@ -24,6 +24,13 @@ type Config struct {
 	TemporalHost      string
 	TemporalNamespace string
 
+	// Redis Sink & Worker Pool
+	RedisAddr             string
+	RedisPassword         string
+	RedisDB               int
+	WorkerPoolConcurrency int
+	RateLimitPerSec       int
+
 	// Service metadata
 	Version     string
 	Environment string
@@ -33,17 +40,22 @@ type Config struct {
 // Load reads configuration from environment variables.
 func Load() (*Config, error) {
 	cfg := &Config{
-		APIAddr:            getEnv("API_ADDR", ":8080"),
-		HealthAddr:         getEnv("HEALTH_ADDR", ":8081"),
-		MetricsAddr:        getEnv("METRICS_ADDR", ":9090"),
-		DatabaseURL:        getEnv("DATABASE_URL", "postgres://localhost:5432/reverse_etl?sslmode=disable"),
-		KafkaBrokers:       getEnv("KAFKA_BROKERS", "localhost:9092"),
-		KafkaConsumerGroup: getEnv("KAFKA_CONSUMER_GROUP", "reverse-etl-orchestrator"),
-		TemporalHost:       getEnv("TEMPORAL_HOST", "localhost:7233"),
-		TemporalNamespace:  getEnv("TEMPORAL_NAMESPACE", "reverse-etl"),
-		Version:            getEnv("SERVICE_VERSION", "1.0.0"),
-		Environment:        getEnv("ENVIRONMENT", "development"),
-		ServiceName:        "reverse-etl-orchestrator",
+		APIAddr:               getEnv("API_ADDR", ":8080"),
+		HealthAddr:            getEnv("HEALTH_ADDR", ":8081"),
+		MetricsAddr:           getEnv("METRICS_ADDR", ":9090"),
+		DatabaseURL:           getEnv("DATABASE_URL", "postgres://localhost:5432/reverse_etl?sslmode=disable"),
+		KafkaBrokers:          getEnv("KAFKA_BROKERS", "localhost:9092"),
+		KafkaConsumerGroup:    getEnv("KAFKA_CONSUMER_GROUP", "reverse-etl-orchestrator"),
+		TemporalHost:          getEnv("TEMPORAL_HOST", "localhost:7233"),
+		TemporalNamespace:     getEnv("TEMPORAL_NAMESPACE", "reverse-etl"),
+		RedisAddr:             getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisPassword:         getEnv("REDIS_PASSWORD", ""),
+		RedisDB:               getEnvInt("REDIS_DB", 0),
+		WorkerPoolConcurrency: getEnvInt("WORKER_POOL_CONCURRENCY", 10),
+		RateLimitPerSec:       getEnvInt("SYNC_RATE_LIMIT_PER_SEC", 1000),
+		Version:               getEnv("SERVICE_VERSION", "1.0.0"),
+		Environment:           getEnv("ENVIRONMENT", "development"),
+		ServiceName:           "reverse-etl-orchestrator",
 	}
 
 	return cfg, nil

@@ -47,6 +47,7 @@ type Config struct {
 	KafkaGroupID       string
 	KafkaTopics        []string
 	KafkaDLQTopic      string
+	KafkaAutoOffsetReset string
 	KafkaMinBytes      int
 	KafkaMaxBytes      int
 	KafkaMaxWait       time.Duration
@@ -153,6 +154,11 @@ func main() {
 	}
 	defer dlqWriter.Close()
 
+	startOffset := kafka.FirstOffset
+	if cfg.KafkaAutoOffsetReset == "latest" {
+		startOffset = kafka.LastOffset
+	}
+
 	readers := make([]*kafka.Reader, 0, len(cfg.KafkaTopics))
 	for _, topic := range cfg.KafkaTopics {
 		reader := kafka.NewReader(kafka.ReaderConfig{
@@ -163,10 +169,13 @@ func main() {
 			MaxBytes:       cfg.KafkaMaxBytes,
 			MaxWait:        cfg.KafkaMaxWait,
 			CommitInterval: 0,
+			StartOffset:    startOffset,
 		})
 		readers = append(readers, reader)
 		defer reader.Close()
 	}
+
+	schemaHandler := NewSchemaEvolutionHandler(bqClient.Dataset(cfg.BQDataset).Table(cfg.BQTable), logger)
 
 	healthHandler := health.NewHandler()
 	server := startHTTPServer(cfg.Port, healthHandler, logger)
@@ -185,7 +194,7 @@ func main() {
 		consumerWg.Add(1)
 		go func(r *kafka.Reader) {
 			defer consumerWg.Done()
-			runConsumer(ctx, r, batchCh, dlqWriter, cfg, metrics, logger, tracer, reportErr)
+			runConsumer(ctx, r, batchCh, dlqWriter, cfg, metrics, logger, tracer, schemaHandler, reportErr)
 		}(reader)
 	}
 
@@ -270,6 +279,7 @@ func runConsumer(
 	metrics Metrics,
 	logger *slog.Logger,
 	tracer trace.Tracer,
+	schemaHandler *SchemaEvolutionHandler,
 	reportErr func(error),
 ) {
 	for {
@@ -299,6 +309,12 @@ func runConsumer(
 				attribute.Int64("messaging.kafka.offset", msg.Offset),
 			),
 		)
+
+		if schemaHandler != nil {
+			if cdcFields, err := ExtractCDCFields(msg.Value); err == nil && len(cdcFields) > 0 {
+				_ = schemaHandler.DetectAndEvolveSchema(msgCtx, cdcFields)
+			}
+		}
 
 		row, err := transformMessage(msg)
 		if err != nil {
@@ -560,7 +576,14 @@ func transformMessage(msg kafka.Message) (bigquery.ValueSaver, error) {
 		sourceValue = mustJSONValue(innerPayload["source"])
 		payloadValue = mustJSONValue(innerPayload)
 	} else {
-		payloadValue = mustJSONValue(payload["payload"])
+		if opField, ok := payload["op"].(string); ok {
+			op = opField
+		}
+		tsValue = parseTsMs(payload["ts_ms"])
+		beforeValue = mustJSONValue(payload["before"])
+		afterValue = mustJSONValue(payload["after"])
+		sourceValue = mustJSONValue(payload["source"])
+		payloadValue = mustJSONValue(payload)
 	}
 
 	headersValue := mustJSONValue(headersToMap(msg.Headers))
@@ -757,6 +780,7 @@ func loadConfig() (Config, error) {
 	cfg.Port = getEnv("PORT", getEnv("SERVER_PORT", "8104"))
 	cfg.KafkaGroupID = getEnv("KAFKA_GROUP_ID", serviceName)
 	cfg.KafkaDLQTopic = getEnv("KAFKA_DLQ_TOPIC", "cdc.dlq")
+	cfg.KafkaAutoOffsetReset = strings.ToLower(getEnv("KAFKA_AUTO_OFFSET_RESET", "earliest"))
 
 	if cfg.LogLevel, err = parseLogLevel(getEnv("LOG_LEVEL", "info")); err != nil {
 		return cfg, err

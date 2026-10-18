@@ -13,6 +13,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.kafka:spring-kafka")
     implementation("org.springframework.boot:spring-boot-starter-cache")
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
     implementation("io.micrometer:micrometer-tracing-bridge-otel")
     implementation("io.micrometer:micrometer-registry-otlp")

@@ -9,13 +9,18 @@ import com.instacommerce.fraud.dto.request.FraudCheckRequest;
 import com.instacommerce.fraud.dto.response.FraudCheckResponse;
 import com.instacommerce.fraud.repository.FraudRuleRepository;
 import com.instacommerce.fraud.repository.FraudSignalRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +34,8 @@ public class FraudScoringService {
     private final RuleEvaluationService ruleEvaluationService;
     private final BlocklistService blocklistService;
     private final OutboxService outboxService;
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
 
     @Value("${fraud.operational-mode:AUTO_BLOCK}")
     private String operationalModeStr;
@@ -37,15 +44,45 @@ public class FraudScoringService {
                                FraudSignalRepository fraudSignalRepository,
                                RuleEvaluationService ruleEvaluationService,
                                BlocklistService blocklistService,
-                               OutboxService outboxService) {
+                               OutboxService outboxService,
+                               ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+                               ObjectProvider<ObjectMapper> objectMapperProvider) {
         this.fraudRuleRepository = fraudRuleRepository;
         this.fraudSignalRepository = fraudSignalRepository;
         this.ruleEvaluationService = ruleEvaluationService;
         this.blocklistService = blocklistService;
         this.outboxService = outboxService;
+        this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;
+        this.objectMapper = objectMapperProvider != null ? objectMapperProvider.getIfAvailable(ObjectMapper::new) : new ObjectMapper();
+    }
+
+    public FraudScoringService(FraudRuleRepository fraudRuleRepository,
+                               FraudSignalRepository fraudSignalRepository,
+                               RuleEvaluationService ruleEvaluationService,
+                               BlocklistService blocklistService,
+                               OutboxService outboxService,
+                               StringRedisTemplate redisTemplate) {
+        this.fraudRuleRepository = fraudRuleRepository;
+        this.fraudSignalRepository = fraudSignalRepository;
+        this.ruleEvaluationService = ruleEvaluationService;
+        this.blocklistService = blocklistService;
+        this.outboxService = outboxService;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = new ObjectMapper();
+    }
+
+    public FraudScoringService(FraudRuleRepository fraudRuleRepository,
+                               FraudSignalRepository fraudSignalRepository,
+                               RuleEvaluationService ruleEvaluationService,
+                               BlocklistService blocklistService,
+                               OutboxService outboxService) {
+        this(fraudRuleRepository, fraudSignalRepository, ruleEvaluationService, blocklistService, outboxService, (StringRedisTemplate) null);
     }
 
     private FraudOperationalMode getOperationalMode() {
+        if (operationalModeStr == null) {
+            return FraudOperationalMode.AUTO_BLOCK;
+        }
         try {
             return FraudOperationalMode.valueOf(operationalModeStr);
         } catch (IllegalArgumentException e) {
@@ -66,6 +103,16 @@ public class FraudScoringService {
         if (isAnyEntityBlocked(request)) {
             return persistAndRespond(request, 100, RiskLevel.CRITICAL, FraudAction.BLOCK,
                     List.of("BLOCKLIST_HIT"));
+        }
+
+        // Fast-path: check ML-computed customer fraud risk score from reverse ETL (Issue #659)
+        Double cachedFraudScore = getCachedFraudRiskScore(request.userId());
+        if (cachedFraudScore != null && cachedFraudScore > 0.85) {
+            log.warn("Blocking checkout: customer fraud risk score {} exceeds threshold 0.85 for user {}",
+                    cachedFraudScore, request.userId());
+            int score = (int) Math.round(cachedFraudScore * 100);
+            return persistAndRespond(request, Math.min(100, Math.max(0, score)),
+                    RiskLevel.CRITICAL, FraudAction.BLOCK, List.of("HIGH_FRAUD_RISK_SCORE"));
         }
 
         List<FraudRule> rules = loadActiveRules();
@@ -160,4 +207,29 @@ public class FraudScoringService {
         return new FraudCheckResponse(score, riskLevel.name(), action.name(),
                 triggeredRules, saved.getId());
     }
+
+    public Double getCachedFraudRiskScore(UUID userId) {
+        if (redisTemplate == null || userId == null) {
+            return null;
+        }
+        try {
+            String key = "fraud:score:" + userId;
+            String rawVal = redisTemplate.opsForValue().get(key);
+            if (rawVal == null || rawVal.isBlank()) {
+                return null;
+            }
+            if (rawVal.trim().startsWith("{")) {
+                JsonNode node = objectMapper.readTree(rawVal);
+                if (node.has("fraud_risk_score")) {
+                    return node.get("fraud_risk_score").asDouble();
+                }
+            } else {
+                return Double.parseDouble(rawVal.trim());
+            }
+        } catch (Exception e) {
+            log.warn("Failed reading cached fraud risk score for userId {}: {}", userId, e.getMessage());
+        }
+        return null;
+    }
 }
+
