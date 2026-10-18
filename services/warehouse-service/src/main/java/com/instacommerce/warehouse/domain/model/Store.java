@@ -58,6 +58,12 @@ public class Store {
     @Column(name = "capacity_orders_per_hour", nullable = false)
     private int capacityOrdersPerHour = 100;
 
+    @Column(name = "max_concurrent_orders", nullable = false)
+    private int maxConcurrentOrders = 100;
+
+    @Column(name = "current_pending_orders", nullable = false)
+    private int currentPendingOrders = 0;
+
     @Column(name = "created_at")
     private Instant createdAt;
 
@@ -120,6 +126,12 @@ public class Store {
 
     public int getCapacityOrdersPerHour() { return capacityOrdersPerHour; }
     public void setCapacityOrdersPerHour(int capacityOrdersPerHour) { this.capacityOrdersPerHour = capacityOrdersPerHour; }
+
+    public int getMaxConcurrentOrders() { return maxConcurrentOrders; }
+    public void setMaxConcurrentOrders(int maxConcurrentOrders) { this.maxConcurrentOrders = maxConcurrentOrders; }
+
+    public int getCurrentPendingOrders() { return currentPendingOrders; }
+    public void setCurrentPendingOrders(int currentPendingOrders) { this.currentPendingOrders = currentPendingOrders; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

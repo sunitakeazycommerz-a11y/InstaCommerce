@@ -1,15 +1,19 @@
 package com.instacommerce.warehouse.integration;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.warehouse.WarehouseServiceApplication;
 import com.instacommerce.warehouse.domain.model.Store;
 import com.instacommerce.warehouse.domain.model.StoreHours;
 import com.instacommerce.warehouse.domain.model.StoreStatus;
 import com.instacommerce.warehouse.domain.model.StoreZone;
+import com.instacommerce.warehouse.repository.StagingTelemetryRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
+import com.instacommerce.warehouse.repository.WarehouseBinRepository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -23,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
@@ -74,12 +79,23 @@ class WarehouseIntegrationTest {
   private MockMvc mockMvc;
 
   @Autowired
+  private ObjectMapper objectMapper;
+
+  @Autowired
   private StoreRepository storeRepository;
+
+  @Autowired
+  private WarehouseBinRepository binRepository;
+
+  @Autowired
+  private StagingTelemetryRepository telemetryRepository;
 
   private UUID testStoreId;
 
   @BeforeEach
   void setUp() {
+    binRepository.deleteAll();
+    telemetryRepository.deleteAll();
     storeRepository.deleteAll();
 
     Store store = new Store();
@@ -92,6 +108,8 @@ class WarehouseIntegrationTest {
     store.setLongitude(new BigDecimal("77.59460000"));
     store.setStatus(StoreStatus.ACTIVE);
     store.setCapacityOrdersPerHour(100);
+    store.setMaxConcurrentOrders(10);
+    store.setCurrentPendingOrders(0);
 
     StoreZone zone = new StoreZone();
     zone.setZoneName("Indiranagar Core");
@@ -193,5 +211,177 @@ class WarehouseIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.maxOrders").isNumber())
         .andExpect(jsonPath("$.maxOrders").value(org.hamcrest.Matchers.greaterThanOrEqualTo(0)));
+  }
+
+  @Test
+  @DisplayName("Bin assignment supports unique locations and rejects conflicting SKUs (Issue #580)")
+  void testBinLocationAssignmentAndCollisionPrevention() throws Exception {
+    var assignReq1 = new com.instacommerce.warehouse.dto.request.BinAssignmentRequest(
+        "A1", "R1", "S1", "B1", "SKU-BEV-COLA", 10000, 1500);
+
+    // Initial assignment succeeds
+    mockMvc.perform(post("/stores/{id}/bins/assign", testStoreId)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(assignReq1)))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.sku").value("SKU-BEV-COLA"))
+        .andExpect(jsonPath("$.occupied").value(true))
+        .andExpect(jsonPath("$.currentVolumeCm3").value(10000));
+
+    // Duplicate assignment with different SKU to the same bin location throws 409 BIN_ALREADY_OCCUPIED
+    var conflictingReq = new com.instacommerce.warehouse.dto.request.BinAssignmentRequest(
+        "A1", "R1", "S1", "B1", "SKU-SNACK-CHIPS", 5000, 200);
+
+    mockMvc.perform(post("/stores/{id}/bins/assign", testStoreId)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(conflictingReq)))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("BIN_ALREADY_OCCUPIED"));
+
+    // Check bin retrieval
+    mockMvc.perform(get("/stores/{id}/bins/by-sku", testStoreId)
+            .param("sku", "SKU-BEV-COLA"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$").isArray())
+        .andExpect(jsonPath("$[0].binNumber").value("B1"));
+  }
+
+  @Test
+  @DisplayName("Cold chain staging temperature telemetry triggers alerts and validates dispatch packaging (Issue #585)")
+  void testColdChainStagingTelemetryAndThresholdAlerts() throws Exception {
+    // 1. Normal reading (2.5°C) for CHILLED bay
+    var normalReading = new com.instacommerce.warehouse.dto.request.StagingTelemetryRequest(
+        "SENSOR-BT-01", "BAY-CHILLED-1", "CHILLED", new BigDecimal("2.50"), 95);
+
+    mockMvc.perform(post("/stores/{id}/staging/telemetry", testStoreId)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(normalReading)))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.breached").value(false))
+        .andExpect(jsonPath("$.alertTriggered").value(false));
+
+    // 2. High reading (5.5°C > 4.0°C threshold) for CHILLED bay
+    var breachReading1 = new com.instacommerce.warehouse.dto.request.StagingTelemetryRequest(
+        "SENSOR-BT-01", "BAY-CHILLED-1", "CHILLED", new BigDecimal("5.50"), 94);
+
+    mockMvc.perform(post("/stores/{id}/staging/telemetry", testStoreId)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(breachReading1)))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.breached").value(true));
+
+    // 3. Second breach reading confirms sustained breach and triggers alert
+    var breachReading2 = new com.instacommerce.warehouse.dto.request.StagingTelemetryRequest(
+        "SENSOR-BT-01", "BAY-CHILLED-1", "CHILLED", new BigDecimal("6.00"), 93);
+
+    mockMvc.perform(post("/stores/{id}/staging/telemetry", testStoreId)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(breachReading2)))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.breached").value(true))
+        .andExpect(jsonPath("$.alertTriggered").value(true));
+
+    // 4. Validate cold chain dispatch packaging: valid
+    var validPackaging = new com.instacommerce.warehouse.dto.request.DispatchPackagingRequest(
+        "ORD-9901", "CHILLED", true, true);
+    mockMvc.perform(post("/stores/{id}/staging/validate-dispatch", testStoreId)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(validPackaging)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.verified").value(true));
+
+    // 5. Validate cold chain dispatch packaging: missing cold packs throws 400
+    var invalidPackaging = new com.instacommerce.warehouse.dto.request.DispatchPackagingRequest(
+        "ORD-9902", "CHILLED", true, false);
+    mockMvc.perform(post("/stores/{id}/staging/validate-dispatch", testStoreId)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(invalidPackaging)))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("COLD_CHAIN_PACKAGING_REQUIRED"));
+  }
+
+  @Test
+  @DisplayName("Store layout pick path orders heavy items first and fragile bakery items last (Issue #589)")
+  void testDarkStorePickPathOptimizationTSP() throws Exception {
+    var items = List.of(
+        new com.instacommerce.warehouse.dto.request.PickItemLocationRequest(
+            "SKU-BREAD", "Fresh Sourdough Bread", "A10", "S2", "B1", "FRAGILE", 1),
+        new com.instacommerce.warehouse.dto.request.PickItemLocationRequest(
+            "SKU-WATER", "Mineral Water 5L Pack", "A1", "S1", "B2", "HEAVY", 2),
+        new com.instacommerce.warehouse.dto.request.PickItemLocationRequest(
+            "SKU-CEREAL", "Corn Flakes Ambient", "A4", "S3", "B5", "AMBIENT", 1)
+    );
+
+    var pathReq = new com.instacommerce.warehouse.dto.request.OptimizePathRequest(
+        "ENTRANCE", "PACKING", items);
+
+    mockMvc.perform(post("/stores/{id}/layout/optimize-path", testStoreId)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(pathReq)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalDistanceMeters").isNumber())
+        .andExpect(jsonPath("$.estimatedPickSeconds").isNumber())
+        .andExpect(jsonPath("$.pickSteps").isArray())
+        // Step 1 must be heavy mineral water
+        .andExpect(jsonPath("$.pickSteps[0].sku").value("SKU-WATER"))
+        .andExpect(jsonPath("$.pickSteps[0].category").value("HEAVY"))
+        // Step 2 must be ambient cereal
+        .andExpect(jsonPath("$.pickSteps[1].sku").value("SKU-CEREAL"))
+        // Step 3 must be fragile bread
+        .andExpect(jsonPath("$.pickSteps[2].sku").value("SKU-BREAD"))
+        .andExpect(jsonPath("$.pickSteps[2].category").value("FRAGILE"));
+  }
+
+  @Test
+  @DisplayName("Dark store capacity throttles at 90% and pauses at 100% capacity (Issue #592)")
+  void testDarkStoreCapacityOverloadThrottlingAndPause() throws Exception {
+    // testStoreId configured with maxConcurrentOrders = 10 in setUp()
+    // Acquire 8 order slots (80% capacity -> NORMAL)
+    for (int i = 0; i < 8; i++) {
+      mockMvc.perform(post("/stores/{id}/capacity/acquire", testStoreId))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$").value(true));
+    }
+
+    mockMvc.perform(get("/stores/{id}/capacity", testStoreId))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.currentPendingOrders").value(8))
+        .andExpect(jsonPath("$.throttleStatus").value("NORMAL"))
+        .andExpect(jsonPath("$.etaExtensionMinutes").value(0));
+
+    // Acquire 9th slot (90% capacity -> THROTTLED)
+    mockMvc.perform(post("/stores/{id}/capacity/acquire", testStoreId))
+        .andExpect(status().isOk());
+
+    mockMvc.perform(get("/stores/{id}/capacity", testStoreId))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.currentPendingOrders").value(9))
+        .andExpect(jsonPath("$.throttleStatus").value("THROTTLED"))
+        .andExpect(jsonPath("$.etaExtensionMinutes").value(15))
+        .andExpect(jsonPath("$.canAcceptOrders").value(true));
+
+    // Acquire 10th slot (100% capacity -> PAUSED)
+    mockMvc.perform(post("/stores/{id}/capacity/acquire", testStoreId))
+        .andExpect(status().isOk());
+
+    mockMvc.perform(get("/stores/{id}/capacity", testStoreId))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.currentPendingOrders").value(10))
+        .andExpect(jsonPath("$.throttleStatus").value("PAUSED"))
+        .andExpect(jsonPath("$.canAcceptOrders").value(false));
+
+    // 11th acquire attempt throws 429 CAPACITY_EXCEEDED
+    mockMvc.perform(post("/stores/{id}/capacity/acquire", testStoreId))
+        .andExpect(status().isTooManyRequests())
+        .andExpect(jsonPath("$.code").value("CAPACITY_EXCEEDED"));
+
+    // Release 1 order slot
+    mockMvc.perform(post("/stores/{id}/capacity/release", testStoreId))
+        .andExpect(status().isOk());
+
+    mockMvc.perform(get("/stores/{id}/capacity", testStoreId))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.currentPendingOrders").value(9))
+        .andExpect(jsonPath("$.canAcceptOrders").value(true));
   }
 }
