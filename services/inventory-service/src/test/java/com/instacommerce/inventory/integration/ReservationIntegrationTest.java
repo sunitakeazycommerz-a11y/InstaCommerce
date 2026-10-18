@@ -23,6 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -59,6 +60,9 @@ class ReservationIntegrationTest {
             .load()
             .migrate();
     }
+
+    @MockitoBean
+    private com.instacommerce.inventory.client.WarehouseClient warehouseClient;
 
     @Autowired
     private ReservationService reservationService;
@@ -220,6 +224,52 @@ class ReservationIntegrationTest {
         // Verify stock unchanged
         StockItem unchanged = stockItemRepository.findByProductIdAndStoreId(productId, storeId).orElseThrow();
         assertThat(unchanged.getOnHand()).isEqualTo(5);
+        assertThat(unchanged.getReserved()).isEqualTo(0);
+    }
+
+    @Test
+    void shouldRejectReservationWhenStoreIsInactive() {
+        UUID productId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        createStockItem(productId, storeId, 100, 0);
+
+        org.mockito.Mockito.doThrow(new com.instacommerce.inventory.exception.StoreInactiveException(storeId, "MAINTENANCE"))
+            .when(warehouseClient).validateStoreActive(storeId);
+
+        ReserveRequest request = new ReserveRequest(
+            "inactive-store-key-" + UUID.randomUUID(),
+            storeId,
+            List.of(new InventoryItemRequest(productId, 10))
+        );
+
+        assertThatThrownBy(() -> reservationService.reserve(request))
+            .isInstanceOf(com.instacommerce.inventory.exception.StoreInactiveException.class);
+
+        // Verify stock untouched
+        StockItem unchanged = stockItemRepository.findByProductIdAndStoreId(productId, storeId).orElseThrow();
+        assertThat(unchanged.getReserved()).isEqualTo(0);
+    }
+
+    @Test
+    void shouldRejectReservationWhenStoreNotFound() {
+        UUID productId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        createStockItem(productId, storeId, 100, 0);
+
+        org.mockito.Mockito.doThrow(new com.instacommerce.inventory.exception.StoreNotFoundException(storeId))
+            .when(warehouseClient).validateStoreActive(storeId);
+
+        ReserveRequest request = new ReserveRequest(
+            "missing-store-key-" + UUID.randomUUID(),
+            storeId,
+            List.of(new InventoryItemRequest(productId, 10))
+        );
+
+        assertThatThrownBy(() -> reservationService.reserve(request))
+            .isInstanceOf(com.instacommerce.inventory.exception.StoreNotFoundException.class);
+
+        // Verify stock untouched
+        StockItem unchanged = stockItemRepository.findByProductIdAndStoreId(productId, storeId).orElseThrow();
         assertThat(unchanged.getReserved()).isEqualTo(0);
     }
 

@@ -104,4 +104,44 @@ public class StockItem {
     public void setVersion(long version) {
         this.version = version;
     }
+
+    public void reserve(int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("Reservation quantity must be strictly positive: " + quantity);
+        }
+        int available = this.onHand - this.reserved;
+        if (available < quantity) {
+            throw new com.instacommerce.inventory.exception.InsufficientStockException(productId, available, quantity);
+        }
+        this.reserved += quantity;
+    }
+
+    public void confirm(int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("Confirmation quantity must be strictly positive: " + quantity);
+        }
+        if (this.reserved < quantity || this.onHand < quantity) {
+            throw new com.instacommerce.inventory.exception.InsufficientStockException(
+                productId, Math.min(this.reserved, this.onHand), quantity);
+        }
+        this.onHand -= quantity;
+        this.reserved -= quantity;
+    }
+
+    public void releaseReserved(int quantity) {
+        if (quantity < 0) {
+            throw new IllegalArgumentException("Release quantity cannot be negative: " + quantity);
+        }
+        if (this.reserved < quantity) {
+            throw new com.instacommerce.inventory.exception.InsufficientStockException(productId, this.reserved, quantity);
+        }
+        this.reserved -= quantity;
+    }
+
+    public void releaseConfirmed(int quantity) {
+        if (quantity < 0) {
+            throw new IllegalArgumentException("Release quantity cannot be negative: " + quantity);
+        }
+        this.onHand += quantity;
+    }
 }

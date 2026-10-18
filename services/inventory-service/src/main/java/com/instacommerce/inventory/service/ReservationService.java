@@ -45,19 +45,22 @@ public class ReservationService {
     private final EntityManager entityManager;
     private final OutboxService outboxService;
     private final InventoryProperties inventoryProperties;
+    private final org.springframework.beans.factory.ObjectProvider<com.instacommerce.inventory.client.WarehouseClient> warehouseClientProvider;
 
     public ReservationService(ReservationRepository reservationRepository,
                               StockItemRepository stockItemRepository,
                               ReservationProperties reservationProperties,
                               EntityManager entityManager,
                               OutboxService outboxService,
-                              InventoryProperties inventoryProperties) {
+                              InventoryProperties inventoryProperties,
+                              org.springframework.beans.factory.ObjectProvider<com.instacommerce.inventory.client.WarehouseClient> warehouseClientProvider) {
         this.reservationRepository = reservationRepository;
         this.stockItemRepository = stockItemRepository;
         this.reservationProperties = reservationProperties;
         this.entityManager = entityManager;
         this.outboxService = outboxService;
         this.inventoryProperties = inventoryProperties;
+        this.warehouseClientProvider = warehouseClientProvider;
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -66,6 +69,10 @@ public class ReservationService {
         if (existing.isPresent()) {
             return InventoryMapper.toReserveResponse(existing.get());
         }
+
+        // Validate dark store existence and active operational status (Issue #570 & #574)
+        warehouseClientProvider.ifAvailable(client -> client.validateStoreActive(request.storeId()));
+
         List<InventoryItemRequest> sortedItems = request.items().stream()
             .sorted(Comparator.comparing(InventoryItemRequest::productId))
             .toList();
@@ -88,7 +95,7 @@ public class ReservationService {
         List<ReservationLineItem> lineItems = new ArrayList<>();
         for (InventoryItemRequest item : sortedItems) {
             StockItem stock = lockedStock.get(item.productId());
-            stock.setReserved(stock.getReserved() + item.quantity());
+            stock.reserve(item.quantity());
             stockItemRepository.save(stock);
 
             ReservationLineItem lineItem = new ReservationLineItem();
@@ -149,15 +156,7 @@ public class ReservationService {
         List<Map<String, Object>> itemsList = new ArrayList<>();
         for (ReservationLineItem item : items) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
-            if (stock.getReserved() < item.getQuantity() || stock.getOnHand() < item.getQuantity()) {
-                throw new InsufficientStockException(
-                    item.getProductId(),
-                    Math.min(stock.getReserved(), stock.getOnHand()),
-                    item.getQuantity()
-                );
-            }
-            stock.setOnHand(stock.getOnHand() - item.getQuantity());
-            stock.setReserved(stock.getReserved() - item.getQuantity());
+            stock.confirm(item.getQuantity());
             stockItemRepository.save(stock);
             checkLowStock(stock, reservation.getStoreId());
 
@@ -261,7 +260,7 @@ public class ReservationService {
             .toList();
         for (ReservationLineItem item : items) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
-            stock.setReserved(Math.max(0, stock.getReserved() - item.getQuantity()));
+            stock.releaseReserved(item.getQuantity());
             stockItemRepository.save(stock);
         }
     }
@@ -272,7 +271,7 @@ public class ReservationService {
             .toList();
         for (ReservationLineItem item : items) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
-            stock.setOnHand(stock.getOnHand() + item.getQuantity());
+            stock.releaseConfirmed(item.getQuantity());
             stockItemRepository.save(stock);
         }
     }

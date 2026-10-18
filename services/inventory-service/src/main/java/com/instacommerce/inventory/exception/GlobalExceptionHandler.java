@@ -43,6 +43,24 @@ public class GlobalExceptionHandler {
                 "Resource was modified by another request, please retry", List.of(), request));
     }
 
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrity(org.springframework.dao.DataIntegrityViolationException ex,
+                                                             HttpServletRequest request) {
+        log.warn("Data integrity conflict on {} {}", request.getMethod(), request.getRequestURI(), ex);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(buildError("DATA_INTEGRITY_CONFLICT",
+                "Data integrity violation or concurrent conflict, please retry", List.of(), request));
+    }
+
+    @ExceptionHandler({org.springframework.dao.PessimisticLockingFailureException.class,
+                       org.springframework.dao.CannotAcquireLockException.class})
+    public ResponseEntity<ErrorResponse> handleLockFailure(Exception ex, HttpServletRequest request) {
+        log.warn("Pessimistic lock timeout on {} {}", request.getMethod(), request.getRequestURI(), ex);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(buildError("LOCK_ACQUISITION_TIMEOUT",
+                "Failed to acquire lock within timeout period, please retry", List.of(), request));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex,
                                                           HttpServletRequest request) {
