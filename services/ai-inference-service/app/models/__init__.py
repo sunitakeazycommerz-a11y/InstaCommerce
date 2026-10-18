@@ -17,6 +17,7 @@ from app.models.demand_model import DemandModel, DemandFeatures, DemandResponse
 from app.models.personalization_model import PersonalizationModel, PersonalizationFeatures, PersonalizationResponse
 from app.models.clv_model import CLVModel, CLVFeatures, CLVResponse, CLVSegment
 from app.models.dynamic_pricing_model import DynamicPricingModel, PricingFeatures, PricingResponse
+from app.models.onnx_runner import ManagedOnnxSession, check_memory_threshold, get_current_rss_bytes
 
 __all__ = [
     "ETAModel", "ETAFeatures", "ETAResponse",
@@ -26,4 +27,5 @@ __all__ = [
     "PersonalizationModel", "PersonalizationFeatures", "PersonalizationResponse",
     "CLVModel", "CLVFeatures", "CLVResponse", "CLVSegment",
     "DynamicPricingModel", "PricingFeatures", "PricingResponse",
+    "ManagedOnnxSession", "check_memory_threshold", "get_current_rss_bytes",
 ]

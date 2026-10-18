@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import posixpath
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -243,13 +245,63 @@ class ToolRegistry:
                 error="Circuit breaker open",
             )
 
-        # Resolve path parameters
-        path = tool.path
+        # Validate path and query parameters against traversal attacks (#600)
+        traversal_indicators = ["..", "/etc/", ".env", "%2e%2e", "%2f", "\\"]
         if path_params:
             for key, value in path_params.items():
+                if not isinstance(value, str):
+                    value = str(value)
+                val_lower = value.lower()
+                if any(ind in val_lower for ind in traversal_indicators) or "/" in value or "\\" in value:
+                    logger.error(
+                        "security.path_traversal_attempt",
+                        extra={"tool": tool_name, "param_key": key, "param_val": value},
+                    )
+                    return ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        error="Security violation: path traversal detected in parameter",
+                    )
+                if not re.match(r"^[a-zA-Z0-9_\-\.:@]+$", value):
+                    logger.error(
+                        "security.invalid_path_param_chars",
+                        extra={"tool": tool_name, "param_key": key, "param_val": value},
+                    )
+                    return ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        error="Security violation: invalid characters in path parameter",
+                    )
                 path = path.replace(f"{{{key}}}", value)
 
-        url = f"{tool.base_url.rstrip('/')}{path}"
+        if params:
+            for k, v in params.items():
+                v_str = str(v).lower()
+                if any(ind in v_str for ind in traversal_indicators):
+                    logger.error(
+                        "security.path_traversal_attempt_in_params",
+                        extra={"tool": tool_name, "param_key": k, "param_val": v},
+                    )
+                    return ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        error="Security violation: path traversal detected in query params",
+                    )
+
+        # Ensure normalized path stays within permitted API prefixes
+        normalized_path = posixpath.normpath(path)
+        if not normalized_path.startswith(("/api/v1/", "/api/")):
+            logger.error(
+                "security.unauthorized_path_access",
+                extra={"tool": tool_name, "path": normalized_path},
+            )
+            return ToolResult(
+                tool_name=tool_name,
+                success=False,
+                error="Security violation: path not in permitted API whitelist",
+            )
+
+        url = f"{tool.base_url.rstrip('/')}{normalized_path}"
 
         # Idempotency key for write operations
         headers: Dict[str, str] = {}

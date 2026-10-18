@@ -9,7 +9,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +20,23 @@ _DEFAULT_RATE_PER_MINUTE: int = int(
     os.environ.get("RATE_LIMIT_PER_MINUTE", "10")
 )
 _DEFAULT_BURST: int = int(os.environ.get("RATE_LIMIT_BURST", "15"))
+_DEFAULT_PER_DAY: int = int(os.environ.get("RATE_LIMIT_PER_DAY", "50"))
 _PRUNE_INTERVAL_SECONDS: float = float(
     os.environ.get("RATE_LIMIT_PRUNE_INTERVAL", "300")
 )
 _BUCKET_STALE_SECONDS: float = float(
     os.environ.get("RATE_LIMIT_STALE_SECONDS", "3600")
 )
+
+try:
+    from prometheus_client import Counter
+    RATE_LIMIT_EXCEEDED = Counter(
+        "ai_orchestrator_ratelimit_exceeded",
+        "Number of requests rejected due to rate limits",
+        ["scope", "reason"],
+    )
+except Exception:
+    RATE_LIMIT_EXCEEDED = None
 
 
 @dataclass
@@ -36,6 +47,8 @@ class _Bucket:
     max_tokens: float
     refill_rate: float  # tokens per second
     last_refill: float = field(default_factory=time.monotonic)
+    day_count: int = 0
+    day_window_start: float = field(default_factory=time.monotonic)
 
     def refill(self) -> None:
         """Add tokens accrued since last refill."""
@@ -43,14 +56,20 @@ class _Bucket:
         elapsed = now - self.last_refill
         self.tokens = min(self.max_tokens, self.tokens + elapsed * self.refill_rate)
         self.last_refill = now
+        if now - self.day_window_start >= 86400.0:
+            self.day_count = 0
+            self.day_window_start = now
 
-    def consume(self) -> bool:
-        """Try to consume one token. Returns ``True`` on success."""
+    def consume(self, max_per_day: Optional[int] = None) -> Tuple[bool, str]:
+        """Try to consume one token. Returns (allowed, reason)."""
         self.refill()
+        if max_per_day is not None and self.day_count >= max_per_day:
+            return False, "daily_quota_exceeded"
         if self.tokens >= 1.0:
             self.tokens -= 1.0
-            return True
-        return False
+            self.day_count += 1
+            return True, "allowed"
+        return False, "minute_limit_exceeded"
 
     @property
     def retry_after_seconds(self) -> float:
@@ -64,7 +83,7 @@ class _Bucket:
 class TokenBucketRateLimiter:
     """Per-user token bucket rate limiter.
 
-    Default: 10 requests/minute, burst of 15 tokens.
+    Default: 10 requests/minute, burst of 15 tokens, 50 requests/day.
 
     Usage::
 
@@ -80,20 +99,26 @@ class TokenBucketRateLimiter:
         Sustained token refill rate expressed as requests per minute.
     burst:
         Maximum token bucket size (allows short bursts above sustained rate).
+    max_per_day:
+        Maximum total requests allowed in a rolling 24-hour day.
     """
 
     def __init__(
         self,
         rate_per_minute: int = _DEFAULT_RATE_PER_MINUTE,
         burst: int = _DEFAULT_BURST,
+        max_per_day: int = _DEFAULT_PER_DAY,
     ) -> None:
         if rate_per_minute <= 0:
             raise ValueError("rate_per_minute must be > 0")
         if burst <= 0:
             raise ValueError("burst must be > 0")
+        if max_per_day <= 0:
+            raise ValueError("max_per_day must be > 0")
 
         self._rate_per_second: float = rate_per_minute / 60.0
         self._burst: int = burst
+        self._max_per_day: int = max_per_day
         self._buckets: Dict[str, _Bucket] = {}
         self._lock = threading.Lock()
         self._last_prune: float = time.monotonic()
@@ -116,19 +141,35 @@ class TokenBucketRateLimiter:
         with self._lock:
             self._maybe_prune()
             bucket = self._get_or_create(user_id)
-            allowed = bucket.consume()
+            allowed, reason = bucket.consume(self._max_per_day)
+
+        retry_after = 0.0
+        if not allowed:
+            if reason == "daily_quota_exceeded":
+                retry_after = max(1.0, 86400.0 - (time.monotonic() - bucket.day_window_start))
+            else:
+                retry_after = bucket.retry_after_seconds
 
         meta: Dict[str, Any] = {
             "remaining_tokens": max(0.0, bucket.tokens),
-            "retry_after_seconds": 0.0 if allowed else bucket.retry_after_seconds,
+            "retry_after_seconds": retry_after,
             "limit": self._burst,
+            "daily_limit": self._max_per_day,
+            "daily_remaining": max(0, self._max_per_day - bucket.day_count),
+            "reason": reason,
+            "message": "Please wait a moment before sending another message." if not allowed else "OK",
         }
-
         if not allowed:
+            log_extra = {"user_id": user_id, **{k: v for k, v in meta.items() if k != "message"}}
             logger.warning(
                 "Rate limit exceeded",
-                extra={"user_id": user_id, **meta},
+                extra=log_extra,
             )
+            if RATE_LIMIT_EXCEEDED:
+                try:
+                    RATE_LIMIT_EXCEEDED.labels(scope="user", reason=reason).inc()
+                except Exception:
+                    pass
 
         return allowed, meta
 

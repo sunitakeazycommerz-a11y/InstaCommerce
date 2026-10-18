@@ -18,7 +18,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.audit import AuditEventPublisher, NoOpAuditPublisher
 from app.config import Settings
-from app.guardrails.rate_limiter import TokenBucketRateLimiter
+from app.cache.semantic_cache import SemanticCache
+from app.guardrails.injection import wrap_user_input
+from app.guardrails.rate_limiter import RATE_LIMIT_EXCEEDED, TokenBucketRateLimiter
 
 settings = Settings()
 logger = logging.getLogger("ai_orchestrator")
@@ -57,6 +59,10 @@ class PiiRedactor:
             (re.compile(r"[\w\.-]+@[\w\.-]+\.\w+"), "[REDACTED_EMAIL]"),
             (re.compile(r"\b\d{3}-?\d{2}-?\d{4}\b"), "[REDACTED_SSN]"),
             (re.compile(r"\b(?:\d[ -]*?){13,16}\b"), "[REDACTED_CARD]"),
+            (
+                re.compile(r"(?:\+91[\-\s]?)?[0]?(?:91)?[6789]\d{9}\b"),
+                "[REDACTED_PHONE]",
+            ),
             (
                 re.compile(r"\b(?:\+?\d{1,3}[ -]?)?(?:\(?\d{3}\)?[ -]?)\d{3}[ -]?\d{4}\b"),
                 "[REDACTED_PHONE]",
@@ -348,6 +354,7 @@ class ExecutionResources:
     breakers: CircuitBreakerRegistry
     tracer: Any
     audit_publisher: Optional[Any] = None
+    semantic_cache: Optional[Any] = None
 
 
 class RetrievalProvider:
@@ -545,9 +552,12 @@ class LlmClient:
         if not self._enabled or not self._client or not self._url:
             return None
         try:
+            sanitized_payload = dict(payload)
+            if "query" in sanitized_payload and isinstance(sanitized_payload["query"], str):
+                sanitized_payload["query"] = wrap_user_input(sanitized_payload["query"])
             response = await self._client.post(
                 self._url,
-                json={"endpoint": endpoint, "input": payload, "model": self._model},
+                json={"endpoint": endpoint, "input": sanitized_payload, "model": self._model},
                 headers=self._headers,
             )
             response.raise_for_status()
@@ -799,6 +809,7 @@ def build_resources(app_instance: FastAPI) -> ExecutionResources:
         breakers=app_instance.state.breakers,
         tracer=app_instance.state.tracer,
         audit_publisher=getattr(app_instance.state, "audit_publisher", None),
+        semantic_cache=getattr(app_instance.state, "semantic_cache", None),
     )
 
 
@@ -836,6 +847,27 @@ async def assist_prepare(state: State) -> Dict[str, Any]:
 
 async def assist_call_llm(state: State) -> Dict[str, Any]:
     resources: ExecutionResources = state["resources"]
+    request: AssistRequest = state["request"]
+
+    # Check semantic cache first for FAQ queries (#609)
+    if resources.semantic_cache:
+        match = resources.semantic_cache.find_match(request.query)
+        if match:
+            log_event(
+                "assist.semantic_cache_hit",
+                request_id=state.get("request_id"),
+                similarity=match["similarity"],
+                category=match.get("category"),
+            )
+            return {
+                "llm_response": {
+                    "message": match["answer"],
+                    "intent": "support",
+                    "tool_calls": [],
+                },
+                "mode": "llm",
+            }
+
     payload = state["payload"]
     llm_response = await resources.llm.generate("assist", sanitize_llm_payload(payload))
     message = llm_response.get("message") if isinstance(llm_response, dict) else None
@@ -1294,6 +1326,7 @@ async def lifespan(app_instance: FastAPI):
     app_instance.state.retriever = retriever
     app_instance.state.guardrails = guardrails
     app_instance.state.breakers = breakers
+    app_instance.state.semantic_cache = SemanticCache()
     app_instance.state.agent_ip_rate_limiter = TokenBucketRateLimiter(
         rate_per_minute=settings.agent_ip_rate_limit_per_minute,
         burst=settings.agent_ip_rate_limit_burst,
@@ -1358,9 +1391,17 @@ def _rate_limited_response(scope: str, principal: str, meta: Dict[str, Any]) -> 
         principal_hash=principal_hash,
         retry_after_seconds=retry_after_seconds,
     )
+    if RATE_LIMIT_EXCEEDED:
+        try:
+            RATE_LIMIT_EXCEEDED.labels(scope=scope, reason=meta.get("reason", "rate_limit_exceeded")).inc()
+        except Exception:
+            pass
     return JSONResponse(
         status_code=429,
-        content={"detail": "Rate limit exceeded"},
+        content={
+            "detail": "Rate limit exceeded",
+            "message": "Please wait a moment before sending another message.",
+        },
         headers={
             "Retry-After": str(retry_after_seconds),
             "X-Agent-RateLimit-Scope": scope,

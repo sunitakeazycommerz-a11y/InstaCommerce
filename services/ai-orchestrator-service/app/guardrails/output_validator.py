@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Configurable thresholds
 # ---------------------------------------------------------------------------
 _MAX_REFUND_AMOUNT_CENTS: int = int(
-    os.environ.get("OUTPUT_MAX_REFUND_CENTS", "50000")
+    os.environ.get("OUTPUT_MAX_REFUND_CENTS", "1500")
 )
 _MAX_DISCOUNT_PERCENT: int = int(
     os.environ.get("OUTPUT_MAX_DISCOUNT_PERCENT", "30")
@@ -49,6 +49,7 @@ class ValidationResult(BaseModel):
     status: ValidationStatus = ValidationStatus.PASSED
     violations: List[ValidationViolation] = Field(default_factory=list)
     sanitised_output: Optional[Dict[str, Any]] = None
+    requires_human_approval: bool = False
 
     @property
     def is_valid(self) -> bool:
@@ -142,10 +143,13 @@ class OutputPolicy:
                 },
             )
 
+        requires_human = any(v.rule == "refund_limit_exceeded" for v in violations)
+
         return ValidationResult(
             status=status,
             violations=violations,
             sanitised_output=sanitised,
+            requires_human_approval=requires_human,
         )
 
     # ------------------------------------------------------------------
@@ -180,21 +184,51 @@ class OutputPolicy:
         """Enforce business limits on refunds, discounts, etc."""
         violations: List[ValidationViolation] = []
 
-        # Refund cap
-        if intent == "refund":
+        # Refund cap (Hard-coded max $15.00 / 1500 cents or 100% of order total, whichever is lower) (#615)
+        if intent in ("refund", "support"):
             amount = output.get("amount_cents")
-            if isinstance(amount, (int, float)) and amount > self.MAX_REFUND_AMOUNT_CENTS:
+            order_total = output.get("order_total_cents")
+            max_allowed = self.MAX_REFUND_AMOUNT_CENTS  # default 1500 cents ($15.00)
+            if isinstance(order_total, (int, float)) and order_total > 0:
+                max_allowed = min(max_allowed, int(order_total))
+
+            if isinstance(amount, (int, float)) and amount > max_allowed:
                 violations.append(
                     ValidationViolation(
                         rule="refund_limit_exceeded",
                         severity="error",
                         message=(
                             f"Refund amount {amount} cents exceeds max "
-                            f"allowed {self.MAX_REFUND_AMOUNT_CENTS} cents."
+                            f"allowed {max_allowed} cents ($15.00 or order total). "
+                            "Two-person supervisor approval required."
                         ),
                         field="amount_cents",
                     )
                 )
+
+        # Check for textual refund promises exceeding the cap (#615)
+        text = self._extract_text(output)
+        if text:
+            refund_matches = re.findall(
+                r"refund(?:ed|ing)?\s+(?:of\s+)?\$?(\d+(?:\.\d{2})?)", text, re.IGNORECASE
+            )
+            for match in refund_matches:
+                try:
+                    refund_val = float(match)
+                    if refund_val > (self.MAX_REFUND_AMOUNT_CENTS / 100.0):
+                        violations.append(
+                            ValidationViolation(
+                                rule="refund_limit_exceeded",
+                                severity="error",
+                                message=(
+                                    f"Autonomous refund promise of ${refund_val:.2f} exceeds hard-coded cap "
+                                    f"of ${self.MAX_REFUND_AMOUNT_CENTS / 100.0:.2f}. Two-person supervisor approval required."
+                                ),
+                                field="message",
+                            )
+                        )
+                except ValueError:
+                    pass
 
         # Discount cap
         if intent == "discount":
@@ -346,3 +380,7 @@ class OutputPolicy:
                     val = re.sub(re.escape(phrase), "[REDACTED]", val, flags=re.IGNORECASE)
                 sanitised[key] = val
         return sanitised
+
+
+# Alias for backward-compatibility and explicit naming (#615)
+OutputPolicyValidator = OutputPolicy

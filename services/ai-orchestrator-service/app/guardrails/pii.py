@@ -22,15 +22,52 @@ _PII_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
     (re.compile(r"[\w\.-]+@[\w\.-]+\.\w{2,}"), "EMAIL"),
     (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "SSN"),
     (re.compile(r"\b(?:\d[ \-]*?){13,16}\b"), "CARD"),
+    # Indian mobile numbers (+91-9876543210, 09876543210, 9876543210) and international numbers (#601)
     (
         re.compile(
-            r"\b(?:\+?\d{1,3}[\s\-]?)?(?:\(?\d{3}\)?[\s\-]?)\d{3}[\s\-]?\d{4}\b"
+            r"(?:\+91[\-\s]?)?[0]?(?:91)?[6789]\d{9}\b"
+        ),
+        "PHONE",
+    ),
+    # US & international phone formats
+    (
+        re.compile(
+            r"\b(?:\+\d{1,3}[\s\-]?)?(?:\(?\d{3}\)?[\s\-]?)\d{3}[\s\-]?\d{4}\b"
         ),
         "PHONE",
     ),
     (
         re.compile(
-            r"\b\d{1,5}\s[\w\s]{1,40}(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Ln|Lane|Ct|Court)\b",
+            r"\b\+\d{1,3}[\s\-]\d{3,4}[\s\-]\d{4,6}\b"
+        ),
+        "PHONE",
+    ),
+    # Localized Indian and international street addresses (Plot, Flat, Sector, Nagar, Marg, Layout, etc.) (#601)
+    (
+        re.compile(
+            r"\b(?:Flat|Plot|House|Door|Shop|Office|Block|Sector|Phase|Apartment|Apt|Building|Tower|Suite|Unit)\s*#?[\w\-\/]+[\w\s,\.\-]{1,60}(?:Street|St|Avenue|Ave|Road|Rd|Marg|Nagar|Colony|Enclave|Layout|Cross|Main|Lane|Ln|Drive|Dr|Court|Ct|Circle|Boulevard|Blvd|Society|Apartments|Heights|Residency|Park|Extension|Extn)\b",
+            re.IGNORECASE,
+        ),
+        "ADDRESS",
+    ),
+    (
+        re.compile(
+            r"\b\d{1,5}\s[\w\s]{1,40}(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Ln|Lane|Ct|Court|Circle|Way)\b",
+            re.IGNORECASE,
+        ),
+        "ADDRESS",
+    ),
+    (
+        re.compile(
+            r"\b\d{1,4}[,\s]+[\w\s]{2,30}(?:Nagar|Colony|Enclave|Layout|Marg|Sector\s*\d+|Block\s*[A-Z0-9]+)\b",
+            re.IGNORECASE,
+        ),
+        "ADDRESS",
+    ),
+    # Postal / PIN codes (Indian 6-digit PIN and US ZIP code)
+    (
+        re.compile(
+            r"\b(?:PIN(?:code)?|Postal\s+Code|Zip(?:\s+Code)?)?\s*:?\s*([1-9][0-9]{2}\s?[0-9]{3}|\d{5}(?:-\d{4})?)\b",
             re.IGNORECASE,
         ),
         "ADDRESS",

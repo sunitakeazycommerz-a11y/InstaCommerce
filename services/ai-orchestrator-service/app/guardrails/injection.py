@@ -56,20 +56,29 @@ class InjectionDetector:
     KNOWN_PATTERNS: List[re.Pattern[str]] = [
         re.compile(p, re.IGNORECASE)
         for p in [
-            r"ignore\s+(all\s+)?previous\s+instructions",
+            r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions",
+            r"disregard\s+(all\s+)?(previous|prior|existing|above)\s+(instructions|directives)",
+            r"issue\s+(a\s+)?(full\s+)?refund",
             r"you\s+are\s+now\s+",
             r"forget\s+(all|everything)",
             r"system\s*:\s*",
             r"\\n\\nHuman:",
             r"<\|im_start\|>",
             r"ADMIN\s+OVERRIDE",
+            r"administrative\s+override",
+            r"system\s+prompt\s+override",
             r"jailbreak",
             r"DAN\s+mode",
             r"pretend\s+you\s+are",
             r"do\s+anything\s+now",
             r"bypass\s+(all\s+)?restrictions",
             r"enter\s+(developer|god)\s+mode",
+            r"developer\s+mode",
             r"reveal\s+(your|the)\s+(system\s+)?prompt",
+            r"prompt\s+leak",
+            r"new\s+system\s+directive",
+            r"act\s+as\s+(an\s+)?unrestricted",
+            r"</?user_input>",
         ]
     ]
 
@@ -184,3 +193,14 @@ class InjectionDetector:
             if pattern.search(text):
                 return True, f"role_boundary_violation: {pattern.pattern}"
         return False, ""
+
+
+def wrap_user_input(text: str) -> str:
+    """Isolate user input within strict XML boundaries to prevent prompt breakout attacks (#606).
+    
+    Escapes any existing user_input tags so user content cannot close or spoof the XML container.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    sanitized = text.replace("<user_input>", "&lt;user_input&gt;").replace("</user_input>", "&lt;/user_input&gt;")
+    return f"<user_input>{sanitized}</user_input>"

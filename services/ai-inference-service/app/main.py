@@ -19,6 +19,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
+from app.batching import DynamicBatcher
 from app.models import (
     DemandModel, DemandFeatures, DemandResponse,
     PersonalizationModel, PersonalizationFeatures, PersonalizationResponse,
@@ -735,9 +736,12 @@ async def lifespan(app_instance: FastAPI):
     registry = ModelRegistry.from_sources(DEFAULT_WEIGHTS, load_registry_data())
     cache = InferenceCache(settings.cache_max_items, settings.cache_ttl_seconds) if settings.cache_enabled else None
     feature_store = build_feature_store(settings)
+    batcher = DynamicBatcher(max_batch_size=64, max_wait_ms=5.0)
+    await batcher.start()
     app_instance.state.registry = registry
     app_instance.state.cache = cache
     app_instance.state.feature_store = feature_store
+    app_instance.state.batcher = batcher
     app_instance.state.demand_model = DemandModel()
     app_instance.state.personalization_model = PersonalizationModel()
     app_instance.state.clv_model = CLVModel()
@@ -745,6 +749,7 @@ async def lifespan(app_instance: FastAPI):
     try:
         yield
     finally:
+        await batcher.stop()
         feature_store.close()
 
 
@@ -754,6 +759,18 @@ from app.auth import InternalServiceAuthMiddleware
 app.add_middleware(InternalServiceAuthMiddleware)
 
 app.state.tracer = init_telemetry(app)
+
+
+@app.post("/inference/dynamic-batch")
+async def dynamic_batch_endpoint(
+    model_name: str,
+    features: Dict[str, float],
+    model_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    registry = app.state.registry
+    batcher: DynamicBatcher = app.state.batcher
+    model_config = resolve_model_config(registry, model_name, model_version)
+    return await batcher.submit(model_name, features, model_config)
 
 
 @app.get("/metrics")
