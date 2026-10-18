@@ -22,6 +22,9 @@ public class Category {
 
     private String slug;
 
+    @Column(name = "path", nullable = false)
+    private String path = "";
+
     @Column(name = "parent_id")
     private UUID parentId;
 
@@ -75,6 +78,14 @@ public class Category {
 
     public void setSlug(String slug) {
         this.slug = slug;
+    }
+
+    public String getPath() {
+        return path;
+    }
+
+    public void setPath(String path) {
+        this.path = path != null ? path : "";
     }
 
     public UUID getParentId() {

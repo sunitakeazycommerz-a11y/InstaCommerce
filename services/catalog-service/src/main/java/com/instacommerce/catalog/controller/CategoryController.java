@@ -26,6 +26,11 @@ public class CategoryController {
         return categoryService.getCategoryTree();
     }
 
+    @GetMapping("/subtree")
+    public List<CategoryResponse> getSubtree(@org.springframework.web.bind.annotation.RequestParam(defaultValue = "/") String pathPrefix) {
+        return categoryService.getSubtree(pathPrefix);
+    }
+
     @GetMapping("/{id}/products")
     public Page<ProductResponse> getCategoryProducts(@PathVariable UUID id, Pageable pageable) {
         return categoryService.getProductsByCategory(id, pageable);

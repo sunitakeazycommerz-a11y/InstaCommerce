@@ -41,6 +41,7 @@ public class CategoryService {
                 category.getId(),
                 category.getName(),
                 category.getSlug(),
+                category.getPath(),
                 category.getParentId(),
                 new ArrayList<>()));
         }
@@ -54,6 +55,16 @@ public class CategoryService {
             }
         }
         return roots;
+    }
+
+    @Transactional(readOnly = true)
+    @Cacheable(value = "categories", key = "'subtree-' + #pathPrefix")
+    public List<CategoryResponse> getSubtree(String pathPrefix) {
+        String prefix = (pathPrefix != null && !pathPrefix.isBlank()) ? pathPrefix : "/";
+        List<Category> categories = categoryRepository.findSubtreeByPathPrefix(prefix);
+        return categories.stream()
+                .map(c -> new CategoryResponse(c.getId(), c.getName(), c.getSlug(), c.getPath(), c.getParentId(), List.of()))
+                .toList();
     }
 
     @Transactional(readOnly = true)
