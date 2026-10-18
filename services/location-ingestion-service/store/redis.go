@@ -28,6 +28,12 @@ type LocationUpdate struct {
 	BatteryPct float64   `json:"battery_pct"`
 }
 
+const (
+	// DefaultRiderHeartbeatTTL is the 60-second TTL on rider heartbeat keys in Redis
+	// to eliminate ghost offline riders when battery dies or signal is lost (Issue #578).
+	DefaultRiderHeartbeatTTL = 60 * time.Second
+)
+
 // LatestPositionStore persists the most recent GPS position for each rider in
 // Redis. Keys follow the pattern rider:{rider_id}:location and expire after
 // ttl to automatically mark riders as offline when no updates arrive.
@@ -35,18 +41,18 @@ type LocationUpdate struct {
 // Used by dispatch-optimizer and routing-eta services for real-time queries.
 type LatestPositionStore struct {
 	client *redis.Client
-	ttl    time.Duration // default 5 min; if no update, rider is considered offline
+	ttl    time.Duration
 }
 
 // NewLatestPositionStore creates a store backed by the given Redis client.
 // ttl controls how long a position is retained before the rider is considered
-// offline (recommended: 5 minutes).
+// offline (default: 60 seconds).
 func NewLatestPositionStore(client *redis.Client, ttl time.Duration) (*LatestPositionStore, error) {
 	if client == nil {
 		return nil, fmt.Errorf("store: redis client must not be nil")
 	}
 	if ttl <= 0 {
-		ttl = 5 * time.Minute
+		ttl = DefaultRiderHeartbeatTTL
 	}
 	return &LatestPositionStore{client: client, ttl: ttl}, nil
 }

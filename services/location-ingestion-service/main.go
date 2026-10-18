@@ -43,6 +43,7 @@ const (
 	defaultKafkaBuffer       = 2000
 	defaultRedisAddr         = "localhost:6379"
 	defaultRedisKeyPrefix    = "rider:location:"
+	defaultRedisTTL          = 60 * time.Second
 	defaultMaxBodyBytes      = 1 << 20
 	defaultWebSocketRead     = 1 << 20
 	defaultShutdownTimeout   = 15 * time.Second
@@ -322,7 +323,7 @@ func loadConfig() Config {
 		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
 		RedisDB:           envOrDefaultInt("REDIS_DB", 0),
 		RedisKeyPrefix:    envOrDefault("REDIS_KEY_PREFIX", defaultRedisKeyPrefix),
-		RedisTTL:          envOrDefaultDuration("REDIS_TTL", 0),
+		RedisTTL:          envOrDefaultDuration("REDIS_TTL", defaultRedisTTL),
 		MaxBodyBytes:      int64(envOrDefaultInt("MAX_BODY_BYTES", defaultMaxBodyBytes)),
 		WebSocketReadMax:  int64(envOrDefaultInt("WS_READ_LIMIT", defaultWebSocketRead)),
 		ShutdownTimeout:   envOrDefaultDuration("SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
