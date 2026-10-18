@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReconciliationCompleted",
+  "type": "object",
+  "required": ["runId", "runDate", "mismatchCount", "autoFixedCount", "manualReviewCount", "completedAt"],
+  "properties": {
+    "runId": { "type": "integer" },
+    "runDate": { "type": "string" },
+    "status": { "type": "string" },
+    "mismatchCount": { "type": "integer", "minimum": 0 },
+    "autoFixedCount": { "type": "integer", "minimum": 0 },
+    "manualReviewCount": { "type": "integer", "minimum": 0 },
+    "completedAt": { "type": "string", "format": "date-time" }
+  }
+}

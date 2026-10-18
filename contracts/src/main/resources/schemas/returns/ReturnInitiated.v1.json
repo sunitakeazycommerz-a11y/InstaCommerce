@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReturnInitiated",
+  "type": "object",
+  "required": ["returnId", "orderId", "userId", "items", "reason", "status", "initiatedAt"],
+  "properties": {
+    "returnId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "items": { "type": "array" },
+    "reason": { "type": "string" },
+    "status": { "type": "string", "enum": ["REQUESTED", "APPROVED", "PICKED_UP", "REFUNDED", "REJECTED"] },
+    "refundAmountCents": { "type": "integer", "minimum": 0 },
+    "initiatedAt": { "type": "string", "format": "date-time" }
+  }
+}

@@ -4,12 +4,12 @@
 
 | Property | Value |
 |----------|-------|
-| **Port** | `8088` |
+| **Port** | `8090` |
 | **Database** | PostgreSQL |
 | **Messaging** | Kafka (`cart-events` via Outbox) |
 | **Cache** | Caffeine (in-memory) |
 | **Auth** | JWT (RS256) + Internal Service Auth |
-| **Upstream** | Pricing Service (`:8087`) |
+| **Upstream** | Pricing Service (`:8089`) |
 
 ---
 

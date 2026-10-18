@@ -1,6 +1,6 @@
 # Wallet & Loyalty Service
 
-> **Module path:** `services/wallet-loyalty-service` · **Port:** 8093 · **Stack:** Spring Boot 3 / Java 21 · **DB:** PostgreSQL (`wallets`)
+> **Module path:** `services/wallet-loyalty-service` · **Port:** 8095 · **Stack:** Spring Boot 3 / Java 21 · **DB:** PostgreSQL (`wallets`)
 
 Digital wallet, loyalty-points engine, and referral programme for InstaCommerce.
 Every monetary mutation is recorded via a **double-entry ledger** so wallet balances are provably correct and auditable.

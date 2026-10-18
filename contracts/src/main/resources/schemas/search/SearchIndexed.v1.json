@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SearchIndexed",
+  "type": "object",
+  "required": ["indexId", "documentType", "documentId", "indexedAt"],
+  "properties": {
+    "indexId": { "type": "string" },
+    "documentType": { "type": "string", "enum": ["PRODUCT", "CATEGORY", "STORE"] },
+    "documentId": { "type": "string" },
+    "version": { "type": "integer", "minimum": 1 },
+    "indexedAt": { "type": "string", "format": "date-time" }
+  }
+}

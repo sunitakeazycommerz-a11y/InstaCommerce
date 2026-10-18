@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| **Port** | `8087` |
+| **Port** | `8089` |
 | **Database** | PostgreSQL |
 | **Messaging** | Kafka (`catalog.events`) |
 | **Cache** | Caffeine (in-memory) |

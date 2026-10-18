@@ -1,5 +1,7 @@
 # Audit Trail Service
 
+> **Java 21 · Spring Boot 4 · PostgreSQL · Kafka · Port 8096**
+
 Centralised, **immutable audit log** with partitioned storage, compliance-grade querying, and CSV export for InstaCommerce.
 Ingests domain events from **14 Kafka topics** plus a REST ingestion API, stores them append-only in PostgreSQL with monthly partitions, and provides paginated search and streaming CSV export.
 

@@ -76,14 +76,14 @@ stateDiagram-v2
 | `config-feature-flag-service` | Java 21 / Spring Boot 4 | 8098 | PostgreSQL + Redis | — | `config-feature-flag-service` |
 | `mobile-bff-service` | Java 21 / WebFlux Gateway | 8080 | Stateless | — | `mobile-bff-service` |
 | `admin-gateway-service` | Java 21 / WebFlux Gateway | 8099 | Stateless | — | `admin-gateway-service` |
-| `cdc-consumer-service` | Go 1.25 | 8080 | Stateless | Consumes Debezium CDC | `cdc-consumer` |
-| `dispatch-optimizer-service` | Go 1.24 | 8080 | Stateless / Memory | — | `dispatch-optimizer-service` |
-| `location-ingestion-service` | Go 1.25 | 8080 | Redis Cluster | `rider.location.updates` | `location-ingestion` |
-| `outbox-relay-service` | Go 1.25 | 8080 | PostgreSQL | Canonical Domain Topics | `outbox-relay` |
-| `payment-webhook-service` | Go 1.24 | 8080 | PostgreSQL | `payment.webhooks` | `payment-webhook` |
-| `reconciliation-engine` | Go 1.24 | 8080 | PostgreSQL | `reconciliation.events` | `reconciliation-engine` |
+| `cdc-consumer-service` | Go 1.25 | 8104 | Stateless | Consumes Debezium CDC | `cdc-consumer` |
+| `dispatch-optimizer-service` | Go 1.25 | 8102 | Stateless / Memory | — | `dispatch-optimizer-service` |
+| `location-ingestion-service` | Go 1.25 | 8105 | Redis Cluster | `rider.location.updates` | `location-ingestion` |
+| `outbox-relay-service` | Go 1.25 | 8103 | PostgreSQL | Canonical Domain Topics | `outbox-relay` |
+| `payment-webhook-service` | Go 1.25 | 8106 | PostgreSQL | `payment.webhooks` | `payment-webhook` |
+| `reconciliation-engine` | Go 1.25 | 8107 | PostgreSQL | `reconciliation.events` | `reconciliation-engine` |
 | `reverse-etl-orchestrator` | Go 1.25 | 8080 | BigQuery / Postgres | — | `reverse-etl-orchestrator` |
-| `stream-processor-service` | Go 1.24 | 8080 | Kafka Streams | Processed Streams | `stream-processor` |
+| `stream-processor-service` | Go 1.25 | 8108 | Kafka Streams | Processed Streams | `stream-processor` |
 | `ai-orchestrator-service` | Python 3.12 / FastAPI | 8100 | LangGraph / Redis | `ai-orchestrator.events` | `ai-orchestrator-service` |
 | `ai-inference-service` | Python 3.12 / FastAPI | 8101 | Redis Cache | — | `ai-inference-service` |
 

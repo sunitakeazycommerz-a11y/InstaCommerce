@@ -1,6 +1,6 @@
 # Routing & ETA Service
 
-> **Java 21 · Spring Boot 3 · PostgreSQL · Kafka · WebSocket**
+> **Java 21 · Spring Boot 3 · PostgreSQL · Kafka · WebSocket · Port 8094**
 >
 > Single owner of delivery lifecycle state, ETA computation, and real-time rider location broadcast.
 
@@ -520,7 +520,7 @@ All values are sourced from `application.yml` with env-var overrides.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SERVER_PORT` | `8092` | HTTP listen port |
+| `SERVER_PORT` | `8094` | HTTP listen port |
 | `ROUTING_DB_URL` | `jdbc:postgresql://localhost:5432/routing` | PostgreSQL JDBC URL |
 | `ROUTING_DB_USER` | `postgres` | DB username |
 | `ROUTING_DB_PASSWORD` | — | DB password (or via `sm://db-password-routing`) |

@@ -2,7 +2,7 @@
 
 > **Owner:** `@instacommerce/mobile-team`
 > ([`docs/reviews/iter3/platform/repo-truth-ownership.md`](../../docs/reviews/iter3/platform/repo-truth-ownership.md))
-> · **Port:** 8097 · **Stack:** Spring Boot 3 / WebFlux (Reactor) / Java 21
+> · **Port:** 8080 · **Stack:** Spring Boot 3 / WebFlux (Reactor) / Java 21
 > · **SLO target:** 99.95 % HTTP availability, 30-day window
 > ([SLO-15](../../docs/reviews/iter3/platform/observability-sre.md))
 

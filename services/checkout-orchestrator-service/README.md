@@ -1,6 +1,6 @@
 # Checkout Orchestrator Service
 
-> **Module:** `services/checkout-orchestrator-service` · **Port:** 8089 · **Language:** Java 21 / Spring Boot · **Workflow engine:** Temporal SDK 1.22.3
+> **Module:** `services/checkout-orchestrator-service` · **Port:** 8091 · **Language:** Java 21 / Spring Boot · **Workflow engine:** Temporal SDK 1.22.3
 >
 > **Authoritative checkout saga orchestrator for InstaCommerce.** Coordinates cart validation, server-side pricing, inventory reservation, payment authorization/capture, order creation, and full compensation (rollback) on failure at any step. Owns no domain data — all state lives in downstream services; durable workflow state is managed by Temporal.
 

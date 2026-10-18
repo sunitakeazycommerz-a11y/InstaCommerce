@@ -1,5 +1,7 @@
 # Fraud Detection Service
 
+> **Java 21 · Spring Boot 4 · PostgreSQL · Kafka · Port 8097**
+
 Rule-based fraud scoring, velocity checks, and blocklist management for
 InstaCommerce. The service consumes order/payment events to enrich velocity
 signals, but the repository implementation is currently rule-engine centric

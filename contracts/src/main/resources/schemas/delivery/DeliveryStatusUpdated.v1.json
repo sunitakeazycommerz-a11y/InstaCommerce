@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DeliveryStatusUpdated",
+  "type": "object",
+  "required": ["deliveryId", "orderId", "riderId", "status", "updatedAt"],
+  "properties": {
+    "deliveryId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string", "format": "uuid" },
+    "riderId": { "type": "string" },
+    "status": { "type": "string" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

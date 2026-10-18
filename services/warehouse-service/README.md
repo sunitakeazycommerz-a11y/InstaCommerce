@@ -5,7 +5,7 @@
 | Attribute | Value |
 |---|---|
 | **Module path** | `services/warehouse-service` (canonical ID in `settings.gradle.kts`) |
-| **Port** | `8090` |
+| **Port** | `8092` |
 | **Database** | PostgreSQL — `warehouse` |
 | **Kafka topic** | `warehouse.events` (canonical in `TopicNames.java`, via outbox + CDC relay) |
 | **Flyway migrations** | V1–V7 |

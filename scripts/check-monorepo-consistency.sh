@@ -101,6 +101,18 @@ else
             log_fail "Python service '$py_svc' MISSING from CI path filters in $CI_FILE"
         fi
     done
+
+    # Verify every directory under services/ is tracked in CI path filters (Issue #694)
+    for svc_dir in services/*; do
+        [ -d "$svc_dir" ] || continue
+        svc=$(basename "$svc_dir")
+        [ "$svc" == "build" ] && continue
+        if grep -q "${svc}:" "$CI_FILE"; then
+            log_pass "Service directory '$svc' verified tracked in CI path filters"
+        else
+            log_fail "Service directory '$svc' exists on disk but is MISSING from CI path filters in $CI_FILE"
+        fi
+    done
 fi
 
 # ------------------------------------------------------------------------------
@@ -153,6 +165,27 @@ else
             log_pass "Helm definition exists for '$svc' (key: '$helm_key')"
         else
             log_fail "Helm definition MISSING for '$svc' (expected key: '$helm_key') in $HELM_VALUES"
+        fi
+    done
+
+    # Verify every microservice directory under services/ is mapped in Helm (Issue #694)
+    for svc_dir in services/*; do
+        [ -d "$svc_dir" ] || continue
+        svc=$(basename "$svc_dir")
+        [ "$svc" == "build" ] && continue
+        [ "$svc" == "go-shared" ] && continue
+
+        has_helm=false
+        for pair in "${HELM_PAIRS[@]}"; do
+            if [ "${pair%%:*}" == "$svc" ]; then
+                has_helm=true
+                break
+            fi
+        done
+        if [ "$has_helm" = true ]; then
+            log_pass "Microservice '$svc' mapped to Helm deployment configuration"
+        else
+            log_fail "Microservice '$svc' MISSING from Helm deployment mapping in $HELM_VALUES"
         fi
     done
 fi
@@ -223,6 +256,14 @@ for mig_dir in services/*/src/main/resources/db/migration; do
     fi
 done
 
+# Check for dangerous Flyway clean-on-validation-error setting (Issue #692)
+CLEAN_ON_VAL_FOUND=$(grep -rnE 'clean-on-validation-error:\s*true' services/*/src/main/resources/application*.yml || true)
+if [ -n "$CLEAN_ON_VAL_FOUND" ]; then
+    log_fail "Hazardous 'clean-on-validation-error: true' detected in production configuration: $CLEAN_ON_VAL_FOUND"
+else
+    log_pass "Flyway clean-on-validation-error is disabled/safe across all production configurations"
+fi
+
 # ------------------------------------------------------------------------------
 # 5. Service Documentation & Dockerfile Coverage
 # ------------------------------------------------------------------------------
@@ -246,6 +287,30 @@ for svc_dir in services/*; do
             log_pass "Dockerfile present for '$svc'"
         else
             log_fail "Dockerfile MISSING for '$svc'"
+        fi
+    fi
+done
+
+# Verify service port synchronization with GLOSSARY.md (Issue #688)
+GLOSSARY_PORTS=$(grep -E '^\| `[a-z0-9-]+`' GLOSSARY.md | sed -E 's/^\| `([^`]+)` \| [^\|]+ \| ([0-9]+) \|.*/\1:\2/')
+for entry in $GLOSSARY_PORTS; do
+    reg_svc="${entry%%:*}"
+    reg_port="${entry##*:}"
+
+    # 1. Assert port is documented in README.md
+    if grep -q "$reg_port" "services/$reg_svc/README.md"; then
+        log_pass "Service '$reg_svc' README documents port $reg_port (matches GLOSSARY.md)"
+    else
+        log_fail "Service '$reg_svc' README MISSING documentation for port $reg_port registered in GLOSSARY.md"
+    fi
+
+    # 2. For Java services, assert application.yml matches
+    app_yml="services/$reg_svc/src/main/resources/application.yml"
+    if [ -f "$app_yml" ]; then
+        if grep -q "port: \${SERVER_PORT:${reg_port}}" "$app_yml"; then
+            log_pass "Service '$reg_svc' application.yml port matches $reg_port"
+        else
+            log_fail "Service '$reg_svc' application.yml port does NOT match $reg_port from GLOSSARY.md"
         fi
     fi
 done

@@ -7,6 +7,7 @@ Handles payment authorization, capture, void, refunds, double-entry ledger bookk
 | Layer | Technology |
 |---|---|
 | Runtime | Java 21, Spring Boot |
+| Port | 8085 (default HTTP port) |
 | Database | PostgreSQL (Flyway migrations) |
 | Messaging | Kafka (`payment.events` / `payments.events`) via outbox relay |
 | PSP | Stripe (`stripe-java 24.18.0`) |

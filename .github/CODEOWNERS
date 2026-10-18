@@ -24,22 +24,24 @@
 # ---------------------------------------------------------------------------
 # CI / CD & GitHub configuration
 # ---------------------------------------------------------------------------
-/.github/                                       @instacommerce/platform @instacommerce/sre
-/.github/workflows/                             @instacommerce/platform @instacommerce/sre
-/.github/CODEOWNERS                             @instacommerce/platform
+/.github/                                       @instacommerce/platform-infra @instacommerce/platform @instacommerce/sre
+/.github/workflows/                             @instacommerce/platform-infra @instacommerce/platform @instacommerce/sre
+/.github/CODEOWNERS                             @instacommerce/platform-infra @instacommerce/platform
 
 # ---------------------------------------------------------------------------
 # Contracts (proto + event schemas) -- cross-team, requires platform review
 # ---------------------------------------------------------------------------
 /contracts/                                     @instacommerce/platform
+/contracts/src/main/proto/order/                @instacommerce/core-checkout @instacommerce/platform
 
 # ---------------------------------------------------------------------------
 # Deploy / Helm / Infrastructure
 # ---------------------------------------------------------------------------
-/deploy/                                        @instacommerce/sre
-/infra/                                         @instacommerce/sre
-/argocd/                                        @instacommerce/sre
-/monitoring/                                    @instacommerce/sre
+/deploy/                                        @instacommerce/platform-infra @instacommerce/sre
+/infra/                                         @instacommerce/platform-infra @instacommerce/sre
+/argocd/                                        @instacommerce/platform-infra @instacommerce/sre
+/monitoring/                                    @instacommerce/platform-infra @instacommerce/sre
+/scripts/                                       @instacommerce/platform-infra @instacommerce/platform
 
 # ---------------------------------------------------------------------------
 # Identity cluster
@@ -57,18 +59,18 @@
 # ---------------------------------------------------------------------------
 # Order & Checkout cluster
 # ---------------------------------------------------------------------------
-/services/order-service/                        @instacommerce/platform
-/services/cart-service/                         @instacommerce/platform
-/services/checkout-orchestrator-service/        @instacommerce/platform
+/services/order-service/                        @instacommerce/core-checkout @instacommerce/platform
+/services/cart-service/                         @instacommerce/core-checkout @instacommerce/platform
+/services/checkout-orchestrator-service/        @instacommerce/core-checkout @instacommerce/platform
 /services/inventory-service/                    @instacommerce/platform
 
 # ---------------------------------------------------------------------------
 # Payments cluster
 # ---------------------------------------------------------------------------
-/services/payment-service/                      @instacommerce/payments
-/services/payment-webhook-service/              @instacommerce/payments
-/services/wallet-loyalty-service/               @instacommerce/payments
-/services/reconciliation-engine/                @instacommerce/payments
+/services/payment-service/                      @instacommerce/payment-eng @instacommerce/payments
+/services/payment-webhook-service/              @instacommerce/payment-eng @instacommerce/payments
+/services/wallet-loyalty-service/               @instacommerce/payment-eng @instacommerce/payments
+/services/reconciliation-engine/                @instacommerce/payment-eng @instacommerce/payments
 
 # ---------------------------------------------------------------------------
 # Logistics / Fulfillment cluster
@@ -95,6 +97,7 @@
 /services/cdc-consumer-service/                 @instacommerce/platform
 /services/outbox-relay-service/                 @instacommerce/platform
 /services/stream-processor-service/             @instacommerce/platform
+/services/reverse-etl-orchestrator/             @instacommerce/data-ml @instacommerce/platform
 /services/go-shared/                            @instacommerce/platform
 
 # ---------------------------------------------------------------------------

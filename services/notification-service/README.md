@@ -6,6 +6,7 @@ Event-driven notification delivery service for InstaCommerce. Consumes domain ev
 
 | Layer | Components |
 |---|---|
+| **Port** | 8087 (default HTTP listen port) |
 | **Kafka Consumers** | `FulfillmentEventConsumer`, `OrderEventConsumer`, `PaymentEventConsumer`, `IdentityEventConsumer` |
 | **Core Services** | `NotificationService`, `TemplateService`, `UserPreferenceService`, `DeduplicationService` |
 | **Providers** | `SendGridEmailProvider` (email), `TwilioSmsProvider` (SMS), `LoggingProvider` (fallback) |

@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TicketCreated",
+  "type": "object",
+  "required": ["ticketId", "userId", "category", "priority", "status", "createdAt"],
+  "properties": {
+    "ticketId": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string" },
+    "category": { "type": "string" },
+    "priority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+    "status": { "type": "string", "enum": ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"] },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,6 +1,6 @@
 # Rider Fleet Service
 
-> **Java 21 · Spring Boot 3 · PostgreSQL · Kafka · Port 8091**
+> **Java 21 · Spring Boot 3 · PostgreSQL · Kafka · Port 8093**
 
 Single assignment authority for the InstaCommerce rider lifecycle. Owns rider
 creation, onboarding, activation/suspension, proximity-based assignment,

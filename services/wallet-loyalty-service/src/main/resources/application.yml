@@ -1,5 +1,5 @@
 server:
-  port: ${SERVER_PORT:8093}
+  port: ${SERVER_PORT:8095}
   shutdown: graceful
   tomcat:
     keep-alive-timeout: 620s

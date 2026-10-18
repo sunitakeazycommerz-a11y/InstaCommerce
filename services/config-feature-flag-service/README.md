@@ -1,5 +1,7 @@
 # Config / Feature Flag Service
 
+> **Java 21 · Spring Boot 4 · PostgreSQL · Redis · Port 8098**
+
 Centralized feature flag management and A/B experimentation platform for InstaCommerce. Provides real-time flag evaluation with Murmur3 consistent hashing, percentage-based rollouts, user targeting, override management, and full experiment lifecycle support with switchback capabilities.
 
 ## Table of Contents
