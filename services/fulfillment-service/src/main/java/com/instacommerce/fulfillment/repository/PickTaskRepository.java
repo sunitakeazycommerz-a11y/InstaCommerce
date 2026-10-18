@@ -2,18 +2,24 @@ package com.instacommerce.fulfillment.repository;
 
 import com.instacommerce.fulfillment.domain.model.PickTask;
 import com.instacommerce.fulfillment.domain.model.PickTaskStatus;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface PickTaskRepository extends JpaRepository<PickTask, UUID> {
     Optional<PickTask> findByOrderId(UUID orderId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM PickTask p WHERE p.orderId = :orderId")
+    Optional<PickTask> findByOrderIdForUpdate(@Param("orderId") UUID orderId);
 
     List<PickTask> findByStoreIdAndStatusIn(String storeId, List<PickTaskStatus> statuses);
 

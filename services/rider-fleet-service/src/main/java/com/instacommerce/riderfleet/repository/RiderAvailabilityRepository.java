@@ -1,17 +1,23 @@
 package com.instacommerce.riderfleet.repository;
 
 import com.instacommerce.riderfleet.domain.model.RiderAvailability;
+import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RiderAvailabilityRepository extends JpaRepository<RiderAvailability, UUID> {
 
     Optional<RiderAvailability> findByRiderId(UUID riderId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT ra FROM RiderAvailability ra WHERE ra.riderId = :riderId")
+    Optional<RiderAvailability> findByRiderIdForUpdate(@Param("riderId") UUID riderId);
 
     List<RiderAvailability> findByIsAvailableTrueAndStoreId(UUID storeId);
 

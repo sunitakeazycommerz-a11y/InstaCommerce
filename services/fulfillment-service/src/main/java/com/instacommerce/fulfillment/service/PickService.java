@@ -133,7 +133,7 @@ public class PickService {
 
     @Transactional
     public PickItemResponse markItem(UUID orderId, UUID productId, MarkItemPickedRequest request, UUID pickerId) {
-        PickTask task = pickTaskRepository.findByOrderId(orderId)
+        PickTask task = pickTaskRepository.findByOrderIdForUpdate(orderId)
             .orElseThrow(() -> new PickTaskNotFoundException(orderId));
         if (task.getStatus() == PickTaskStatus.COMPLETED || task.getStatus() == PickTaskStatus.CANCELLED) {
             throw new InvalidPickTaskStateException(orderId, task.getStatus(), "update items");
@@ -168,7 +168,7 @@ public class PickService {
 
     @Transactional
     public PickTaskResponse markPacked(UUID orderId, UUID pickerId, String note) {
-        PickTask task = pickTaskRepository.findByOrderId(orderId)
+        PickTask task = pickTaskRepository.findByOrderIdForUpdate(orderId)
             .orElseThrow(() -> new PickTaskNotFoundException(orderId));
         if (task.getStatus() == PickTaskStatus.COMPLETED) {
             return FulfillmentMapper.toPickTaskResponse(task);

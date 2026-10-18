@@ -107,7 +107,7 @@ public class RiderAssignmentService {
                     orderId, storeId, pickupLat, pickupLng);
                 if (optimizedRiderId.isPresent()) {
                     Optional<RiderAvailability> availability = availabilityRepository
-                        .findByRiderId(optimizedRiderId.get());
+                        .findByRiderIdForUpdate(optimizedRiderId.get());
                     if (availability.isPresent() && availability.get().isAvailable()) {
                         logger.info("Using dispatch optimizer for order={}, assigned rider={}",
                             orderId, optimizedRiderId.get());
