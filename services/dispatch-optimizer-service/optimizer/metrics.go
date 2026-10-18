@@ -55,6 +55,14 @@ var (
 		Help:      "Distribution of total delivery distances in kilometres per assignment.",
 		Buckets:   []float64{0.5, 1, 2, 3, 5, 8, 10, 15, 20},
 	})
+
+	// HandlerPanics counts panics caught and recovered in dispatch handlers (Issue #594).
+	HandlerPanics = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "dispatch",
+		Subsystem: "handler",
+		Name:      "panics_total",
+		Help:      "Total number of unhandled panics recovered in dispatch handler.",
+	})
 )
 
 func init() {
@@ -65,5 +73,6 @@ func init() {
 		BatchedOrders,
 		SLABreachRisk,
 		AvgDeliveryDistance,
+		HandlerPanics,
 	)
 }

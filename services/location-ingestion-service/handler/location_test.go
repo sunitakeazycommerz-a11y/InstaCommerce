@@ -254,3 +254,58 @@ func TestLocationHandler_ValidationErrors(t *testing.T) {
 	h.HandleHTTP(w, req)
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
+
+func TestGeofenceChecker_DebounceAndHysteresisDeduplication(t *testing.T) {
+	geofencer := NewGeofenceChecker(9)
+	geofencer.AddZone(Zone{
+		ID:                  "store-indiranagar-01",
+		Type:                ZoneStore,
+		CenterLat:           12.9716,
+		CenterLng:           77.5946,
+		RadiusKm:            0.2, // 200m
+		MinConsecutivePings: 3,   // Requires 3 consecutive pings before arrival confirmation (Issue #590)
+		HysteresisWindow:    3 * time.Minute,
+	})
+
+	now := time.Now().UTC()
+	makePing := func(offsetSec int) LocationUpdate {
+		return LocationUpdate{
+			RiderID:   "rider-debounced",
+			Lat:       12.9716,
+			Lng:       77.5946,
+			Timestamp: now.Add(time.Duration(offsetSec) * time.Second),
+		}
+	}
+
+	// Ping 1: Inside boundary, but consecutive count = 1 < 3 -> No event
+	evs1 := geofencer.Check(makePing(0))
+	assert.Empty(t, evs1, "Ping 1 should be debounced")
+
+	// Ping 2: Inside boundary, consecutive count = 2 < 3 -> No event
+	evs2 := geofencer.Check(makePing(5))
+	assert.Empty(t, evs2, "Ping 2 should be debounced")
+
+	// Ping 3: Inside boundary, consecutive count = 3 >= 3 -> Event emitted!
+	evs3 := geofencer.Check(makePing(10))
+	require.Len(t, evs3, 1, "Ping 3 should confirm arrival")
+	assert.Equal(t, "ENTERED_STORE", evs3[0].EventType)
+	assert.Equal(t, "store-indiranagar-01", evs3[0].ZoneID)
+
+	// Pings 4 through 10 within 3-minute window (e.g. at 20s, 30s, 60s) -> Suppressed by hysteresis
+	for sec := 20; sec <= 60; sec += 10 {
+		evs := geofencer.Check(makePing(sec))
+		assert.Empty(t, evs, "Subsequent pings within 3m hysteresis must be deduplicated")
+	}
+
+	// Ping after 3-minute hysteresis window expires (185s > 180s) -> Emits once again if re-entered
+	// Rider exits zone first
+	exitPing := LocationUpdate{
+		RiderID:   "rider-debounced",
+		Lat:       12.9735, // 250m away
+		Lng:       77.5946,
+		Timestamp: now.Add(185 * time.Second),
+	}
+	exitEvs := geofencer.Check(exitPing)
+	require.Len(t, exitEvs, 1)
+	assert.Equal(t, "EXITED_ZONE", exitEvs[0].EventType)
+}

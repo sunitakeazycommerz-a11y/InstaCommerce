@@ -169,3 +169,150 @@ func TestHandleDispatchAssign_ValidationErrors(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+type spyMutex struct {
+	lockCount   int
+	unlockCount int
+}
+
+func (s *spyMutex) Lock(ctx context.Context, riderID string, ttl time.Duration) (func() error, error) {
+	s.lockCount++
+	return func() error {
+		s.unlockCount++
+		return nil
+	}, nil
+}
+
+type panickingPublisher struct{}
+
+func (p *panickingPublisher) Publish(ctx context.Context, topic string, key string, payload any) error {
+	panic("unexpected kafka publisher runtime panic")
+}
+
+func TestHandleDispatchAssign_PanicRecoveryReleasesMutexLock(t *testing.T) {
+	matcher := optimizer.NewBipartiteMatcher(nil, nil)
+	panicker := &panickingPublisher{}
+	spy := &spyMutex{}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	handler := HandleDispatchAssignWithLocker(matcher, panicker, spy, logger)
+
+	reqPayload := DispatchAssignRequest{
+		OrderID: "order-panic-test",
+		StoreID: "store-1",
+		OrderPosition: optimizer.Position{
+			Lat: 12.9716,
+			Lng: 77.5946,
+		},
+		AvailableRiders: []optimizer.RiderState{
+			{
+				ID:          "rider-locked",
+				Position:    optimizer.Position{Lat: 12.9720, Lng: 77.5950},
+				IsAvailable: true,
+			},
+		},
+	}
+
+	body, _ := json.Marshal(reqPayload)
+	req := httptest.NewRequest(http.MethodPost, "/dispatch/assign", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	// Must not crash or propagate unhandled panic
+	assert.NotPanics(t, func() {
+		handler.ServeHTTP(rec, req)
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	// Mutex lock must have been acquired and subsequently unlocked during panic recovery (Issue #594)
+	assert.Equal(t, 1, spy.lockCount, "Lock must have been acquired")
+	assert.Equal(t, 1, spy.unlockCount, "Lock must have been released by defer recover()")
+}
+
+func TestHandleRiderResponse_AutomatedReDispatchOnRejectionOrTimeout(t *testing.T) {
+	matcher := optimizer.NewBipartiteMatcher(nil, nil)
+	pub := &mockPublisher{}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	locker := NewInMemoryRiderMutex()
+
+	responseHandler := HandleRiderResponse(matcher, pub, locker, logger)
+
+	rider1 := optimizer.RiderState{
+		ID:          "rider-first-choice",
+		Position:    optimizer.Position{Lat: 12.9720, Lng: 77.5950}, // ~200m
+		IsAvailable: true,
+	}
+	rider2 := optimizer.RiderState{
+		ID:          "rider-second-choice",
+		Position:    optimizer.Position{Lat: 12.9750, Lng: 77.5980}, // ~500m
+		IsAvailable: true,
+	}
+
+	// Rider 1 times out after 45 seconds or rejects -> Request automated re-dispatch
+	riderResp := RiderResponseRequest{
+		OrderID:         "order-redispatch",
+		StoreID:         "store-100",
+		RiderID:         "rider-first-choice",
+		Accepted:        false,
+		Reason:          "TIMEOUT",
+		OrderPosition:   optimizer.Position{Lat: 12.9716, Lng: 77.5946},
+		AttemptCount:    1,
+		AvailableRiders: []optimizer.RiderState{rider1, rider2},
+	}
+
+	body, _ := json.Marshal(riderResp)
+	req := httptest.NewRequest(http.MethodPost, "/dispatch/response", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	responseHandler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var resp DispatchAssignResponse
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	// Must be re-assigned to rider-second-choice
+	assert.Equal(t, "ASSIGNED", resp.Status)
+	assert.Equal(t, "rider-second-choice", resp.RiderID)
+	assert.Equal(t, 2, resp.AttemptCount)
+	assert.Contains(t, resp.ExcludedRiderIDs, "rider-first-choice")
+	assert.False(t, resp.LeadDispatcherAlert)
+}
+
+func TestHandleDispatchAssign_LeadDispatcherAlertAfterThreeAttempts(t *testing.T) {
+	matcher := optimizer.NewBipartiteMatcher(nil, nil)
+	pub := &mockPublisher{}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	handler := HandleDispatchAssign(matcher, pub, logger)
+
+	reqPayload := DispatchAssignRequest{
+		OrderID: "order-failing-attempts",
+		StoreID: "store-100",
+		OrderPosition: optimizer.Position{
+			Lat: 12.9716,
+			Lng: 77.5946,
+		},
+		AttemptCount: 2, // 2 prior attempts, this is 3rd attempt
+		AvailableRiders: []optimizer.RiderState{
+			{
+				ID:          "rider-3rd",
+				Position:    optimizer.Position{Lat: 12.9720, Lng: 77.5950},
+				IsAvailable: true,
+			},
+		},
+	}
+
+	body, _ := json.Marshal(reqPayload)
+	req := httptest.NewRequest(http.MethodPost, "/dispatch/assign", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var resp DispatchAssignResponse
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, resp.AttemptCount)
+	assert.True(t, resp.LeadDispatcherAlert, "Attempt 3 must trigger lead dispatcher alert")
+}

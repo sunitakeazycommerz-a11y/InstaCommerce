@@ -107,3 +107,43 @@ func TestBipartiteMatcher_EscalationAfterTimeout(t *testing.T) {
 	assert.True(t, result.Escalated)
 	assert.Contains(t, result.EscalationReason, "pending assignment for >=")
 }
+
+func TestBatteryConstraint_FilterLowBatteryRidersOnLongDistance(t *testing.T) {
+	checker := NewConstraintChecker(SolverConfig{})
+
+	order := OrderRequest{
+		ID:       "order-long-dist",
+		Position: Position{Lat: 12.9716, Lng: 77.5946},
+	}
+
+	// Rider is ~4.2 km away (> 3.0 km) on electric scooter with 18% battery (< 20%)
+	lowBatteryEVRider := RiderState{
+		ID:              "rider-ev-low-batt",
+		Position:        Position{Lat: 13.0100, Lng: 77.5946},
+		VehicleType:     "electric_scooter",
+		BatteryPercent:  18.0,
+		IsAvailable:     true,
+		TotalDeliveries: 100,
+	}
+
+	ok, violations := checker.CheckAll(lowBatteryEVRider, order)
+	assert.False(t, ok, "Low battery EV rider on >3km delivery must be rejected")
+	require.NotEmpty(t, violations)
+	assert.Equal(t, "battery", violations[0].Constraint)
+	assert.Contains(t, violations[0].Reason, "below 20.0% threshold")
+	assert.Contains(t, violations[0].Reason, "battery swap station")
+
+	// Same distance, but with 25% battery (> 20%)
+	healthyBatteryEVRider := RiderState{
+		ID:              "rider-ev-good-batt",
+		Position:        Position{Lat: 13.0100, Lng: 77.5946},
+		VehicleType:     "electric_scooter",
+		BatteryPercent:  25.0,
+		IsAvailable:     true,
+		TotalDeliveries: 100,
+	}
+
+	okGood, violationsGood := checker.CheckAll(healthyBatteryEVRider, order)
+	assert.True(t, okGood, "Healthy battery EV rider must be accepted")
+	assert.Empty(t, violationsGood)
+}

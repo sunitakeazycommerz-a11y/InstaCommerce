@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sync"
@@ -10,6 +11,13 @@ import (
 const (
 	// DefaultGeofenceTopic is the standard Kafka topic for rider geofence transitions.
 	DefaultGeofenceTopic = "rider.geofence.events"
+
+	// DefaultHysteresisWindow is the 3-minute suppression window preventing redundant geofence events (Issue #590).
+	DefaultHysteresisWindow = 3 * time.Minute
+
+	// DefaultStoreConsecutivePings is the number of consecutive GPS pings required
+	// inside dark store dispatch bay boundary to eliminate GPS jitter false-positives (Issue #590).
+	DefaultStoreConsecutivePings = 3
 )
 
 // GeofenceEvent is emitted when a rider enters or exits a monitored zone.
@@ -82,32 +90,95 @@ const (
 	ZoneRestricted ZoneType = "restricted"
 )
 
-// Zone defines a circular geofence boundary.
+// Zone defines a circular geofence boundary with debounce and hysteresis options.
 type Zone struct {
-	ID       string
-	Type     ZoneType
-	CenterLat float64
-	CenterLng float64
-	RadiusKm  float64 // boundary radius in kilometres
+	ID                  string
+	Type                ZoneType
+	CenterLat           float64
+	CenterLng           float64
+	RadiusKm            float64       // boundary radius in kilometres
+	MinConsecutivePings int           // consecutive GPS pings inside boundary required before confirming transition
+	HysteresisWindow    time.Duration // minimum duration before duplicate transition can be emitted
+}
+
+// GeofenceDeduplicator defines interface for deduplicating geofence events (e.g. in Redis).
+type GeofenceDeduplicator interface {
+	TryAcquire(ctx context.Context, key string, ttl time.Duration) bool
+}
+
+// InMemoryGeofenceDeduplicator provides in-memory deduplication fallback.
+type InMemoryGeofenceDeduplicator struct {
+	mu      sync.Mutex
+	entries map[string]time.Time
+}
+
+func NewInMemoryGeofenceDeduplicator() *InMemoryGeofenceDeduplicator {
+	return &InMemoryGeofenceDeduplicator{
+		entries: make(map[string]time.Time),
+	}
+}
+
+func (d *InMemoryGeofenceDeduplicator) TryAcquire(ctx context.Context, key string, ttl time.Duration) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	now := time.Now()
+	if exp, exists := d.entries[key]; exists && now.Before(exp) {
+		return false
+	}
+
+	d.entries[key] = now.Add(ttl)
+	return true
+}
+
+type riderZoneKey struct {
+	riderID string
+	zoneID  string
+}
+
+type riderZoneTracking struct {
+	consecutiveInside int
+	lastEventTime     time.Time
+	lastEventType     string
+	inside            bool
 }
 
 // GeofenceChecker performs H3-based hexagonal geofence detection for rider
-// location updates. It detects store arrivals, delivery-zone proximity, and
-// restricted-area incursions.
+// location updates with jitter debounce and hysteresis deduplication (Issue #590).
 type GeofenceChecker struct {
-	mu         sync.RWMutex
-	zones      map[string]Zone // zone_id → boundary
-	resolution int             // H3 resolution (9 ≈ 174 m hexagons)
+	mu                   sync.RWMutex
+	zones                map[string]Zone // zone_id → boundary
+	resolution           int             // H3 resolution (9 ≈ 174 m hexagons)
+	deduplicator         GeofenceDeduplicator
+	tracking             map[riderZoneKey]*riderZoneTracking
+	defaultHysteresis    time.Duration
+	defaultRequiredPings int
 }
 
 // NewGeofenceChecker creates a GeofenceChecker with the given H3 resolution.
-// A resolution of 9 produces ~174 m hexagons and is the recommended default
-// for urban delivery geofencing.
 func NewGeofenceChecker(resolution int) *GeofenceChecker {
 	return &GeofenceChecker{
-		zones:      make(map[string]Zone),
-		resolution: resolution,
+		zones:                make(map[string]Zone),
+		resolution:           resolution,
+		deduplicator:         NewInMemoryGeofenceDeduplicator(),
+		tracking:             make(map[riderZoneKey]*riderZoneTracking),
+		defaultHysteresis:    DefaultHysteresisWindow,
+		defaultRequiredPings: 1,
 	}
+}
+
+// SetDeduplicator configures an external deduplicator (e.g. Redis).
+func (g *GeofenceChecker) SetDeduplicator(d GeofenceDeduplicator) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.deduplicator = d
+}
+
+// SetDefaultRequiredConsecutivePings sets the default consecutive pings requirement.
+func (g *GeofenceChecker) SetDefaultRequiredConsecutivePings(pings int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.defaultRequiredPings = pings
 }
 
 // AddZone registers a geofence zone. It is safe for concurrent use.
@@ -124,41 +195,107 @@ func (g *GeofenceChecker) RemoveZone(zoneID string) {
 	delete(g.zones, zoneID)
 }
 
-// Check evaluates a LocationUpdate against all registered zones and returns
-// any triggered GeofenceEvents. It is safe for concurrent use.
+// Check evaluates a LocationUpdate against registered zones with hysteresis and debounce (Issue #590).
 func (g *GeofenceChecker) Check(update LocationUpdate) []GeofenceEvent {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
 
 	h3Index := h3IndexStub(update.Lat, update.Lng, g.resolution)
-
 	var events []GeofenceEvent
+
 	for _, zone := range g.zones {
 		dist := haversineKm(update.Lat, update.Lng, zone.CenterLat, zone.CenterLng)
+		key := riderZoneKey{riderID: update.RiderID, zoneID: zone.ID}
+		track, exists := g.tracking[key]
+		if !exists {
+			track = &riderZoneTracking{}
+			g.tracking[key] = track
+		}
+
+		hysteresis := zone.HysteresisWindow
+		if hysteresis <= 0 {
+			hysteresis = g.defaultHysteresis
+		}
+
+		requiredPings := zone.MinConsecutivePings
+		if requiredPings <= 0 {
+			requiredPings = g.defaultRequiredPings
+		}
 
 		var eventType string
+		isInside := false
+
 		switch {
 		case zone.Type == ZoneStore && dist <= zone.RadiusKm:
 			eventType = "ENTERED_STORE"
+			isInside = true
 		case zone.Type == ZoneDelivery && dist <= zone.RadiusKm:
 			eventType = "NEAR_DELIVERY"
+			isInside = true
 		case zone.Type == ZoneRestricted && dist <= zone.RadiusKm:
 			eventType = "ENTERED_RESTRICTED"
+			isInside = true
 		case dist > zone.RadiusKm && dist <= zone.RadiusKm*1.5:
-			// Rider just exited the zone boundary (with a small buffer).
 			eventType = "EXITED_ZONE"
 		default:
+			track.consecutiveInside = 0
+			track.inside = false
 			continue
 		}
 
-		events = append(events, GeofenceEvent{
-			RiderID:   update.RiderID,
-			EventType: eventType,
-			ZoneID:    zone.ID,
-			H3Index:   h3Index,
-			Timestamp: update.Timestamp,
-		})
+		if isInside {
+			track.consecutiveInside++
+			if track.consecutiveInside < requiredPings {
+				// Suppress event until required consecutive pings are achieved inside boundary
+				continue
+			}
+
+			// Check 3-minute hysteresis window against duplicate entry
+			if !track.lastEventTime.IsZero() && update.Timestamp.Sub(track.lastEventTime) < hysteresis && track.lastEventType == eventType {
+				continue
+			}
+
+			// Redis deduplication check using key geofence:{riderId}:{storeId} (Issue #590)
+			redisKey := fmt.Sprintf("geofence:%s:%s", update.RiderID, zone.ID)
+			if g.deduplicator != nil && !g.deduplicator.TryAcquire(context.Background(), redisKey, hysteresis) {
+				continue
+			}
+
+			track.inside = true
+			track.lastEventTime = update.Timestamp
+			track.lastEventType = eventType
+
+			events = append(events, GeofenceEvent{
+				RiderID:   update.RiderID,
+				EventType: eventType,
+				ZoneID:    zone.ID,
+				H3Index:   h3Index,
+				Timestamp: update.Timestamp,
+			})
+		} else if eventType == "EXITED_ZONE" {
+			track.consecutiveInside = 0
+			if !track.inside {
+				continue
+			}
+
+			if !track.lastEventTime.IsZero() && update.Timestamp.Sub(track.lastEventTime) < hysteresis && track.lastEventType == "EXITED_ZONE" {
+				continue
+			}
+
+			track.inside = false
+			track.lastEventTime = update.Timestamp
+			track.lastEventType = "EXITED_ZONE"
+
+			events = append(events, GeofenceEvent{
+				RiderID:   update.RiderID,
+				EventType: "EXITED_ZONE",
+				ZoneID:    zone.ID,
+				H3Index:   h3Index,
+				Timestamp: update.Timestamp,
+			})
+		}
 	}
+
 	return events
 }
 

@@ -208,6 +208,12 @@ func main() {
 		"DispatchAssign",
 	))
 
+	dispatchResponseHandler := handler.HandleRiderResponse(matcher, publisher, handler.NewInMemoryRiderMutex(), logger)
+	mux.Handle("/dispatch/response", otelhttp.NewHandler(
+		instrumentHandler("dispatch_response", logger, metrics, dispatchResponseHandler),
+		"DispatchResponse",
+	))
+
 	server := &http.Server{
 		Addr:              ":" + port,
 		Handler:           correlation.Middleware(mux),

@@ -96,22 +96,49 @@ func (c *ConstraintChecker) checkZone(rider RiderState, order OrderRequest) *Con
 }
 
 // checkBattery ensures riders on electric vehicles have enough battery to
-// complete the delivery. A minimum of 15 % charge is required.
+// complete the delivery. A minimum of 15% charge is required for short trips,
+// and riders with < 20% battery are filtered from assignments exceeding 3 km (Issue #587).
 func (c *ConstraintChecker) checkBattery(rider RiderState, order OrderRequest) *ConstraintViolation {
-	if rider.VehicleType != "bicycle" && rider.VehicleType != "scooter" {
+	if !isElectricVehicle(rider.VehicleType) {
 		// Non-electric vehicles are not battery-constrained.
 		return nil
 	}
+
+	dist := HaversineDistance(rider.Position, order.Position)
+	if dist > 3.0 && rider.BatteryPercent < 20.0 {
+		return &ConstraintViolation{
+			Constraint: "battery",
+			Rider:      rider.ID,
+			Order:      order.ID,
+			Reason: fmt.Sprintf(
+				"battery at %.1f%% below 20.0%% threshold for delivery distance %.2f km (> 3.0 km); redirecting to battery swap station",
+				rider.BatteryPercent, dist,
+			),
+		}
+	}
+
 	const minBattery = 15.0
 	if rider.BatteryPercent < minBattery {
 		return &ConstraintViolation{
 			Constraint: "battery",
 			Rider:      rider.ID,
 			Order:      order.ID,
-			Reason:     fmt.Sprintf("battery at %.1f%% (minimum %.1f%%)", rider.BatteryPercent, minBattery),
+			Reason: fmt.Sprintf(
+				"battery at %.1f%% (minimum %.1f%%); redirecting to battery swap station",
+				rider.BatteryPercent, minBattery,
+			),
 		}
 	}
 	return nil
+}
+
+func isElectricVehicle(vType string) bool {
+	switch vType {
+	case "electric_scooter", "electric_bicycle", "ev_2w", "ev", "scooter", "bicycle":
+		return true
+	default:
+		return false
+	}
 }
 
 // checkConsecutiveLimit enforces a mandatory 30-minute break after a
