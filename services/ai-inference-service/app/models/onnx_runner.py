@@ -13,7 +13,7 @@ import logging
 import os
 import resource
 import sys
-from typing import Any, Dict, Generator, List, Optional, Sequence
+from typing import Any, Dict, Generator, List, Optional, Sequence, Tuple
 
 import numpy as np
 from prometheus_client import Gauge
@@ -109,7 +109,7 @@ class ManagedOnnxSession:
         input_feed: Dict[str, np.ndarray],
     ) -> Generator[List[np.ndarray], None, None]:
         """Context manager executing model inference and reclaiming native buffers."""
-        outputs: Optional[List[np.ndarray]] = None
+        outputs: List[np.ndarray] = []
         try:
             if not self._is_mock and self._session is not None:
                 outputs = self._session.run(output_names, input_feed)
@@ -123,10 +123,10 @@ class ManagedOnnxSession:
 
         finally:
             # Explicit tensor buffer cleanup to prevent native heap leaks (#612)
-            if outputs is not None:
+            if outputs:
                 for arr in outputs:
                     del arr
-                outputs = None
+                outputs.clear()
 
             # Clear temporary references from input feed
             input_feed.clear()

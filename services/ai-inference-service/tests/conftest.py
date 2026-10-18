@@ -4,7 +4,6 @@ os.environ.setdefault("AI_INFERENCE_LOG_LEVEL", "WARNING")
 os.environ.setdefault("AI_INFERENCE_CACHE_ENABLED", "true")
 
 from typing import Any, cast
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 

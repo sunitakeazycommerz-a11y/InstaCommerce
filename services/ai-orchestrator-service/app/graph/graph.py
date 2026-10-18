@@ -49,7 +49,7 @@ from app.graph.nodes import (
     retrieve_context,
     validate_output,
 )
-from app.graph.state import AgentState, RiskLevel
+from app.graph.state import AgentState
 from app.graph.tools import ToolRegistry
 
 logger = logging.getLogger("ai_orchestrator.graph")

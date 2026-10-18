@@ -191,7 +191,7 @@ class PersonalizationTrainer:
         interaction_df = self._build_interaction_matrix(df)
 
         # Store popular items from training interactions for cold-start tier
-        pop_counts = interaction_df.groupby("sku_id")["interaction_score"].sum().sort_values(ascending=False)
+        pop_counts = pd.Series(interaction_df.groupby("sku_id")["interaction_score"].sum()).sort_values(ascending=False)
         self.popular_items = list(pop_counts.index)
 
         # Store item categories if present

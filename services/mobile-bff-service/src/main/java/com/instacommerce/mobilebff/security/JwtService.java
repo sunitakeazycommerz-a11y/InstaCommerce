@@ -9,4 +9,3 @@ public interface JwtService {
     Jws<Claims> validateAccessToken(String token);
     Collection<? extends GrantedAuthority> extractAuthorities(Claims claims);
 }
-

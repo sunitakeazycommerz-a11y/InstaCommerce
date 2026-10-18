@@ -1,9 +1,9 @@
 import pytest
 from app.guardrails.injection import InjectionDetector, wrap_user_input
 from app.guardrails.pii import PIIVault
-from app.guardrails.output_validator import OutputPolicy, OutputPolicyValidator, ValidationStatus
+from app.guardrails.output_validator import OutputPolicy
 from app.guardrails.rate_limiter import TokenBucketRateLimiter
-from app.graph.tools import ToolRegistry, ToolDescriptor
+from app.graph.tools import ToolRegistry
 from app.config import Settings
 from app.cache.semantic_cache import SemanticCache
 
@@ -146,12 +146,12 @@ async def test_tool_registry_path_traversal_protection():
     # Attempt directory traversal via path_params
     result1 = await registry.call("catalog.get_product", path_params={"product_id": "../../etc/passwd"})
     assert result1.success is False
-    assert "path traversal detected" in result1.error or "invalid characters" in result1.error
-    
+    assert result1.error is not None and ("path traversal detected" in result1.error or "invalid characters" in result1.error)
+
     # Attempt .env traversal
     result2 = await registry.call("catalog.get_product", path_params={"product_id": "../.env"})
     assert result2.success is False
-    assert "path traversal detected" in result2.error or "invalid characters" in result2.error
+    assert result2.error is not None and ("path traversal detected" in result2.error or "invalid characters" in result2.error)
 
 
 def test_semantic_cache_faq_retrieval():

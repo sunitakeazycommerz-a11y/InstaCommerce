@@ -12,4 +12,3 @@ public class AdminHealthController {
         return Map.of("status", "UP");
     }
 }
-

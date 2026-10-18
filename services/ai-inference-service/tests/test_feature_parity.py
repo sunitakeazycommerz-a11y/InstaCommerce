@@ -5,7 +5,6 @@ from app.features.redis_client import RedisFeatureStoreClient
 from ml.features.feature_definitions import (
     WINDOW_30D_EXCLUDING_TODAY,
     compute_user_conversion_rate_30d,
-    verify_feature_parity,
 )
 
 

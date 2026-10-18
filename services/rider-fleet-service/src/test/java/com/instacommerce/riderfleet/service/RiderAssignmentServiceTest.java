@@ -14,7 +14,6 @@ import com.instacommerce.riderfleet.domain.model.RiderStatus;
 import com.instacommerce.riderfleet.repository.RiderAssignmentRepository;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;

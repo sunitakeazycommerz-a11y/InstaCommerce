@@ -2,12 +2,9 @@ package com.instacommerce.pricing.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.instacommerce.pricing.domain.Promotion;
 import com.instacommerce.pricing.dto.response.PricedItem;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.UUID;

@@ -100,4 +100,3 @@ public class UserContextPropagationFilter implements WebFilter {
         }
     }
 }
-

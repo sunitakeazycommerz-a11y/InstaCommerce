@@ -1,7 +1,6 @@
 package com.instacommerce.catalog.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.contracts.topics.TopicNames;
 import java.util.Map;
 import java.util.UUID;

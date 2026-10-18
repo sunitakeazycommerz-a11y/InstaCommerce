@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,10 @@ class RedisFeatureStoreClient:
     def _get_raw(self, key: str) -> Optional[str]:
         if self._client is not None:
             try:
-                return self._client.get(key)
+                res = self._client.get(key)
+                if isinstance(res, bytes):
+                    return res.decode("utf-8")
+                return cast(Optional[str], res)
             except Exception as e:
                 logger.warning("Redis get error for %s: %s", key, e)
         return self._in_memory_store.get(key)

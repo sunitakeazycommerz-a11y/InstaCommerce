@@ -9,7 +9,6 @@ import static org.mockito.Mockito.when;
 import com.instacommerce.search.dto.SearchResponse;
 import com.instacommerce.search.repository.SearchDocumentRepository;
 import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;

@@ -21,7 +21,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -245,6 +245,7 @@ class ToolRegistry:
                 error="Circuit breaker open",
             )
 
+        path = tool.path
         # Validate path and query parameters against traversal attacks (#600)
         traversal_indicators = ["..", "/etc/", ".env", "%2e%2e", "%2f", "\\"]
         if path_params:

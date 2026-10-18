@@ -28,4 +28,3 @@ public record ReserveRequest(
         this.items = items != null ? items : List.of();
     }
 }
-

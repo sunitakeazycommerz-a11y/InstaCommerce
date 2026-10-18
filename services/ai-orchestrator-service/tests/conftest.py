@@ -5,7 +5,6 @@ os.environ.setdefault("AI_ORCHESTRATOR_OTEL_ENABLED", "false")
 os.environ.setdefault("AI_ORCHESTRATOR_AUDIT_ENABLED", "false")
 
 from typing import Any, cast
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 

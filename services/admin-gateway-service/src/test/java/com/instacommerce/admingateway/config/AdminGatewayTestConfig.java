@@ -2,7 +2,6 @@ package com.instacommerce.admingateway.config;
 
 import static org.mockito.Mockito.*;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.KeyFactory;
@@ -41,4 +40,3 @@ public class AdminGatewayTestConfig {
     return KeyFactory.getInstance("RSA").generatePublic(keySpec);
   }
 }
-

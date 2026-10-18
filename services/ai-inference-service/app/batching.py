@@ -12,7 +12,7 @@ import logging
 import time
 from dataclasses import dataclass
 from math import exp
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import numpy as np
 from prometheus_client import Histogram

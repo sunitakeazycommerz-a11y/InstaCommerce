@@ -15,11 +15,9 @@ from __future__ import annotations
 
 import logging
 import re
-import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from app.config import Settings
-from app.graph.budgets import BudgetExceededError, BudgetTracker
 from app.graph.state import (
     AgentState,
     IntentType,
@@ -137,7 +135,6 @@ def classify_intent(state: AgentState) -> AgentState:
 
         if scores:
             best_intent = max(scores, key=scores.get)  # type: ignore[arg-type]
-            total_keywords = sum(len(v) for v in _INTENT_KEYWORDS.values())
             confidence = min(1.0, scores[best_intent] / max(len(_INTENT_KEYWORDS[best_intent]), 1))
         else:
             best_intent = IntentType.UNKNOWN
@@ -472,7 +469,6 @@ async def execute_tools(
 
 def _plan_tools(state: AgentState) -> List[Dict[str, Any]]:
     """Return an ordered list of tool calls for the detected intent."""
-    query_lower = state.query.lower()
     plan: List[Dict[str, Any]] = []
 
     if state.intent == IntentType.SEARCH:

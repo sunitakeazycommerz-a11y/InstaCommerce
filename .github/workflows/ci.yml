@@ -318,6 +318,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
       - name: Build (skip tests - migration in progress)
         run: ./gradlew :services:${{ matrix.service }}:build -x test --no-daemon
+      - name: Spotless code formatting check
+        run: ./gradlew :services:${{ matrix.service }}:spotlessCheck --no-daemon
       - name: Build bootJar
         run: ./gradlew :services:${{ matrix.service }}:bootJar --no-daemon
       - name: Build Image
@@ -375,9 +377,15 @@ jobs:
       - name: Build
         working-directory: services/${{ matrix.service }}
         run: go build ./...
-      - name: Test with race detector
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: services/${{ matrix.service }}
+          args: --config=${{ github.workspace }}/.golangci.yml
+      - name: Test with race detector and coverage
         working-directory: services/${{ matrix.service }}
-        run: go test -race ./...
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Set up Docker Buildx
         if: matrix.service != 'go-shared' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
@@ -433,12 +441,18 @@ jobs:
         run: |
           cd services/${{ matrix.service }}
           pip install -r requirements.txt
-          pip install pytest httpx pytest-asyncio
+          pip install pytest httpx pytest-asyncio ruff pyright
+      - name: Lint with ruff
+        run: |
+          ruff check services/${{ matrix.service }}
+      - name: Type check with pyright
+        run: |
+          pyright services/${{ matrix.service }}
       - name: Run tests
         run: |
           cd services/${{ matrix.service }}
           if [ -d "tests" ]; then
-            pytest -v tests/
+            PYTHONPATH=../..:. pytest -v tests/
           else
             echo "No tests directory found, skipping"
           fi

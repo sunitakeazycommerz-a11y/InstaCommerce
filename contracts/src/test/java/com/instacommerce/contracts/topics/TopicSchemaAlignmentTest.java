@@ -55,7 +55,7 @@ class TopicSchemaAlignmentTest {
                         } else if (domain.contains(".")) {
                             domain = domain.substring(0, domain.indexOf("."));
                         }
-                        
+
                         // Check if schema directory exists and has at least one schema file
                         Path domainPath = schemasPath.resolve(domain);
                         if (!Files.exists(domainPath) || !Files.isDirectory(domainPath)) {

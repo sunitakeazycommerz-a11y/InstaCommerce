@@ -10,13 +10,13 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.audit import AuditEventPublisher
 from app.config import Settings
 from app.graph.graph import build_graph
-from app.graph.state import AgentState, IntentType, RiskLevel
+from app.graph.state import AgentState
 from app.graph.tools import ToolRegistry
 
 logger = logging.getLogger("ai_orchestrator.api")

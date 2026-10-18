@@ -2,7 +2,6 @@ package com.instacommerce.routing.service;
 
 import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.domain.model.RoutingBarrier;
-import com.instacommerce.routing.domain.model.TrafficCongestionFeed;
 import com.instacommerce.routing.domain.model.WeatherCondition;
 import com.instacommerce.routing.dto.response.ETAEstimate;
 import com.instacommerce.routing.dto.response.ETAResponse;

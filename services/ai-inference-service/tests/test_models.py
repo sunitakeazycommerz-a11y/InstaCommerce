@@ -1,4 +1,3 @@
-import pytest
 from app.models.demand_model import DemandModel, DemandFeatures
 from app.models.personalization_model import PersonalizationModel, PersonalizationFeatures, RecommendationSurface
 from app.models.clv_model import CLVModel, CLVFeatures, CLVSegment

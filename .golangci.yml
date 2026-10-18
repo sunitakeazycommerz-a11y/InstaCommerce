@@ -1,0 +1,38 @@
+run:
+  timeout: 5m
+  tests: true
+  allow-parallel-runners: true
+
+linters-settings:
+  govet:
+    enable-all: false
+    enable:
+      - nilness
+      - shadow
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+  staticcheck:
+    checks: ["all", "-SA1019"]
+  unused:
+    local-variables-are-used: false
+  gosec:
+    severity: medium
+    confidence: medium
+    excludes:
+      - G104 # duplicates errcheck
+
+linters:
+  disable-all: true
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 50
+  max-same-issues: 10

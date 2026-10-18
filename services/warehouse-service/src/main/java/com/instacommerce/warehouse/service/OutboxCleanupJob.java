@@ -3,7 +3,6 @@ package com.instacommerce.warehouse.service;
 import com.instacommerce.warehouse.repository.OutboxEventRepository;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

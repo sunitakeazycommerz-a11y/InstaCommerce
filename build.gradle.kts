@@ -2,6 +2,8 @@ plugins {
     java
     id("org.springframework.boot") version "4.0.0" apply false
     id("io.spring.dependency-management") version "1.1.7" apply false
+    id("com.diffplug.spotless") version "7.0.2" apply false
+    jacoco
 }
 
 
@@ -19,9 +21,32 @@ subprojects {
     apply(plugin = "java")
     apply(plugin = "eclipse")
     apply(plugin = "io.spring.dependency-management")
+    apply(plugin = "jacoco")
+    apply(plugin = "com.diffplug.spotless")
 
     tasks.withType<JavaCompile>().configureEach {
         options.release.set(21)
+    }
+
+    configure<com.diffplug.gradle.spotless.SpotlessExtension> {
+        java {
+            target("src/*/java/**/*.java")
+            targetExclude("build/**", "generated/**", "**/proto/**", "**/grpc/**")
+            removeUnusedImports()
+            trimTrailingWhitespace()
+            endWithNewline()
+        }
+    }
+
+    jacoco {
+        toolVersion = "0.8.12"
+    }
+
+    tasks.withType<JacocoReport>().configureEach {
+        reports {
+            xml.required.set(true)
+            html.required.set(true)
+        }
     }
 
     plugins.withId("org.springframework.boot") {
@@ -63,9 +88,30 @@ subprojects {
             dependency("com.google.protobuf:protobuf-java:4.32.0")
             dependency("com.google.protobuf:protobuf-java-util:4.32.0")
             dependency("at.yawk.lz4:lz4-java:1.11.4")
-            // Spring Boot 4.0+ manages spring-kafka via BOM, but explicit for clarity
             dependency("org.springframework.kafka:spring-kafka:4.0.6")
             dependency("org.springframework.kafka:spring-kafka-test:4.0.6")
+            dependency("net.javacrumbs.shedlock:shedlock-spring:5.12.0")
+            dependency("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.12.0")
+            dependency("io.github.resilience4j:resilience4j-spring-boot3:2.2.0")
+            dependency("io.github.resilience4j:resilience4j-ratelimiter:2.2.0")
+            dependency("io.github.resilience4j:resilience4j-micrometer:2.2.0")
+            dependency("com.github.ben-manes.caffeine:caffeine:3.1.8")
+            dependency("net.logstash.logback:logstash-logback-encoder:7.4")
+            dependency("com.google.cloud.sql:postgres-socket-factory:1.15.0")
+            dependency("org.testcontainers:testcontainers:1.19.3")
+            dependency("org.testcontainers:postgresql:1.19.3")
+            dependency("org.testcontainers:kafka:1.19.3")
+            dependency("org.testcontainers:junit-jupiter:1.19.3")
+            dependency("com.redis.testcontainers:testcontainers-redis:1.6.1")
+            dependency("io.temporal:temporal-sdk:1.22.3")
+            dependency("org.mapstruct:mapstruct:1.5.5.Final")
+            dependency("org.mapstruct:mapstruct-processor:1.5.5.Final")
+            dependency("com.stripe:stripe-java:24.18.0")
+            dependency("com.google.guava:guava:33.0.0-jre")
+            dependency("com.google.cloud:google-cloud-storage:2.38.0")
+            dependency("org.apache.parquet:parquet-column:1.13.1")
+            dependency("com.squareup.okhttp3:mockwebserver:4.12.0")
+            dependency("io.lettuce:lettuce-core:6.3.2.RELEASE")
         }
     }
 }

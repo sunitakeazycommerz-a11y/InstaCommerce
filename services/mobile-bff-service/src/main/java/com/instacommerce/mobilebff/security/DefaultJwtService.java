@@ -53,4 +53,3 @@ public class DefaultJwtService implements JwtService {
         return new SimpleGrantedAuthority(normalized);
     }
 }
-

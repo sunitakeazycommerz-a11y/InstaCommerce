@@ -11,10 +11,8 @@ Both are thread-safe and serialise ``AgentState`` to JSON.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
-import time
 from typing import Any, Dict, Optional
 
 from app.graph.state import AgentState

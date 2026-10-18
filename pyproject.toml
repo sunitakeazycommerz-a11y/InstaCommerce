@@ -1,0 +1,16 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+]
+ignore = [
+    "E501", # line too long
+    "E402", # module level import not at top of file
+    "W291", # trailing whitespace
+    "W293", # blank line contains whitespace
+]

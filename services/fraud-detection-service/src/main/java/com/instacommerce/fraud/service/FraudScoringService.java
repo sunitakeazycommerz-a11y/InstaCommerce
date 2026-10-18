@@ -232,4 +232,3 @@ public class FraudScoringService {
         return null;
     }
 }
-

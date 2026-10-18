@@ -5,7 +5,6 @@ import static org.springframework.test.web.reactive.server.WebTestClient.bindToA
 
 import com.instacommerce.mobilebff.MobileBffServiceApplication;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.time.Instant;
@@ -13,7 +12,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.Date;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

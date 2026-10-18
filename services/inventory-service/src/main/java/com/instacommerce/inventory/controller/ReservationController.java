@@ -54,4 +54,3 @@ public class ReservationController {
         reservationService.cancel(reservationId);
     }
 }
-
