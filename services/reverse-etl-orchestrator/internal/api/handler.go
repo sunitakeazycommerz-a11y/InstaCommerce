@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -11,13 +12,23 @@ import (
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/subscription"
 )
 
+// SubscriptionManager defines operations required by the API handler.
+type SubscriptionManager interface {
+	Create(ctx context.Context, req subscription.CreateRequest, createdBy string) (*subscription.Subscription, error)
+	Get(ctx context.Context, id string) (*subscription.Subscription, error)
+	List(ctx context.Context, sourceDomain, sinkType string, state subscription.State) ([]*subscription.Subscription, error)
+	Activate(ctx context.Context, id string) error
+	Pause(ctx context.Context, id string) error
+	Archive(ctx context.Context, id string) error
+}
+
 // Handler provides HTTP handlers for the API.
 type Handler struct {
-	subscriptionSvc *subscription.Service
+	subscriptionSvc SubscriptionManager
 }
 
 // NewHandler creates a new API handler.
-func NewHandler(subscriptionSvc *subscription.Service) *Handler {
+func NewHandler(subscriptionSvc SubscriptionManager) *Handler {
 	return &Handler{
 		subscriptionSvc: subscriptionSvc,
 	}

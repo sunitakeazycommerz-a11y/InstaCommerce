@@ -2,21 +2,25 @@
 package health
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
-
-	"github.com/instacommerce/reverse-etl-orchestrator/internal/subscription"
 )
+
+// Pinger provides dependency connectivity check capability.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
 
 // Checker provides health check functionality.
 type Checker struct {
-	subscriptionSvc *subscription.Service
+	pinger Pinger
 }
 
 // NewChecker creates a new health checker.
-func NewChecker(subscriptionSvc *subscription.Service) *Checker {
+func NewChecker(pinger Pinger) *Checker {
 	return &Checker{
-		subscriptionSvc: subscriptionSvc,
+		pinger: pinger,
 	}
 }
 
@@ -40,9 +44,11 @@ func (c *Checker) Health(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check database connectivity
-	if err := c.subscriptionSvc.Ping(r.Context()); err != nil {
-		response.Status = "DOWN"
-		response.Checks["database"] = "DOWN"
+	if c.pinger != nil {
+		if err := c.pinger.Ping(r.Context()); err != nil {
+			response.Status = "DOWN"
+			response.Checks["database"] = "DOWN"
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -71,11 +77,13 @@ func (c *Checker) Readiness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check all dependencies
-	if err := c.subscriptionSvc.Ping(r.Context()); err != nil {
-		response.Status = "DOWN"
-		response.Checks["database"] = "DOWN"
-	} else {
-		response.Checks["database"] = "UP"
+	if c.pinger != nil {
+		if err := c.pinger.Ping(r.Context()); err != nil {
+			response.Status = "DOWN"
+			response.Checks["database"] = "DOWN"
+		} else {
+			response.Checks["database"] = "UP"
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
