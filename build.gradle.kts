@@ -87,7 +87,7 @@ subprojects {
             dependency("tools.jackson.module:jackson-module-parameter-names:3.1.0")
             dependency("com.google.protobuf:protobuf-java:4.32.0")
             dependency("com.google.protobuf:protobuf-java-util:4.32.0")
-            dependency("at.yawk.lz4:lz4-java:1.11.4")
+            dependency("at.yawk.lz4:lz4-java:1.12.0")
             dependency("org.springframework.kafka:spring-kafka:4.0.6")
             dependency("org.springframework.kafka:spring-kafka-test:4.0.6")
             dependency("net.javacrumbs.shedlock:shedlock-spring:5.12.0")
