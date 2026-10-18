@@ -3,6 +3,8 @@ package com.instacommerce.mobilebff.security;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;
+import io.opentelemetry.api.baggage.Baggage;
+import io.opentelemetry.context.Scope;
 import java.util.Collection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,15 +51,49 @@ public class UserContextPropagationFilter implements WebFilter {
 
             Authentication authentication = new UsernamePasswordAuthenticationToken(userId, token, authorities);
 
+            String customerTier = claims.get("tier", String.class);
+            if (customerTier == null) {
+                customerTier = claims.get("customer_tier", String.class);
+            }
+            if (customerTier == null && authorities.stream().anyMatch(a -> a.getAuthority().contains("VIP"))) {
+                customerTier = "VIP";
+            }
+            if (customerTier == null) {
+                customerTier = exchange.getRequest().getHeaders().getFirst("X-Customer-Tier");
+            }
+            if (customerTier == null || customerTier.isBlank()) {
+                customerTier = "STANDARD";
+            }
+
+            String orderValueBracket = claims.get("order_value_bracket", String.class);
+            if (orderValueBracket == null) {
+                orderValueBracket = exchange.getRequest().getHeaders().getFirst("X-Order-Value-Bracket");
+            }
+            if (orderValueBracket == null || orderValueBracket.isBlank()) {
+                orderValueBracket = "STANDARD";
+            }
+
+            Baggage baggage = Baggage.current().toBuilder()
+                .put("customer_tier", customerTier)
+                .put("order_value_bracket", orderValueBracket)
+                .build();
+
+            String baggageHeader = "customer_tier=" + customerTier + ",order_value_bracket=" + orderValueBracket;
+
             ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
                 .header("X-User-Id", userId != null ? userId : "")
                 .header("X-User-Roles", authorities.stream().map(GrantedAuthority::getAuthority).reduce((a, b) -> a + "," + b).orElse(""))
+                .header("X-Customer-Tier", customerTier)
+                .header("X-Order-Value-Bracket", orderValueBracket)
+                .header("baggage", baggageHeader)
                 .build();
 
             ServerWebExchange mutatedExchange = exchange.mutate().request(mutatedRequest).build();
 
-            return chain.filter(mutatedExchange)
-                .contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication));
+            try (Scope scope = baggage.makeCurrent()) {
+                return chain.filter(mutatedExchange)
+                    .contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication));
+            }
         } catch (JwtException | IllegalArgumentException ex) {
             log.debug("JWT validation failed: {}", ex.getMessage());
             return chain.filter(exchange);

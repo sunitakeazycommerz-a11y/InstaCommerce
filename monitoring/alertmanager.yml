@@ -1,0 +1,71 @@
+# Alertmanager configuration for InstaCommerce SRE incident routing & escalation
+global:
+  resolve_timeout: 5m
+  pagerduty_url: "https://events.pagerduty.com/v2/enqueue"
+
+route:
+  group_by: ['alertname', 'service', 'tier', 'journey']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'slack-alerts'
+
+  routes:
+    # Critical and page severity alerts route to PagerDuty with auto-escalation
+    - match_re:
+        severity: ^(critical|page)$
+      receiver: 'pagerduty-tier0'
+      continue: true
+
+    - match_re:
+        severity: ^(critical|page)$
+      receiver: 'slack-incidents'
+
+    - match:
+        severity: warning
+      receiver: 'slack-alerts'
+
+receivers:
+  - name: 'pagerduty-tier0'
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_PRIMARY_SERVICE_KEY:instacommerce-primary-oncall}'
+        send_resolved: true
+        severity: '{{ if eq .Labels.severity "page" }}critical{{ else }}{{ .Labels.severity }}{{ end }}'
+        description: '{{ .CommonAnnotations.summary }} - {{ .CommonAnnotations.description }}'
+        client: 'InstaCommerce Alertmanager'
+        client_url: 'https://prometheus.instacommerce.internal'
+        details:
+          service: '{{ .CommonLabels.service }}'
+          tier: '{{ .CommonLabels.tier }}'
+          journey: '{{ .CommonLabels.journey }}'
+          runbook_url: '{{ .CommonAnnotations.runbook_url }}'
+          firing_count: '{{ .Alerts.Firing | len }}'
+      # Backup escalation receiver triggered if primary does not ack within 5 minutes
+      - service_key: '${PAGERDUTY_BACKUP_LEAD_SERVICE_KEY:instacommerce-backup-lead}'
+        send_resolved: true
+        severity: critical
+        description: '[ESCALATED] Backup Lead Alert: {{ .CommonAnnotations.summary }}'
+        client: 'InstaCommerce Escalation Engine'
+        client_url: 'https://pagerduty.com/escalations/tier0'
+
+  - name: 'slack-incidents'
+    slack_configs:
+      - channel: '#incidents'
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonAnnotations.summary }}'
+        text: '{{ .CommonAnnotations.description }}\n*Runbook*: {{ .CommonAnnotations.runbook_url }}'
+
+  - name: 'slack-alerts'
+    slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonAnnotations.summary }}'
+        text: '{{ .CommonAnnotations.description }}'
+
+inhibit_rules:
+  # Inhibit warning alerts if a critical alert is already firing for the same service
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['service']

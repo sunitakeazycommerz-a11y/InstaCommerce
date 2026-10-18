@@ -5,6 +5,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.instacommerce.inventory.exception.StoreInactiveException;
 import com.instacommerce.inventory.exception.StoreNotFoundException;
 import com.instacommerce.inventory.security.InternalServiceAuthInterceptor;
+import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
@@ -51,6 +52,7 @@ public class RestWarehouseClient implements WarehouseClient {
     @Override
     @CircuitBreaker(name = "warehouseService", fallbackMethod = "validateStoreActiveFallback")
     @Retry(name = "warehouseService")
+    @Bulkhead(name = "warehouseService", fallbackMethod = "validateStoreActiveFallback")
     public void validateStoreActive(UUID storeId) {
         if (storeId == null) {
             throw new IllegalArgumentException("storeId cannot be null");
@@ -66,8 +68,8 @@ public class RestWarehouseClient implements WarehouseClient {
     }
 
     @SuppressWarnings("unused")
-    private void validateStoreActiveFallback(UUID storeId, Exception e) {
-        log.warn("Circuit breaker fallback for warehouseService validateStoreActive storeId={}: {}", storeId, e.getMessage());
+    private void validateStoreActiveFallback(UUID storeId, Throwable e) {
+        log.warn("Resilience fallback for warehouseService validateStoreActive storeId={}: {}", storeId, e.getMessage());
         if (e instanceof StoreNotFoundException notFound) {
             throw notFound;
         }
@@ -78,7 +80,7 @@ public class RestWarehouseClient implements WarehouseClient {
             throw illegal;
         }
         log.error("Warehouse service unavailable for storeId={}", storeId, e);
-        throw new RestClientException("Warehouse service unavailable via circuit breaker: " + e.getMessage(), e);
+        throw new RestClientException("Warehouse service unavailable via resilience bulkhead/circuit breaker: " + e.getMessage(), e);
     }
 
     @Override

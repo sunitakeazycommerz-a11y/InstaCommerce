@@ -72,6 +72,8 @@ class UserContextPropagationFilterTest {
         WebFilterChain chain = ex -> {
             assertThat(ex.getRequest().getHeaders().getFirst("X-User-Id")).isEqualTo("usr_test_999");
             assertThat(ex.getRequest().getHeaders().getFirst("X-User-Roles")).isEqualTo("ROLE_CUSTOMER,ROLE_VIP");
+            assertThat(ex.getRequest().getHeaders().getFirst("X-Customer-Tier")).isEqualTo("VIP");
+            assertThat(ex.getRequest().getHeaders().getFirst("baggage")).contains("customer_tier=VIP");
             return Mono.empty();
         };
 

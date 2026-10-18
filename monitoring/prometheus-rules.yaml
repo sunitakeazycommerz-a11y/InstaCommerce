@@ -54,6 +54,50 @@ groups:
           /
           sum(rate(http_server_requests_seconds_count[1h])) by (service)
 
+      # Checkout Journey Success SLI: ratio of successful (2xx) checkouts
+      - record: sli:checkout_success:rate5m
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*",status=~"2.."}[5m]))
+          /
+          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*"}[5m]))
+
+      - record: sli:checkout_success:rate30m
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*",status=~"2.."}[30m]))
+          /
+          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*"}[30m]))
+
+      - record: sli:checkout_success:rate1h
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*",status=~"2.."}[1h]))
+          /
+          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*"}[1h]))
+
+      - record: sli:checkout_success:rate6h
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*",status=~"2.."}[6h]))
+          /
+          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*"}[6h]))
+
+      # Pre-calculated P95 and P99 latency percentile recording rules (#645)
+      - record: job:checkout_duration_seconds:p95
+        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{service="checkout-orchestrator-service"}[5m])) by (le, uri))
+
+      - record: job:checkout_duration_seconds:p99
+        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="checkout-orchestrator-service"}[5m])) by (le, uri))
+
+      - record: job:payment_duration_seconds:p95
+        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{service="payment-service"}[5m])) by (le, uri))
+
+      - record: job:payment_duration_seconds:p99
+        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="payment-service"}[5m])) by (le, uri))
+
+      - record: sli:http_latency_p95:rate5m
+        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket[5m])) by (le, service))
+
+      - record: sli:http_latency_p99:rate5m
+        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket[5m])) by (le, service))
+
       # Kafka consumer lag SLI
       - record: sli:kafka_consumer_lag:max5m
         expr: max(kafka_consumer_records_lag_max) by (group)
@@ -119,6 +163,41 @@ groups:
         annotations:
           summary: "{{ $labels.service }} error budget burn at 3x rate over 1h"
           description: "{{ $labels.service }} 1h error rate exceeds 3x burn rate for 99.9% SLO. Budget exhaustion in ~2.5 days."
+
+      # ── Checkout Journey Multi-Burn-Rate Alerts (#620) ──
+      # 14.4x burn rate over 1h (5m window) -- budget exhausted in ~5h
+      - alert: CheckoutBurnRate_Critical
+        expr: |
+          (1 - sli:checkout_success:rate5m) > (14.4 * 0.001)
+          and
+          (1 - sli:checkout_success:rate1h) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+          tier: "0"
+          journey: checkout
+          slo: "99.9"
+        annotations:
+          summary: "Checkout journey burning error budget at 14.4x rate"
+          description: "Checkout SLI success rate dropped below 99.9% SLO with 14.4x burn rate over 1h window (5m short window). Budget exhaustion in ~5 hours."
+          runbook_url: "https://runbooks.instacommerce.internal/slo/checkout-burn-rate"
+
+      # 6x burn rate over 6h (30m window) -- budget exhausted in ~12h
+      - alert: CheckoutBurnRate_High
+        expr: |
+          (1 - sli:checkout_success:rate30m) > (6 * 0.001)
+          and
+          (1 - sli:checkout_success:rate6h) > (6 * 0.001)
+        for: 5m
+        labels:
+          severity: page
+          tier: "0"
+          journey: checkout
+          slo: "99.9"
+        annotations:
+          summary: "Checkout journey sustained error budget burn at 6x rate"
+          description: "Checkout SLI 30m error rate exceeds 6x burn rate for 99.9% SLO. Budget exhaustion in ~12 hours."
+          runbook_url: "https://runbooks.instacommerce.internal/slo/checkout-burn-rate"
 
       # ── Tier 1 (order, inventory, fulfillment, cart, pricing, rider-fleet, routing-eta): SLO 99.5% ──
 
@@ -412,4 +491,17 @@ groups:
           summary: "HTTP synthetic check failing for {{ $labels.instance }}"
           description: "Blackbox probe for {{ $labels.instance }} failed (probe_success == 0) for 2 minutes."
           runbook_url: "https://runbooks.instacommerce.internal/ops/synthetic-check-failed"
+
+      # ── Automated Synthetic Canary Prober (#627) ──
+      - alert: SyntheticCanaryFailed
+        expr: synthetic_canary_consecutive_failures >= 2 or increase(synthetic_canary_failure_total[2m]) >= 2
+        for: 1m
+        labels:
+          severity: page
+          journey: checkout
+        annotations:
+          summary: "End-to-end synthetic checkout canary failed 2 consecutive executions"
+          description: "Synthetic canary prober executing end-to-end checkout flow (Search -> Cart -> Reserve -> Sandbox Auth) failed repeatedly."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/synthetic-canary-failed"
+
 

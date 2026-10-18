@@ -108,3 +108,15 @@ resilience4j:
         retryExceptions:
           - java.io.IOException
           - java.net.SocketTimeoutException
+  bulkhead:
+    instances:
+      warehouseService:
+        maxConcurrentCalls: 20
+        maxWaitDuration: 0ms
+  thread-pool-bulkhead:
+    instances:
+      warehouseService:
+        maxThreadPoolSize: 20
+        coreThreadPoolSize: 10
+        queueCapacity: 40
+

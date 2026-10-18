@@ -47,7 +47,14 @@ data:
             latency:
               threshold_ms: 2000
 
-          # Policy 4: Sample 0.1% of successful low-latency search requests
+          # Policy 4: Always sample 100% of VIP customer traces (#633)
+          - name: vip-customer-filter
+            type: string_attribute
+            string_attribute:
+              key: customer_tier
+              values: ["vip", "VIP"]
+
+          # Policy 5: Sample 0.1% of successful low-latency search requests
           - name: search-probabilistic-filter
             type: and
             and:
@@ -62,7 +69,7 @@ data:
                   probabilistic:
                     sampling_percentage: 0.1
 
-          # Policy 5: Baseline probabilistic sampling for other non-error traffic
+          # Policy 6: Baseline probabilistic sampling for other non-error traffic
           - name: default-probabilistic-filter
             type: probabilistic
             probabilistic:

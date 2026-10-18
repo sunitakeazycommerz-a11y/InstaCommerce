@@ -2,6 +2,7 @@ package com.instacommerce.order.client;
 
 import com.instacommerce.order.config.OrderProperties;
 import com.instacommerce.order.security.InternalServiceAuthInterceptor;
+import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
@@ -32,6 +33,7 @@ public class RestPricingQuoteClient implements PricingQuoteClient {
     @Override
     @CircuitBreaker(name = "pricingService", fallbackMethod = "validateQuoteFallback")
     @Retry(name = "pricingService")
+    @Bulkhead(name = "pricingService", fallbackMethod = "validateQuoteFallback")
     public boolean validateQuote(UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents) {
         try {
             QuoteValidateRequest request = new QuoteValidateRequest(quoteId, quoteToken, totalCents, subtotalCents, discountCents);
@@ -52,8 +54,8 @@ public class RestPricingQuoteClient implements PricingQuoteClient {
     }
 
     @SuppressWarnings("unused")
-    private boolean validateQuoteFallback(UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents, Exception e) {
-        logger.warn("Circuit breaker fallback for pricingService validateQuote quoteId={}: {}", quoteId, e.getMessage());
+    private boolean validateQuoteFallback(UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents, Throwable t) {
+        logger.warn("Resilience fallback for pricingService validateQuote quoteId={}: {}", quoteId, t.getMessage());
         return false;
     }
 
