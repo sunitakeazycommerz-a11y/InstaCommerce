@@ -10,6 +10,16 @@ public record OrderPlacedItem(
     String sku,
     int quantity,
     long unitPriceCents,
-    long lineTotalCents
+    long lineTotalCents,
+    String aisle,
+    Integer shelf,
+    String bin,
+    String barcode,
+    Integer tareWeightGrams
 ) {
+    public OrderPlacedItem(UUID productId, String productName, String sku, int quantity,
+                           long unitPriceCents, long lineTotalCents) {
+        this(productId, productName, sku, quantity, unitPriceCents, lineTotalCents,
+             null, null, null, null, null);
+    }
 }

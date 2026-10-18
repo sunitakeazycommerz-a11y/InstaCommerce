@@ -60,6 +60,24 @@ public class PickItem {
     @Column(name = "updated_at")
     private Instant updatedAt;
 
+    @Column(name = "aisle")
+    private String aisle;
+
+    @Column(name = "shelf")
+    private Integer shelf;
+
+    @Column(name = "bin")
+    private String bin;
+
+    @Column(name = "pick_sequence")
+    private Integer pickSequence;
+
+    @Column(name = "barcode")
+    private String barcode;
+
+    @Column(name = "tare_weight_grams")
+    private Integer tareWeightGrams;
+
     @PrePersist
     @PreUpdate
     void prePersist() {
@@ -168,5 +186,53 @@ public class PickItem {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getAisle() {
+        return aisle;
+    }
+
+    public void setAisle(String aisle) {
+        this.aisle = aisle;
+    }
+
+    public Integer getShelf() {
+        return shelf;
+    }
+
+    public void setShelf(Integer shelf) {
+        this.shelf = shelf;
+    }
+
+    public String getBin() {
+        return bin;
+    }
+
+    public void setBin(String bin) {
+        this.bin = bin;
+    }
+
+    public Integer getPickSequence() {
+        return pickSequence;
+    }
+
+    public void setPickSequence(Integer pickSequence) {
+        this.pickSequence = pickSequence;
+    }
+
+    public String getBarcode() {
+        return barcode;
+    }
+
+    public void setBarcode(String barcode) {
+        this.barcode = barcode;
+    }
+
+    public Integer getTareWeightGrams() {
+        return tareWeightGrams;
+    }
+
+    public void setTareWeightGrams(Integer tareWeightGrams) {
+        this.tareWeightGrams = tareWeightGrams;
     }
 }

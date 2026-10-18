@@ -13,17 +13,22 @@ import com.instacommerce.fulfillment.dto.request.MarkItemPickedRequest;
 import com.instacommerce.fulfillment.dto.response.PickItemResponse;
 import com.instacommerce.fulfillment.dto.response.PickTaskResponse;
 import com.instacommerce.fulfillment.event.OrderStatusUpdateEvent;
+import com.instacommerce.fulfillment.exception.DuplicateScanException;
 import com.instacommerce.fulfillment.exception.InvalidPickTaskStateException;
 import com.instacommerce.fulfillment.exception.PickItemNotFoundException;
 import com.instacommerce.fulfillment.exception.PickTaskNotFoundException;
 import com.instacommerce.fulfillment.repository.PickItemRepository;
 import com.instacommerce.fulfillment.repository.PickTaskRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -41,19 +46,31 @@ public class PickService {
     private final OutboxService outboxService;
     private final ApplicationEventPublisher eventPublisher;
     private final WarehouseClient warehouseClient;
+    private final AisleRoutingOptimizer aisleRoutingOptimizer;
+    private final AuditLogService auditLogService;
+    private final Timer pickDurationTimer;
+    private final Map<String, Long> scanDebounceMap = new ConcurrentHashMap<>();
 
     public PickService(PickTaskRepository pickTaskRepository,
                        PickItemRepository pickItemRepository,
                        SubstitutionService substitutionService,
                        OutboxService outboxService,
                        ApplicationEventPublisher eventPublisher,
-                       WarehouseClient warehouseClient) {
+                       WarehouseClient warehouseClient,
+                       AisleRoutingOptimizer aisleRoutingOptimizer,
+                       AuditLogService auditLogService,
+                       MeterRegistry meterRegistry) {
         this.pickTaskRepository = pickTaskRepository;
         this.pickItemRepository = pickItemRepository;
         this.substitutionService = substitutionService;
         this.outboxService = outboxService;
         this.eventPublisher = eventPublisher;
         this.warehouseClient = warehouseClient;
+        this.aisleRoutingOptimizer = aisleRoutingOptimizer;
+        this.auditLogService = auditLogService;
+        this.pickDurationTimer = Timer.builder("fulfillment_pick_duration_seconds")
+            .description("Duration of pick tasks from started to completed in seconds")
+            .register(meterRegistry);
     }
 
     @Transactional
@@ -71,7 +88,8 @@ public class PickService {
 
         List<OrderPlacedItem> itemsPayload = payload.items() == null ? List.of() : payload.items();
         List<PickItem> items = itemsPayload.stream().map(item -> toPickItem(task, item)).toList();
-        task.setItems(items);
+        List<PickItem> optimized = aisleRoutingOptimizer.optimizePickPath(items);
+        task.setItems(optimized);
         try {
             pickTaskRepository.save(task);
         } catch (DataIntegrityViolationException ex) {
@@ -126,7 +144,7 @@ public class PickService {
     public List<PickItemResponse> listItems(UUID orderId) {
         PickTask task = pickTaskRepository.findByOrderId(orderId)
             .orElseThrow(() -> new PickTaskNotFoundException(orderId));
-        return pickItemRepository.findByPickTask_Id(task.getId()).stream()
+        return pickItemRepository.findByPickTask_IdOrderByPickSequenceAsc(task.getId()).stream()
             .map(FulfillmentMapper::toPickItemResponse)
             .toList();
     }
@@ -135,11 +153,39 @@ public class PickService {
     public PickItemResponse markItem(UUID orderId, UUID productId, MarkItemPickedRequest request, UUID pickerId) {
         PickTask task = pickTaskRepository.findByOrderIdForUpdate(orderId)
             .orElseThrow(() -> new PickTaskNotFoundException(orderId));
+        if (request.scannedBarcode() != null) {
+            long now = System.currentTimeMillis();
+            String debounceKey = orderId + ":" + request.scannedBarcode();
+            Long lastScan = scanDebounceMap.get(debounceKey);
+            if (lastScan != null && (now - lastScan) < 1000) {
+                throw new DuplicateScanException("Duplicate scan detected for barcode " + request.scannedBarcode() + " within 1000ms debounce window");
+            }
+            scanDebounceMap.put(debounceKey, now);
+        }
+
         if (task.getStatus() == PickTaskStatus.COMPLETED || task.getStatus() == PickTaskStatus.CANCELLED) {
             throw new InvalidPickTaskStateException(orderId, task.getStatus(), "update items");
         }
         PickItem item = pickItemRepository.findByPickTask_OrderIdAndProductId(orderId, productId)
             .orElseThrow(() -> new PickItemNotFoundException(orderId, productId));
+
+        if (request.scannedBarcode() != null && request.scannerHardwareId() != null) {
+            auditLogService.log(pickerId, "ITEM_SCANNED", "PickItem", item.getId().toString(),
+                Map.of("barcode", request.scannedBarcode(), "scannerId", request.scannerHardwareId()));
+        }
+
+        if (request.measuredWeightGrams() != null && item.getTareWeightGrams() != null && item.getTareWeightGrams() > 0) {
+            int targetQty = request.pickedQty() != null ? request.pickedQty() : item.getQuantity();
+            int expectedWeight = item.getTareWeightGrams() * targetQty;
+            int diff = Math.abs(request.measuredWeightGrams() - expectedWeight);
+            if (expectedWeight > 0 && diff > (expectedWeight * 0.05)) {
+                logger.warn("Weight discrepancy detected for item {}: expected {}g (+/-5%), measured {}g",
+                    item.getId(), expectedWeight, request.measuredWeightGrams());
+                auditLogService.log(pickerId, "WEIGHT_DISCREPANCY_DETECTED", "PickItem", item.getId().toString(),
+                    Map.of("expectedWeightGrams", expectedWeight, "measuredWeightGrams", request.measuredWeightGrams()));
+            }
+        }
+
         PickItemStatus previousStatus = item.getStatus();
         int previousPickedQty = item.getPickedQty();
         applyItemUpdate(item, request);
@@ -190,6 +236,9 @@ public class PickService {
         task.setCompletedAt(Instant.now());
         task.setStatus(PickTaskStatus.COMPLETED);
         PickTask saved = pickTaskRepository.save(task);
+        if (saved.getStartedAt() != null && saved.getCompletedAt() != null) {
+            pickDurationTimer.record(Duration.between(saved.getStartedAt(), saved.getCompletedAt()));
+        }
         if (wasPending) {
             eventPublisher.publishEvent(new OrderStatusUpdateEvent(orderId, "PACKING", "picking-started"));
         }
@@ -252,6 +301,9 @@ public class PickService {
         task.setStatus(PickTaskStatus.COMPLETED);
         task.setCompletedAt(Instant.now());
         PickTask saved = pickTaskRepository.save(task);
+        if (saved.getStartedAt() != null && saved.getCompletedAt() != null) {
+            pickDurationTimer.record(Duration.between(saved.getStartedAt(), saved.getCompletedAt()));
+        }
         publishPacked(saved, "auto-complete");
     }
 
@@ -285,6 +337,11 @@ public class PickService {
         pickItem.setUnitPriceCents(item.unitPriceCents());
         pickItem.setLineTotalCents(item.lineTotalCents());
         pickItem.setStatus(PickItemStatus.PENDING);
+        pickItem.setAisle(item.aisle());
+        pickItem.setShelf(item.shelf());
+        pickItem.setBin(item.bin());
+        pickItem.setBarcode(item.barcode());
+        pickItem.setTareWeightGrams(item.tareWeightGrams());
         return pickItem;
     }
 }

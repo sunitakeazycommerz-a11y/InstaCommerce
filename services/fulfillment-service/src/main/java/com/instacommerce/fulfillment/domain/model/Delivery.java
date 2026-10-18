@@ -49,6 +49,21 @@ public class Delivery {
     @Column(name = "created_at")
     private Instant createdAt;
 
+    @Column(name = "dispatch_otp")
+    private String dispatchOtp;
+
+    @Column(name = "pod_photo_url")
+    private String podPhotoUrl;
+
+    @Column(name = "pod_photo_format")
+    private String podPhotoFormat;
+
+    @Column(name = "pod_photo_size_bytes")
+    private Integer podPhotoSizeBytes;
+
+    @Column(name = "pod_masked")
+    private Boolean podMasked;
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) {
@@ -126,5 +141,45 @@ public class Delivery {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getDispatchOtp() {
+        return dispatchOtp;
+    }
+
+    public void setDispatchOtp(String dispatchOtp) {
+        this.dispatchOtp = dispatchOtp;
+    }
+
+    public String getPodPhotoUrl() {
+        return podPhotoUrl;
+    }
+
+    public void setPodPhotoUrl(String podPhotoUrl) {
+        this.podPhotoUrl = podPhotoUrl;
+    }
+
+    public String getPodPhotoFormat() {
+        return podPhotoFormat;
+    }
+
+    public void setPodPhotoFormat(String podPhotoFormat) {
+        this.podPhotoFormat = podPhotoFormat;
+    }
+
+    public Integer getPodPhotoSizeBytes() {
+        return podPhotoSizeBytes;
+    }
+
+    public void setPodPhotoSizeBytes(Integer podPhotoSizeBytes) {
+        this.podPhotoSizeBytes = podPhotoSizeBytes;
+    }
+
+    public Boolean getPodMasked() {
+        return podMasked;
+    }
+
+    public void setPodMasked(Boolean podMasked) {
+        this.podMasked = podMasked;
     }
 }

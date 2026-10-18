@@ -10,6 +10,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface PickItemRepository extends JpaRepository<PickItem, UUID> {
     List<PickItem> findByPickTask_Id(UUID pickTaskId);
 
+    List<PickItem> findByPickTask_IdOrderByPickSequenceAsc(UUID pickTaskId);
+
     Optional<PickItem> findByPickTask_OrderIdAndProductId(UUID orderId, UUID productId);
 
     long countByPickTask_IdAndStatus(UUID pickTaskId, PickItemStatus status);

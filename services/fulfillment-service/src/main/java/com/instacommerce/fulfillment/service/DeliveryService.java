@@ -170,12 +170,66 @@ public class DeliveryService {
         return timeline;
     }
 
+    @Transactional
+    public DeliveryResponse verifyRiderHandoff(UUID orderId, UUID riderId, String dispatchOtp) {
+        Delivery delivery = deliveryRepository.findByOrderId(orderId)
+            .orElseThrow(() -> new DeliveryNotFoundException(orderId));
+        if (delivery.getRider() == null || !delivery.getRider().getId().equals(riderId)) {
+            throw new com.instacommerce.fulfillment.exception.InvalidRiderHandoffException("Assigned rider mismatch for order " + orderId);
+        }
+        if (delivery.getStatus() == DeliveryStatus.DELIVERED) {
+            return FulfillmentMapper.toDeliveryResponse(delivery);
+        }
+        if (delivery.getDispatchOtp() == null || !delivery.getDispatchOtp().equals(dispatchOtp != null ? dispatchOtp.trim() : "")) {
+            throw new com.instacommerce.fulfillment.exception.InvalidRiderHandoffException("Cryptographic dispatch OTP verification failed for order " + orderId);
+        }
+        delivery.setStatus(DeliveryStatus.PICKED_UP);
+        delivery.setDispatchedAt(Instant.now());
+        Delivery saved = deliveryRepository.save(delivery);
+
+        eventPublisher.publishEvent(new OrderStatusUpdateEvent(orderId, "OUT_FOR_DELIVERY", "rider-handoff-verified"));
+        outboxService.publish("Fulfillment", orderId.toString(), "RiderHandoffCompleted",
+            Map.of("orderId", orderId, "riderId", riderId, "handoffAt", saved.getDispatchedAt()));
+        return FulfillmentMapper.toDeliveryResponse(saved);
+    }
+
+    @Transactional
+    public DeliveryResponse recordProofOfDelivery(UUID orderId, String photoUrl, String format, Integer sizeBytes, Boolean masked) {
+        Delivery delivery = deliveryRepository.findByOrderId(orderId)
+            .orElseThrow(() -> new DeliveryNotFoundException(orderId));
+        if (photoUrl == null || photoUrl.isBlank()) {
+            throw new com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException("Proof-of-delivery photo URL cannot be empty");
+        }
+        if (format == null || !"WEBP".equalsIgnoreCase(format.trim())) {
+            throw new com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException("Invalid photo format '" + format + "': only WebP format is allowed");
+        }
+        if (sizeBytes == null || sizeBytes > 200 * 1024) {
+            throw new com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException("Compressed photo exceeds 200KB limit (actual: " + sizeBytes + " bytes)");
+        }
+        if (masked == null || !masked) {
+            throw new com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException("Proof-of-delivery photo must have detected faces and PII masked");
+        }
+        delivery.setPodPhotoUrl(photoUrl);
+        delivery.setPodPhotoFormat("WEBP");
+        delivery.setPodPhotoSizeBytes(sizeBytes);
+        delivery.setPodMasked(true);
+        Delivery saved = deliveryRepository.save(delivery);
+
+        outboxService.publish("Fulfillment", orderId.toString(), "ProofOfDeliveryUploaded",
+            Map.of("orderId", orderId, "photoUrl", photoUrl, "lifecycleDays", 30, "format", "WEBP"));
+        return FulfillmentMapper.toDeliveryResponse(saved);
+    }
+
     private Delivery assignDelivery(Delivery existing, UUID orderId, Rider rider, int etaMinutes, UUID userId) {
         Delivery delivery = existing == null ? new Delivery() : existing;
         delivery.setOrderId(orderId);
         delivery.setRider(rider);
         delivery.setStatus(DeliveryStatus.ASSIGNED);
         delivery.setEstimatedMinutes(etaMinutes);
+        if (delivery.getDispatchOtp() == null) {
+            String otp = String.format("%06d", java.util.concurrent.ThreadLocalRandom.current().nextInt(100000, 1000000));
+            delivery.setDispatchOtp(otp);
+        }
         delivery.setDispatchedAt(Instant.now());
         Delivery saved = deliveryRepository.save(delivery);
 
@@ -187,6 +241,7 @@ public class DeliveryService {
         eventPayload.put("riderName", rider.getName());
         eventPayload.put("estimatedMinutes", saved.getEstimatedMinutes());
         eventPayload.put("dispatchedAt", saved.getDispatchedAt());
+        eventPayload.put("dispatchOtp", saved.getDispatchOtp());
         outboxService.publish("Fulfillment", orderId.toString(), "OrderDispatched", eventPayload);
         return saved;
     }

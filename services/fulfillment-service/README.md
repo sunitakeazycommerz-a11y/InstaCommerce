@@ -659,12 +659,18 @@ Readiness includes `readinessState` + `db` health indicators. Liveness includes
 | `GET` | `/fulfillment/picklist/{orderId}/items` | List pick items for an order | — | `List<PickItemResponse>` |
 | `POST` | `/fulfillment/picklist/{orderId}/items/{productId}` | Mark item picked/missing/substituted | `MarkItemPickedRequest` | `PickItemResponse` |
 | `POST` | `/fulfillment/orders/{orderId}/packed` | Mark order packed | `MarkPackedRequest` (optional body) | `PickTaskResponse` |
+| `POST` | `/fulfillment/batches` | Create multi-order pick batch run (up to 4 orders) | `CreateBatchRequest` | `BatchPickResponse` |
+| `GET` | `/fulfillment/batches/{batchId}` | Get batch details and remaining consolidated route | — | `BatchPickResponse` |
+| `POST` | `/fulfillment/batches/{batchId}/validate-compartment` | Validate tote compartment barcode at pick face | `ValidateCompartmentRequest` | `Map<String, Object>` |
+| `POST` | `/fulfillment/batches/{batchId}/complete` | Complete batch run and all constituent orders | — | `BatchPickResponse` |
+| `POST` | `/fulfillment/orders/{orderId}/handoff` | Verify cryptographic rider handoff with dynamic OTP | `RiderHandoffRequest` | `DeliveryResponse` |
 
 ### 11.2 Delivery Endpoints — requires `ROLE_RIDER` or authenticated
 
 | Method | Path | Auth | Description | Response |
 |--------|------|------|-------------|----------|
 | `GET` | `/orders/{orderId}/tracking` | Authenticated (owner or admin) | Delivery tracking + timeline | `TrackingResponse` |
+| `POST` | `/fulfillment/orders/{orderId}/proof-of-delivery` | `ROLE_RIDER` | Upload compressed WebP POD photo (<200KB) | `DeliveryResponse` |
 | `POST` | `/fulfillment/orders/{orderId}/delivered` | `ROLE_RIDER` | Confirm delivery | `DeliveryResponse` |
 
 ### 11.3 Admin Endpoints (`/admin/fulfillment`) — requires `ROLE_ADMIN`

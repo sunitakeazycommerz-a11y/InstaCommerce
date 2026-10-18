@@ -78,6 +78,7 @@ class PickServiceIntegrationTest {
                 pick_items,
                 deliveries,
                 pick_tasks,
+                pick_batches,
                 riders,
                 shedlock
             RESTART IDENTITY CASCADE

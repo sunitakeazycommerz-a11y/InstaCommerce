@@ -41,7 +41,10 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/**", "/error").permitAll()
                 .requestMatchers("/admin/**").hasRole("ADMIN")
                 .requestMatchers("/fulfillment/picklist/**").hasRole("PICKER")
+                .requestMatchers("/fulfillment/batches/**").hasRole("PICKER")
                 .requestMatchers(HttpMethod.POST, "/fulfillment/orders/*/packed").hasRole("PICKER")
+                .requestMatchers(HttpMethod.POST, "/fulfillment/orders/*/handoff").hasAnyRole("PICKER", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/fulfillment/orders/*/proof-of-delivery").hasRole("RIDER")
                 .requestMatchers(HttpMethod.POST, "/fulfillment/orders/*/delivered").hasRole("RIDER")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions

@@ -39,7 +39,13 @@ public final class FulfillmentMapper {
             item.getStatus().name(),
             item.getSubstituteProductId(),
             item.getNote(),
-            item.getUpdatedAt()
+            item.getUpdatedAt(),
+            item.getAisle(),
+            item.getShelf(),
+            item.getBin(),
+            item.getPickSequence(),
+            item.getBarcode(),
+            item.getTareWeightGrams()
         );
     }
 
@@ -52,7 +58,9 @@ public final class FulfillmentMapper {
             delivery.getRider() == null ? null : delivery.getRider().getName(),
             delivery.getEstimatedMinutes(),
             delivery.getDispatchedAt(),
-            delivery.getDeliveredAt()
+            delivery.getDeliveredAt(),
+            delivery.getDispatchOtp(),
+            delivery.getPodPhotoUrl()
         );
     }
 

@@ -11,6 +11,13 @@ public record MarkItemPickedRequest(
     @NotNull PickItemStatus status,
     @PositiveOrZero Integer pickedQty,
     UUID substituteProductId,
-    String note
+    String note,
+    String scannedBarcode,
+    String scannerHardwareId,
+    Integer measuredWeightGrams,
+    Long scanTimestampMs
 ) {
+    public MarkItemPickedRequest(PickItemStatus status, Integer pickedQty, UUID substituteProductId, String note) {
+        this(status, pickedQty, substituteProductId, note, null, null, null, null);
+    }
 }

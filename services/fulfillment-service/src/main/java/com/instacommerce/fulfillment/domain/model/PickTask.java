@@ -59,6 +59,15 @@ public class PickTask {
     @Column(name = "created_at")
     private Instant createdAt;
 
+    @Column(name = "batch_id")
+    private UUID batchId;
+
+    @Column(name = "tote_barcode")
+    private String toteBarcode;
+
+    @Column(name = "tote_color")
+    private String toteColor;
+
     @OneToMany(mappedBy = "pickTask", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PickItem> items = new ArrayList<>();
 
@@ -171,5 +180,29 @@ public class PickTask {
 
     public void setItems(List<PickItem> items) {
         this.items = items;
+    }
+
+    public UUID getBatchId() {
+        return batchId;
+    }
+
+    public void setBatchId(UUID batchId) {
+        this.batchId = batchId;
+    }
+
+    public String getToteBarcode() {
+        return toteBarcode;
+    }
+
+    public void setToteBarcode(String toteBarcode) {
+        this.toteBarcode = toteBarcode;
+    }
+
+    public String getToteColor() {
+        return toteColor;
+    }
+
+    public void setToteColor(String toteColor) {
+        this.toteColor = toteColor;
     }
 }

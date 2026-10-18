@@ -11,6 +11,13 @@ public record DeliveryResponse(
     String riderName,
     Integer estimatedMinutes,
     Instant dispatchedAt,
-    Instant deliveredAt
+    Instant deliveredAt,
+    String dispatchOtp,
+    String podPhotoUrl
 ) {
+    public DeliveryResponse(UUID id, UUID orderId, String status, UUID riderId,
+                            String riderName, Integer estimatedMinutes,
+                            Instant dispatchedAt, Instant deliveredAt) {
+        this(id, orderId, status, riderId, riderName, estimatedMinutes, dispatchedAt, deliveredAt, null, null);
+    }
 }
