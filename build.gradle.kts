@@ -46,26 +46,26 @@ subprojects {
             mavenBom("io.grpc:grpc-bom:1.75.0")
         }
         dependencies {
-            dependency("tools.jackson.core:jackson-annotations:3.1.0")
+            dependency("tools.jackson.core:jackson-annotations:3.1.4")
             dependency("com.fasterxml.jackson.core:jackson-annotations:2.21")
-            dependency("com.fasterxml.jackson.core:jackson-core:2.20.1")
-            dependency("com.fasterxml.jackson.core:jackson-databind:2.20.1")
+            dependency("com.fasterxml.jackson.core:jackson-core:2.18.11")
+            dependency("com.fasterxml.jackson.core:jackson-databind:2.18.11")
             dependency("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.20.1")
             dependency("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.20.1")
             dependency("io.jsonwebtoken:jjwt-api:0.12.5")
             dependency("io.jsonwebtoken:jjwt-impl:0.12.5")
             dependency("io.jsonwebtoken:jjwt-jackson:0.12.5")
-            dependency("tools.jackson.core:jackson-core:3.1.0")
-            dependency("tools.jackson.core:jackson-databind:3.1.0")
+            dependency("tools.jackson.core:jackson-core:3.1.4")
+            dependency("tools.jackson.core:jackson-databind:3.1.4")
             dependency("tools.jackson.datatype:jackson-datatype-jdk8:3.1.0")
             dependency("tools.jackson.datatype:jackson-datatype-jsr310:3.1.0")
             dependency("tools.jackson.module:jackson-module-parameter-names:3.1.0")
             dependency("com.google.protobuf:protobuf-java:4.32.0")
             dependency("com.google.protobuf:protobuf-java-util:4.32.0")
-            dependency("at.yawk.lz4:lz4-java:1.10.1")
+            dependency("at.yawk.lz4:lz4-java:1.11.4")
             // Spring Boot 4.0+ manages spring-kafka via BOM, but explicit for clarity
-            dependency("org.springframework.kafka:spring-kafka:4.0.0")
-            dependency("org.springframework.kafka:spring-kafka-test:4.0.0")
+            dependency("org.springframework.kafka:spring-kafka:4.0.6")
+            dependency("org.springframework.kafka:spring-kafka-test:4.0.6")
         }
     }
 }
