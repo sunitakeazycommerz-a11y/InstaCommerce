@@ -8,17 +8,16 @@ import org.springframework.stereotype.Component;
 
 /**
  * Fallback publisher that only logs outbox events without sending them.
- * Used when Kafka is not available (e.g. local development or tests).
- * In production, {@link KafkaOutboxEventPublisher} takes precedence as the {@code @Primary} bean.
+ * Used when neither KafkaOutboxEventPublisher nor PostgresOutboxEventPublisher is available.
  */
 @Component
-@ConditionalOnMissingBean(KafkaOutboxEventPublisher.class)
+@ConditionalOnMissingBean({KafkaOutboxEventPublisher.class, PostgresOutboxEventPublisher.class})
 public class LoggingOutboxEventPublisher implements OutboxEventPublisher {
     private static final Logger log = LoggerFactory.getLogger(LoggingOutboxEventPublisher.class);
 
     @Override
     public void publish(OutboxEvent event) {
-        log.warn("STUB: Logging outbox event (Kafka publisher not available) id={} type={} aggregateType={} aggregateId={}",
+        log.warn("STUB: Logging outbox event id={} type={} aggregateType={} aggregateId={}",
             event.getId(),
             event.getEventType(),
             event.getAggregateType(),

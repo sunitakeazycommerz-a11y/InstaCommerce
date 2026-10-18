@@ -161,10 +161,17 @@ class CatalogServiceIntegrationTest {
         .andExpect(jsonPath("$.name").value("New Product"))
         .andExpect(jsonPath("$.description").value("New product description"));
 
-    // Assert - verify event was created in outbox
-    Thread.sleep(500); // Allow async processing
+    // Assert - verify event was created in outbox with full payload attributes
     long outboxEvents = outboxEventRepository.count();
-    assertThat(outboxEvents).isGreaterThanOrEqualTo(0L);
+    assertThat(outboxEvents).isEqualTo(1L);
+    var event = outboxEventRepository.findAll().get(0);
+    assertThat(event.getEventType()).isEqualTo("ProductCreated");
+    assertThat(event.getPayload()).contains("basePriceCents")
+        .contains("unitValue")
+        .contains("unitOfMeasure")
+        .contains("isPerishable")
+        .contains("temperatureZone")
+        .contains("vatRateBps");
   }
 
   @Test

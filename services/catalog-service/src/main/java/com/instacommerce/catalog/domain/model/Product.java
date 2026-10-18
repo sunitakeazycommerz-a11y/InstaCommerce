@@ -57,6 +57,15 @@ public class Product {
     @Column(name = "store_id")
     private UUID storeId;
 
+    @Column(name = "is_perishable")
+    private boolean isPerishable = false;
+
+    @Column(name = "temperature_zone")
+    private String temperatureZone = "AMBIENT";
+
+    @Column(name = "vat_rate_bps")
+    private int vatRateBps = 0;
+
     @Column(name = "is_active")
     private boolean isActive = true;
 
@@ -89,6 +98,9 @@ public class Product {
         }
         if (unitValue == null) {
             unitValue = BigDecimal.ONE;
+        }
+        if (temperatureZone == null || temperatureZone.isBlank()) {
+            temperatureZone = "AMBIENT";
         }
     }
 
@@ -246,5 +258,37 @@ public class Product {
         if (images != null) {
             this.images.addAll(images);
         }
+    }
+
+    public boolean isPerishable() {
+        return isPerishable;
+    }
+
+    public void setPerishable(boolean perishable) {
+        isPerishable = perishable;
+    }
+
+    public String getTemperatureZone() {
+        return temperatureZone;
+    }
+
+    public void setTemperatureZone(String temperatureZone) {
+        this.temperatureZone = temperatureZone;
+    }
+
+    public int getVatRateBps() {
+        return vatRateBps;
+    }
+
+    public void setVatRateBps(int vatRateBps) {
+        this.vatRateBps = vatRateBps;
+    }
+
+    public String getUnitOfMeasure() {
+        return unit;
+    }
+
+    public void setUnitOfMeasure(String unitOfMeasure) {
+        this.unit = unitOfMeasure;
     }
 }

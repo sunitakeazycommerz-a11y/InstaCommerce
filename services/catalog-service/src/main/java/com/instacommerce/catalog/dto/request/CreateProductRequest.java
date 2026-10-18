@@ -21,6 +21,32 @@ public record CreateProductRequest(
     String unit,
     BigDecimal unitValue,
     Integer weightGrams,
-    @Valid List<ProductImageRequest> images
+    @Valid List<ProductImageRequest> images,
+    Boolean isPerishable,
+    String temperatureZone,
+    Integer vatRateBps,
+    String unitOfMeasure
 ) {
+    public CreateProductRequest(
+        String sku,
+        String name,
+        String description,
+        UUID categoryId,
+        String brand,
+        Long basePriceCents,
+        String currency,
+        String unit,
+        BigDecimal unitValue,
+        Integer weightGrams,
+        List<ProductImageRequest> images
+    ) {
+        this(sku, name, description, categoryId, brand, basePriceCents, currency, unit, unitValue, weightGrams, images, false, "AMBIENT", 0, unit);
+    }
+
+    public String resolveUnit() {
+        if (unitOfMeasure != null && !unitOfMeasure.isBlank()) {
+            return unitOfMeasure;
+        }
+        return unit != null && !unit.isBlank() ? unit : "piece";
+    }
 }

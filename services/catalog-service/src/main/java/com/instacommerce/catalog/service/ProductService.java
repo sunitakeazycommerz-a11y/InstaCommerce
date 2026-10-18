@@ -73,10 +73,18 @@ public class ProductService {
         product.setCategory(category);
         product.setBrand(request.brand());
         product.setBasePriceCents(request.basePriceCents());
-        product.setCurrency(request.currency());
-        product.setUnit(request.unit());
+        product.setUnit(request.resolveUnit());
         product.setUnitValue(request.unitValue());
         product.setWeightGrams(request.weightGrams());
+        if (request.isPerishable() != null) {
+            product.setPerishable(request.isPerishable());
+        }
+        if (request.temperatureZone() != null && !request.temperatureZone().isBlank()) {
+            product.setTemperatureZone(request.temperatureZone());
+        }
+        if (request.vatRateBps() != null) {
+            product.setVatRateBps(request.vatRateBps());
+        }
         product.replaceImages(ProductMapper.toImages(request.images(), product));
         Product saved = productRepository.save(product);
         outboxService.recordProductEvent(saved, "ProductCreated");
@@ -120,14 +128,23 @@ public class ProductService {
         if (request.currency() != null) {
             product.setCurrency(request.currency());
         }
-        if (request.unit() != null) {
-            product.setUnit(request.unit());
+        if (request.resolveUnit() != null) {
+            product.setUnit(request.resolveUnit());
         }
         if (request.unitValue() != null) {
             product.setUnitValue(request.unitValue());
         }
         if (request.weightGrams() != null) {
             product.setWeightGrams(request.weightGrams());
+        }
+        if (request.isPerishable() != null) {
+            product.setPerishable(request.isPerishable());
+        }
+        if (request.temperatureZone() != null && !request.temperatureZone().isBlank()) {
+            product.setTemperatureZone(request.temperatureZone());
+        }
+        if (request.vatRateBps() != null) {
+            product.setVatRateBps(request.vatRateBps());
         }
         if (request.isActive() != null) {
             product.setActive(request.isActive());

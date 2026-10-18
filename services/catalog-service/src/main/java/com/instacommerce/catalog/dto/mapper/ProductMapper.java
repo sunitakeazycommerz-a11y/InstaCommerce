@@ -34,7 +34,11 @@ public final class ProductMapper {
             product.getWeightGrams(),
             images,
             product.isActive(),
-            product.getCreatedAt());
+            product.getCreatedAt(),
+            product.isPerishable(),
+            product.getTemperatureZone(),
+            product.getVatRateBps(),
+            product.getUnitOfMeasure());
     }
 
     public static CategorySummaryResponse toCategorySummary(Category category) {

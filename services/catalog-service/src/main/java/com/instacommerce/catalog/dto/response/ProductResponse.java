@@ -20,6 +20,29 @@ public record ProductResponse(
     Integer weightGrams,
     List<ProductImageResponse> images,
     boolean isActive,
-    Instant createdAt
+    Instant createdAt,
+    boolean isPerishable,
+    String temperatureZone,
+    int vatRateBps,
+    String unitOfMeasure
 ) {
+    public ProductResponse(
+        UUID id,
+        String sku,
+        String name,
+        String slug,
+        String description,
+        CategorySummaryResponse category,
+        String brand,
+        long basePriceCents,
+        String currency,
+        String unit,
+        BigDecimal unitValue,
+        Integer weightGrams,
+        List<ProductImageResponse> images,
+        boolean isActive,
+        Instant createdAt
+    ) {
+        this(id, sku, name, slug, description, category, brand, basePriceCents, currency, unit, unitValue, weightGrams, images, isActive, createdAt, false, "AMBIENT", 0, unit);
+    }
 }

@@ -12,6 +12,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.kafka.core.KafkaTemplate;
+import com.instacommerce.contracts.topics.TopicNames;
+import java.util.concurrent.TimeUnit;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
 @Primary
@@ -19,7 +22,7 @@ import org.springframework.stereotype.Component;
 @ConditionalOnBean(KafkaTemplate.class)
 public class KafkaOutboxEventPublisher implements OutboxEventPublisher {
     private static final Logger log = LoggerFactory.getLogger(KafkaOutboxEventPublisher.class);
-    private static final String TOPIC = "catalog.events";
+    private static final String TOPIC = TopicNames.CATALOG_EVENTS;
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ObjectMapper objectMapper;
@@ -38,18 +41,17 @@ public class KafkaOutboxEventPublisher implements OutboxEventPublisher {
         log.info("Publishing outbox event to Kafka: topic={} key={} eventType={}",
             TOPIC, key, event.getEventType());
 
-        kafkaTemplate.send(TOPIC, key, envelope)
-            .whenComplete((result, ex) -> {
-                if (ex != null) {
-                    log.error("Failed to publish outbox event id={} to Kafka",
-                        event.getId(), ex);
-                    throw new RuntimeException("Kafka publish failed for event " + event.getId(), ex);
-                }
-                log.debug("Published outbox event id={} to Kafka partition={} offset={}",
-                    event.getId(),
-                    result.getRecordMetadata().partition(),
-                    result.getRecordMetadata().offset());
-            });
+        try {
+            SendResult<String, Object> result = kafkaTemplate.send(TOPIC, key, envelope)
+                .get(5, TimeUnit.SECONDS);
+            log.debug("Published outbox event id={} to Kafka partition={} offset={}",
+                event.getId(),
+                result.getRecordMetadata().partition(),
+                result.getRecordMetadata().offset());
+        } catch (Exception ex) {
+            log.error("Failed to publish outbox event id={} to Kafka topic={}", event.getId(), TOPIC, ex);
+            throw new RuntimeException("Kafka publish failed for event " + event.getId(), ex);
+        }
     }
 
     private Map<String, Object> buildEnvelope(OutboxEvent event) {

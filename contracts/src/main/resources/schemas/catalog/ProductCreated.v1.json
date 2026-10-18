@@ -17,6 +17,13 @@
     "inStock": { "type": "boolean" },
     "storeId": { "type": ["string", "null"], "format": "uuid" },
     "active": { "type": "boolean" },
+    "basePriceCents": { "type": "integer" },
+    "unitValue": { "type": "number" },
+    "unitOfMeasure": { "type": ["string", "null"] },
+    "weightGrams": { "type": ["integer", "null"] },
+    "isPerishable": { "type": "boolean" },
+    "temperatureZone": { "type": "string", "enum": ["AMBIENT", "CHILLED", "FROZEN"] },
+    "vatRateBps": { "type": "integer" },
     "updatedAt": { "type": ["string", "null"], "format": "date-time" }
   }
 }

@@ -38,7 +38,14 @@ public class OutboxService {
             resolvePrimaryImageUrl(product),
             product.isActive(),
             product.getStoreId(),
-            product.getUpdatedAt());
+            product.getUpdatedAt(),
+            product.getBasePriceCents(),
+            product.getUnitValue(),
+            product.getUnitOfMeasure(),
+            product.getWeightGrams(),
+            product.isPerishable(),
+            product.getTemperatureZone(),
+            product.getVatRateBps());
         OutboxEvent outboxEvent = new OutboxEvent();
         outboxEvent.setAggregateType("Product");
         outboxEvent.setAggregateId(product.getId().toString());
