@@ -1,0 +1,70 @@
+{{- if (default true (dig "observability" "ebpfProfiler" "enabled" true .Values)) }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-ebpf-network-profiler
+  namespace: monitoring
+  labels:
+    app: otel-ebpf-network-profiler
+    app.kubernetes.io/name: otel-ebpf-network-profiler
+    {{- include "instacommerce.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: otel-ebpf-network-profiler
+  template:
+    metadata:
+      labels:
+        app: otel-ebpf-network-profiler
+    spec:
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: ebpf-network-profiler
+          image: grafana/beyla:1.4.0
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - SYS_PTRACE
+                - NET_ADMIN
+                - BPF
+          env:
+            - name: BEYLA_OPEN_PORT
+              value: "80,443,8080,8081,8090,8091,8092,8093,8094,8095,8096,8097,8098,8099,9090"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.monitoring:4318"
+            - name: BEYLA_TRACE_PRINTER
+              value: "text"
+            - name: BEYLA_BPF_FS_PATH
+              value: "/sys/fs/bpf"
+            - name: BEYLA_NETWORK_METRICS
+              value: "true"
+            - name: BEYLA_NETWORK_SOURCE_TAG
+              value: "k8s.pod.name"
+            - name: BEYLA_NETWORK_DEST_TAG
+              value: "k8s.pod.name"
+          volumeMounts:
+            - name: sys-fs-bpf
+              mountPath: /sys/fs/bpf
+              mountPropagation: HostToContainer
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: sys-fs-bpf
+          hostPath:
+            path: /sys/fs/bpf
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+{{- end }}

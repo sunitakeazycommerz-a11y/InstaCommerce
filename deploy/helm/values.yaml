@@ -1180,4 +1180,14 @@ observability:
       highLatencyThresholdMs: 2000
       searchLowLatencySamplingPercentage: 0.1
       defaultProbabilisticSamplingPercentage: 5.0
+  ebpfProfiler:
+    enabled: true
+    image: grafana/beyla:1.4.0
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
 

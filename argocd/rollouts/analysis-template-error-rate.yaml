@@ -1,0 +1,36 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: canary-error-rate-and-latency-analysis
+  namespace: instacommerce
+  labels:
+    app.kubernetes.io/part-of: instacommerce-sre
+spec:
+  metrics:
+    # Metric 1: Canary 5xx error rate must not exceed 1%
+    - name: canary-error-rate
+      interval: 30s
+      count: 10 # 5-minute evaluation window
+      failureLimit: 1 # Abort and roll back on first confirmed violation
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            (
+              sum(rate(http_server_requests_seconds_count{status=~"5..",service="{{args.service-name}}",pod=~".*canary.*"}[1m]))
+              /
+              (sum(rate(http_server_requests_seconds_count{service="{{args.service-name}}",pod=~".*canary.*"}[1m])) > 0)
+            ) <= 0.01
+
+    # Metric 2: Canary p99 latency must not exceed 1000ms
+    - name: canary-p99-latency
+      interval: 30s
+      count: 10
+      failureLimit: 2
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            histogram_quantile(0.99,
+              sum(rate(http_server_requests_seconds_bucket{service="{{args.service-name}}",pod=~".*canary.*"}[1m])) by (le)
+            ) <= 1.0

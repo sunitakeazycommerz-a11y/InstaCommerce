@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: order-service-rollout
+  namespace: instacommerce
+  labels:
+    app: order-service
+spec:
+  replicas: 4
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      containers:
+        - name: order-service
+          image: asia-south1-docker.pkg.dev/instacommerce/images/order-service:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: 1000m, memory: 1024Mi }
+  strategy:
+    canary:
+      analysis:
+        templates:
+          - templateName: canary-error-rate-and-latency-analysis
+        args:
+          - name: service-name
+            value: order-service
+      steps:
+        - setWeight: 10
+        - pause: { duration: 5m }
+        - setWeight: 25
+        - pause: { duration: 5m }
+        - setWeight: 50
+        - pause: { duration: 10m }
+      abortScaleDownDelaySeconds: 30
+      antiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: order-service
+              topologyKey: kubernetes.io/hostname
