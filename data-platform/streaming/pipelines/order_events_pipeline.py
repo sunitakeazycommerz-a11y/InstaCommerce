@@ -44,16 +44,23 @@ class OrderPipelineOptions(PipelineOptions):
             default="analytics.sla_compliance",
             help="BigQuery table for SLA compliance metrics",
         )
+        parser.add_argument(
+            "--output_table_late_events",
+            default="analytics_dlq.late_order_events",
+            help="BigQuery table for late-arriving order events",
+        )
 
 
 class OrderEventParser(beam.DoFn):
     """Parse order event JSON from Kafka.
 
     Expects CloudEvents-style envelope with nested payload.
-    Dead-letters malformed events to a side output.
+    Dead-letters malformed events and routes late-arriving events beyond watermark.
     """
 
     DEAD_LETTER = "dead_letter"
+    LATE_EVENTS = "late_events"
+    ALLOWED_LATENESS_SECONDS = 3600  # 1 hour allowed lateness
 
     def process(self, element):
         key, value = element
@@ -72,7 +79,12 @@ class OrderEventParser(beam.DoFn):
             }
             if not parsed["order_id"]:
                 raise ValueError("Missing order_id in event")
-            event_time_str = event.get("eventTime")
+            event_time_str = (
+                event.get("eventTime")
+                or event.get("timestamp")
+                or event.get("occurredAt")
+                or event.get("createdAt")
+            )
             if event_time_str:
                 try:
                     event_ts = isoparse(event_time_str).timestamp()
@@ -80,6 +92,31 @@ class OrderEventParser(beam.DoFn):
                     event_ts = time.time()
             else:
                 event_ts = time.time()
+
+            # Check for late-arriving events beyond allowed lateness window (1 hour)
+            current_time = time.time()
+            lateness = current_time - event_ts
+            if lateness > self.ALLOWED_LATENESS_SECONDS:
+                logger.warning(
+                    "Late-arriving order event dropped to DLQ: order_id=%s, lateness=%.1fs",
+                    parsed["order_id"],
+                    lateness,
+                )
+                yield beam.pvalue.TaggedOutput(
+                    self.LATE_EVENTS,
+                    {
+                        "order_id": parsed["order_id"],
+                        "event_type": parsed["event_type"] or "UNKNOWN",
+                        "store_id": parsed["store_id"] or "UNKNOWN",
+                        "zone_id": parsed["zone_id"] or "UNKNOWN",
+                        "total_cents": parsed["total_cents"],
+                        "event_time": event_time_str or datetime.utcfromtimestamp(event_ts).isoformat(),
+                        "received_at": datetime.utcnow().isoformat(),
+                        "lateness_seconds": round(lateness, 2),
+                    },
+                )
+                return
+
             yield TimestampedValue(parsed, event_ts)
         except Exception as e:
             logger.warning("Failed to parse order event: %s", e)
@@ -187,6 +224,19 @@ SLA_TABLE_SCHEMA = {
     ]
 }
 
+LATE_EVENT_TABLE_SCHEMA = {
+    "fields": [
+        {"name": "order_id", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "event_type", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "store_id", "type": "STRING", "mode": "NULLABLE"},
+        {"name": "zone_id", "type": "STRING", "mode": "NULLABLE"},
+        {"name": "total_cents", "type": "INTEGER", "mode": "NULLABLE"},
+        {"name": "event_time", "type": "STRING", "mode": "NULLABLE"},
+        {"name": "received_at", "type": "TIMESTAMP", "mode": "REQUIRED"},
+        {"name": "lateness_seconds", "type": "FLOAT", "mode": "REQUIRED"},
+    ]
+}
+
 
 def build_pipeline(options):
     """Construct and return the order events streaming pipeline."""
@@ -209,13 +259,15 @@ def build_pipeline(options):
             )
             | "ParseEvents"
             >> beam.ParDo(OrderEventParser()).with_outputs(
-                OrderEventParser.DEAD_LETTER, main="parsed"
+                OrderEventParser.DEAD_LETTER,
+                OrderEventParser.LATE_EVENTS,
+                main="parsed",
             )
         )
 
         events = parsed.parsed
 
-        # --- 1-minute order volume (fixed window) ---
+        # --- 1-minute order volume (fixed window with 1-hour allowed lateness) ---
         (
             events
             | "Window1Min" >> beam.WindowInto(
@@ -224,7 +276,7 @@ def build_pipeline(options):
                     early=AfterProcessingTime(30),
                     late=AfterCount(1),
                 ),
-                allowed_lateness=Duration(seconds=300),
+                allowed_lateness=Duration(seconds=3600),
                 accumulation_mode=AccumulationMode.ACCUMULATING,
             )
             | "KeyByStore" >> beam.Map(lambda e: (e["store_id"], e))
@@ -239,7 +291,7 @@ def build_pipeline(options):
             )
         )
 
-        # --- 30-minute SLA compliance (sliding window, 1-min slide) ---
+        # --- 30-minute SLA compliance (sliding window, 1-min slide with 1-hour allowed lateness) ---
         (
             events
             | "FilterDelivered"
@@ -250,7 +302,7 @@ def build_pipeline(options):
                     early=AfterProcessingTime(30),
                     late=AfterCount(1),
                 ),
-                allowed_lateness=Duration(seconds=300),
+                allowed_lateness=Duration(seconds=3600),
                 accumulation_mode=AccumulationMode.ACCUMULATING,
             )
             | "KeyByZone" >> beam.Map(lambda e: (e["zone_id"], e))
@@ -260,6 +312,18 @@ def build_pipeline(options):
             >> WriteToBigQuery(
                 table=pipeline_options.output_table_sla,
                 schema=SLA_TABLE_SCHEMA,
+                write_disposition="WRITE_APPEND",
+                create_disposition="CREATE_IF_NEEDED",
+            )
+        )
+
+        # --- Late events dead-letter sink (BigQuery) ---
+        (
+            parsed[OrderEventParser.LATE_EVENTS]
+            | "WriteLateEvents"
+            >> WriteToBigQuery(
+                table=pipeline_options.output_table_late_events,
+                schema=LATE_EVENT_TABLE_SCHEMA,
                 write_disposition="WRITE_APPEND",
                 create_disposition="CREATE_IF_NEEDED",
             )

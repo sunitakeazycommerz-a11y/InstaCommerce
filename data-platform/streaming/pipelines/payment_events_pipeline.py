@@ -46,6 +46,11 @@ class PaymentPipelineOptions(PipelineOptions):
             default="analytics.payment_metrics",
             help="BigQuery table for payment metrics",
         )
+        parser.add_argument(
+            "--output_table_insert_failures",
+            default="analytics_errors.payment_insert_failures",
+            help="BigQuery table for failed payment records insert dead-letter queue",
+        )
 
 
 class PaymentEventParser(beam.DoFn):
@@ -156,6 +161,38 @@ METRICS_TABLE_SCHEMA = {
     ]
 }
 
+INSERT_FAILURE_SCHEMA = {
+    "fields": [
+        {"name": "destination", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "payload", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "error_message", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "failed_at", "type": "TIMESTAMP", "mode": "REQUIRED"},
+    ]
+}
+
+
+class FormatBigQueryInsertFailureFn(beam.DoFn):
+    """Format failed BigQuery streaming inserts for dead-letter routing."""
+
+    def process(self, element):
+        destination = "analytics.payment_metrics"
+        row_content = element
+        if isinstance(element, tuple) and len(element) >= 2:
+            destination = str(element[0])
+            row_content = element[1]
+
+        logger.error(
+            "CRITICAL: BigQuery insert failure detected for destination %s: %s",
+            destination,
+            row_content,
+        )
+        yield {
+            "destination": destination,
+            "payload": json.dumps(row_content) if not isinstance(row_content, str) else row_content,
+            "error_message": "Schema mismatch or streaming buffer error during insertion",
+            "failed_at": datetime.utcnow().isoformat(),
+        }
+
 
 def build_pipeline(options):
     """Construct and return the payment events streaming pipeline."""
@@ -184,7 +221,7 @@ def build_pipeline(options):
         events = parsed.parsed
 
         # 1-minute payment success rate per method
-        (
+        write_result = (
             events
             | "Window1Min" >> beam.WindowInto(
                 FixedWindows(60),
@@ -203,6 +240,20 @@ def build_pipeline(options):
             >> WriteToBigQuery(
                 table=pipeline_options.output_table,
                 schema=METRICS_TABLE_SCHEMA,
+                write_disposition="WRITE_APPEND",
+                create_disposition="CREATE_IF_NEEDED",
+                insert_retry_policy="NEVER",
+            )
+        )
+
+        # Route failed streaming inserts to dead-letter table
+        (
+            write_result.failed_rows
+            | "FormatInsertFailures" >> beam.ParDo(FormatBigQueryInsertFailureFn())
+            | "WriteInsertFailures"
+            >> WriteToBigQuery(
+                table=pipeline_options.output_table_insert_failures,
+                schema=INSERT_FAILURE_SCHEMA,
                 write_disposition="WRITE_APPEND",
                 create_disposition="CREATE_IF_NEEDED",
             )

@@ -142,7 +142,11 @@ class CartSessionAggregator(beam.CombineFn):
         return merged
 
     def extract_output(self, acc):
-        converted = "CHECKOUT_COMPLETED" in acc["event_types"]
+        # A session is converted if any checkout/order event completed
+        converted = any(
+            evt in acc["event_types"]
+            for evt in ("CHECKOUT_COMPLETED", "ORDER_PLACED", "PAYMENT_CONFIRMED")
+        )
         return {
             "converted": converted,
             "abandoned": not converted,
@@ -263,12 +267,9 @@ def build_pipeline(options):
             | "SessionWindow"
             >> beam.WindowInto(
                 Sessions(pipeline_options.session_gap_seconds),
-                trigger=AfterWatermark(
-                    early=AfterProcessingTime(30),
-                    late=AfterCount(1),
-                ),
+                trigger=AfterWatermark(),
                 allowed_lateness=Duration(seconds=900),
-                accumulation_mode=AccumulationMode.ACCUMULATING,
+                accumulation_mode=AccumulationMode.DISCARDING,
             )
             | "AggregateSession" >> beam.CombinePerKey(CartSessionAggregator())
             | "ExtractSessionValues" >> beam.Values()
@@ -281,12 +282,9 @@ def build_pipeline(options):
             | "SessionWindowForZone"
             >> beam.WindowInto(
                 Sessions(pipeline_options.session_gap_seconds),
-                trigger=AfterWatermark(
-                    early=AfterProcessingTime(30),
-                    late=AfterCount(1),
-                ),
+                trigger=AfterWatermark(),
                 allowed_lateness=Duration(seconds=900),
-                accumulation_mode=AccumulationMode.ACCUMULATING,
+                accumulation_mode=AccumulationMode.DISCARDING,
             )
             | "AggregateSessionForZone"
             >> beam.CombinePerKey(CartSessionAggregator())

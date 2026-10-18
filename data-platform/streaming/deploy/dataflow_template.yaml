@@ -45,7 +45,7 @@ rider_location:
     output_table: analytics.rider_utilization
     temp_location: gs://instacommerce-dataflow/temp
   machine_type: n1-standard-4
-  max_workers: 10
+  max_workers: 20
   autoscaling_algorithm: THROUGHPUT_BASED
   network: dataflow-vpc
   subnetwork: regions/asia-south1/subnetworks/dataflow-subnet
@@ -77,6 +77,22 @@ cart_events:
     temp_location: gs://instacommerce-dataflow/temp
   machine_type: n1-standard-4
   max_workers: 8
+  autoscaling_algorithm: THROUGHPUT_BASED
+  network: dataflow-vpc
+  subnetwork: regions/asia-south1/subnetworks/dataflow-subnet
+  service_account: dataflow-sa@instacommerce-prod.iam.gserviceaccount.com
+
+order_payment_join:
+  template: gs://instacommerce-dataflow/templates/order-payment-join
+  parameters:
+    kafka_bootstrap: kafka-bootstrap:9092
+    orders_topic: orders.events
+    payments_topic: payments.events
+    output_table: analytics.realtime_order_payments
+    join_window_seconds: 600
+    temp_location: gs://instacommerce-dataflow/temp
+  machine_type: n1-standard-4
+  max_workers: 12
   autoscaling_algorithm: THROUGHPUT_BASED
   network: dataflow-vpc
   subnetwork: regions/asia-south1/subnetworks/dataflow-subnet

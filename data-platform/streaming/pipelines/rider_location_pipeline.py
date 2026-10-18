@@ -86,8 +86,18 @@ class RiderLocationParser(beam.DoFn):
             )
 
 
-class RiderUtilizationAggregator(beam.CombineFn):
-    """Aggregate rider utilization metrics per zone."""
+def compute_spatial_cell(lat, lng):
+    """Compute spatial cell index (~100m grid) from lat/lng to prevent high-cardinality OOM."""
+    if lat is None or lng is None:
+        return "UNKNOWN_CELL"
+    return f"{round(lat, 3)}_{round(lng, 3)}"
+
+
+class SpatialPreAggregateFn(beam.CombineFn):
+    """Pre-aggregate GPS pings at 10-second micro-batches by spatial cell and zone.
+
+    Emits compact scalar summary structs instead of accumulating millions of raw pings in memory.
+    """
 
     def create_accumulator(self):
         return {
@@ -119,7 +129,6 @@ class RiderUtilizationAggregator(beam.CombineFn):
             merged["idle_riders"] |= acc["idle_riders"]
             merged["total_speed_kmh"] += acc["total_speed_kmh"]
             merged["ping_count"] += acc["ping_count"]
-        # A rider active in any accumulator is active overall
         merged["idle_riders"] -= merged["active_riders"]
         return merged
 
@@ -128,8 +137,54 @@ class RiderUtilizationAggregator(beam.CombineFn):
             acc["total_speed_kmh"] / acc["ping_count"] if acc["ping_count"] > 0 else 0.0
         )
         return {
-            "active_rider_count": len(acc["active_riders"]),
-            "idle_rider_count": len(acc["idle_riders"]),
+            "active_count": len(acc["active_riders"]),
+            "idle_count": len(acc["idle_riders"]),
+            "rider_count": len(acc["active_riders"]) + len(acc["idle_riders"]),
+            "total_speed_kmh": acc["total_speed_kmh"],
+            "avg_speed": round(avg_speed, 2),
+            "ping_count": acc["ping_count"],
+        }
+
+
+class ZoneUtilizationAggregator(beam.CombineFn):
+    """Aggregate pre-aggregated spatial cell summaries into zone metrics without OOM."""
+
+    def create_accumulator(self):
+        return {
+            "active_riders": 0,
+            "idle_riders": 0,
+            "total_speed_kmh": 0.0,
+            "ping_count": 0,
+        }
+
+    def add_input(self, acc, element):
+        acc["active_riders"] += element.get("active_count", 0)
+        acc["idle_riders"] += element.get("idle_count", 0)
+        acc["total_speed_kmh"] += element.get("total_speed_kmh", 0.0)
+        acc["ping_count"] += element.get("ping_count", 0)
+        return acc
+
+    def merge_accumulators(self, accumulators):
+        merged = {
+            "active_riders": 0,
+            "idle_riders": 0,
+            "total_speed_kmh": 0.0,
+            "ping_count": 0,
+        }
+        for acc in accumulators:
+            merged["active_riders"] += acc["active_riders"]
+            merged["idle_riders"] += acc["idle_riders"]
+            merged["total_speed_kmh"] += acc["total_speed_kmh"]
+            merged["ping_count"] += acc["ping_count"]
+        return merged
+
+    def extract_output(self, acc):
+        avg_speed = (
+            acc["total_speed_kmh"] / acc["ping_count"] if acc["ping_count"] > 0 else 0.0
+        )
+        return {
+            "active_rider_count": acc["active_riders"],
+            "idle_rider_count": acc["idle_riders"],
             "avg_speed_kmh": round(avg_speed, 2),
             "total_pings": acc["ping_count"],
         }
@@ -186,9 +241,38 @@ def build_pipeline(options):
 
         events = parsed.parsed
 
-        # 1-minute rider utilization per zone
-        (
+        # Pre-aggregate GPS pings by spatial cell at 10-second fixed intervals
+        pre_aggregated = (
             events
+            | "Window10SecMicroBatch" >> beam.WindowInto(
+                FixedWindows(10),
+                trigger=AfterWatermark(),
+                accumulation_mode=AccumulationMode.DISCARDING,
+            )
+            | "KeyByZoneAndCell"
+            >> beam.Map(
+                lambda e: (
+                    (e["zone_id"], compute_spatial_cell(e.get("latitude"), e.get("longitude"))),
+                    e,
+                )
+            )
+            | "PreAggregateByCell" >> beam.CombinePerKey(SpatialPreAggregateFn())
+            | "FlattenPreAgg"
+            >> beam.Map(
+                lambda kv: {
+                    "zone_id": kv[0][0],
+                    "spatial_cell": kv[0][1],
+                    "active_count": kv[1]["active_count"],
+                    "idle_count": kv[1]["idle_count"],
+                    "total_speed_kmh": kv[1]["total_speed_kmh"],
+                    "ping_count": kv[1]["ping_count"],
+                }
+            )
+        )
+
+        # 1-minute rider utilization per zone over pre-aggregated summaries
+        (
+            pre_aggregated
             | "Window1Min" >> beam.WindowInto(
                 FixedWindows(60),
                 trigger=AfterWatermark(
@@ -196,11 +280,11 @@ def build_pipeline(options):
                     late=AfterCount(1),
                 ),
                 allowed_lateness=Duration(seconds=300),
-                accumulation_mode=AccumulationMode.ACCUMULATING,
+                accumulation_mode=AccumulationMode.DISCARDING,
             )
             | "KeyByZone" >> beam.Map(lambda e: (e["zone_id"], e))
             | "AggregatePerZone"
-            >> beam.CombinePerKey(RiderUtilizationAggregator())
+            >> beam.CombinePerKey(ZoneUtilizationAggregator())
             | "FormatUtilization" >> beam.Map(format_utilization_row)
             | "WriteUtilization"
             >> WriteToBigQuery(

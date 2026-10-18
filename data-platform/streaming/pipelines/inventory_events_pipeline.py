@@ -217,7 +217,7 @@ def build_pipeline(options):
                     late=AfterCount(1),
                 ),
                 allowed_lateness=Duration(seconds=600),
-                accumulation_mode=AccumulationMode.ACCUMULATING,
+                accumulation_mode=AccumulationMode.DISCARDING,
             )
             | "KeyBySkuStore"
             >> beam.Map(lambda e: ((e["sku_id"], e["store_id"]), e))
