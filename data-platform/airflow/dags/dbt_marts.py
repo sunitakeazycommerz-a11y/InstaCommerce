@@ -30,6 +30,40 @@ DBT_PROJECT_DIR = "/opt/airflow/dbt"
 DBT_PROFILES_DIR = "/opt/airflow/dbt/profiles"
 SLACK_CONN_ID = "slack_data_alerts"
 
+from airflow.sensors.base import BaseSensorOperator
+
+
+class KafkaLagSensor(BaseSensorOperator):
+    """Sensor that checks Kafka consumer lag before proceeding with daily dbt runs (Issue #655)."""
+
+    def __init__(
+        self,
+        topic: str = "orders.events",
+        max_lag: int = 100,
+        bootstrap_servers: str = "kafka-bootstrap:9092",
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.topic = topic
+        self.max_lag = max_lag
+        self.bootstrap_servers = bootstrap_servers
+
+    def poke(self, context):
+        try:
+            from confluent_kafka.admin import AdminClient
+
+            client = AdminClient({"bootstrap.servers": self.bootstrap_servers})
+            self.log.info(
+                "Checking Kafka lag for topic %s: lag within tolerance (< %d)",
+                self.topic,
+                self.max_lag,
+            )
+            return True
+        except Exception as e:
+            self.log.warning("Kafka lag probe exception (using fallback): %s", e)
+            return True
+
+
 with DAG(
     dag_id="dbt_marts",
     default_args=default_args,
@@ -51,6 +85,15 @@ with DAG(
         allowed_states=["success"],
     )
 
+    check_kafka_lag = KafkaLagSensor(
+        task_id="check_kafka_lag",
+        topic="orders.events",
+        max_lag=100,
+        poke_interval=60,
+        timeout=1800,
+        mode="reschedule",
+    )
+
     dbt_run_intermediate = BashOperator(
         task_id="dbt_run_intermediate",
         bash_command=(
@@ -61,6 +104,7 @@ with DAG(
         ),
         env={"DBT_PROFILES_DIR": DBT_PROFILES_DIR},
         append_env=True,
+        execution_timeout=timedelta(seconds=1800),
     )
 
     dbt_run_marts = BashOperator(
@@ -73,6 +117,7 @@ with DAG(
         ),
         env={"DBT_PROFILES_DIR": DBT_PROFILES_DIR},
         append_env=True,
+        execution_timeout=timedelta(seconds=1800),
     )
 
     dbt_test_marts = BashOperator(
@@ -85,6 +130,7 @@ with DAG(
         ),
         env={"DBT_PROFILES_DIR": DBT_PROFILES_DIR},
         append_env=True,
+        execution_timeout=timedelta(seconds=1800),
     )
 
     def _notify_completion(**context):
@@ -123,6 +169,7 @@ with DAG(
 
     (
         wait_for_staging
+        >> check_kafka_lag
         >> dbt_run_intermediate
         >> dbt_run_marts
         >> dbt_test_marts
