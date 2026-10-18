@@ -549,18 +549,33 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 			),
 		)
 
+		traceID := ""
+		if msgSpan.SpanContext().HasTraceID() {
+			traceID = msgSpan.SpanContext().TraceID().String()
+		}
+
+		headers := []sarama.RecordHeader{
+			{Key: []byte("event_id"), Value: []byte(evt.ID)},
+			{Key: []byte("event_type"), Value: []byte(evt.EventType)},
+			{Key: []byte("aggregate_type"), Value: []byte(evt.AggregateType)},
+			{Key: []byte("schema_version"), Value: []byte("v1")},
+			{Key: []byte("source_service"), Value: []byte(evt.SourceService)},
+			{Key: []byte("correlation_id"), Value: []byte(evt.CorrelationID)},
+			{Key: []byte("X-Correlation-Id"), Value: []byte(evt.CorrelationID)},
+			{Key: []byte("X-Source-Service"), Value: []byte(evt.SourceService)},
+		}
+		if traceID != "" {
+			headers = append(headers,
+				sarama.RecordHeader{Key: []byte("X-Trace-Id"), Value: []byte(traceID)},
+				sarama.RecordHeader{Key: []byte("X-B3-TraceId"), Value: []byte(traceID)},
+			)
+		}
+
 		message := &sarama.ProducerMessage{
-			Topic: topic,
-			Key:   sarama.StringEncoder(evt.AggregateID),
-			Value: sarama.ByteEncoder(value),
-			Headers: []sarama.RecordHeader{
-				{Key: []byte("event_id"), Value: []byte(evt.ID)},
-				{Key: []byte("event_type"), Value: []byte(evt.EventType)},
-				{Key: []byte("aggregate_type"), Value: []byte(evt.AggregateType)},
-				{Key: []byte("schema_version"), Value: []byte("v1")},
-				{Key: []byte("source_service"), Value: []byte(evt.SourceService)},
-				{Key: []byte("correlation_id"), Value: []byte(evt.CorrelationID)},
-			},
+			Topic:   topic,
+			Key:     sarama.StringEncoder(evt.AggregateID),
+			Value:   sarama.ByteEncoder(value),
+			Headers: headers,
 		}
 
 		if _, _, err := s.producer.SendMessage(message); err != nil {
@@ -570,17 +585,28 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 
 			// Attempt DLQ fallback to unblock the pipeline
 			dlqValue := buildDLQMessage(evt, topic, err)
+			dlqHeaders := []sarama.RecordHeader{
+				{Key: []byte("event_id"), Value: []byte(evt.ID)},
+				{Key: []byte("original_topic"), Value: []byte(topic)},
+				{Key: []byte("event_type"), Value: []byte(evt.EventType)},
+				{Key: []byte("aggregate_type"), Value: []byte(evt.AggregateType)},
+				{Key: []byte("source_service"), Value: []byte(evt.SourceService)},
+				{Key: []byte("correlation_id"), Value: []byte(evt.CorrelationID)},
+				{Key: []byte("X-Correlation-Id"), Value: []byte(evt.CorrelationID)},
+				{Key: []byte("X-Source-Service"), Value: []byte(evt.SourceService)},
+				{Key: []byte("dlq_reason"), Value: []byte(err.Error())},
+			}
+			if traceID != "" {
+				dlqHeaders = append(dlqHeaders,
+					sarama.RecordHeader{Key: []byte("X-Trace-Id"), Value: []byte(traceID)},
+					sarama.RecordHeader{Key: []byte("X-B3-TraceId"), Value: []byte(traceID)},
+				)
+			}
 			dlqMessage := &sarama.ProducerMessage{
-				Topic: s.cfg.DLQTopic,
-				Key:   sarama.StringEncoder(evt.AggregateID),
-				Value: sarama.ByteEncoder(dlqValue),
-				Headers: []sarama.RecordHeader{
-					{Key: []byte("event_id"), Value: []byte(evt.ID)},
-					{Key: []byte("original_topic"), Value: []byte(topic)},
-					{Key: []byte("event_type"), Value: []byte(evt.EventType)},
-					{Key: []byte("aggregate_type"), Value: []byte(evt.AggregateType)},
-					{Key: []byte("dlq_reason"), Value: []byte(err.Error())},
-				},
+				Topic:   s.cfg.DLQTopic,
+				Key:     sarama.StringEncoder(evt.AggregateID),
+				Value:   sarama.ByteEncoder(dlqValue),
+				Headers: dlqHeaders,
 			}
 
 			if _, _, dlqErr := s.producer.SendMessage(dlqMessage); dlqErr != nil {
