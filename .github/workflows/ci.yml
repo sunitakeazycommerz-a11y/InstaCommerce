@@ -490,8 +490,23 @@ jobs:
           cache: 'gradle'
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: 'services/go-shared/go.sum'
       - name: Build contracts (proto + schemas)
         run: ./gradlew :contracts:build :contracts:test --no-daemon
+      - name: Generate and verify Go Protobuf stubs
+        run: |
+          ./scripts/generate-proto.sh
+          if [[ -n $(git status --porcelain services/go-shared/pkg/proto/) ]]; then
+            echo "ERROR: Go Protobuf stubs in services/go-shared/pkg/proto/ are out of sync with contracts/src/main/proto/."
+            echo "Run ./scripts/generate-proto.sh and commit the generated stubs."
+            git status --porcelain services/go-shared/pkg/proto/
+            exit 1
+          fi
+          echo "Go Protobuf stubs are completely in sync."
       - name: Validate JSON event schemas
         run: |
           echo "Validating all JSON schema files are well-formed..."
@@ -517,15 +532,65 @@ jobs:
               sys.exit(1)
           print(f'SUCCESS: All {len(titles)} JSON schema titles are globally unique.')
           "
+      - name: Check for breaking JSON Schema changes
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 -c "import json, subprocess, sys
+          base_ref = 'origin/${{ github.base_ref }}'
+          diff_cmd = ['git', 'diff', '--name-only', base_ref + '...HEAD', '--', 'contracts/src/main/resources/schemas/']
+          try:
+              changed = subprocess.check_output(diff_cmd).decode('utf-8').splitlines()
+          except Exception:
+              changed = []
+          violations = []
+          for path in changed:
+              if not path.endswith('.json'): continue
+              try:
+                  old_content = subprocess.check_output(['git', 'show', f'{base_ref}:{path}']).decode('utf-8')
+                  old_schema = json.loads(old_content)
+              except Exception:
+                  continue # new file
+              with open(path) as f:
+                  new_schema = json.load(f)
+              # Check required fields removal
+              old_req = set(old_schema.get('required', []))
+              new_req = set(new_schema.get('required', []))
+              removed_req = old_req - new_req
+              if removed_req:
+                  violations.append(f'{path}: required field(s) {removed_req} were removed')
+              # Check new required field added
+              old_props = set(old_schema.get('properties', {}).keys())
+              added_req = new_req - old_props
+              if added_req:
+                  violations.append(f'{path}: new field(s) {added_req} added as required (breaks backwards compatibility)')
+              # Check property type mutations
+              new_props = new_schema.get('properties', {})
+              for prop, old_def in old_schema.get('properties', {}).items():
+                  if prop in new_props:
+                      new_def = new_props[prop]
+                      if 'type' in old_def and 'type' in new_def and old_def['type'] != new_def['type']:
+                          violations.append(f'{path}: property \"{prop}\" type changed from {old_def[\"type\"]} to {new_def[\"type\"]}')
+                      if 'enum' in old_def and 'enum' in new_def:
+                          removed_enum = set(old_def['enum']) - set(new_def['enum'])
+                          if removed_enum:
+                              violations.append(f'{path}: property \"{prop}\" enum values {removed_enum} were removed')
+          if violations:
+              print('FAIL: Backwards compatibility violations detected in schemas:')
+              for v in violations:
+                  print(f'  - {v}')
+              sys.exit(1)
+          print('SUCCESS: All schema modifications are backwards compatible.')
+          "
       - name: Check for breaking proto changes
         if: github.event_name == 'pull_request'
         run: |
           echo "Checking for proto field removals or type changes against base branch..."
           git diff origin/${{ github.base_ref }}...HEAD -- contracts/src/main/proto/ > /tmp/proto-diff.txt || true
           if grep -qE '^\-\s+(required|optional|repeated)?\s*(string|int32|int64|bool|bytes|double|float|message|enum)\s+' /tmp/proto-diff.txt 2>/dev/null; then
-            echo "::warning::Potential breaking change detected in proto files. Review the diff carefully."
+            echo "ERROR: Breaking change detected in proto contracts without major version bump!"
             echo "--- Proto diff ---"
             cat /tmp/proto-diff.txt
+            exit 1
           else
             echo "No breaking proto field removals detected."
           fi

@@ -46,3 +46,11 @@ protobuf {
         }
     }
 }
+
+tasks.register<Exec>("generateGoProto") {
+    description = "Generates Go Protobuf and gRPC stubs into services/go-shared/pkg/proto"
+    group = "build"
+    workingDir = rootDir
+    commandLine("./scripts/generate-proto.sh")
+}
+
