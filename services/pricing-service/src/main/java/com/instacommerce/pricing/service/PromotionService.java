@@ -80,6 +80,9 @@ public class PromotionService {
         p.setStartAt(request.startAt());
         p.setEndAt(request.endAt());
         p.setMaxUses(request.maxUses());
+        if (request.maxRedemptionsPerUser() != null) {
+            p.setMaxRedemptionsPerUser(request.maxRedemptionsPerUser());
+        }
         p.setActive(true);
         Promotion saved = promotionRepository.save(p);
         log.info("Created promotion id={} name={}", saved.getId(), saved.getName());
@@ -104,6 +107,7 @@ public class PromotionService {
         if (request.endAt() != null) p.setEndAt(request.endAt());
         if (request.active() != null) p.setActive(request.active());
         if (request.maxUses() != null) p.setMaxUses(request.maxUses());
+        if (request.maxRedemptionsPerUser() != null) p.setMaxRedemptionsPerUser(request.maxRedemptionsPerUser());
 
         Promotion saved = promotionRepository.save(p);
         log.info("Updated promotion id={}", saved.getId());
@@ -121,6 +125,22 @@ public class PromotionService {
             return false;
         }
         return true;
+    }
+
+    @CacheEvict(value = "activePromotions", allEntries = true)
+    @Transactional
+    public boolean recordPromotionUsage(UUID promotionId, UUID userId) {
+        var promoOpt = promotionRepository.findByIdForUpdate(promotionId);
+        if (promoOpt.isEmpty()) {
+            log.warn("Promotion not found for update: {}", promotionId);
+            return false;
+        }
+        Promotion promo = promoOpt.get();
+        if (promo.getMaxUses() != null && promo.getCurrentUses() >= promo.getMaxUses()) {
+            log.warn("Promotion max uses exceeded for promo={}", promotionId);
+            return false;
+        }
+        return recordPromotionUsage(promotionId);
     }
 
     @CacheEvict(value = "activePromotions", allEntries = true)
@@ -154,6 +174,7 @@ public class PromotionService {
                 p.isActive(),
                 p.getMaxUses(),
                 p.getCurrentUses(),
+                p.getMaxRedemptionsPerUser(),
                 p.getCreatedAt());
     }
 }

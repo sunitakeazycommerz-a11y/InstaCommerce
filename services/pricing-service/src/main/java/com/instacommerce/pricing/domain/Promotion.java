@@ -51,6 +51,9 @@ public class Promotion {
     @Column(name = "current_uses", nullable = false)
     private int currentUses;
 
+    @Column(name = "max_redemptions_per_user")
+    private Integer maxRedemptionsPerUser = 1;
+
     @Column(name = "created_at")
     private Instant createdAt;
 
@@ -155,6 +158,14 @@ public class Promotion {
 
     public void setCurrentUses(int currentUses) {
         this.currentUses = currentUses;
+    }
+
+    public Integer getMaxRedemptionsPerUser() {
+        return maxRedemptionsPerUser;
+    }
+
+    public void setMaxRedemptionsPerUser(Integer maxRedemptionsPerUser) {
+        this.maxRedemptionsPerUser = maxRedemptionsPerUser;
     }
 
     public Instant getCreatedAt() {

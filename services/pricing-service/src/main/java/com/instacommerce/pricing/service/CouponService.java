@@ -33,25 +33,36 @@ public class CouponService {
     private final PromotionRepository promotionRepository;
     private final PromotionService promotionService;
     private final OutboxService outboxService;
+    private final PromoReservationService promoReservationService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public CouponService(CouponRepository couponRepository,
                          CouponRedemptionRepository couponRedemptionRepository,
                          PromotionRepository promotionRepository,
                          PromotionService promotionService,
-                         OutboxService outboxService) {
+                         OutboxService outboxService,
+                         PromoReservationService promoReservationService) {
         this.couponRepository = couponRepository;
         this.couponRedemptionRepository = couponRedemptionRepository;
         this.promotionRepository = promotionRepository;
         this.promotionService = promotionService;
         this.outboxService = outboxService;
+        this.promoReservationService = promoReservationService;
+    }
+
+    public CouponService(CouponRepository couponRepository,
+                         CouponRedemptionRepository couponRedemptionRepository,
+                         PromotionRepository promotionRepository,
+                         PromotionService promotionService,
+                         OutboxService outboxService) {
+        this(couponRepository, couponRedemptionRepository, promotionRepository, promotionService, outboxService, new PromoReservationService());
     }
 
     public CouponService(CouponRepository couponRepository,
                          CouponRedemptionRepository couponRedemptionRepository,
                          PromotionRepository promotionRepository,
                          PromotionService promotionService) {
-        this(couponRepository, couponRedemptionRepository, promotionRepository, promotionService, null);
+        this(couponRepository, couponRedemptionRepository, promotionRepository, promotionService, null, new PromoReservationService());
     }
 
     public record CouponValidationResult(long discountCents, String couponCode) {}
@@ -94,59 +105,74 @@ public class CouponService {
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public void redeemCoupon(String code, UUID userId, UUID orderId, long discountCents) {
-        Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)
-                .orElseThrow(() -> new CouponNotFoundException(code));
-
-        // Thread-safe redemption: lock coupon row and check limits inside transaction
-        if (coupon.getTotalLimit() != null && coupon.getTotalRedeemed() >= coupon.getTotalLimit()) {
-            throw new InvalidCouponException("Coupon has reached its total redemption limit");
+        if (promoReservationService != null && !promoReservationService.tryAcquire(code, userId)) {
+            throw new InvalidCouponException("Coupon redemption currently in progress for user");
         }
-
-        long userRedemptions = couponRedemptionRepository.countByCouponIdAndUserId(coupon.getId(), userId);
-        if (userRedemptions >= coupon.getPerUserLimit()) {
-            throw new InvalidCouponException("You have already used this coupon the maximum number of times");
-        }
-
-        CouponRedemption redemption = new CouponRedemption();
-        redemption.setCoupon(coupon);
-        redemption.setUserId(userId);
-        redemption.setOrderId(orderId);
-        redemption.setDiscountCents(discountCents);
-        redemption.setSingleUse(coupon.isSingleUse());
 
         try {
-            couponRedemptionRepository.save(redemption);
-        } catch (DataIntegrityViolationException ex) {
-            // Constraint violation for single-use coupon redemptions
-            throw new InvalidCouponException("Coupon has already been used");
+            Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)
+                    .orElseThrow(() -> new CouponNotFoundException(code));
+
+            // Thread-safe redemption: lock coupon row and check limits inside transaction
+            if (coupon.getTotalLimit() != null && coupon.getTotalRedeemed() >= coupon.getTotalLimit()) {
+                throw new InvalidCouponException("Coupon has reached its total redemption limit");
+            }
+
+            long userRedemptions = couponRedemptionRepository.countByCouponIdAndUserId(coupon.getId(), userId);
+            if (userRedemptions >= coupon.getPerUserLimit()) {
+                throw new InvalidCouponException("You have already used this coupon the maximum number of times");
+            }
+
+            CouponRedemption redemption = new CouponRedemption();
+            redemption.setCoupon(coupon);
+            redemption.setUserId(userId);
+            redemption.setOrderId(orderId);
+            redemption.setDiscountCents(discountCents);
+            redemption.setSingleUse(coupon.isSingleUse() || coupon.getPerUserLimit() <= 1);
+
+            try {
+                couponRedemptionRepository.save(redemption);
+            } catch (DataIntegrityViolationException ex) {
+                // Constraint violation for single-use coupon redemptions
+                throw new InvalidCouponException("Coupon has already been used");
+            }
+
+            // Increment counter atomically
+            coupon.setTotalRedeemed(coupon.getTotalRedeemed() + 1);
+            couponRepository.save(coupon);
+            promotionService.recordPromotionUsage(coupon.getPromotion().getId());
+
+            java.util.Map<String, Object> eventPayload = new java.util.LinkedHashMap<>();
+            eventPayload.put("couponId", coupon.getId().toString());
+            eventPayload.put("couponCode", code);
+            eventPayload.put("userId", userId.toString());
+            eventPayload.put("orderId", orderId != null ? orderId.toString() : null);
+            eventPayload.put("discountCents", discountCents);
+            eventPayload.put("singleUse", redemption.isSingleUse());
+            eventPayload.put("totalRedeemed", coupon.getTotalRedeemed());
+            eventPayload.put("redeemedAt", Instant.now().toString());
+
+            if (outboxService != null) {
+                outboxService.recordEvent("Coupon", coupon.getId().toString(), "CouponRedeemed", eventPayload);
+            }
+
+            log.info("Redeemed coupon code={} userId={} orderId={} discount={}", code, userId, orderId, discountCents);
+        } catch (Exception ex) {
+            if (promoReservationService != null) {
+                promoReservationService.release(code, userId);
+            }
+            throw ex;
         }
-
-        // Increment counter atomically
-        coupon.setTotalRedeemed(coupon.getTotalRedeemed() + 1);
-        couponRepository.save(coupon);
-        promotionService.recordPromotionUsage(coupon.getPromotion().getId());
-
-        java.util.Map<String, Object> eventPayload = new java.util.LinkedHashMap<>();
-        eventPayload.put("couponId", coupon.getId().toString());
-        eventPayload.put("couponCode", code);
-        eventPayload.put("userId", userId.toString());
-        eventPayload.put("orderId", orderId != null ? orderId.toString() : null);
-        eventPayload.put("discountCents", discountCents);
-        eventPayload.put("singleUse", coupon.isSingleUse());
-        eventPayload.put("totalRedeemed", coupon.getTotalRedeemed());
-        eventPayload.put("redeemedAt", Instant.now().toString());
-
-        if (outboxService != null) {
-            outboxService.recordEvent("Coupon", coupon.getId().toString(), "CouponRedeemed", eventPayload);
-        }
-
-        log.info("Redeemed coupon code={} userId={} orderId={} discount={}", code, userId, orderId, discountCents);
     }
 
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public void unredeemCoupon(String code, UUID userId, UUID orderId) {
+        if (promoReservationService != null) {
+            promoReservationService.release(code, userId);
+        }
+
         var couponOpt = couponRepository.findByCodeIgnoreCaseForUpdate(code);
         if (couponOpt.isEmpty()) {
             log.warn("Cannot un-redeem non-existent coupon code={}", code);

@@ -20,10 +20,19 @@ public class CatalogEventConsumer {
 
     private final ObjectMapper objectMapper;
     private final PriceRuleRepository priceRuleRepository;
+    private final org.springframework.cache.CacheManager cacheManager;
 
-    public CatalogEventConsumer(ObjectMapper objectMapper, PriceRuleRepository priceRuleRepository) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public CatalogEventConsumer(ObjectMapper objectMapper,
+                                PriceRuleRepository priceRuleRepository,
+                                org.springframework.cache.CacheManager cacheManager) {
         this.objectMapper = objectMapper;
         this.priceRuleRepository = priceRuleRepository;
+        this.cacheManager = cacheManager;
+    }
+
+    public CatalogEventConsumer(ObjectMapper objectMapper, PriceRuleRepository priceRuleRepository) {
+        this(objectMapper, priceRuleRepository, null);
     }
 
     @KafkaListener(topics = TopicNames.CATALOG_EVENTS, groupId = "pricing-service-catalog")
@@ -38,6 +47,19 @@ public class CatalogEventConsumer {
             if (event.id() == null) {
                 logger.warn("Catalog event missing product id");
                 return;
+            }
+
+            // Evict product prices and rules cache
+            if (cacheManager != null) {
+                var pricesCache = cacheManager.getCache("productPrices");
+                if (pricesCache != null) {
+                    pricesCache.evict(event.id());
+                }
+                var rulesCache = cacheManager.getCache("priceRules");
+                if (rulesCache != null) {
+                    rulesCache.evict(event.id());
+                }
+                logger.debug("Evicted price caches for productId={}", event.id());
             }
 
             Instant now = Instant.now();

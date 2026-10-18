@@ -28,15 +28,25 @@ public class PricingService {
     private final PromotionService promotionService;
     private final CouponService couponService;
     private final QuoteTokenService quoteTokenService;
+    private final DiscountCalculator discountCalculator;
+
+    public PricingService(PriceRuleRepository priceRuleRepository,
+                          PromotionService promotionService,
+                          CouponService couponService,
+                          QuoteTokenService quoteTokenService,
+                          DiscountCalculator discountCalculator) {
+        this.priceRuleRepository = priceRuleRepository;
+        this.promotionService = promotionService;
+        this.couponService = couponService;
+        this.quoteTokenService = quoteTokenService;
+        this.discountCalculator = discountCalculator;
+    }
 
     public PricingService(PriceRuleRepository priceRuleRepository,
                           PromotionService promotionService,
                           CouponService couponService,
                           QuoteTokenService quoteTokenService) {
-        this.priceRuleRepository = priceRuleRepository;
-        this.promotionService = promotionService;
-        this.couponService = couponService;
-        this.quoteTokenService = quoteTokenService;
+        this(priceRuleRepository, promotionService, couponService, quoteTokenService, new DiscountCalculator());
     }
 
     @Cacheable(value = "productPrices", key = "#productId")
@@ -65,39 +75,43 @@ public class PricingService {
             pricedItems.add(new PricedItem(item.productId(), unitPrice, item.quantity(), lineTotal));
         }
 
-        // Apply best applicable promotion
-        List<String> appliedPromotions = new ArrayList<>();
-        long promotionDiscount = 0;
-        Promotion bestPromo = null;
-        for (Promotion promotion : promotionService.findActivePromotions()) {
-            if (subtotalCents < promotion.getMinOrderCents()) {
-                continue;
+        // Evaluate candidate promotions
+        var activePromotions = promotionService.findActivePromotions();
+        long preliminaryPromoDiscount = 0;
+        for (Promotion promotion : activePromotions) {
+            if (subtotalCents >= promotion.getMinOrderCents()
+                    && !now.isBefore(promotion.getStartAt())
+                    && now.isBefore(promotion.getEndAt())) {
+                long discount = promotionService.calculateDiscount(promotion, subtotalCents);
+                if (discount > preliminaryPromoDiscount) {
+                    preliminaryPromoDiscount = discount;
+                }
             }
-            if (now.isBefore(promotion.getStartAt()) || !now.isBefore(promotion.getEndAt())) {
-                continue;
-            }
-            long discount = promotionService.calculateDiscount(promotion, subtotalCents);
-            if (discount > promotionDiscount) {
-                promotionDiscount = discount;
-                bestPromo = promotion;
-            }
-        }
-        if (bestPromo != null) {
-            appliedPromotions.add(bestPromo.getName());
         }
 
-        // Apply coupon if provided
-        long couponDiscount = 0;
+        // Apply coupon if provided, evaluated strictly on net subtotal post-promotion
+        Long couponValidationDiscount = null;
         String appliedCoupon = null;
         if (request.couponCode() != null && !request.couponCode().isBlank() && request.userId() != null) {
+            long netBase = Math.max(0, subtotalCents - preliminaryPromoDiscount);
             var validationResult = couponService.validateCoupon(
-                    request.couponCode(), request.userId(), subtotalCents - promotionDiscount);
-            couponDiscount = validationResult.discountCents();
+                    request.couponCode(), request.userId(), netBase);
+            couponValidationDiscount = validationResult.discountCents();
             appliedCoupon = request.couponCode();
         }
 
-        long totalDiscount = promotionDiscount + couponDiscount;
-        long totalCents = Math.max(0, subtotalCents - totalDiscount);
+        // Strict precedence discount calculation via DiscountCalculator
+        var calcResult = discountCalculator.calculateDiscounts(
+                pricedItems,
+                activePromotions,
+                List.of(),
+                couponValidationDiscount,
+                null
+        );
+
+        long totalDiscount = calcResult.totalDiscountCents();
+        long totalCents = calcResult.netTotalCents();
+        List<String> appliedPromotions = calcResult.appliedPromotionNames();
 
         log.info("Cart pricing calculated: subtotal={}, discount={}, total={}", subtotalCents, totalDiscount, totalCents);
 

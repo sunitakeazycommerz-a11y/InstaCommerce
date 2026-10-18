@@ -13,6 +13,21 @@ public record UpdatePromotionRequest(
     Instant startAt,
     Instant endAt,
     Boolean active,
-    Integer maxUses
+    Integer maxUses,
+    Integer maxRedemptionsPerUser
 ) {
+    public UpdatePromotionRequest(
+        String name,
+        String description,
+        String discountType,
+        BigDecimal discountValue,
+        Long minOrderCents,
+        Long maxDiscountCents,
+        Instant startAt,
+        Instant endAt,
+        Boolean active,
+        Integer maxUses
+    ) {
+        this(name, description, discountType, discountValue, minOrderCents, maxDiscountCents, startAt, endAt, active, maxUses, null);
+    }
 }
