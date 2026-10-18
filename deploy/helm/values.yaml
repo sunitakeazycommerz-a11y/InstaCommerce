@@ -1159,3 +1159,25 @@ resourceQuota:
   memory: "84Gi"
   cpuLimit: "128"
   memoryLimit: "164Gi"
+
+observability:
+  otelCollector:
+    enabled: true
+    replicas: 2
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    sampling:
+      decisionWait: 10s
+      numTraces: 100000
+      expectedNewTracesPerSec: 2000
+      errorStatusSamplingPercentage: 100
+      highLatencyThresholdMs: 2000
+      searchLowLatencySamplingPercentage: 0.1
+      defaultProbabilisticSamplingPercentage: 5.0
+

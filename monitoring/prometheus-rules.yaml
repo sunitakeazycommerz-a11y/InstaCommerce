@@ -285,3 +285,131 @@ groups:
           summary: "Database {{ $labels.database_id }} CPU utilization above 80%"
           description: "Cloud SQL instance {{ $labels.database_id }} CPU utilization is {{ $value | humanizePercentage }} for 10 minutes."
           runbook_url: "https://runbooks.instacommerce.internal/ops/database-high-cpu"
+
+      # ── JVM & Connection Pool Health (SRE-P1-13 / #625, #632) ──
+      - alert: JVMHeapUsageHigh
+        expr: |
+          (
+            jvm_memory_used_bytes{area="heap"}
+            /
+            jvm_memory_max_bytes{area="heap"}
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} JVM heap memory usage above 85%"
+          description: "{{ $labels.service }} on {{ $labels.instance }} has heap usage at {{ $value | humanizePercentage }} for 5 minutes."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/jvm-heap-high"
+
+      - alert: JVMGarbageCollectionLag
+        expr: |
+          jvm_gc_pause_seconds_max > 1.0
+          or
+          (increase(jvm_gc_pause_seconds_sum[1m]) / increase(jvm_gc_pause_seconds_count[1m])) > 1.0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} JVM GC pause time exceeds 1s"
+          description: "{{ $labels.service }} on {{ $labels.instance }} experienced GC pause latency > 1000ms, risking STW freeze."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/jvm-gc-lag"
+
+      - alert: HikariPoolDeadlock
+        expr: hikaricp_pending_threads > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} HikariCP connection pool deadlock suspected"
+          description: "{{ $labels.service }} has {{ $value }} pending threads waiting for DB connections for over 1m."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/hikaricp-deadlock"
+
+      - alert: HikariPoolSaturation
+        expr: |
+          (
+            hikaricp_active_connections
+            /
+            (hikaricp_max_connections > 0)
+          ) > 0.85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} HikariCP connection pool saturation > 85%"
+          description: "{{ $labels.service }} database pool is {{ $value | humanizePercentage }} saturated for 2 minutes."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/hikaricp-saturation"
+
+      - alert: HikariConnectionTimeout
+        expr: rate(hikaricp_connection_timeout_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} HikariCP connection acquisition timeouts occurring"
+          description: "{{ $labels.service }} is experiencing SQLTransientConnectionException / connection acquisition timeouts."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/hikaricp-timeout"
+
+      # ── Kafka Per-Partition Health & Starvation (#630) ──
+      - alert: KafkaPartitionLagHigh
+        expr: kafka_consumergroup_lag{topic=~".*events"} > 500
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka consumer group {{ $labels.consumergroup }} partition lag is high on topic {{ $labels.topic }}"
+          description: "Partition {{ $labels.partition }} of topic {{ $labels.topic }} for consumer group {{ $labels.consumergroup }} has a lag of {{ $value }} (> 500) for 3 minutes."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/kafka-partition-lag"
+
+      - alert: KafkaPartitionStarved
+        expr: kafka_consumergroup_current_offset{topic=~".*events"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka consumer group {{ $labels.consumergroup }} partition starvation on topic {{ $labels.topic }}"
+          description: "Partition {{ $labels.partition }} of topic {{ $labels.topic }} has current offset 0 for 5m, indicating starvation or partition unassigned."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/kafka-partition-starvation"
+
+      # ── Database Storage & WAL I/O Resilience (#640) ──
+      - alert: CloudSQLDiskReadOpsRatioHigh
+        expr: cloudsql_database_disk_read_ops_ratio > 0.85
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database {{ $labels.database_id }} disk read ops ratio above 85%"
+          description: "Cloud SQL instance {{ $labels.database_id }} read ops ratio is {{ $value | humanizePercentage }} for 3m, risking IOPS exhaustion."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/cloudsql-disk-read-ops"
+
+      - alert: CloudSQLWALDiskWriteLatencyHigh
+        expr: cloudsql_database_disk_write_latency_seconds > 0.01
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database {{ $labels.database_id }} WAL disk write latency > 10ms"
+          description: "Cloud SQL instance {{ $labels.database_id }} disk write latency is {{ $value }}s (> 10ms) for 3 minutes, transaction commits stalling."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/cloudsql-wal-latency"
+
+      # ── Synthetic Checks & Blackbox Probing (#636) ──
+      - alert: GRPCHealthCheckFailed
+        expr: probe_success{job="blackbox-grpc"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "gRPC service {{ $labels.instance }} health check failed"
+          description: "Blackbox probe on gRPC port 9090 for {{ $labels.instance }} reported status not SERVING (probe_success == 0)."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/grpc-health-check"
+
+      - alert: SyntheticCheckFailing
+        expr: probe_success{job="blackbox-http"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "HTTP synthetic check failing for {{ $labels.instance }}"
+          description: "Blackbox probe for {{ $labels.instance }} failed (probe_success == 0) for 2 minutes."
+          runbook_url: "https://runbooks.instacommerce.internal/ops/synthetic-check-failed"
+

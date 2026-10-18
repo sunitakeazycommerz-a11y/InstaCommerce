@@ -1,0 +1,47 @@
+# Prometheus configuration for InstaCommerce monitoring stack
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - prometheus-rules.yaml
+
+scrape_configs:
+  - job_name: 'blackbox-http'
+    scrape_interval: 15s
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://cart-service:8080/actuator/health/readiness
+          - http://order-service:8080/actuator/health/readiness
+          - http://inventory-service:8080/actuator/health/readiness
+          - http://payment-service:8080/actuator/health/readiness
+          - http://pricing-service:8080/actuator/health/readiness
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: 'blackbox-grpc'
+    scrape_interval: 15s
+    metrics_path: /probe
+    params:
+      module: [grpc_health]
+    static_configs:
+      - targets:
+          - dispatch-optimizer-service:9090
+          - stream-processor-service:9090
+          - routing-eta-service:9090
+          - inventory-service:9090
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

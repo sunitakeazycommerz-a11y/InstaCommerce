@@ -1,0 +1,169 @@
+{{- if (default true (dig "observability" "otelCollector" "enabled" true .Values)) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  labels:
+    app.kubernetes.io/name: otel-collector
+    {{- include "instacommerce.labels" . | nindent 4 }}
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 20
+
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 100000
+        expected_new_traces_per_sec: 2000
+        policies:
+          # Policy 1: Always sample traces with HTTP status >= 500 (100% error sampling)
+          - name: error-http-status-filter
+            type: numeric_attribute
+            numeric_attribute:
+              key: http.status_code
+              min_value: 500
+              max_value: 599
+
+          # Policy 2: Always sample traces with error status code
+          - name: error-status-code-filter
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+
+          # Policy 3: Always sample traces where latency > 2000ms (100% slow trace sampling)
+          - name: high-latency-filter
+            type: latency
+            latency:
+              threshold_ms: 2000
+
+          # Policy 4: Sample 0.1% of successful low-latency search requests
+          - name: search-probabilistic-filter
+            type: and
+            and:
+              and_sub_policy:
+                - name: search-service-match
+                  type: string_attribute
+                  string_attribute:
+                    key: service.name
+                    values: ["search-service"]
+                - name: search-sample-rate
+                  type: probabilistic
+                  probabilistic:
+                    sampling_percentage: 0.1
+
+          # Policy 5: Baseline probabilistic sampling for other non-error traffic
+          - name: default-probabilistic-filter
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: 5.0
+
+      batch:
+        send_batch_size: 1024
+        timeout: 5s
+
+      resource:
+        attributes:
+          - key: environment
+            value: "production"
+            action: upsert
+
+    exporters:
+      otlp/tempo:
+        endpoint: tempo.monitoring:4317
+        tls:
+          insecure: true
+      jaeger:
+        endpoint: jaeger-collector.monitoring:14250
+        tls:
+          insecure: true
+      prometheusremotewrite:
+        endpoint: "http://prometheus.monitoring:9090/api/v1/write"
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, tail_sampling, batch, resource]
+          exporters: [otlp/tempo, jaeger]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [prometheusremotewrite]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels:
+    app: otel-collector
+    app.kubernetes.io/name: otel-collector
+    {{- include "instacommerce.labels" . | nindent 4 }}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.96.0
+          args: ["--config=/conf/otel-collector-config.yaml"]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+            - name: metrics
+              containerPort: 8889
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /conf
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  labels:
+    app: otel-collector
+    app.kubernetes.io/name: otel-collector
+    {{- include "instacommerce.labels" . | nindent 4 }}
+spec:
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: metrics
+      port: 8889
+      targetPort: 8889
+  selector:
+    app: otel-collector
+{{- end }}

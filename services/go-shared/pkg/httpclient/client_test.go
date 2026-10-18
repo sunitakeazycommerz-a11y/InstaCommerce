@@ -113,3 +113,64 @@ func TestCircuitBreakerTripsAndRecovers(t *testing.T) {
 		t.Errorf("expected 200 OK, got %d", resp.StatusCode)
 	}
 }
+
+func TestDNSCacheLookupAndExpiration(t *testing.T) {
+	cache := NewDNSCache(50 * time.Millisecond)
+	ctx := context.Background()
+
+	// Initial lookup
+	ips1, err := cache.LookupHost(ctx, "localhost")
+	if err != nil {
+		t.Fatalf("LookupHost failed: %v", err)
+	}
+	if len(ips1) == 0 {
+		t.Fatalf("expected at least one IP for localhost, got 0")
+	}
+
+	// Immediate second lookup should hit cache
+	ips2, err := cache.LookupHost(ctx, "localhost")
+	if err != nil {
+		t.Fatalf("cached LookupHost failed: %v", err)
+	}
+	if len(ips2) != len(ips1) {
+		t.Errorf("expected %d IPs from cache, got %d", len(ips1), len(ips2))
+	}
+
+	// Wait for TTL to expire (50ms)
+	time.Sleep(60 * time.Millisecond)
+
+	// Third lookup should refresh cache
+	ips3, err := cache.LookupHost(ctx, "localhost")
+	if err != nil {
+		t.Fatalf("refreshed LookupHost failed: %v", err)
+	}
+	if len(ips3) == 0 {
+		t.Fatalf("expected at least one IP after refresh, got 0")
+	}
+}
+
+func TestHTTPClientWithDNSCacheAndIdleTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(
+		WithDNSCacheTTL(100*time.Millisecond),
+		WithIdleConnTimeout(15*time.Second),
+		WithTimeout(2*time.Second),
+	)
+
+	ctx := context.Background()
+	resp, err := client.Get(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("client.Get failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 OK, got %d", resp.StatusCode)
+	}
+}
+

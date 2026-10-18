@@ -120,10 +120,17 @@ func (cb *CircuitBreaker) recordFailure() {
 // Client is a production HTTP client with retry, circuit breaker, and timeouts.
 type Client struct {
 	httpClient     *http.Client
+	baseTransport  *http.Transport
 	circuitBreaker *CircuitBreaker
+	dnsCache       *DNSCache
 	maxRetries     int
 	baseDelay      time.Duration
 	logger         *slog.Logger
+}
+
+// DNSCache returns the client's DNSCache instance.
+func (c *Client) DNSCache() *DNSCache {
+	return c.dnsCache
 }
 
 // Option configures a Client.
@@ -167,9 +174,106 @@ func WithCircuitBreakerResetTimeout(d time.Duration) Option {
 }
 
 // WithLogger sets a custom logger.
+// DNSCache caches DNS lookups with a configurable TTL to prevent indefinite DNS
+// caching while avoiding DNS resolution overhead on every HTTP request.
+type DNSCache struct {
+	resolver *net.Resolver
+	ttl      time.Duration
+	mu       sync.RWMutex
+	entries  map[string]dnsEntry
+}
+
+type dnsEntry struct {
+	ips       []string
+	expiresAt time.Time
+}
+
+// NewDNSCache returns a new DNSCache with the specified TTL.
+func NewDNSCache(ttl time.Duration) *DNSCache {
+	return &DNSCache{
+		resolver: &net.Resolver{PreferGo: true},
+		ttl:      ttl,
+		entries:  make(map[string]dnsEntry),
+	}
+}
+
+// LookupHost resolves host to IP addresses, caching successful results for ttl.
+func (c *DNSCache) LookupHost(ctx context.Context, host string) ([]string, error) {
+	c.mu.RLock()
+	entry, ok := c.entries[host]
+	c.mu.RUnlock()
+
+	if ok && time.Now().Before(entry.expiresAt) {
+		return entry.ips, nil
+	}
+
+	ips, err := c.resolver.LookupHost(ctx, host)
+	if err != nil {
+		if ok && len(entry.ips) > 0 {
+			return entry.ips, nil
+		}
+		return nil, err
+	}
+
+	c.mu.Lock()
+	c.entries[host] = dnsEntry{
+		ips:       ips,
+		expiresAt: time.Now().Add(c.ttl),
+	}
+	c.mu.Unlock()
+
+	return ips, nil
+}
+
+// DialContext returns a dial function that resolves hostnames through the DNS cache.
+func (c *DNSCache) DialContext(dialer *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return dialer.DialContext(ctx, network, addr)
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			return dialer.DialContext(ctx, network, addr)
+		}
+
+		ips, err := c.LookupHost(ctx, host)
+		if err != nil || len(ips) == 0 {
+			return dialer.DialContext(ctx, network, addr)
+		}
+
+		var lastErr error
+		for _, ip := range ips {
+			target := net.JoinHostPort(ip, port)
+			conn, err := dialer.DialContext(ctx, network, target)
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
+	}
+}
+
+// WithLogger sets a custom logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *Client) {
 		c.logger = l
+	}
+}
+
+// WithDNSCacheTTL sets the TTL for DNS resolution caching.
+func WithDNSCacheTTL(d time.Duration) Option {
+	return func(c *Client) {
+		c.dnsCache.ttl = d
+	}
+}
+
+// WithIdleConnTimeout sets the maximum idle connection timeout for connection pooling.
+func WithIdleConnTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		if c.baseTransport != nil {
+			c.baseTransport.IdleConnTimeout = d
+		}
 	}
 }
 
@@ -182,17 +286,22 @@ func WithLogger(l *slog.Logger) Option {
 //   - BaseDelay: 500ms (exponential backoff with jitter)
 //   - CircuitBreaker threshold: 5 consecutive failures
 //   - CircuitBreaker reset timeout: 30s
+//   - IdleConnTimeout: 30s (max idle connection age)
+//   - DNS Cache TTL: 5s
 func NewClient(opts ...Option) *Client {
+	dnsCache := NewDNSCache(5 * time.Second)
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Resolver:  &net.Resolver{PreferGo: true},
+	}
 	baseTransport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dnsCache.DialContext(dialer),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   100,
-		IdleConnTimeout:       90 * time.Second,
+		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
@@ -201,7 +310,9 @@ func NewClient(opts ...Option) *Client {
 			Timeout:   30 * time.Second,
 			Transport: otelhttp.NewTransport(baseTransport),
 		},
+		baseTransport:  baseTransport,
 		circuitBreaker: newCircuitBreaker(5, 30*time.Second),
+		dnsCache:       dnsCache,
 		maxRetries:     3,
 		baseDelay:      500 * time.Millisecond,
 		logger:         slog.Default(),
