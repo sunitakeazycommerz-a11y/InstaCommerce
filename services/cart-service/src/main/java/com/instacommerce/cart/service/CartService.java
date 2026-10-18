@@ -87,6 +87,15 @@ public class CartService {
         return toResponse(cart);
     }
 
+    public CartResponse mergeCart(UUID targetUserId, UUID sourceGuestUserId) {
+        if (sourceGuestUserId == null || targetUserId.equals(sourceGuestUserId)) {
+            return getCart(targetUserId);
+        }
+        Cart merged = cartStore.mergeCart(targetUserId, sourceGuestUserId);
+        log.info("Merged guest cart {} into user cart {}", sourceGuestUserId, targetUserId);
+        return toResponse(merged);
+    }
+
     private void validateBusinessRules(UUID userId, AddItemRequest request) {
         cartStore.getCart(userId).ifPresent(cart -> {
             // Check max items per cart
@@ -122,7 +131,7 @@ public class CartService {
         int itemCount = cart.getItems().stream()
             .mapToInt(CartItem::getQuantity)
             .sum();
-        return new CartResponse(cart.getId(), cart.getUserId(), items, subtotal, itemCount, cart.getExpiresAt());
+        return new CartResponse(cart.getId(), cart.getUserId(), items, subtotal, itemCount, cart.getExpiresAt(), cart.getVersion());
     }
 
     private CartItemResponse toItemResponse(CartItem item) {
@@ -136,6 +145,6 @@ public class CartService {
     }
 
     private CartResponse emptyCartResponse(UUID userId) {
-        return new CartResponse(null, userId, Collections.emptyList(), 0L, 0, null);
+        return new CartResponse(null, userId, Collections.emptyList(), 0L, 0, null, 0L);
     }
 }

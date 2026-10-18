@@ -81,8 +81,8 @@ public class GlobalExceptionHandler {
             .body(buildError("CART_INVALID", ex.getMessage(), List.of(), request));
     }
 
-    @ExceptionHandler(OptimisticLockException.class)
-    public ResponseEntity<ErrorResponse> handleOptimisticLock(OptimisticLockException ex,
+    @ExceptionHandler({OptimisticLockException.class, org.springframework.dao.OptimisticLockingFailureException.class})
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(Exception ex,
                                                               HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
             .body(buildError("CONCURRENT_MODIFICATION", "Cart was modified by another request. Please retry.",

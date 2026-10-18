@@ -22,4 +22,6 @@ public interface CartStore {
     void clearCart(UUID userId);
 
     Cart validateCart(UUID userId);
+
+    Cart mergeCart(UUID targetUserId, UUID sourceGuestUserId);
 }

@@ -1,5 +1,6 @@
 package com.instacommerce.cart.controller;
 
+import com.instacommerce.cart.dto.request.UpdateQuantityRequest;
 import com.instacommerce.cart.dto.response.CartItemResponse;
 import com.instacommerce.cart.dto.response.CartResponse;
 import com.instacommerce.cart.service.CartService;
@@ -10,6 +11,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 
 import java.time.Instant;
 import java.util.List;
@@ -61,7 +63,7 @@ class CartControllerTest {
     @Test
     void getCartByUserIdReturnsCart() {
         CartResponse cartResponse = new CartResponse(
-            cartId, userId, List.of(), 0L, 0, Instant.now()
+            cartId, userId, List.of(), 0L, 0, Instant.now(), 2L
         );
 
         when(cartService.getCart(userId)).thenReturn(cartResponse);
@@ -71,5 +73,43 @@ class CartControllerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().userId()).isEqualTo(userId);
+        assertThat(response.getHeaders().getETag()).isEqualTo("\"2\"");
+    }
+
+    @Test
+    void mergeCartReturnsMergedCartWithETag() {
+        UUID guestUserId = UUID.randomUUID();
+        Authentication auth = org.mockito.Mockito.mock(Authentication.class);
+        when(auth.getName()).thenReturn(userId.toString());
+
+        CartResponse mergedResponse = new CartResponse(
+            cartId, userId, List.of(), 1000L, 2, Instant.now(), 3L
+        );
+        when(cartService.mergeCart(userId, guestUserId)).thenReturn(mergedResponse);
+
+        ResponseEntity<CartResponse> response = cartController.mergeCart(auth, guestUserId);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getHeaders().getETag()).isEqualTo("\"3\"");
+        verify(cartService).mergeCart(userId, guestUserId);
+    }
+
+    @Test
+    void updateQuantityFailsOnStaleIfMatchHeader() {
+        Authentication auth = org.mockito.Mockito.mock(Authentication.class);
+        when(auth.getName()).thenReturn(userId.toString());
+
+        CartResponse currentResponse = new CartResponse(
+            cartId, userId, List.of(), 500L, 1, Instant.now(), 2L
+        );
+        when(cartService.getCart(userId)).thenReturn(currentResponse);
+
+        UpdateQuantityRequest request = new UpdateQuantityRequest(3);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+            cartController.updateQuantity(auth, productId, request, "\"1\"")
+        ).isInstanceOf(com.instacommerce.cart.exception.ApiException.class)
+         .hasMessageContaining("Cart version mismatch");
     }
 }

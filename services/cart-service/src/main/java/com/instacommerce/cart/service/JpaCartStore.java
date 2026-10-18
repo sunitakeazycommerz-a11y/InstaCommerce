@@ -144,6 +144,64 @@ public class JpaCartStore implements CartStore {
         return cart;
     }
 
+    @Override
+    @Transactional
+    @CacheEvict(value = "carts", allEntries = true)
+    public Cart mergeCart(UUID targetUserId, UUID sourceGuestUserId) {
+        if (targetUserId.equals(sourceGuestUserId)) {
+            return cartRepository.findByUserId(targetUserId).orElseGet(() -> {
+                Cart newCart = new Cart();
+                newCart.setUserId(targetUserId);
+                newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
+                return cartRepository.save(newCart);
+            });
+        }
+
+        Cart targetCart = cartRepository.findByUserId(targetUserId).orElseGet(() -> {
+            Cart newCart = new Cart();
+            newCart.setUserId(targetUserId);
+            newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
+            return cartRepository.save(newCart);
+        });
+
+        Optional<Cart> guestCartOpt = cartRepository.findByUserId(sourceGuestUserId);
+        if (guestCartOpt.isEmpty() || guestCartOpt.get().getItems().isEmpty()) {
+            return targetCart;
+        }
+
+        Cart guestCart = guestCartOpt.get();
+        int maxQtyPerItem = 10;
+
+        for (CartItem guestItem : guestCart.getItems()) {
+            Optional<CartItem> existingTargetItem = cartItemRepository.findByCartIdAndProductId(
+                targetCart.getId(), guestItem.getProductId());
+            if (existingTargetItem.isPresent()) {
+                CartItem targetItem = existingTargetItem.get();
+                int combinedQty = Math.min(targetItem.getQuantity() + guestItem.getQuantity(), maxQtyPerItem);
+                targetItem.setQuantity(combinedQty);
+                cartItemRepository.save(targetItem);
+            } else {
+                CartItem newItem = new CartItem();
+                newItem.setProductId(guestItem.getProductId());
+                newItem.setProductName(guestItem.getProductName());
+                newItem.setUnitPriceCents(guestItem.getUnitPriceCents());
+                newItem.setQuantity(Math.min(guestItem.getQuantity(), maxQtyPerItem));
+                targetCart.addItem(newItem);
+            }
+        }
+
+        targetCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
+        Cart savedTargetCart = cartRepository.save(targetCart);
+
+        // Delete guest cart so it is not orphaned or duplicated
+        cartRepository.delete(guestCart);
+
+        outboxService.publish(AGGREGATE_TYPE, savedTargetCart.getId().toString(), "CART_MERGED",
+            Map.of("targetUserId", targetUserId.toString(), "guestUserId", sourceGuestUserId.toString()));
+
+        return savedTargetCart;
+    }
+
     private Map<String, Object> itemPayload(UUID userId, Cart cart, CartItem item) {
         return Map.of(
             "userId", userId,
