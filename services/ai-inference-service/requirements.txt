@@ -6,7 +6,7 @@ opentelemetry-exporter-otlp==1.27.0
 opentelemetry-instrumentation-fastapi==0.48b0
 opentelemetry-sdk==1.27.0
 prometheus-client==0.20.0
-redis==5.0.4
+redis==8.1.0
 uvicorn[standard]==0.32.1
 lightgbm==4.6.0
 xgboost==2.1.3
