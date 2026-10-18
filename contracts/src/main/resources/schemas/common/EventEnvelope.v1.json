@@ -15,13 +15,22 @@
   "properties": {
     "id": { "type": "string" },
     "eventId": { "type": "string" },
+    "event_id": { "type": "string" },
     "eventType": { "type": "string" },
+    "event_type": { "type": "string" },
     "aggregateType": { "type": "string" },
+    "aggregate_type": { "type": "string" },
     "aggregateId": { "type": "string" },
+    "aggregate_id": { "type": "string" },
     "eventTime": { "type": "string", "format": "date-time" },
-    "schemaVersion": { "type": "string", "const": "v1" },
+    "event_time": { "type": "string", "format": "date-time" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "schemaVersion": { "type": "string" },
+    "schema_version": { "type": "string" },
     "source_service": { "type": "string", "minLength": 1 },
+    "sourceService": { "type": "string" },
     "correlation_id": { "type": "string" },
+    "correlationId": { "type": "string" },
     "payload": {
       "type": [
         "object",
