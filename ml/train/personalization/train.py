@@ -8,14 +8,20 @@ produce 64-dim vectors. Dot product scores candidate items. Approximate
 nearest neighbor (ANN) index for sub-10ms serving.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
-import mlflow  # type: ignore
+try:
+    import mlflow  # type: ignore
+except (ImportError, OSError):
+    mlflow = None
+
 import numpy as np
 import pandas as pd
 import yaml
@@ -65,6 +71,42 @@ ITEM_FEATURES = [
 ]
 
 
+def assert_zero_data_leakage(
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    timestamp_col: str = "timestamp",
+) -> bool:
+    """Verify zero temporal overlap or test label contamination in training data.
+
+    Enforces strict temporal boundary: all training interactions must precede
+    the earliest test interaction.
+    """
+    if len(train_df) == 0 or len(test_df) == 0:
+        return True
+
+    train_max_ts = pd.to_datetime(train_df[timestamp_col]).max()
+    test_min_ts = pd.to_datetime(test_df[timestamp_col]).min()
+
+    if train_max_ts >= test_min_ts:
+        raise ValueError(
+            f"Temporal label leakage detected: max train timestamp ({train_max_ts}) "
+            f"is not strictly before min test timestamp ({test_min_ts})"
+        )
+
+    # Check for identical event keys if event_id column exists
+    if "event_id" in train_df.columns and "event_id" in test_df.columns:
+        overlap = set(train_df["event_id"]).intersection(set(test_df["event_id"]))
+        if overlap:
+            raise ValueError(f"Target leakage detected: {len(overlap)} event IDs overlap between train and test")
+
+    logger.info(
+        "Zero data leakage verified: train window ends at %s, test window starts at %s",
+        train_max_ts,
+        test_min_ts,
+    )
+    return True
+
+
 class PersonalizationTrainer:
     """Two-Tower NCF for personalized recommendations with cold-start handling."""
 
@@ -74,13 +116,28 @@ class PersonalizationTrainer:
         self.item_tower = None
         self.user_embeddings: dict[str, np.ndarray] = {}
         self.item_embeddings: dict[str, np.ndarray] = {}
+        self.popular_items: list[str] = []
+        self.item_categories: dict[str, str] = {}
+
+    @staticmethod
+    def split_train_test(
+        df: pd.DataFrame,
+        cutoff_days: int = 7,
+        timestamp_col: str = "timestamp",
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Split interactions strictly by timestamp cutoff to prevent label leakage."""
+        df = df.copy()
+        df[timestamp_col] = pd.to_datetime(df[timestamp_col])
+        cutoff = df[timestamp_col].max() - pd.Timedelta(days=cutoff_days)
+
+        train_df = pd.DataFrame(df[df[timestamp_col] <= cutoff].copy())
+        test_df = pd.DataFrame(df[df[timestamp_col] > cutoff].copy())
+
+        assert_zero_data_leakage(train_df, test_df, timestamp_col=timestamp_col)
+        return train_df, test_df
 
     def load_data(self, query: str) -> pd.DataFrame:
-        """Load user-item interaction data from BigQuery.
-
-        Expected columns: user_id, sku_id, interaction_type (view/click/cart/purchase),
-        timestamp, plus user and item features.
-        """
+        """Load user-item interaction data from BigQuery."""
         logger.info("Loading personalization training data from BigQuery")
         client = bigquery.Client()
         df = client.query(query).to_dataframe()
@@ -92,15 +149,23 @@ class PersonalizationTrainer:
         )
         return df
 
-    def _build_interaction_matrix(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Build implicit feedback matrix with weighted interactions."""
+    def _build_interaction_matrix(
+        self,
+        df: pd.DataFrame,
+        max_timestamp: Optional[pd.Timestamp] = None,
+    ) -> pd.DataFrame:
+        """Build implicit feedback matrix with weighted interactions strictly before max_timestamp."""
+        df = df.copy()
+        if max_timestamp is not None and "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df = df[df["timestamp"] <= max_timestamp]
+
         weights = self.config.get("interaction_weights", {
             "view": 1.0,
             "click": 2.0,
             "add_to_cart": 5.0,
             "purchase": 10.0,
         })
-        df = df.copy()
         df["weight"] = df["interaction_type"].map(weights).fillna(1.0)
         grouped = df.groupby(["user_id", "sku_id"], as_index=False)["weight"].sum()
         interaction = pd.DataFrame(grouped).rename(columns={"weight": "interaction_score"})
@@ -120,26 +185,30 @@ class PersonalizationTrainer:
         return "popularity"
 
     def train(self, df: pd.DataFrame):
-        """Train Two-Tower NCF model.
-
-        Uses LightFM as a proxy for the two-tower architecture in Phase 1.
-        Phase 2 will use TensorFlow/PyTorch for full neural towers.
-        """
+        """Train Two-Tower NCF model."""
         logger.info("Starting personalization model training")
         hp = self.config["hyperparameters"]
         interaction_df = self._build_interaction_matrix(df)
+
+        # Store popular items from training interactions for cold-start tier
+        pop_counts = interaction_df.groupby("sku_id")["interaction_score"].sum().sort_values(ascending=False)
+        self.popular_items = list(pop_counts.index)
+
+        # Store item categories if present
+        for cat_col in ["category_l1", "category", "preferred_category"]:
+            if cat_col in df.columns:
+                self.item_categories = df.drop_duplicates("sku_id").set_index("sku_id")[cat_col].to_dict()
+                break
 
         embedding_dim = int(hp.get("embedding_dim", 64))
         n_users = int(len(df["user_id"].unique()))
         n_items = int(len(df["sku_id"].unique()))
 
-        # Build user and item ID mappings
         user_ids = sorted(df["user_id"].unique())
         item_ids = sorted(df["sku_id"].unique())
         user_id_map = {uid: idx for idx, uid in enumerate(user_ids)}
         item_id_map = {iid: idx for idx, iid in enumerate(item_ids)}
 
-        # Initialize embeddings (Phase 1: matrix factorization via ALS)
         np.random.seed(42)
         user_factors = np.random.normal(0, 0.1, (n_users, embedding_dim))
         item_factors = np.random.normal(0, 0.1, (n_items, embedding_dim))
@@ -177,7 +246,6 @@ class PersonalizationTrainer:
                 rmse = np.sqrt(epoch_loss / len(interaction_df))
                 logger.info("Epoch %d/%d, RMSE: %.4f", epoch + 1, n_epochs, rmse)
 
-        # Store embeddings
         for uid, idx in user_id_map.items():
             self.user_embeddings[uid] = user_factors[idx]
         for iid, idx in item_id_map.items():
@@ -185,11 +253,68 @@ class PersonalizationTrainer:
 
         self.user_tower = user_factors
         self.item_tower = item_factors
-        logger.info("Training complete: %d user embeddings, %d item embeddings",
-                     len(self.user_embeddings), len(self.item_embeddings))
+        logger.info(
+            "Training complete: %d user embeddings, %d item embeddings, %d popular items",
+            len(self.user_embeddings),
+            len(self.item_embeddings),
+            len(self.popular_items),
+        )
+
+    def recommend(
+        self,
+        user_id: str,
+        store_popular_items: Optional[List[str]] = None,
+        viewed_categories: Optional[List[str]] = None,
+        top_k: int = 10,
+        candidates: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Generate top_k recommendations with robust cold-start fallbacks.
+
+        Guarantees cold-start users never receive an empty recommendation list.
+        """
+        all_items = list(self.item_embeddings.keys()) or self.popular_items
+        default_popular = store_popular_items or self.popular_items or all_items[:top_k]
+
+        # Case 1: Known user with learned embedding (collaborative filtering)
+        if user_id in self.user_embeddings and self.item_embeddings:
+            user_vec = self.user_embeddings[user_id]
+            candidate_list = candidates or all_items
+            scored_candidates = []
+            for item in candidate_list:
+                if item in self.item_embeddings:
+                    score = float(np.dot(user_vec, self.item_embeddings[item]))
+                    scored_candidates.append((item, score))
+            scored_candidates.sort(key=lambda x: x[1], reverse=True)
+            recs = [item for item, _ in scored_candidates[:top_k]]
+            for p in default_popular:
+                if p not in recs and len(recs) < top_k:
+                    recs.append(p)
+            return recs[:top_k]
+
+        # Case 2: Cold start with 1-3 viewed categories (content-based affinity)
+        if viewed_categories and self.item_categories:
+            matching = [
+                iid for iid, cat in self.item_categories.items()
+                if cat in viewed_categories
+            ]
+            recs = list(matching[:top_k])
+            for p in default_popular:
+                if p not in recs and len(recs) < top_k:
+                    recs.append(p)
+            if len(recs) >= top_k:
+                return recs[:top_k]
+
+        # Case 3: Absolute cold-start user (0 orders, 0 views) -> dark store popularity tier
+        recs = list(default_popular[:top_k])
+        if len(recs) < top_k:
+            for item in all_items:
+                if item not in recs and len(recs) < top_k:
+                    recs.append(item)
+
+        return recs[:top_k]
 
     def evaluate(self, df: pd.DataFrame) -> dict[str, float]:
-        """Evaluate recommendations. Return Hit@K, NDCG@K metrics."""
+        """Evaluate recommendations on held-out test data. Return Hit@K, NDCG@K metrics."""
         if not self.user_embeddings or not self.item_embeddings:
             raise RuntimeError("Model not trained yet")
 
@@ -199,7 +324,6 @@ class PersonalizationTrainer:
         hits = {k: [] for k in k_values}
         ndcg_scores_per_k = {k: [] for k in k_values}
 
-        # Evaluate per user
         user_interactions = interaction_df.groupby("user_id")
         all_items = list(self.item_embeddings.keys())
         item_matrix = np.array([self.item_embeddings[iid] for iid in all_items])
@@ -219,7 +343,6 @@ class PersonalizationTrainer:
                 hit = len(set(top_k) & true_items) > 0
                 hits[k].append(float(hit))
 
-                # NDCG@K
                 relevance = [1.0 if item in true_items else 0.0 for item in top_k]
                 if sum(relevance) > 0:
                     ideal = sorted(relevance, reverse=True)
@@ -237,22 +360,22 @@ class PersonalizationTrainer:
         return metrics
 
     def export(self, path: str):
-        """Export embeddings and model artifacts."""
+        """Export embeddings, metadata, and popular items for serving."""
         if not self.user_embeddings or self.user_tower is None or self.item_tower is None:
             raise RuntimeError("Model not trained yet")
 
         export_dir = Path(path)
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save embeddings as numpy arrays
         np.save(export_dir / "user_embeddings.npy", self.user_tower)
         np.save(export_dir / "item_embeddings.npy", self.item_tower)
 
-        # Save ID mappings
         with open(export_dir / "user_id_map.json", "w") as f:
             json.dump({uid: i for i, uid in enumerate(self.user_embeddings.keys())}, f)
         with open(export_dir / "item_id_map.json", "w") as f:
             json.dump({iid: i for i, iid in enumerate(self.item_embeddings.keys())}, f)
+        with open(export_dir / "popular_items.json", "w") as f:
+            json.dump(self.popular_items[:50], f)
 
         logger.info("Model exported to %s", export_dir)
 
@@ -282,54 +405,52 @@ def main():
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    mlflow.set_experiment(args.experiment)
+    if mlflow is not None:
+        mlflow.set_experiment(args.experiment)
 
-    with mlflow.start_run(run_name=args.run_name):
-        mlflow.log_params({
-            k: v for k, v in config.get("hyperparameters", {}).items()
-            if isinstance(v, (str, int, float, bool))
-        })
-        mlflow.log_param("model_name", config["model_name"])
-        mlflow.log_param("version", config["version"])
+    trainer = PersonalizationTrainer(config)
 
-        trainer = PersonalizationTrainer(config)
+    # Load data
+    query = config["training"]["query"]
+    df = trainer.load_data(query)
 
-        # Load data
-        query = config["training"]["query"]
-        df = trainer.load_data(query)
+    # Time-based split without label leakage
+    cutoff_days = config["training"].get("test_days", 7)
+    train_df, test_df = PersonalizationTrainer.split_train_test(df, cutoff_days=cutoff_days)
+    logger.info("Train: %d interactions, Test: %d interactions", len(train_df), len(test_df))
 
-        # Time-based split
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        cutoff_days = config["training"].get("test_days", 7)
-        cutoff = df["timestamp"].max() - pd.Timedelta(days=cutoff_days)
-        train_df = pd.DataFrame(df[df["timestamp"] <= cutoff])
-        test_df = pd.DataFrame(df[df["timestamp"] > cutoff])
-        logger.info("Train: %d interactions, Test: %d interactions", len(train_df), len(test_df))
+    # Train
+    trainer.train(train_df)
 
-        # Train
-        trainer.train(train_df)
+    # Evaluate
+    metrics = trainer.evaluate(test_df)
 
-        # Evaluate
-        metrics = trainer.evaluate(test_df)
-        mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
+    # Promotion gates
+    gates = config.get("promotion_gates", {})
+    gate_passed = _check_promotion_gates(metrics, gates)
 
-        # Promotion gates
-        gates = config.get("promotion_gates", {})
-        gate_passed = _check_promotion_gates(metrics, gates)
-        mlflow.log_metric("promotion_gate_passed", int(gate_passed))
+    if mlflow is not None:
+        with mlflow.start_run(run_name=args.run_name):
+            mlflow.log_params({
+                k: v for k, v in config.get("hyperparameters", {}).items()
+                if isinstance(v, (str, int, float, bool))
+            })
+            mlflow.log_param("model_name", config["model_name"])
+            mlflow.log_param("version", config["version"])
+            mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
+            mlflow.log_metric("promotion_gate_passed", int(gate_passed))
 
-        # Export model
-        output_dir = Path(args.output_dir) / config["version"]
-        trainer.export(str(output_dir))
-        mlflow.log_artifacts(str(output_dir))
-        mlflow.log_artifact(args.config)
+            output_dir = Path(args.output_dir) / config["version"]
+            trainer.export(str(output_dir))
+            mlflow.log_artifacts(str(output_dir))
+            mlflow.log_artifact(args.config)
 
-        logger.info(
-            "Training complete. Gate passed: %s. Hit@10: %.4f, NDCG@10: %.4f",
-            gate_passed,
-            metrics.get("hit_at_10", 0),
-            metrics.get("ndcg_at_10", 0),
-        )
+    logger.info(
+        "Training complete. Gate passed: %s. Hit@10: %.4f, NDCG@10: %.4f",
+        gate_passed,
+        metrics.get("hit_at_10", 0),
+        metrics.get("ndcg_at_10", 0),
+    )
 
 
 if __name__ == "__main__":

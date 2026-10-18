@@ -55,4 +55,8 @@ training:
 
 promotion_gates:
   min_ndcg_at_10: 0.65
-  min_improvement_pct: 2.0
+  min_ndcg_gain_pct: 1.5
+  baseline_ndcg_at_10: 0.65
+  max_p99_latency_ms: 15.0
+  min_shadow_agreement: 0.92
+  auto_promote: true

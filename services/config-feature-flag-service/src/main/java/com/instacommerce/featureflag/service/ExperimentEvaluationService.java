@@ -61,7 +61,10 @@ public class ExperimentEvaluationService {
 
         String resolvedAssignmentKey = resolveAssignmentKey(experiment, assignmentKey, userId, context);
         Long switchbackWindow = computeSwitchbackWindow(experiment, Instant.now());
-        ExperimentVariant variant = assignVariant(experiment.getKey(), variants, resolvedAssignmentKey,
+        String salt = (experiment.getSalt() != null && !experiment.getSalt().isBlank())
+                ? experiment.getSalt()
+                : experiment.getKey();
+        ExperimentVariant variant = assignVariant(salt, variants, resolvedAssignmentKey,
                 switchbackWindow);
         if (variant == null) {
             return new ExperimentEvaluationResponse(key, experiment.getId(), null, null, null,
@@ -160,8 +163,14 @@ public class ExperimentEvaluationService {
         return variants.get(variants.size() - 1);
     }
 
-    private int computeBucket(String assignmentKey, String experimentKey, Long switchbackWindow, int totalWeight) {
-        String input = assignmentKey + ":" + experimentKey;
+    public static int computeBucketPercent(String assignmentKey, String experimentSalt) {
+        String input = assignmentKey + ":" + experimentSalt;
+        int hash = Hashing.murmur3_32_fixed().hashString(input, StandardCharsets.UTF_8).asInt();
+        return (hash & 0x7FFFFFFF) % 100;
+    }
+
+    private int computeBucket(String assignmentKey, String salt, Long switchbackWindow, int totalWeight) {
+        String input = assignmentKey + ":" + salt;
         if (switchbackWindow != null) {
             input += ":" + switchbackWindow;
         }

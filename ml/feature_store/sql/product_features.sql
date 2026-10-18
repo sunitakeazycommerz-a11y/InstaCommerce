@@ -29,7 +29,9 @@ conversion AS (
         JOIN `analytics.fact_cart_events` ce
             ON fs.user_id = ce.user_id
             AND fs.search_date = ce.event_date
+        -- Exclude current calendar day to eliminate offline-to-online skew: window is strictly [T-30d, T-1d]
         WHERE fs.search_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+          AND fs.search_date < CURRENT_DATE()
           AND ce.product_id IS NOT NULL
     )
     GROUP BY product_id

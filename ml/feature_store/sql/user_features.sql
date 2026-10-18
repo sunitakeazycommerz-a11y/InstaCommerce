@@ -6,9 +6,12 @@
 WITH order_stats AS (
     SELECT
         user_id,
-        COUNT(*) FILTER (WHERE placed_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY))
+        -- Exclude current calendar day to eliminate offline-to-online skew: window is strictly [T-30d, T-1d]
+        COUNT(*) FILTER (WHERE placed_at >= TIMESTAMP_SUB(TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY), INTERVAL 30 DAY)
+                           AND placed_at < TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY))
             AS order_count_30d,
-        AVG(CASE WHEN placed_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY) THEN total_cents END)
+        AVG(CASE WHEN placed_at >= TIMESTAMP_SUB(TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY), INTERVAL 30 DAY)
+                  AND placed_at < TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY) THEN total_cents END)
             AS avg_basket_cents,
         DATE_DIFF(CURRENT_DATE(), MAX(DATE(placed_at)), DAY)
             AS days_since_last_order,

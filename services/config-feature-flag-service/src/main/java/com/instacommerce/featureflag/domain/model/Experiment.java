@@ -59,6 +59,9 @@ public class Experiment {
     @Column(columnDefinition = "jsonb")
     private String metadata;
 
+    @Column(length = 120)
+    private String salt;
+
     @Column(name = "created_by", length = 255)
     private String createdBy;
 
@@ -183,6 +186,14 @@ public class Experiment {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public String getSalt() {
+        return salt;
+    }
+
+    public void setSalt(String salt) {
+        this.salt = salt;
     }
 
     public long getVersion() {

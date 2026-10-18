@@ -63,6 +63,7 @@ public class ExperimentManagementService {
         experiment.setSwitchbackIntervalMinutes(request.switchbackIntervalMinutes());
         experiment.setSwitchbackStartAt(request.switchbackStartAt());
         experiment.setMetadata(request.metadata());
+        experiment.setSalt(request.salt());
         experiment.setCreatedBy(changedBy);
 
         experiment = experimentRepository.save(experiment);
@@ -111,6 +112,9 @@ public class ExperimentManagementService {
         }
         if (request.metadata() != null) {
             experiment.setMetadata(request.metadata());
+        }
+        if (request.salt() != null) {
+            experiment.setSalt(request.salt());
         }
         experiment = experimentRepository.save(experiment);
 
@@ -226,6 +230,7 @@ public class ExperimentManagementService {
                 experiment.getSwitchbackIntervalMinutes(),
                 experiment.getSwitchbackStartAt(),
                 experiment.getMetadata(),
+                experiment.getSalt(),
                 experiment.getCreatedBy(),
                 experiment.getCreatedAt(),
                 experiment.getUpdatedAt(),

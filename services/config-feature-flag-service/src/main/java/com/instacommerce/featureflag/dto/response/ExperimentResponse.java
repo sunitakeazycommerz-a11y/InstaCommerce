@@ -18,6 +18,7 @@ public record ExperimentResponse(
     Integer switchbackIntervalMinutes,
     Instant switchbackStartAt,
     String metadata,
+    String salt,
     String createdBy,
     Instant createdAt,
     Instant updatedAt,

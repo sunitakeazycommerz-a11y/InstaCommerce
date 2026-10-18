@@ -21,6 +21,7 @@ public record CreateExperimentRequest(
     @Min(1) Integer switchbackIntervalMinutes,
     Instant switchbackStartAt,
     String metadata,
+    @Size(max = 120) String salt,
     @NotEmpty List<@Valid ExperimentVariantRequest> variants
 ) {
 }

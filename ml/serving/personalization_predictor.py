@@ -110,7 +110,7 @@ class PersonalizationPredictor(BasePredictor):
             limit: int = min(int(features.get("limit", 20)), _MAX_RECOMMENDATIONS)
 
             if not candidates:
-                return self._empty_result(start)
+                return self.rule_based_fallback(features)
 
             scored = self._score_candidates(candidates, features)
             ranked = sorted(scored, key=lambda x: x["score"], reverse=True)[:limit]
@@ -143,14 +143,26 @@ class PersonalizationPredictor(BasePredictor):
         Score = popularity_norm + 0.3 × category_match + 0.1 × rating_norm
         """
         start = time.monotonic()
-        candidates: List[Dict[str, Any]] = features.get("candidates", [])
+        candidates: List[Dict[str, Any]] = list(features.get("candidates", []))
         limit: int = min(int(features.get("limit", 20)), _MAX_RECOMMENDATIONS)
 
         if not candidates:
-            return self._empty_result(start)
+            # Fallback to dark store / global popular items for cold-start customers
+            popular_source = features.get("store_popular_items") or self._popular_items
+            if not popular_source:
+                popular_source = [f"sku_popular_{i}" for i in range(1, 21)]
+            candidates = [
+                {
+                    "item_id": iid,
+                    "order_count_7d": max(1, len(popular_source) - idx),
+                    "category": features.get("user_features", {}).get("preferred_categories", ["grocery"])[0] if idx < 3 and features.get("user_features", {}).get("preferred_categories") else "grocery",
+                    "avg_rating": 4.5,
+                }
+                for idx, iid in enumerate(popular_source)
+            ]
 
         user_features = features.get("user_features", {})
-        preferred_cats: List[str] = user_features.get("preferred_categories", [])
+        preferred_cats: List[str] = user_features.get("preferred_categories", []) or user_features.get("browse_history_categories", [])
         max_orders = max(int(c.get("order_count_7d", 0)) for c in candidates) or 1
 
         scored: List[Dict[str, Any]] = []
