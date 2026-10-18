@@ -81,6 +81,21 @@ public class Delivery {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Column(name = "is_breach_risk", nullable = false)
+    private boolean isBreachRisk = false;
+
+    @Column(name = "compensation_triggered", nullable = false)
+    private boolean compensationTriggered = false;
+
+    @Column(name = "compensation_amount_cents", nullable = false)
+    private int compensationAmountCents = 0;
+
+    @Column(name = "vehicle_type")
+    private String vehicleType = "MOTORCYCLE";
+
+    @Column(name = "weather_delay_active", nullable = false)
+    private boolean weatherDelayActive = false;
+
     @Version
     private Long version;
 
@@ -256,5 +271,45 @@ public class Delivery {
 
     public void setVersion(Long version) {
         this.version = version;
+    }
+
+    public boolean isBreachRisk() {
+        return isBreachRisk;
+    }
+
+    public void setBreachRisk(boolean breachRisk) {
+        isBreachRisk = breachRisk;
+    }
+
+    public boolean isCompensationTriggered() {
+        return compensationTriggered;
+    }
+
+    public void setCompensationTriggered(boolean compensationTriggered) {
+        this.compensationTriggered = compensationTriggered;
+    }
+
+    public int getCompensationAmountCents() {
+        return compensationAmountCents;
+    }
+
+    public void setCompensationAmountCents(int compensationAmountCents) {
+        this.compensationAmountCents = compensationAmountCents;
+    }
+
+    public String getVehicleType() {
+        return vehicleType;
+    }
+
+    public void setVehicleType(String vehicleType) {
+        this.vehicleType = vehicleType;
+    }
+
+    public boolean isWeatherDelayActive() {
+        return weatherDelayActive;
+    }
+
+    public void setWeatherDelayActive(boolean weatherDelayActive) {
+        this.weatherDelayActive = weatherDelayActive;
     }
 }

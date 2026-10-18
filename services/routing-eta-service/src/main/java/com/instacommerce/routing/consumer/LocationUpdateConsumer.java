@@ -158,7 +158,10 @@ public class LocationUpdateConsumer {
             ETAEstimate estimate = etaService.calculateETAWithConfidence(
                 currentLat, currentLng,
                 delivery.getDropoffLat().doubleValue(),
-                delivery.getDropoffLng().doubleValue());
+                delivery.getDropoffLng().doubleValue(),
+                delivery.getStoreId(),
+                delivery.getVehicleType(),
+                0.0);
 
             int currentEta = delivery.getEstimatedMinutes() != null ? delivery.getEstimatedMinutes() : 0;
             int minDelta = routingProperties.getBreach().getEtaRecalcMinDeltaMinutes();

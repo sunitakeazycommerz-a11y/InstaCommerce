@@ -31,29 +31,62 @@ public class DeliveryService {
     private final ETAService etaService;
     private final OutboxService outboxService;
     private final RoutingProperties routingProperties;
+    private final org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
 
     public DeliveryService(DeliveryRepository deliveryRepository,
                            ETAService etaService,
                            OutboxService outboxService,
                            RoutingProperties routingProperties) {
+        this(deliveryRepository, etaService, outboxService, routingProperties, (org.springframework.messaging.simp.SimpMessagingTemplate) null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DeliveryService(DeliveryRepository deliveryRepository,
+                           ETAService etaService,
+                           OutboxService outboxService,
+                           RoutingProperties routingProperties,
+                           org.springframework.beans.factory.ObjectProvider<org.springframework.messaging.simp.SimpMessagingTemplate> messagingTemplateProvider) {
         this.deliveryRepository = deliveryRepository;
         this.etaService = etaService;
         this.outboxService = outboxService;
         this.routingProperties = routingProperties;
+        this.messagingTemplate = messagingTemplateProvider != null ? messagingTemplateProvider.getIfAvailable() : null;
+    }
+
+    public DeliveryService(DeliveryRepository deliveryRepository,
+                           ETAService etaService,
+                           OutboxService outboxService,
+                           RoutingProperties routingProperties,
+                           org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate) {
+        this.deliveryRepository = deliveryRepository;
+        this.etaService = etaService;
+        this.outboxService = outboxService;
+        this.routingProperties = routingProperties;
+        this.messagingTemplate = messagingTemplate;
     }
 
     @Transactional
     public DeliveryResponse createDelivery(UUID orderId, UUID riderId, UUID storeId,
                                            BigDecimal pickupLat, BigDecimal pickupLng,
                                            BigDecimal dropoffLat, BigDecimal dropoffLng) {
+        return createDelivery(orderId, riderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng, "MOTORCYCLE");
+    }
+
+    @Transactional
+    public DeliveryResponse createDelivery(UUID orderId, UUID riderId, UUID storeId,
+                                           BigDecimal pickupLat, BigDecimal pickupLng,
+                                           BigDecimal dropoffLat, BigDecimal dropoffLng,
+                                           String vehicleType) {
         var existing = deliveryRepository.findByOrderId(orderId);
         if (existing.isPresent()) {
             log.info("Delivery already exists for order {}", orderId);
             return toResponse(existing.get());
         }
+        String effectiveVehicle = vehicleType != null ? vehicleType : "MOTORCYCLE";
         var eta = etaService.calculateETAWithConfidence(
             pickupLat.doubleValue(), pickupLng.doubleValue(),
-            dropoffLat.doubleValue(), dropoffLng.doubleValue());
+            dropoffLat.doubleValue(), dropoffLng.doubleValue(),
+            storeId, effectiveVehicle, 0.0);
 
         Delivery delivery = new Delivery();
         delivery.setOrderId(orderId);
@@ -63,11 +96,15 @@ public class DeliveryService {
         delivery.setPickupLng(pickupLng);
         delivery.setDropoffLat(dropoffLat);
         delivery.setDropoffLng(dropoffLng);
+        delivery.setVehicleType(effectiveVehicle);
         delivery.setEstimatedMinutes(eta.etaMinutes());
         delivery.setEtaLowMinutes(eta.etaLowMinutes());
         delivery.setEtaHighMinutes(eta.etaHighMinutes());
         delivery.setLastEtaUpdatedAt(eta.calculatedAt());
         delivery.setDistanceKm(eta.distanceKm());
+        if (eta.monsoonDelayActive()) {
+            delivery.setWeatherDelayActive(true);
+        }
         if (riderId != null) {
             delivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
             delivery.setStartedAt(Instant.now());
@@ -139,25 +176,68 @@ public class DeliveryService {
         delivery.setEtaLowMinutes(estimate.etaLowMinutes());
         delivery.setEtaHighMinutes(estimate.etaHighMinutes());
         delivery.setLastEtaUpdatedAt(estimate.calculatedAt());
-        delivery = deliveryRepository.save(delivery);
+        if (estimate.monsoonDelayActive()) {
+            delivery.setWeatherDelayActive(true);
+        }
 
+        // 1. Continuous ETA update broadcast and event (Issue #595)
+        Map<String, Object> updatePayload = new java.util.HashMap<>();
+        updatePayload.put("deliveryId", deliveryId.toString());
+        updatePayload.put("orderId", delivery.getOrderId().toString());
+        updatePayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
+        updatePayload.put("estimatedMinutes", estimate.etaMinutes());
+        updatePayload.put("etaLowMinutes", estimate.etaLowMinutes());
+        updatePayload.put("etaHighMinutes", estimate.etaHighMinutes());
+        updatePayload.put("distanceKm", estimate.distanceKm());
+        updatePayload.put("detourDetected", estimate.detourDetected());
+        updatePayload.put("monsoonDelayActive", estimate.monsoonDelayActive());
+        updatePayload.put("delayBanner", estimate.delayBanner());
+        updatePayload.put("vehicleRecommendation", estimate.vehicleRecommendation());
+        updatePayload.put("calculatedAt", estimate.calculatedAt().toString());
+
+        outboxService.publish("Delivery", deliveryId.toString(), "ETA_UPDATED", updatePayload);
+
+        if (messagingTemplate != null) {
+            messagingTemplate.convertAndSend("/topic/deliveries/" + deliveryId + "/eta", (Object) updatePayload);
+            messagingTemplate.convertAndSend("/topic/orders/" + delivery.getOrderId() + "/eta", (Object) updatePayload);
+        }
+
+        // 2. Early-warning SLA breach risk and automated compensation (Issue #596)
         double threshold = routingProperties.getBreach().getBreachAlertThreshold();
-        if (estimate.breachProbability() > threshold) {
+        if (estimate.breachProbability() > threshold || estimate.etaMinutes() > routingProperties.getBreach().getSlaThresholdMinutes()) {
+            boolean firstBreach = !delivery.isCompensationTriggered();
+            delivery.setBreachRisk(true);
+            if (firstBreach) {
+                delivery.setCompensationTriggered(true);
+                delivery.setCompensationAmountCents(200); // Automated $2 apology wallet credit per Issue #596
+            }
+
             log.warn("ETA breach risk for delivery {}: probability={}, eta={}min, sla={}min",
                 deliveryId, estimate.breachProbability(), estimate.etaMinutes(),
                 routingProperties.getBreach().getSlaThresholdMinutes());
 
-            outboxService.publish("Delivery", deliveryId.toString(),
-                "ETA_BREACH_RISK", Map.of(
-                    "deliveryId", deliveryId.toString(),
-                    "orderId", delivery.getOrderId().toString(),
-                    "riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "",
-                    "currentEtaMinutes", estimate.etaMinutes(),
-                    "etaLowMinutes", estimate.etaLowMinutes(),
-                    "etaHighMinutes", estimate.etaHighMinutes(),
-                    "slaMinutes", routingProperties.getBreach().getSlaThresholdMinutes(),
-                    "breachProbability", estimate.breachProbability()));
+            Map<String, Object> breachPayload = new java.util.HashMap<>();
+            breachPayload.put("deliveryId", deliveryId.toString());
+            breachPayload.put("orderId", delivery.getOrderId().toString());
+            breachPayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
+            breachPayload.put("currentEtaMinutes", estimate.etaMinutes());
+            breachPayload.put("etaLowMinutes", estimate.etaLowMinutes());
+            breachPayload.put("etaHighMinutes", estimate.etaHighMinutes());
+            breachPayload.put("slaMinutes", routingProperties.getBreach().getSlaThresholdMinutes());
+            breachPayload.put("breachProbability", estimate.breachProbability());
+            breachPayload.put("timestamp", Instant.now().toString());
+            breachPayload.put("autoCompensationCents", 200);
+            breachPayload.put("customerMessage", "We're running slightly late! Here is a $2 apology wallet credit on us.");
+            breachPayload.put("priorityEscalation", true);
+
+            outboxService.publish("Delivery", deliveryId.toString(), "ETA_BREACH_RISK", breachPayload);
+
+            if (messagingTemplate != null) {
+                messagingTemplate.convertAndSend("/topic/deliveries/" + deliveryId + "/breach-risk", (Object) breachPayload);
+            }
         }
+
+        delivery = deliveryRepository.save(delivery);
     }
 
     @Transactional(readOnly = true)
@@ -194,6 +274,8 @@ public class DeliveryService {
             d.getPickupLat(), d.getPickupLng(), d.getDropoffLat(), d.getDropoffLng(),
             d.getStatus(), d.getEstimatedMinutes(), d.getActualMinutes(),
             d.getDistanceKm(), d.getStartedAt(), d.getDeliveredAt(),
-            d.getCreatedAt(), d.getUpdatedAt());
+            d.getCreatedAt(), d.getUpdatedAt(),
+            d.isBreachRisk(), d.isCompensationTriggered(), d.getCompensationAmountCents(),
+            d.getVehicleType(), d.isWeatherDelayActive());
     }
 }

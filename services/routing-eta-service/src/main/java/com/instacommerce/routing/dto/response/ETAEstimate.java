@@ -9,6 +9,21 @@ public record ETAEstimate(
     int etaHighMinutes,
     BigDecimal distanceKm,
     double breachProbability,
-    Instant calculatedAt
+    Instant calculatedAt,
+    boolean detourDetected,
+    boolean monsoonDelayActive,
+    String delayBanner,
+    String vehicleRecommendation
 ) {
+    public ETAEstimate(
+        int etaMinutes,
+        int etaLowMinutes,
+        int etaHighMinutes,
+        BigDecimal distanceKm,
+        double breachProbability,
+        Instant calculatedAt
+    ) {
+        this(etaMinutes, etaLowMinutes, etaHighMinutes, distanceKm, breachProbability, calculatedAt,
+             false, false, null, null);
+    }
 }
