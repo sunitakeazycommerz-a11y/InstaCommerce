@@ -12,10 +12,10 @@ import (
 )
 
 func TestStreamDispatcherBackpressure80And30Percent(t *testing.T) {
-	// Buffer size 10, high watermark 8 (80%), low watermark 3 (30%)
+	// Buffer size 10, high watermark 7 (7 queued + 1 in worker = 80% total in-flight), low watermark 3 (30%)
 	cfg := StreamConfig{
 		BufferSize:     10,
-		HighWatermark:  8,
+		HighWatermark:  7,
 		LowWatermark:   3,
 		WorkerCount:    1,
 		PauseCheckWait: 5 * time.Millisecond,
@@ -38,7 +38,7 @@ func TestStreamDispatcherBackpressure80And30Percent(t *testing.T) {
 
 	dispatcher.Start(ctx)
 
-	// Send 8 messages to trigger 80% watermark
+	// Send 8 messages (1 in blocked worker, 7 in queue reaching high watermark)
 	for i := 0; i < 8; i++ {
 		err := dispatcher.Submit(ctx, kafka.Message{
 			Topic:  "test.topic",

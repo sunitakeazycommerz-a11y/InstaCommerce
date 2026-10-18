@@ -86,6 +86,9 @@ type RiderProcessor struct {
 }
 
 func NewRiderProcessor(rdb *redis.Client, logger *slog.Logger) *RiderProcessor {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &RiderProcessor{
 		redis:   rdb,
 		logger:  logger.With("processor", "rider"),

@@ -2,6 +2,8 @@ module github.com/instacommerce/cdc-consumer-service
 
 go 1.25.0
 
+toolchain go1.25.1
+
 require (
 	cloud.google.com/go/bigquery v1.74.0
 	github.com/instacommerce/go-shared v0.0.0

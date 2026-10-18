@@ -2,6 +2,8 @@ module github.com/instacommerce/outbox-relay-service
 
 go 1.25.0
 
+toolchain go1.25.1
+
 require (
 	github.com/IBM/sarama v1.43.2
 	github.com/instacommerce/go-shared v0.0.0

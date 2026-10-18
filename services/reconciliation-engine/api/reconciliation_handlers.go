@@ -115,13 +115,19 @@ func (h *ReconciliationHandler) HandleGetRunMismatches(w http.ResponseWriter, r 
 		return
 	}
 
-	parts := strings.Split(r.URL.Path, "/")
-	if len(parts) < 3 {
+	trimmed := strings.Trim(r.URL.Path, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 {
 		h.writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 
-	runID, err := strconv.ParseInt(parts[len(parts)-3], 10, 64)
+	idStr := parts[len(parts)-1]
+	if idStr == "mismatches" && len(parts) >= 2 {
+		idStr = parts[len(parts)-2]
+	}
+
+	runID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid run ID")
 		return
@@ -161,13 +167,19 @@ func (h *ReconciliationHandler) HandleReviewMismatch(w http.ResponseWriter, r *h
 		return
 	}
 
-	parts := strings.Split(r.URL.Path, "/")
-	if len(parts) < 3 {
+	trimmed := strings.Trim(r.URL.Path, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 {
 		h.writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 
-	mismatchID, err := strconv.ParseInt(parts[len(parts)-3], 10, 64)
+	idStr := parts[len(parts)-1]
+	if idStr == "review" && len(parts) >= 2 {
+		idStr = parts[len(parts)-2]
+	}
+
+	mismatchID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid mismatch ID")
 		return
@@ -194,13 +206,19 @@ func (h *ReconciliationHandler) HandleApplyFix(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	parts := strings.Split(r.URL.Path, "/")
-	if len(parts) < 3 {
+	trimmed := strings.Trim(r.URL.Path, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 {
 		h.writeError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 
-	mismatchID, err := strconv.ParseInt(parts[len(parts)-3], 10, 64)
+	idStr := parts[len(parts)-1]
+	if idStr == "fix" && len(parts) >= 2 {
+		idStr = parts[len(parts)-2]
+	}
+
+	mismatchID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid mismatch ID")
 		return

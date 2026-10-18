@@ -80,6 +80,9 @@ type InventoryProcessor struct {
 }
 
 func NewInventoryProcessor(rdb *redis.Client, logger *slog.Logger) *InventoryProcessor {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &InventoryProcessor{
 		redis:     rdb,
 		logger:    logger.With("processor", "inventory"),

@@ -2,6 +2,8 @@ module github.com/instacommerce/location-ingestion-service
 
 go 1.25.0
 
+toolchain go1.25.1
+
 require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/instacommerce/go-shared v0.0.0

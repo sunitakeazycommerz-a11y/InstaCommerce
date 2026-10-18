@@ -53,11 +53,13 @@ type RedisClient interface {
 	SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd
 }
 
-// Checker performs event-ID deduplication via Redis SET NX.
+// Checker performs event-ID deduplication via Redis SET NX and optional Bloom filter.
 type Checker struct {
 	redis   RedisClient
 	logger  *slog.Logger
 	metrics *dedupMetrics
+	bloom   *BloomFilter
+	ttl     time.Duration
 }
 
 // NewChecker creates a deduplication checker backed by Redis.
@@ -69,22 +71,51 @@ func NewChecker(rdb RedisClient, logger *slog.Logger) *Checker {
 		redis:   rdb,
 		logger:  logger.With("component", "dedup"),
 		metrics: getDedupMetrics(),
+		ttl:     keyTTL,
 	}
+}
+
+// WithBloomFilter attaches an in-memory Bloom filter for fast-path membership tests.
+func (c *Checker) WithBloomFilter(bf *BloomFilter) *Checker {
+	c.bloom = bf
+	return c
+}
+
+// WithCustomTTL overrides the default sliding window TTL.
+func (c *Checker) WithCustomTTL(ttl time.Duration) *Checker {
+	if ttl > 0 {
+		c.ttl = ttl
+	}
+	return c
 }
 
 // IsDuplicate checks whether the message identified by (topic, partition, offset)
 // has already been processed. It atomically marks the message as seen using
-// Redis SET NX with a 24-hour TTL.
+// Redis SET NX with a sliding window TTL (default 24 hours).
 //
 // Returns true if the message was already processed (duplicate).
 // On Redis failure, returns false to allow processing (fail-open for availability).
 func (c *Checker) IsDuplicate(ctx context.Context, topic string, partition int, offset int64) (bool, error) {
-	if c.redis == nil {
-		return false, nil
-	}
 	key := fmt.Sprintf("dedup:%s:%d:%d", topic, partition, offset)
 
-	set, err := c.redis.SetNX(ctx, key, 1, keyTTL).Result()
+	if c.redis == nil {
+		if c.bloom != nil {
+			if c.bloom.Contains(key) {
+				c.metrics.skippedTotal.WithLabelValues(topic).Inc()
+				return true, nil
+			}
+			c.bloom.Add(key)
+			return false, nil
+		}
+		return false, nil
+	}
+
+	ttl := c.ttl
+	if ttl <= 0 {
+		ttl = keyTTL
+	}
+
+	set, err := c.redis.SetNX(ctx, key, 1, ttl).Result()
 	if err != nil {
 		c.metrics.errorsTotal.Inc()
 		c.logger.Warn("dedup check failed, allowing processing",
@@ -99,9 +130,17 @@ func (c *Checker) IsDuplicate(ctx context.Context, topic string, partition int, 
 	// SetNX returns true if the key was newly set (not a duplicate),
 	// false if the key already existed (duplicate).
 	if !set {
+		if c.bloom != nil {
+			c.bloom.Add(key)
+		}
 		c.metrics.skippedTotal.WithLabelValues(topic).Inc()
 		return true, nil
 	}
 
+	if c.bloom != nil {
+		c.bloom.Add(key)
+	}
+
 	return false, nil
 }
+

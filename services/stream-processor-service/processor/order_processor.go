@@ -79,6 +79,9 @@ type OrderProcessor struct {
 }
 
 func NewOrderProcessor(rdb *redis.Client, metrics *OrderMetrics, slaMonitor *SLAMonitor, logger *slog.Logger) *OrderProcessor {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &OrderProcessor{
 		redis:      rdb,
 		metrics:    metrics,

@@ -85,6 +85,9 @@ type PaymentProcessor struct {
 }
 
 func NewPaymentProcessor(rdb *redis.Client, logger *slog.Logger) *PaymentProcessor {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &PaymentProcessor{
 		redis:   rdb,
 		logger:  logger.With("processor", "payment"),

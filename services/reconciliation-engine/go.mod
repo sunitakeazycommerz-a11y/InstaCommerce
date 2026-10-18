@@ -2,6 +2,8 @@ module github.com/instacommerce/reconciliation-engine
 
 go 1.25.0
 
+toolchain go1.25.1
+
 require (
 	github.com/instacommerce/go-shared v0.0.0
 	github.com/lib/pq v1.10.9
