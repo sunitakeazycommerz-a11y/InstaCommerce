@@ -21,11 +21,19 @@ public class CartService {
     private final CartStore cartStore;
     private final CartProperties cartProperties;
     private final PricingClient pricingClient;
+    private final CartSyncPublisher cartSyncPublisher;
 
-    public CartService(CartStore cartStore, CartProperties cartProperties, PricingClient pricingClient) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public CartService(CartStore cartStore, CartProperties cartProperties, PricingClient pricingClient,
+                       org.springframework.beans.factory.ObjectProvider<CartSyncPublisher> cartSyncPublisherProvider) {
         this.cartStore = cartStore;
         this.cartProperties = cartProperties;
         this.pricingClient = pricingClient;
+        this.cartSyncPublisher = cartSyncPublisherProvider != null ? cartSyncPublisherProvider.getIfAvailable() : null;
+    }
+
+    public CartService(CartStore cartStore, CartProperties cartProperties, PricingClient pricingClient) {
+        this(cartStore, cartProperties, pricingClient, null);
     }
 
     public CartResponse getCart(UUID userId) {
@@ -57,7 +65,9 @@ public class CartService {
 
         Cart cart = cartStore.addItem(userId, validatedRequest);
         log.info("Item added to cart for user={}, product={}, serverPrice={}", userId, request.productId(), serverPrice);
-        return toResponse(cart);
+        CartResponse response = toResponse(cart);
+        notifyCartUpdated(userId, response);
+        return response;
     }
 
     public CartResponse updateQuantity(UUID userId, UUID productId, int quantity) {
@@ -67,18 +77,23 @@ public class CartService {
         }
         Cart cart = cartStore.updateQuantity(userId, productId, quantity);
         log.info("Quantity updated for user={}, product={}, qty={}", userId, productId, quantity);
-        return toResponse(cart);
+        CartResponse response = toResponse(cart);
+        notifyCartUpdated(userId, response);
+        return response;
     }
 
     public CartResponse removeItem(UUID userId, UUID productId) {
         Cart cart = cartStore.removeItem(userId, productId);
         log.info("Item removed from cart for user={}, product={}", userId, productId);
-        return toResponse(cart);
+        CartResponse response = toResponse(cart);
+        notifyCartUpdated(userId, response);
+        return response;
     }
 
     public void clearCart(UUID userId) {
         cartStore.clearCart(userId);
         log.info("Cart cleared for user={}", userId);
+        notifyCartUpdated(userId, emptyCartResponse(userId));
     }
 
     public CartResponse validateCart(UUID userId) {
@@ -93,7 +108,15 @@ public class CartService {
         }
         Cart merged = cartStore.mergeCart(targetUserId, sourceGuestUserId);
         log.info("Merged guest cart {} into user cart {}", sourceGuestUserId, targetUserId);
-        return toResponse(merged);
+        CartResponse response = toResponse(merged);
+        notifyCartUpdated(targetUserId, response);
+        return response;
+    }
+
+    private void notifyCartUpdated(UUID userId, CartResponse response) {
+        if (cartSyncPublisher != null) {
+            cartSyncPublisher.publishCartUpdated(userId, response);
+        }
     }
 
     private void validateBusinessRules(UUID userId, AddItemRequest request) {

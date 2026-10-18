@@ -15,9 +15,17 @@ import reactor.core.publisher.Mono;
 public class MobileBffController {
 
     private final HomeAggregator homeAggregator;
+    private final com.instacommerce.mobilebff.service.CartSyncService cartSyncService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public MobileBffController(HomeAggregator homeAggregator,
+                               org.springframework.beans.factory.ObjectProvider<com.instacommerce.mobilebff.service.CartSyncService> cartSyncServiceProvider) {
+        this.homeAggregator = homeAggregator;
+        this.cartSyncService = cartSyncServiceProvider != null ? cartSyncServiceProvider.getIfAvailable() : null;
+    }
 
     public MobileBffController(HomeAggregator homeAggregator) {
-        this.homeAggregator = homeAggregator;
+        this(homeAggregator, null);
     }
 
     @GetMapping("/home")
@@ -36,5 +44,14 @@ public class MobileBffController {
             "userId", userId,
             "status", "authenticated"
         ));
+    }
+
+    @GetMapping(value = "/cart/stream/{userId}", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
+    public reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<Map<String, Object>>> streamCartUpdates(
+            @org.springframework.web.bind.annotation.PathVariable String userId) {
+        if (cartSyncService == null) {
+            return reactor.core.publisher.Flux.empty();
+        }
+        return cartSyncService.subscribeToCartUpdates(userId);
     }
 }

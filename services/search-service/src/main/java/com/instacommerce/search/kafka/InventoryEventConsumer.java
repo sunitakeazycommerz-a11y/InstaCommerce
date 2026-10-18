@@ -16,9 +16,16 @@ public class InventoryEventConsumer {
     private static final Logger log = LoggerFactory.getLogger(InventoryEventConsumer.class);
 
     private final SearchIndexService searchIndexService;
+    private final org.springframework.cache.CacheManager cacheManager;
+
+    public InventoryEventConsumer(SearchIndexService searchIndexService,
+                                  org.springframework.beans.factory.ObjectProvider<org.springframework.cache.CacheManager> cacheManagerProvider) {
+        this.searchIndexService = searchIndexService;
+        this.cacheManager = cacheManagerProvider != null ? cacheManagerProvider.getIfAvailable() : null;
+    }
 
     public InventoryEventConsumer(SearchIndexService searchIndexService) {
-        this.searchIndexService = searchIndexService;
+        this(searchIndexService, null);
     }
 
     @KafkaListener(topics = TopicNames.INVENTORY_EVENTS, groupId = "search-service")
@@ -36,11 +43,33 @@ public class InventoryEventConsumer {
                 : envelope;
 
         switch (eventType) {
-            case "StockAdjusted" -> handleStockAdjusted(payload);
-            case "LowStockAlert" -> handleLowStockAlert(payload);
-            case "StockConfirmed" -> handleStockConfirmed(payload);
-            case "StockReleased" -> handleStockReleased(payload);
+            case "StockAdjusted" -> {
+                handleStockAdjusted(payload);
+                evictSearchCaches();
+            }
+            case "LowStockAlert" -> {
+                handleLowStockAlert(payload);
+                evictSearchCaches();
+            }
+            case "StockConfirmed" -> {
+                handleStockConfirmed(payload);
+                evictSearchCaches();
+            }
+            case "StockReleased" -> {
+                handleStockReleased(payload);
+                evictSearchCaches();
+            }
             default -> log.debug("Ignoring unhandled inventory event type={}", eventType);
+        }
+    }
+
+    private void evictSearchCaches() {
+        if (cacheManager != null) {
+            var searchCache = cacheManager.getCache("searchResults");
+            if (searchCache != null) searchCache.clear();
+            var autoCache = cacheManager.getCache("autocomplete");
+            if (autoCache != null) autoCache.clear();
+            log.info("Evicted searchResults and autocomplete caches following inventory change");
         }
     }
 

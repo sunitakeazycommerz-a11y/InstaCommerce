@@ -14,9 +14,16 @@ public class CatalogEventConsumer {
     private static final Logger log = LoggerFactory.getLogger(CatalogEventConsumer.class);
 
     private final SearchIndexService searchIndexService;
+    private final org.springframework.cache.CacheManager cacheManager;
+
+    public CatalogEventConsumer(SearchIndexService searchIndexService,
+                                org.springframework.beans.factory.ObjectProvider<org.springframework.cache.CacheManager> cacheManagerProvider) {
+        this.searchIndexService = searchIndexService;
+        this.cacheManager = cacheManagerProvider != null ? cacheManagerProvider.getIfAvailable() : null;
+    }
 
     public CatalogEventConsumer(SearchIndexService searchIndexService) {
-        this.searchIndexService = searchIndexService;
+        this(searchIndexService, null);
     }
 
     @KafkaListener(topics = TopicNames.CATALOG_EVENTS, groupId = "search-service")
@@ -37,9 +44,25 @@ public class CatalogEventConsumer {
             : envelope;
 
         switch (eventType) {
-            case "ProductCreated", "ProductUpdated" -> handleProductUpsert(payload);
-            case "ProductDeactivated", "ProductDelisted" -> handleProductDelisted(payload);
+            case "ProductCreated", "ProductUpdated" -> {
+                handleProductUpsert(payload);
+                evictSearchCaches();
+            }
+            case "ProductDeactivated", "ProductDelisted" -> {
+                handleProductDelisted(payload);
+                evictSearchCaches();
+            }
             default -> log.debug("Ignoring unhandled catalog event type={}", eventType);
+        }
+    }
+
+    private void evictSearchCaches() {
+        if (cacheManager != null) {
+            var searchCache = cacheManager.getCache("searchResults");
+            if (searchCache != null) searchCache.clear();
+            var autoCache = cacheManager.getCache("autocomplete");
+            if (autoCache != null) autoCache.clear();
+            log.info("Evicted searchResults and autocomplete caches following catalog change");
         }
     }
 
