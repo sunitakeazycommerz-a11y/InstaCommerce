@@ -18,13 +18,14 @@ from run_quality_checks import (
 
 
 def test_discover_suites():
-    """Verify all 4 domain expectation suites are discovered."""
+    """Verify all domain expectation suites are discovered."""
     suites = discover_suites()
     suite_names = [s.name for s in suites]
     assert "orders_suite.yaml" in suite_names
     assert "payments_suite.yaml" in suite_names
     assert "inventory_suite.yaml" in suite_names
     assert "users_suite.yaml" in suite_names
+    assert "daily_sales_suite.yaml" in suite_names
 
 
 def test_discover_single_suite():
@@ -37,7 +38,7 @@ def test_discover_single_suite():
 def test_load_fixtures_and_validate_all_suites():
     """Verify that all default fixtures pass their respective expectation suites."""
     suites = discover_suites()
-    assert len(suites) == 4
+    assert len(suites) == 5
 
     for suite_path in suites:
         config = load_suite_config(suite_path)

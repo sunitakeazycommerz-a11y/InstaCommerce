@@ -180,3 +180,56 @@ models:
         description: "Composite score used to prioritize ad/sponsored activation"
       - name: opportunity_tier
         description: "Prioritization tier for monetization rollout (HIGH, MEDIUM, LOW)"
+
+  - name: mart_order_fulfillment
+    description: "Incremental order fulfillment mart tracking lifecycle milestones and SLA compliance"
+    columns:
+      - name: order_id
+        description: "Unique order identifier (primary key)"
+        tests:
+          - not_null
+          - unique
+      - name: user_id
+        description: "Customer identifier"
+        policy_tags:
+          - "projects/instacommerce-prod/locations/asia-south1/taxonomies/pii_taxonomy/policyTags/confidential"
+        tests:
+          - not_null
+      - name: store_id
+        description: "Dark store node identifier"
+        tests:
+          - not_null
+      - name: status
+        description: "Terminal or in-flight fulfillment status"
+        tests:
+          - not_null
+      - name: order_date
+        description: "Partitioning date of order placement"
+        tests:
+          - not_null
+      - name: total_cents
+        description: "Gross order total in cents"
+      - name: sla_met
+        description: "Boolean flag indicating whether order met 10-minute SLA"
+
+  - name: mart_daily_sales
+    description: "Daily aggregated financial sales by store for executive dashboards"
+    columns:
+      - name: sale_date
+        description: "Calendar date of sales"
+        tests:
+          - not_null
+      - name: store_id
+        description: "Dark store identifier"
+        tests:
+          - not_null
+      - name: order_count
+        description: "Total orders placed for the day"
+        tests:
+          - not_null
+      - name: total_revenue_usd
+        description: "Total gross revenue in USD"
+        tests:
+          - not_null
+      - name: on_time_pct
+        description: "Percentage of orders meeting 10-minute delivery SLA"

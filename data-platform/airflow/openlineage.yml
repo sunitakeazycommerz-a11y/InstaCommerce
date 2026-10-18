@@ -1,0 +1,13 @@
+# OpenLineage configuration for Airflow and dbt (Issue #657)
+# Emits run, job, and dataset lineage metadata to Marquez for end-to-end visualization.
+
+transport:
+  type: "http"
+  url: "http://marquez:5000"
+  endpoint: "api/v1/lineage"
+
+dataset:
+  namespace: "instacommerce-data-platform"
+
+circuit_breaker:
+  type: "simple"

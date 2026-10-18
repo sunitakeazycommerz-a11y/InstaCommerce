@@ -47,6 +47,7 @@ SUITE_TABLE_MAP = {
     "payments_validation": "analytics.payments",
     "inventory_validation": "analytics.inventory",
     "users_validation": "analytics.users",
+    "daily_sales_validation": "marts.mart_daily_sales",
 }
 
 SUITE_FIXTURE_MAP = {
@@ -54,6 +55,7 @@ SUITE_FIXTURE_MAP = {
     "payments_validation": "payments.json",
     "inventory_validation": "inventory.json",
     "users_validation": "users.json",
+    "daily_sales_validation": "daily_sales.json",
 }
 
 

@@ -11,6 +11,10 @@ snapshot-paths: ["snapshots"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
+vars:
+  parquet_compression_codec: zstd
+  parquet_compression_level: 3
+
 models:
   instacommerce_analytics:
     staging:
@@ -34,3 +38,16 @@ models:
         +partition_by:
           field: order_date
           data_type: date
+      mart_order_fulfillment:
+        +materialized: incremental
+        +unique_key: order_id
+        +partition_by:
+          field: order_date
+          data_type: date
+        +cluster_by: ["store_id", "status"]
+      mart_daily_sales:
+        +materialized: table
+        +partition_by:
+          field: sale_date
+          data_type: date
+        +cluster_by: ["store_id"]

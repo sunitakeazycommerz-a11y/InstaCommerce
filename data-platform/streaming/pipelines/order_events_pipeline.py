@@ -288,6 +288,8 @@ def build_pipeline(options):
                 schema=VOLUME_TABLE_SCHEMA,
                 write_disposition="WRITE_APPEND",
                 create_disposition="CREATE_IF_NEEDED",
+                method=WriteToBigQuery.Method.STORAGE_WRITE_API,
+                triggering_frequency=2,
             )
         )
 
@@ -314,6 +316,8 @@ def build_pipeline(options):
                 schema=SLA_TABLE_SCHEMA,
                 write_disposition="WRITE_APPEND",
                 create_disposition="CREATE_IF_NEEDED",
+                method=WriteToBigQuery.Method.STORAGE_WRITE_API,
+                triggering_frequency=2,
             )
         )
 

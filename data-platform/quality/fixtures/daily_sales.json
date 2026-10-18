@@ -1,0 +1,22 @@
+[
+  {
+    "sale_date": "2026-10-18",
+    "store_id": "store-koramangala-01",
+    "order_count": 1420,
+    "customer_count": 1280,
+    "total_revenue_usd": 38450.50,
+    "avg_order_value_usd": 27.08,
+    "on_time_orders": 1395,
+    "on_time_pct": 98.24
+  },
+  {
+    "sale_date": "2026-10-18",
+    "store_id": "store-indiranagar-02",
+    "order_count": 1180,
+    "customer_count": 1050,
+    "total_revenue_usd": 31200.75,
+    "avg_order_value_usd": 26.44,
+    "on_time_orders": 1150,
+    "on_time_pct": 97.46
+  }
+]
