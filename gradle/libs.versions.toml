@@ -44,7 +44,7 @@ junit-jupiter = "5.10.2"
 assertj = "3.25.3"
 testcontainers = "1.19.3"
 testcontainers-redis = "1.6.1"
-mockwebserver = "4.12.0"
+mockwebserver = "5.5.0"
 
 [libraries]
 # Spring Boot Starters
