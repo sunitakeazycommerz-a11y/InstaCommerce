@@ -40,8 +40,8 @@ type Config struct {
 // Load reads configuration from environment variables.
 func Load() (*Config, error) {
 	cfg := &Config{
-		APIAddr:               getEnv("API_ADDR", ":8080"),
-		HealthAddr:            getEnv("HEALTH_ADDR", ":8081"),
+		APIAddr:               getEnv("API_ADDR", ":8109"),
+		HealthAddr:            getEnv("HEALTH_ADDR", ":8110"),
 		MetricsAddr:           getEnv("METRICS_ADDR", ":9090"),
 		DatabaseURL:           getEnv("DATABASE_URL", "postgres://localhost:5432/reverse_etl?sslmode=disable"),
 		KafkaBrokers:          getEnv("KAFKA_BROKERS", "localhost:9092"),

@@ -25,11 +25,12 @@ const (
 // by checking the X-Internal-Service and X-Internal-Token headers.
 // Paths in skipPaths (e.g. /health, /metrics) bypass authentication.
 type InternalAuthMiddleware struct {
-	expectedToken  string
-	allowedCallers map[string]string // callerName -> token
-	serviceName    string
-	logger         *slog.Logger
-	skipPaths      map[string]bool
+	expectedToken    string
+	allowedCallers   map[string]string // callerName -> token
+	serviceName      string
+	logger           *slog.Logger
+	skipPaths        map[string]bool
+	strictPerService bool
 }
 
 // NewInternalAuthMiddleware creates a middleware instance configured from
@@ -38,14 +39,16 @@ type InternalAuthMiddleware struct {
 //   - INTERNAL_SERVICE_NAME: the name of this service (used in logs)
 //   - INTERNAL_SERVICE_ALLOWED_CALLERS: JSON map of {callerName: token} for
 //     per-service token validation (takes precedence over shared token)
+//   - INTERNAL_SERVICE_STRICT_PER_SERVICE: if "true", disables shared token fallback
 //
 // Health and metrics endpoints are excluded from authentication by default.
 func NewInternalAuthMiddleware(logger *slog.Logger) *InternalAuthMiddleware {
 	m := &InternalAuthMiddleware{
-		expectedToken:  os.Getenv("INTERNAL_SERVICE_TOKEN"),
-		allowedCallers: make(map[string]string),
-		serviceName:    os.Getenv("INTERNAL_SERVICE_NAME"),
-		logger:         logger,
+		expectedToken:    os.Getenv("INTERNAL_SERVICE_TOKEN"),
+		allowedCallers:   make(map[string]string),
+		serviceName:      os.Getenv("INTERNAL_SERVICE_NAME"),
+		logger:           logger,
+		strictPerService: os.Getenv("INTERNAL_SERVICE_STRICT_PER_SERVICE") == "true",
 		skipPaths: map[string]bool{
 			"/health":       true,
 			"/health/ready": true,
@@ -114,6 +117,19 @@ func (m *InternalAuthMiddleware) isValidToken(callingService, token string) bool
 	if perServiceToken, ok := m.allowedCallers[callingService]; ok {
 		return subtle.ConstantTimeCompare([]byte(token), []byte(perServiceToken)) == 1
 	}
+	// Under strict per-service mode, fallback to shared token is rejected
+	if m.strictPerService {
+		m.logger.Warn("STRICT_PER_SERVICE_REJECTION: Caller attempted shared token fallback, but strict per-service tokens are enforced",
+			slog.String("calling_service", callingService),
+		)
+		return false
+	}
 	// Fall back to shared token during migration
-	return subtle.ConstantTimeCompare([]byte(token), []byte(m.expectedToken)) == 1
+	isValid := subtle.ConstantTimeCompare([]byte(token), []byte(m.expectedToken)) == 1
+	if isValid {
+		m.logger.Warn("DEPRECATION WARNING: Caller authenticated via legacy flat shared token! Per-service token required under ADR-010/ADR-012.",
+			slog.String("calling_service", callingService),
+		)
+	}
+	return isValid
 }

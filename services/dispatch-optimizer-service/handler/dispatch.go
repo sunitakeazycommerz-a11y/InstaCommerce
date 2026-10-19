@@ -262,12 +262,16 @@ func HandleDispatchAssignWithLocker(matcher *optimizer.BipartiteMatcher, publish
 			return
 		}
 
-		if len(matchRes.Assignments) == 0 || len(matchRes.Assignments[0].OrderIDs) == 0 {
+		if matchRes == nil || len(matchRes.Assignments) == 0 || len(matchRes.Assignments[0].OrderIDs) == 0 {
+			isEscalated := leadDispatcherAlert
+			if matchRes != nil && matchRes.Escalated {
+				isEscalated = true
+			}
 			writeV2JSON(w, http.StatusOK, DispatchAssignResponse{
 				Status:                   "QUEUED_NO_RIDERS",
 				OrderID:                  req.OrderID,
 				RetryAfterSeconds:        int(optimizer.DefaultReevaluationInterval.Seconds()),
-				Escalated:                matchRes.Escalated || leadDispatcherAlert,
+				Escalated:                isEscalated,
 				EscalationReason:         buildEscalationReason(matchRes, leadDispatcherAlert, req.OrderID, currentAttempt),
 				AttemptCount:             currentAttempt,
 				AcceptanceTimeoutSeconds: DefaultRiderAcceptanceTimeoutSeconds,

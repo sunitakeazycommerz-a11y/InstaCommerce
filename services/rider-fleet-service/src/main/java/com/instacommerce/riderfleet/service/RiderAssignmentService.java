@@ -145,10 +145,11 @@ public class RiderAssignmentService {
         List<DispatchOptimizerClient.RiderState> riderStates = availableRiders.stream()
             .filter(ra -> riderMap.containsKey(ra.getRiderId()))
             .filter(ra -> riderMap.get(ra.getRiderId()).getStatus() == RiderStatus.ACTIVE)
+            .filter(ra -> ra.getCurrentLat() != null && ra.getCurrentLng() != null)
             .map(ra -> {
                 Rider r = riderMap.get(ra.getRiderId());
-                double lat = ra.getCurrentLat() != null ? ra.getCurrentLat().doubleValue() : 0.0;
-                double lng = ra.getCurrentLng() != null ? ra.getCurrentLng().doubleValue() : 0.0;
+                double lat = ra.getCurrentLat().doubleValue();
+                double lng = ra.getCurrentLng().doubleValue();
                 String vehicle = r.getVehicleType() != null ? r.getVehicleType().name().toLowerCase() : "scooter";
                 return new DispatchOptimizerClient.RiderState(
                     ra.getRiderId().toString(),
@@ -179,6 +180,9 @@ public class RiderAssignmentService {
             .filter(result -> result.assignments() != null && !result.assignments().isEmpty())
             .flatMap(result -> {
                 String assignedRiderId = result.assignments().get(0).riderId();
+                if (assignedRiderId == null || assignedRiderId.isBlank()) {
+                    return Optional.empty();
+                }
                 try {
                     return Optional.of(UUID.fromString(assignedRiderId));
                 } catch (IllegalArgumentException ex) {

@@ -126,6 +126,7 @@ internal:
       outbox-relay-service: ${OUTBOX_RELAY_SERVICE_TOKEN:}
       payment-webhook-service: ${PAYMENT_WEBHOOK_SERVICE_TOKEN:}
       reconciliation-engine: ${RECONCILIATION_ENGINE_TOKEN:}
+      reverse-etl-orchestrator: ${REVERSE_ETL_ORCHESTRATOR_TOKEN:}
       stream-processor-service: ${STREAM_PROCESSOR_SERVICE_TOKEN:}
       ai-orchestrator-service: ${AI_ORCHESTRATOR_SERVICE_TOKEN:}
       ai-inference-service: ${AI_INFERENCE_SERVICE_TOKEN:}

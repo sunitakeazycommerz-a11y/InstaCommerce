@@ -9,8 +9,11 @@
     "aggregateId",
     "eventTime",
     "schemaVersion",
-    "source_service",
     "payload"
+  ],
+  "anyOf": [
+    { "required": ["source_service"] },
+    { "required": ["sourceService"] }
   ],
   "properties": {
     "id": { "type": "string" },

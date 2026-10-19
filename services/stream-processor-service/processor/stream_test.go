@@ -38,8 +38,20 @@ func TestStreamDispatcherBackpressure80And30Percent(t *testing.T) {
 
 	dispatcher.Start(ctx)
 
-	// Send 8 messages (1 in blocked worker, 7 in queue reaching high watermark)
-	for i := 0; i < 8; i++ {
+	// Send first message and ensure the worker has started processing and is blocked
+	err := dispatcher.Submit(ctx, kafka.Message{
+		Topic:  "test.topic",
+		Offset: 0,
+		Value:  []byte("msg-0"),
+	})
+	assert.NoError(t, err)
+
+	for processedCount.Load() < 1 {
+		time.Sleep(time.Millisecond)
+	}
+
+	// Send remaining 7 messages to fill queue up to high watermark (7)
+	for i := 1; i < 8; i++ {
 		err := dispatcher.Submit(ctx, kafka.Message{
 			Topic:  "test.topic",
 			Offset: int64(i),

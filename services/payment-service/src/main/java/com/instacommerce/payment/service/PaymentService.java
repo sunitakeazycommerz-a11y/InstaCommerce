@@ -7,6 +7,7 @@ import com.instacommerce.payment.dto.request.AuthorizeRequest;
 import com.instacommerce.payment.dto.response.PaymentResponse;
 import com.instacommerce.payment.exception.PaymentDeclinedException;
 import com.instacommerce.payment.exception.PaymentGatewayException;
+import com.instacommerce.payment.exception.PaymentGatewayTransientException;
 import com.instacommerce.payment.exception.InvalidCaptureAmountException;
 import com.instacommerce.payment.exception.PaymentNotFoundException;
 import com.instacommerce.payment.gateway.GatewayAuthRequest;
@@ -18,11 +19,14 @@ import com.instacommerce.payment.repository.PaymentRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PaymentService {
+    private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
     private final PaymentRepository paymentRepository;
     private final PaymentGateway paymentGateway;
     private final PaymentTransactionHelper txHelper;
@@ -63,6 +67,10 @@ public class PaymentService {
                     normalizedKey,
                     request.paymentMethod()
                 ));
+            } catch (PaymentGatewayTransientException ex) {
+                log.warn("Transient PSP authorization timeout/error for payment {}: {}",
+                    pending.getId(), ex.getMessage());
+                throw ex;
             } catch (Exception ex) {
                 String reason = (ex.getMessage() != null && !ex.getMessage().isBlank())
                     ? ex.getMessage() : "PSP authorization error";
@@ -121,6 +129,9 @@ public class PaymentService {
             GatewayCaptureResult gatewayResult;
             try {
                 gatewayResult = paymentGateway.capture(payment.getPspReference(), captureAmount, normalizedKey);
+            } catch (PaymentGatewayTransientException ex) {
+                log.warn("Transient PSP capture failure for payment {}: {}", paymentId, ex.getMessage());
+                throw ex;
             } catch (Exception ex) {
                 txHelper.revertToAuthorized(paymentId);
                 throw ex;
@@ -170,6 +181,9 @@ public class PaymentService {
             GatewayVoidResult gatewayResult;
             try {
                 gatewayResult = paymentGateway.voidAuth(payment.getPspReference(), normalizedKey);
+            } catch (PaymentGatewayTransientException ex) {
+                log.warn("Transient PSP void failure for payment {}: {}", paymentId, ex.getMessage());
+                throw ex;
             } catch (Exception ex) {
                 txHelper.revertVoidToAuthorized(paymentId);
                 throw ex;
