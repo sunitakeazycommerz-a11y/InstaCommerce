@@ -2,7 +2,7 @@
 # Core Toolchain & Plugins
 spring-boot = "4.0.0"
 spring-dependency-management = "1.1.7"
-spotless = "7.0.2"
+spotless = "8.10.4"
 protobuf-plugin = "0.9.6"
 jacoco = "0.8.12"
 
