@@ -494,4 +494,38 @@ class CheckoutWorkflowImplTest {
             any()
         );
     }
+
+    @Test
+    void shouldFailWhenCartContainsZeroOrNegativeQuantity() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 0, 1000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED");
+        assertThat(response.status()).contains("non-positive quantities");
+        verify(pricingActivity, never()).calculatePrice(any());
+        verify(inventoryActivity, never()).reserveStock(any());
+    }
+
+    @Test
+    void shouldFailWhenPricingReturnsZeroOrNegativeTotal() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 2, 1000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(2000L, 2000L, 0L, 0L, "INR", "quote-1", "token-1"));
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED");
+        assertThat(response.status()).contains("Pricing calculation failed");
+        verify(inventoryActivity, never()).reserveStock(any());
+        verify(paymentActivity, never()).authorizePayment(anyLong(), anyString(), anyString());
+    }
 }

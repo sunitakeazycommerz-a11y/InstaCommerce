@@ -122,7 +122,7 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
         ActivityOptions.newBuilder()
             .setStartToCloseTimeout(Duration.ofSeconds(45))
             .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(2))
+                .setInitialInterval(Duration.ofSeconds(1))
                 .setMaximumAttempts(5)
                 .setBackoffCoefficient(2.0)
                 .build())
@@ -178,10 +178,13 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             // Step 1: Validate cart
             currentStatus = "VALIDATING_CART";
             CartValidationResult cartResult = cartActivity.validateCart(request.userId());
-            if (!cartResult.valid()) {
+            if (!cartResult.valid() || cartResult.items() == null || cartResult.items().isEmpty()) {
                 return CheckoutResponse.failed("Cart is empty or invalid");
             }
             List<CartItem> items = cartResult.items();
+            if (items.stream().anyMatch(i -> i == null || i.quantity() == null || i.quantity() <= 0)) {
+                return CheckoutResponse.failed("Cart contains items with invalid or non-positive quantities");
+            }
             String storeId = cartResult.storeId();
 
             // Step 2: Calculate prices
@@ -189,6 +192,10 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             PricingRequest pricingRequest = new PricingRequest(
                 request.userId(), items, storeId, request.couponCode(), request.deliveryAddressId());
             PricingResult pricingResult = pricingActivity.calculatePrice(pricingRequest);
+            if (pricingResult == null || pricingResult.totalCents() <= 0) {
+                currentStatus = "FAILED";
+                return CheckoutResponse.failed("Pricing calculation failed: invalid total amount");
+            }
             paymentAmountCents = pricingResult.totalCents();
 
             // Step 3: Reserve inventory — register compensation BEFORE the activity
