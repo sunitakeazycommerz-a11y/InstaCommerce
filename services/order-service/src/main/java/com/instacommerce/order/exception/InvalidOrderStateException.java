@@ -6,4 +6,8 @@ public class InvalidOrderStateException extends ApiException {
     public InvalidOrderStateException(String message) {
         super(HttpStatus.CONFLICT, "INVALID_ORDER_STATE", message);
     }
+
+    public InvalidOrderStateException(HttpStatus status, String errorCode, String message) {
+        super(status, errorCode, message);
+    }
 }

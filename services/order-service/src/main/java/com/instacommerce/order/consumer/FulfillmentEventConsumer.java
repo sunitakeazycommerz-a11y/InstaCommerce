@@ -41,7 +41,22 @@ public class FulfillmentEventConsumer {
             case "OrderDelivered" -> OrderStatus.DELIVERED;
             case "DeliveryFailed", "FulfillmentFailed" -> OrderStatus.FAILED;
             case "OrderModified" -> {
-                logger.info("Ignoring OrderModified event for aggregateId={}", envelope.aggregateId());
+                FulfillmentOrderEvent event = (envelope.payload() != null && !envelope.payload().isNull())
+                    ? objectMapper.treeToValue(envelope.payload(), FulfillmentOrderEvent.class)
+                    : null;
+                UUID orderId = (event != null && event.orderId() != null)
+                    ? event.orderId()
+                    : resolveOrderId(envelope);
+                if (orderId != null && event != null && event.productId() != null) {
+                    orderService.applyOrderModification(
+                        orderId,
+                        event.productId(),
+                        event.missingQty() != null ? event.missingQty() : 1,
+                        event.refundCents() != null ? event.refundCents() : 0L
+                    );
+                } else {
+                    logger.info("Ignoring OrderModified event missing fields for aggregateId={}", envelope.aggregateId());
+                }
                 yield null;
             }
             default -> {
