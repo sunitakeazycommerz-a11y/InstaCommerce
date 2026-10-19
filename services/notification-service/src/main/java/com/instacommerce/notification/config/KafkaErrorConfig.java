@@ -1,5 +1,6 @@
 package com.instacommerce.notification.config;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,6 +18,11 @@ public class KafkaErrorConfig {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
             (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition()));
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3L));
+        errorHandler.addNotRetryableExceptions(
+            JsonProcessingException.class,
+            IllegalArgumentException.class,
+            NullPointerException.class
+        );
         errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
         return errorHandler;
     }

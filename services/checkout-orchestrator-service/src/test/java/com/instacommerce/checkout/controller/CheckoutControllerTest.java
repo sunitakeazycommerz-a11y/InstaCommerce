@@ -170,6 +170,32 @@ class CheckoutControllerTest {
         assertThat(response.getBody().status()).contains("RATE_LIMIT_EXCEEDED");
     }
 
+    @Test
+    void retryFailedCompensationIncrementsRetryAndMarksResolved() {
+        com.instacommerce.checkout.repository.CompensationDlqRepository dlqRepo =
+            mock(com.instacommerce.checkout.repository.CompensationDlqRepository.class);
+        CheckoutController dlqController = new CheckoutController(
+            workflowClient,
+            TASK_QUEUE,
+            new com.instacommerce.checkout.service.CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            dlqRepo
+        );
+
+        UUID dlqId = UUID.randomUUID();
+        com.instacommerce.checkout.domain.CompensationDlq dlqEntry =
+            new com.instacommerce.checkout.domain.CompensationDlq("wf-1", "releaseStock", "res-1", "connection timeout", null);
+        when(dlqRepo.findById(dlqId)).thenReturn(Optional.of(dlqEntry));
+        when(dlqRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ResponseEntity<java.util.Map<String, Object>> response = dlqController.retryFailedCompensation(dlqId);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().get("status")).isEqualTo("RESOLVED");
+        assertThat(dlqEntry.getRetryCount()).isEqualTo(1);
+        assertThat(dlqEntry.getStatus()).isEqualTo("RESOLVED");
+    }
+
     private CheckoutRequest request() {
         return new CheckoutRequest("user-123", "pm-123", "SAVE20", "addr-123");
     }

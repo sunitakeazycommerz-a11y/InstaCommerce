@@ -336,6 +336,12 @@ else
     log_fail "Canonical TopicNames.java topic constants missing!"
 fi
 
+if grep -q 'partitions[[:space:]]*=[[:space:]]*12' infra/terraform/debezium-connector-reconciliation.tf; then
+    log_pass "Kafka reconciliation topic partitions standardized to 12"
+else
+    log_fail "Kafka reconciliation topic partitions not standardized to 12 in Terraform"
+fi
+
 # ------------------------------------------------------------------------------
 # 7. Skills & Agents Directory Alignment
 # ------------------------------------------------------------------------------
