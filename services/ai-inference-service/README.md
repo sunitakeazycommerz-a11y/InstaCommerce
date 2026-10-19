@@ -835,7 +835,7 @@ The in-process model registry does not persist state across restarts. A pod rest
 
 | Gap | Severity | Detail |
 |---|---|---|
-| **No inbound authentication** | Medium | Neither JWT validation nor internal service token is enforced. Any in-mesh caller can invoke inference endpoints. |
+| **Inbound authentication** | Resolved | `InternalServiceAuthMiddleware` validates caller token via `X-Internal-Token` or `Authorization: Bearer`. Exempts `/health*`, `/metrics`, `/docs`. |
 | **No Istio AuthorizationPolicy** | Medium | Istio authorization policy does not cover this service; reachable from any pod in the namespace. |
 | **No model weight integrity check** | Medium | `weights.json` is loaded via `json.load()` with no signature or checksum verification. A tampered file produces silently wrong predictions. |
 | **Redis plaintext** | High (infra) | Redis connection uses port 6379 with no TLS; feature data in cleartext within VPC. |

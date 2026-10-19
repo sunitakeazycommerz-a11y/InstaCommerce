@@ -257,11 +257,11 @@ flowchart TB
 ```mermaid
 flowchart LR
     subgraph Kafka["Kafka Topics"]
-        OE["order.events"]
-        PE["payment.events"]
+        OE["orders.events"]
+        PE["payments.events"]
         CE["cart.events"]
         IE["inventory.events"]
-        RL["rider.location"]
+        RL["rider.location.updates"]
     end
 
     subgraph Dataflow["Apache Beam on Dataflow"]
@@ -285,11 +285,11 @@ flowchart LR
 
 | Pipeline | Source Topic | Sinks | Window | Purpose |
 |----------|-------------|-------|--------|---------|
-| `order_events_pipeline` | `order.events` | BigQuery | 1 min fixed | Order analytics and SLA tracking |
-| `payment_events_pipeline` | `payment.events` | BigQuery | 1 min fixed | Payment reconciliation and success metrics |
+| `order_events_pipeline` | `orders.events` | BigQuery | 1 min fixed | Order analytics and SLA tracking |
+| `payment_events_pipeline` | `payments.events` | BigQuery | 1 min fixed | Payment reconciliation and success metrics |
 | `cart_events_pipeline` | `cart.events` | BigQuery | 15 min session | Cart analytics and abandonment modeling |
 | `inventory_events_pipeline` | `inventory.events` | BigQuery | 5 min fixed | Stock velocity and stockout tracking |
-| `rider_location_pipeline` | `rider.location` | BigQuery | 1 min fixed | Rider utilization and zone-level tracking |
+| `rider_location_pipeline` | `rider.location.updates` | BigQuery | 1 min fixed | Rider utilization and zone-level tracking |
 
 > The streaming README contains the canonical per-pipeline deployment and
 > monitoring details. Use this top-level table as the architecture summary and

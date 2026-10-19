@@ -27,7 +27,7 @@ graph TB
         MOBILE[Mobile App]
     end
 
-    subgraph Config Feature Flag Service :8096
+    subgraph Config Feature Flag Service :8098
         AFC[AdminFlagController<br>/admin/flags]
         AEC[AdminExperimentController<br>/admin/experiments]
         FEC[FlagEvaluationController<br>/flags]

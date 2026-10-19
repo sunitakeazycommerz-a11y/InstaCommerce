@@ -39,7 +39,7 @@ platform. It contains:
 | What | Where | Canonical identifier |
 |------|-------|---------------------|
 | 20 Java/Spring Boot services | `services/` + `settings.gradle.kts` | Gradle module paths (e.g. `:services:order-service`) |
-| 7 Go data/event services + 1 shared library | `services/*/go.mod` | Per-module `go.mod` (e.g. `services/outbox-relay-service`) |
+| 8 Go data/event services + 1 shared library | `services/*/go.mod` | Per-module `go.mod` (e.g. `services/outbox-relay-service`) |
 | 2 Python/FastAPI AI services | `services/ai-orchestrator-service`, `services/ai-inference-service` | `uvicorn app.main:app` entrypoint |
 | Cross-service contracts | `contracts/` (Protobuf + JSON Schema) | `./gradlew :contracts:build` |
 | Data platform | `data-platform/` (dbt, Airflow, Beam, Great Expectations) | `dbt run`, Airflow DAGs |
@@ -165,7 +165,7 @@ flowchart LR
 
     subgraph IC["InstaCommerce Platform"]
         direction TB
-        CoreSvc["Core Services\n20 Java · 7 Go · 2 Python"]
+        CoreSvc["Core Services\n20 Java · 8 Go · 2 Python"]
         KafkaBus["Kafka Event Bus"]
         TemporalWF["Temporal\nWorkflow Engine"]
         DataPlat["Data Platform\nBigQuery + dbt + Airflow"]

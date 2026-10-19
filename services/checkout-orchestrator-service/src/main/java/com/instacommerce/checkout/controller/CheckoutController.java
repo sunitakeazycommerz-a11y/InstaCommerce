@@ -211,7 +211,7 @@ public class CheckoutController {
             .map(entry -> {
                 entry.incrementRetry();
                 Map<String, Object> result = new java.util.LinkedHashMap<>();
-                result.put("id", entry.getId().toString());
+                result.put("id", entry.getId() != null ? entry.getId().toString() : id.toString());
                 result.put("workflowId", entry.getWorkflowId());
                 result.put("activityName", entry.getActivityName());
                 result.put("targetId", entry.getTargetId());

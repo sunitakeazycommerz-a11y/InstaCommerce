@@ -42,13 +42,13 @@ fulfillment:
     public-key: ${sm://jwt-rsa-public-key:${FULFILLMENT_JWT_PUBLIC_KEY}}
   clients:
     order:
-      base-url: ${ORDER_SERVICE_URL:http://localhost:8085}
+      base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
     payment:
-      base-url: ${PAYMENT_SERVICE_URL:http://localhost:8086}
+      base-url: ${PAYMENT_SERVICE_URL:http://localhost:8085}
     inventory:
       base-url: ${INVENTORY_SERVICE_URL:http://localhost:8083}
     warehouse:
-      base-url: ${WAREHOUSE_SERVICE_URL:http://localhost:8088}
+      base-url: ${WAREHOUSE_SERVICE_URL:http://localhost:8092}
   choreography:
     order-status-callback-enabled: ${FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED:true}
   delivery:

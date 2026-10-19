@@ -34,8 +34,8 @@ Every order/payment event is evaluated through a multi-stage pipeline that produ
 │  API Gateway │ ────────▶ │  fraud-detection-service      │ ───────▶│ PostgreSQL │
 └──────────────┘           │  (Spring Boot 3 / Java)       │         └────────────┘
                            │                                │
-  Kafka (order.events) ──▶ │  OrderEventConsumer            │
-  Kafka (payment.events) ▶ │  PaymentEventConsumer          │
+  Kafka (orders.events) ──▶ │  OrderEventConsumer            │
+  Kafka (payments.events) ▶ │  PaymentEventConsumer          │
                            │                                │
                            │  Outbox → CDC relay ───────────┼──▶ Kafka (fraud.events)
                            └──────────────────────────────┘

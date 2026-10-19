@@ -73,9 +73,9 @@ isolation.
 
 ## High-Level Design
 
-### Current-state architecture
+### Architecture
 
-Two Java classes, a stub endpoint, and actuator. No downstream integration.
+The admin gateway enforces multi-layer security, IP anti-spoofing verification, RBAC authorization, and automated audit forwarding to `audit-trail-service`.
 
 ```mermaid
 graph TB
@@ -84,18 +84,27 @@ graph TB
     end
 
     subgraph admin-gateway-service :8099
-        APP["AdminGatewayServiceApplication<br/><i>@SpringBootApplication</i>"]
-        CTRL["AdminGatewayController<br/>GET /admin/v1/dashboard"]
+        SEC["SecurityConfig<br/>default-deny · RBAC"]
+        JWT["AdminJwtAuthenticationFilter<br/>RS256 JWT validation"]
+        AUD["AdminSecurityAuditFilter<br/>Anti-spoofing IP & mutation audit"]
+        CLIENT["AdminAuditClient<br/>Forwarding to audit-trail-service"]
+        CTRL["AdminDashboardController<br/>/admin/v1/**"]
         ACT["Actuator<br/>health · prometheus · metrics"]
     end
 
-    GW -->|"/admin/v1/*"| CTRL
-    APP -.->|component scan| CTRL
-    APP -.->|auto-config| ACT
+    subgraph Downstream
+        AUDIT["audit-trail-service :8096"]
+        FF["config-feature-flag-service :8098"]
+        RECON["reconciliation-engine :8107"]
+    end
 
-    style GW fill:#f5f5f5,stroke:#999
-    style CTRL fill:#fff3cd,stroke:#856404
-    style ACT fill:#d4edda,stroke:#155724
+    GW -->|"/admin/v1/*"| JWT
+    JWT --> AUD
+    AUD --> CTRL
+    AUD -.->|mutations| CLIENT
+    CLIENT -->|audit events| AUDIT
+    CTRL -->|flags & overrides| FF
+    CTRL -->|pending mismatches| RECON
 ```
 
 ### Target-state architecture (not yet implemented)
@@ -195,23 +204,19 @@ sequenceDiagram
 
 ### Inbound
 
-| Source | Protocol | Path | Auth (current) | Auth (target) |
-|--------|----------|------|-----------------|---------------|
-| Istio VirtualService | HTTP | `/admin/v1/*` | None | Istio `RequestAuthentication` + app-level JWT + RBAC |
-| Kubernetes probes | HTTP | `/actuator/health/{liveness,readiness}` | None (permitAll) | None (permitAll) |
-| Prometheus | HTTP | `/actuator/prometheus` | None | None |
+| Source | Protocol | Path | Auth (enforced) |
+|---|---|---|---|
+| Istio VirtualService | HTTP | `/admin/v1/*` | RS256 JWT (`AdminJwtAuthenticationFilter`) + RBAC (`@PreAuthorize("hasRole('ADMIN')")`) + Audit (`AdminSecurityAuditFilter`) |
+| Kubernetes probes | HTTP | `/actuator/health/{liveness,readiness}` | None (permitAll) |
+| Prometheus | HTTP | `/actuator/prometheus` | None (permitAll) |
 
-### Outbound (target — none implemented)
+### Outbound Integrations
 
-| Target service | Purpose | Pattern |
-|----------------|---------|---------|
-| `identity-service` | User management, admin role queries | Sync HTTP via internal token |
-| `catalog-service` | Product CRUD | Sync HTTP |
-| `inventory-service` | Stock ops, bulk updates | Sync HTTP |
-| `order-service` | Order lookup, refund initiation | Sync HTTP |
-| `config-feature-flag-service` | Flag management | Sync HTTP |
-| `fraud-detection-service` | Rule management | Sync HTTP |
-| `audit-trail-service` | Audit event sink | Async (fire-and-forget or outbox) |
+| Target Service | Purpose | Pattern | Implementation |
+|---|---|---|---|
+| `audit-trail-service` (:8096) | Audit event emission for all mutations | Sync HTTP (`POST /audit-trail/events`) | `AdminAuditClient` |
+| `config-feature-flag-service` (:8098) | Flag queries and overrides | Sync HTTP via RestTemplate | `AdminDashboardController` |
+| `reconciliation-engine` (:8107) | Pending financial mismatch queries | Sync HTTP via RestTemplate | `AdminDashboardController` |
 
 ### Istio/Helm routing (exists in `deploy/helm/values.yaml`)
 
@@ -224,11 +229,14 @@ sequenceDiagram
 
 ## API Reference
 
-### Business endpoint
+### Business Endpoints (`/admin/v1`)
 
-| Method | Path | Response | Notes |
-|--------|------|----------|-------|
-| `GET` | `/admin/v1/dashboard` | `{"status":"ok"}` | Stub. No downstream call. |
+| Method | Path | Auth | Response | Notes |
+|--------|------|------|----------|-------|
+| `GET` | `/admin/v1/dashboard` | `ADMIN`, `SUPER_ADMIN` | Order/payment volume and fulfillment metrics | Aggregated operational KPI snapshot |
+| `GET` | `/admin/v1/flags` | `ADMIN`, `SUPER_ADMIN` | Feature flags JSON | Proxies to `config-feature-flag-service` |
+| `POST` | `/admin/v1/flags/{id}/override` | `SUPER_ADMIN` | Flag override confirmation | Emergency temporary flag override |
+| `GET` | `/admin/v1/reconciliation/pending` | `ADMIN`, `SUPER_ADMIN` | Pending settlement items | Proxies to `reconciliation-engine` |
 
 ### Actuator endpoints (Spring Boot auto-configured)
 

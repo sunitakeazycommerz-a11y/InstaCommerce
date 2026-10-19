@@ -462,7 +462,7 @@ channel are dropped with a warning log.
 | `REDIS_ADDR` | `localhost:6379` | Redis server address |
 | `REDIS_PASSWORD` | *(empty)* | Redis authentication password |
 
-### Kafka Reader Settings (hardcoded in `main.go`)
+### Kafka Consumer Settings (tuned in `main.go` and `go-shared/pkg/kafka`)
 
 | Setting | Value | Implication |
 |---|---|---|
@@ -470,6 +470,10 @@ channel are dropped with a warning log.
 | `MaxBytes` | 10 MB | Maximum fetch size per poll |
 | `CommitInterval` | 1 second | Offsets are flushed to broker every 1s (async) |
 | `StartOffset` | `kafka.LastOffset` | On cold start or group reset, starts from latest — see [Known Limitations](#known-limitations) |
+| `SessionTimeout` | 45 seconds | Heartbeat failure detection threshold (prevents false-eviction during GC pauses) |
+| `HeartbeatInterval` | 3 seconds | Periodic heartbeat rate sent to Kafka coordinator |
+| `RebalanceTimeout` | 60 seconds | Maximum time allotted for consumer group rebalance coordination |
+| `GroupBalancers` | `[Range, RoundRobin]` | Partition assignment strategies supporting cooperative rebalance stability |
 
 ### HTTP Endpoints
 

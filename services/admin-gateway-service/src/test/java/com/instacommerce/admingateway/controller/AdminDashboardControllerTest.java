@@ -51,7 +51,7 @@ class AdminDashboardControllerTest {
     void shouldReturnFeatureFlags() throws Exception {
         Map<String, Object> flags = Map.of("feature-a", true, "feature-b", false);
         when(restTemplate.exchange(
-                eq("http://config-feature-flag-service:8095/flags"),
+                eq("http://config-feature-flag-service:8098/flags"),
                 eq(HttpMethod.GET),
                 isNull(),
                 any(ParameterizedTypeReference.class)))
@@ -114,7 +114,7 @@ class AdminDashboardControllerTest {
                 Map.of("id", "rec-1", "status", "PENDING")
             });
         when(restTemplate.exchange(
-                eq("http://reconciliation-engine:8098/pending"),
+                eq("http://reconciliation-engine:8107/pending"),
                 eq(HttpMethod.GET),
                 isNull(),
                 any(ParameterizedTypeReference.class)))

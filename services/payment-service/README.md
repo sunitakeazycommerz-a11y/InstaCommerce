@@ -621,7 +621,7 @@ Key environment variables (see `application.yml`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `SERVER_PORT` | `8086` | HTTP port |
+| `SERVER_PORT` | `8085` | HTTP port |
 | `PAYMENT_DB_URL` | `jdbc:postgresql://localhost:5432/payments` | Database JDBC URL |
 | `PAYMENT_DB_USER` | `postgres` | Database username |
 | `PAYMENT_DB_PASSWORD` | — | Database password (or via Secret Manager) |
@@ -650,7 +650,7 @@ docker run -d --name payments-db -e POSTGRES_DB=payments -e POSTGRES_PASSWORD=po
 ./gradlew :services:payment-service:bootRun
 ```
 
-The server starts on port **8086** by default. Flyway runs migrations automatically on startup (`spring.jpa.hibernate.ddl-auto=validate`).
+The server starts on port **8085** by default. Flyway runs migrations automatically on startup (`spring.jpa.hibernate.ddl-auto=validate`).
 
 ## Testing
 
@@ -863,6 +863,25 @@ The shared Kafka error handler (`KafkaConfig`) is activated when either this con
 2. **Enable in prod** — flip `PAYMENT_WEBHOOK_KAFKA_CONSUMER_ENABLED` to `"true"` in `values-prod.yaml` once dev validation is complete.
 3. **Rollback** — set the flag back to `"false"` and redeploy. The consumer stops processing new events; Kafka consumer offsets are retained, so re-enabling will resume from the last committed offset.
 4. **Monitoring** — watch for: consumer lag on the `payment.webhooks` topic, growth in `payment.webhooks.DLT`, Stripe webhook processing errors, and handler latency.
+
+---
+
+## OrderPacked Consumer (Two-Phase Capture Choreography)
+
+When `payment.choreography.order-packed-consumer-enabled` is `true` (default: `true`), the `OrderPackedEventConsumer` subscribes to the `fulfillment.events` Kafka topic. It triggers payment capture only after physical warehouse packing verification (Issue #531), closing the loop on two-phase payment authorization and capture:
+
+1. **Checkout (Phase 1: Authorization Hold)**: `POST /payments/authorize` reserves the order total at Stripe, moving the payment state to `AUTHORIZED`.
+2. **Warehouse Packing (Phase 2: Capture on Pack)**: When warehouse operators finish packing the order, `fulfillment-service` publishes an `OrderPacked` event to `fulfillment.events`.
+3. **Automated Capture**: `OrderPackedEventConsumer` resolves the corresponding payment record by `orderId` or `paymentId`, verifies it is in `AUTHORIZED` status, and invokes `PaymentService.capture()` with a deterministic idempotency key (`orderPacked:<orderId>:<paymentId>`).
+4. **Failure & Compensation Isolation**: If capture fails or times out, the payment status reverts cleanly to `AUTHORIZED`, preventing premature forfeiture of customer funds while allowing the saga or manual operators to inspect and retry.
+
+### Configuration
+
+| Property | Default | Description |
+|---|---|---|
+| `payment.choreography.order-packed-consumer-enabled` | `true` | Enables automatic payment capture on `OrderPacked` |
+| `payment.choreography.order-packed-topic` | `fulfillment.events` | Kafka topic for dark store fulfillment events |
+| `payment.choreography.order-packed-consumer-group` | `payment-service-order-packed` | Consumer group ID |
 
 ---
 

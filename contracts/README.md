@@ -291,6 +291,11 @@ All Java services, Go relay, and consumers reference this single source of truth
 | `WAREHOUSE_EVENTS` | `warehouse.events` | `warehouse-service` | Inventory, routing, dispatch |
 | `RECONCILIATION_EVENTS` | `reconciliation.events` | `reconciliation-engine` | Ledger, payment, finance platform |
 | `AI_ORCHESTRATOR_EVENTS` | `ai-orchestrator.events` | `ai-orchestrator-service` | Audit trail, stream processor |
+| `RIDER_LOCATION_UPDATES` | `rider.location.updates` | `location-ingestion-service` | Routing ETA, dispatch optimizer |
+| `PAYMENT_WEBHOOKS` | `payment.webhooks` | `payment-webhook-service` | Payment service |
+| `OUTBOX_RELAY_DLQ` | `outbox.relay.dlq` | `outbox-relay-service` | Dead-letter monitor, DLQ retry tooling |
+| `RETURNS_EVENTS` | `returns.events` | `fulfillment-service` | Order, inventory, wallet |
+| `CUSTOMER_SUPPORT_EVENTS` | `customer-support.events` | `admin-gateway-service` | Notification, audit trail |
 | `*_DLT` | `{topic}.DLT` | Any DeadLetterPublishingRecoverer | Ops alerting, replay tooling |
 
 
