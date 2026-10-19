@@ -223,6 +223,14 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 currentStatus = "COMPENSATING";
                 saga.compensate();
                 currentStatus = "FAILED";
+                if ("TOKEN_EXPIRED".equalsIgnoreCase(paymentResult.declineReason())) {
+                    return new CheckoutResponse(
+                        null,
+                        "PAYMENT_TOKEN_EXPIRED: Client re-authentication required",
+                        0,
+                        0
+                    );
+                }
                 return CheckoutResponse.failed(
                     "Payment declined: " + paymentResult.declineReason());
             }

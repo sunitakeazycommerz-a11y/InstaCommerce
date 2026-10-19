@@ -74,6 +74,36 @@ func (p *EventPublisher) PublishMismatchEvent(ctx context.Context, runID int64, 
 	return p.publish(ctx, envelope, mismatch.TransactionID)
 }
 
+func (p *EventPublisher) PublishDiscrepancyAlert(ctx context.Context, runID int64, mismatch MismatchDetail, discrepancyCents int64) error {
+	if p.writer == nil {
+		return nil
+	}
+
+	payload := map[string]interface{}{
+		"run_id":            runID,
+		"transaction_id":    mismatch.TransactionID,
+		"discrepancy_cents": discrepancyCents,
+		"ledger_amount":     mismatch.LedgerAmount,
+		"psp_amount":        mismatch.PSPAmount,
+		"reason":            mismatch.Reason,
+		"freeze_payouts":    true,
+		"alert_level":       "CRITICAL",
+	}
+
+	envelope := EventEnvelope{
+		EventID:       newID("evt"),
+		EventType:     "ReconciliationDiscrepancyAlert",
+		AggregateID:   fmt.Sprintf("run-%d", runID),
+		SchemaVersion: "1.0",
+		SourceService: "reconciliation-engine",
+		CorrelationID: fmt.Sprintf("run-%d", runID),
+		Timestamp:     time.Now().UTC(),
+		Payload:       payload,
+	}
+
+	return p.publish(ctx, envelope, mismatch.TransactionID)
+}
+
 func (p *EventPublisher) PublishCompletionEvent(ctx context.Context, runID int64, totalMismatches, autoFixed, manualReview int) error {
 	if p.writer == nil {
 		return nil

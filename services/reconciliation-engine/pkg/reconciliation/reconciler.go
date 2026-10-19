@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -99,6 +101,10 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 
 		// Publish event
 		r.pubsub.PublishMismatchEvent(ctx, runID, mismatch)
+		discrepancyCents := calculateDiscrepancyCents(mismatch.LedgerAmount, mismatch.PSPAmount)
+		if discrepancyCents > 0 {
+			_ = r.pubsub.PublishDiscrepancyAlert(ctx, runID, mismatch, discrepancyCents)
+		}
 	}
 
 	// Update run record with final counts
@@ -316,15 +322,48 @@ func ShouldAutoFix(ledgerAmountStr, pspAmountStr string) bool {
 	return diff.Cmp(threshold) <= 0
 }
 
+func calculateDiscrepancyCents(ledgerStr, pspStr string) int64 {
+	parseCents := func(s string) int64 {
+		s = strings.TrimSpace(s)
+		if s == "" || s == "0.00" || s == "0" {
+			return 0
+		}
+		if val, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return val
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return int64(f * 100)
+		}
+		return 0
+	}
+	l := parseCents(ledgerStr)
+	p := parseCents(pspStr)
+	diff := l - p
+	if diff < 0 {
+		return -diff
+	}
+	return diff
+}
+
 func (r *DBReconciler) processMismatch(ctx context.Context, tx *sql.Tx, runID int64, mismatch MismatchDetail) error {
 	reason := mismatch.Reason
 	manualReview := !mismatch.AutoFixed
+	ledgerAmt := mismatch.LedgerAmount
+	if ledgerAmt == "" {
+		ledgerAmt = "0.00"
+	}
+	pspAmt := mismatch.PSPAmount
+	if pspAmt == "" {
+		pspAmt = "0.00"
+	}
+
+	discrepancyCents := calculateDiscrepancyCents(ledgerAmt, pspAmt)
 
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO reconciliation_mismatches
-		(run_id, transaction_id, ledger_amount, psp_amount, discrepancy_reason, auto_fixed, manual_review_required, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-		runID, mismatch.TransactionID, mismatch.LedgerAmount, mismatch.PSPAmount, reason, mismatch.AutoFixed, manualReview)
+		(run_id, transaction_id, ledger_amount, psp_amount, discrepancy_amount, discrepancy_reason, auto_fixed, manual_review_required, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+		runID, mismatch.TransactionID, ledgerAmt, pspAmt, discrepancyCents, reason, mismatch.AutoFixed, manualReview)
 
 	return err
 }

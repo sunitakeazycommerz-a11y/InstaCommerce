@@ -18,6 +18,8 @@ import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.PaymentRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import java.util.Currency;
+import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +53,15 @@ public class PaymentService {
         Timer.Sample sample = Timer.start(meterRegistry);
         String result = "success";
         try {
+            if (request.currency() == null || request.currency().isBlank()) {
+                throw new IllegalArgumentException("Currency is mandatory and must not be null or blank");
+            }
+            try {
+                Currency.getInstance(request.currency().trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalArgumentException("Unsupported currency: " + request.currency(), ex);
+            }
+
             String normalizedKey = IdempotencyKeys.normalize(request.idempotencyKey());
             Payment pending = txHelper.savePendingAuthorization(request, normalizedKey);
             if (pending == null) {
