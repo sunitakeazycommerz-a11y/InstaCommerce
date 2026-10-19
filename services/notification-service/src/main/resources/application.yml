@@ -48,7 +48,7 @@ notification:
     base-url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
     preference-cache-ttl: ${NOTIFICATION_PREFERENCE_CACHE_TTL:60s}
   order:
-    base-url: ${ORDER_SERVICE_URL:http://localhost:8085}
+    base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
   delivery:
     default-eta-minutes: ${NOTIFICATION_DEFAULT_ETA_MINUTES:15}
   dlt-topic: ${NOTIFICATION_DLT_TOPIC:notification.events.DLT}

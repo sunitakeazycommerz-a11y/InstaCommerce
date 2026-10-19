@@ -43,11 +43,11 @@
 
 | Concern | Owner |
 |---|---|
-| Cart contents and validation | `cart-service` (:8084) |
-| Price calculation, coupons, delivery fees | `pricing-service` (:8087) |
+| Cart contents and validation | `cart-service` (:8090) |
+| Price calculation, coupons, delivery fees | `pricing-service` (:8089) |
 | Inventory reservation and stock counts | `inventory-service` (:8083) |
-| Payment authorization, capture, void, refund, ledger | `payment-service` (:8086) |
-| Order persistence, state machine, events | `order-service` (:8085) |
+| Payment authorization, capture, void, refund, ledger | `payment-service` (:8085) |
+| Order persistence, state machine, events | `order-service` (:8084) |
 | JWT issuance and key management | `identity-service` (:8081) |
 
 ### Boundary rule
@@ -93,15 +93,15 @@ The orchestrator controls the **transactional path** (money-path). Once the saga
 ```mermaid
 flowchart TB
     Customer["👤 Customer\n(Mobile / Web)"]
-    BFF["mobile-bff-service\n:8097"]
+    BFF["mobile-bff-service\n:8080"]
     Identity["identity-service\n:8081\n(JWT RS256)"]
-    CO["checkout-orchestrator-service\n:8089\n(This Service)"]
+    CO["checkout-orchestrator-service\n:8091\n(This Service)"]
     Temporal["Temporal Server\n:7233"]
-    Cart["cart-service\n:8084"]
-    Pricing["pricing-service\n:8087"]
+    Cart["cart-service\n:8090"]
+    Pricing["pricing-service\n:8089"]
     Inventory["inventory-service\n:8083"]
-    Payment["payment-service\n:8086"]
-    Order["order-service\n:8085"]
+    Payment["payment-service\n:8085"]
+    Order["order-service\n:8084"]
     PSP["Payment Gateway\n(Stripe / Razorpay)"]
     Kafka["Kafka\n(orders / payments / inventory topics)"]
     Debezium["Debezium\n(Outbox CDC relay)"]
@@ -475,9 +475,9 @@ Each activity stub is configured in `CheckoutWorkflowImpl` with independently tu
 | `PaymentActivity` | 30 s | 45 s | 3 | 2 s | 2.0× | `PaymentDeclinedException` |
 | `OrderActivity` | 15 s | — | 3 | 1 s | 2.0× | — |
 
-**Workflow execution timeout:** 5 minutes (set by `CheckoutController` via `WorkflowOptions.setWorkflowExecutionTimeout`).
+**Workflow execution timeout:** 10 minutes (set by `CheckoutController` via `WorkflowOptions.setWorkflowExecutionTimeout`).
 
-**Worst-case single-attempt budget:** 10 + 10 + 15 + 30 + 15 + 15 + 30 + 10 = **135 s** (confirm + capture reuse inventory + payment timeouts). With 3 retry attempts at max backoff, worst case approaches the 5-minute workflow timeout.
+**Worst-case single-attempt budget:** 10 + 10 + 15 + 30 + 15 + 15 + 30 + 10 = **135 s** (confirm + capture reuse inventory + payment timeouts). With 3 retry attempts at max backoff, worst case approaches the 10-minute workflow timeout.
 
 ---
 
@@ -493,6 +493,8 @@ Initiates a checkout workflow. Blocks until the Temporal workflow completes (syn
 |---|:---:|---|
 | `Authorization` | ✅ | `Bearer <JWT>` — `sub` claim must match `userId` in body |
 | `Idempotency-Key` | ❌ | Client-supplied UUID for duplicate detection. Auto-generated if absent |
+| `X-Tenant-Id` | ❌ | Multi-tenant header propagated to Temporal interceptor context |
+| `X-Store-Id` | ❌ | Store location context propagated to Temporal interceptor context |
 
 **Request body**
 
@@ -563,6 +565,27 @@ Queries the current status of an in-flight checkout workflow via Temporal's `@Qu
 
 **Status values** (from `CheckoutWorkflowImpl.currentStatus`): `STARTED` → `VALIDATING_CART` → `CALCULATING_PRICES` → `RESERVING_INVENTORY` → `AUTHORIZING_PAYMENT` → `CREATING_ORDER` → `CONFIRMING` → `CLEARING_CART` → `COMPLETED` | `COMPENSATING` → `FAILED`
 
+### `POST /checkout/dlq/{id}/retry`
+
+Manually or operationally retries a poisoned or stalled saga compensation record from the DLQ table (`saga_dlq_records`). When compensation fails (e.g., downstream network timeout during payment refund or inventory unreservation), the workflow logs a dead-letter entry. Operators can inspect and trigger targeted retry.
+
+**Path Parameter:** `id` — UUID of the DLQ record.
+
+**Response** — `200 OK`
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+  "status": "RETRIED",
+  "message": "Compensation retry executed successfully"
+}
+```
+
+**CLI Tooling:** Operators can execute automated bulk retries or inspect stalled compensation records using:
+```bash
+./scripts/saga-dlq-retry.sh [dlq-record-id]
+```
+
 ---
 
 ## 10. Runtime and Configuration
@@ -585,7 +608,7 @@ Queries the current status of an in-flight checkout workflow via Temporal's `@Qu
 
 | Variable | Default | Description |
 |---|---|---|
-| `SERVER_PORT` | `8089` | HTTP listen port |
+| `SERVER_PORT` | `8091` | HTTP listen port |
 | `CHECKOUT_DB_URL` | `jdbc:postgresql://localhost:5432/checkout` | PostgreSQL JDBC URL |
 | `CHECKOUT_DB_USER` | `postgres` | Database username |
 | `CHECKOUT_DB_PASSWORD` | — | Database password (supports `sm://` secret manager URIs) |
@@ -594,11 +617,11 @@ Queries the current status of an in-flight checkout workflow via Temporal's `@Qu
 | `TEMPORAL_HOST` | `localhost` | Temporal gRPC host (port 7233 appended in config) |
 | `TEMPORAL_NAMESPACE` | `instacommerce` | Temporal namespace |
 | `TEMPORAL_TASK_QUEUE` | `CHECKOUT_ORCHESTRATOR_TASK_QUEUE` | Temporal task queue name |
-| `CART_SERVICE_URL` | `http://localhost:8084` | Cart service base URL |
-| `PRICING_SERVICE_URL` | `http://localhost:8087` | Pricing service base URL |
+| `CART_SERVICE_URL` | `http://localhost:8090` | Cart service base URL |
+| `PRICING_SERVICE_URL` | `http://localhost:8089` | Pricing service base URL |
 | `INVENTORY_SERVICE_URL` | `http://localhost:8083` | Inventory service base URL |
-| `PAYMENT_SERVICE_URL` | `http://localhost:8086` | Payment service base URL |
-| `ORDER_SERVICE_URL` | `http://localhost:8085` | Order service base URL |
+| `PAYMENT_SERVICE_URL` | `http://localhost:8085` | Payment service base URL |
+| `ORDER_SERVICE_URL` | `http://localhost:8084` | Order service base URL |
 | `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Token for service-to-service auth headers |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` | OTLP traces endpoint |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` | OTLP metrics endpoint |

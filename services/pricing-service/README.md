@@ -37,7 +37,7 @@ graph TB
         ADMIN[Admin Gateway]
     end
 
-    subgraph pricing-service [Pricing Service :8087]
+    subgraph pricing-service [Pricing Service :8089]
         PC[PricingController]
         APC[AdminPromotionController]
         ACC[AdminCouponController]
@@ -267,7 +267,11 @@ flowchart TD
 | Method | Endpoint | Description | Rate Limit |
 |--------|----------|-------------|------------|
 | `POST` | `/pricing/calculate` | Calculate cart price with promotions & coupons | 100 req/min |
-| `GET` | `/pricing/products/{id}` | Get single product price | 100 req/min |
+| `GET` | `/pricing/products/{id}` | Get single product price (alias: `/api/v1/prices/{id}`) | 100 req/min |
+| `POST` | `/pricing/coupons/redeem` | Atomically reserve/redeem coupon usage | 100 req/min |
+| `POST` | `/pricing/coupons/unredeem` | Void active coupon redemption | 100 req/min |
+| `POST` | `/pricing/coupons/rollback-usage` | Decrement coupon per-user usage on checkout cancel | 100 req/min |
+| `POST` | `/pricing/quotes/validate` | Verify HMAC pricing quote token validity | 100 req/min |
 
 ### Admin Endpoints (requires `ROLE_ADMIN`)
 

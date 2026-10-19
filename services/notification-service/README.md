@@ -22,7 +22,7 @@ Event-driven notification delivery service for InstaCommerce. Consumes domain ev
 | `fulfillment.events` | `FulfillmentEventConsumer` | `OrderDispatched` | Dispatch & delivery updates |
 | `payments.events` | `PaymentEventConsumer` | `PaymentRefunded` | Refund confirmations |
 | `identity.events` | `IdentityEventConsumer` | `UserErased` | GDPR right-to-erasure |
-| `notifications.dlq` | — (produced to) | Failed notifications | Dead-letter queue |
+| `notification.events.DLT` | — (produced to) | Failed notifications | Dead-letter queue (ADR-003) |
 
 All consumers use group ID `notification-service` with concurrency of 3 partitions.
 
@@ -92,7 +92,7 @@ flowchart TD
     PROVIDER --> |Success| SENT[(Status: SENT)]
     PROVIDER --> |ProviderTemporaryException| RETRY[(Status: RETRY_PENDING)]
     PROVIDER --> |ProviderPermanentException| FAIL[(Status: FAILED)]
-    FAIL --> DLQ[NotificationDlqPublisher → notifications.dlq]
+    FAIL --> DLQ[NotificationDlqPublisher → notification.events.DLT]
 ```
 
 ### 2. Channel Routing Logic
@@ -253,7 +253,7 @@ stateDiagram-v2
 
     note right of FAILED
         Published to
-        notifications.dlq
+        notification.events.DLT
         via NotificationDlqPublisher
     end note
 
@@ -268,8 +268,9 @@ stateDiagram-v2
 1. **First attempt** — `RetryableNotificationSender.send()` dispatches asynchronously via `@Async("notificationExecutor")`.
 2. **Temporary failure** — status set to `RETRY_PENDING` with `nextRetryAt` using exponential backoff (5 s → 30 s → 5 min).
 3. **`NotificationRetryJob`** — scheduled poller (`fixedDelay: 5000 ms`) picks up `RETRY_PENDING` rows whose `nextRetryAt` has passed, in batches of 100.
-4. **Exhausted retries** (≥ 3 attempts) or **permanent failure** — status set to `FAILED`, event published to `notifications.dlq` Kafka topic.
-5. **`NotificationLogCleanupJob`** — daily cron (`0 0 3 * * *`) deletes logs older than 90 days.
+4. **Exhausted retries** (≥ 3 attempts) or **permanent failure** — status set to `FAILED`, event published to canonical `notification.events.DLT` Kafka topic.
+5. **Kafka Poison-Pill & DLT Recovery (`KafkaErrorConfig`)** — inbound Kafka records from `orders.events`, `payments.events`, and `fulfillment.events` that fail deserialization (`JsonProcessingException`, `IllegalArgumentException`, `NullPointerException`) or throw unrecoverable processing errors are retried up to 3 times (1-second backoff) and then automatically routed to `<topic>.DLT` (e.g. `orders.events.DLT`) via Spring Kafka's `DeadLetterPublishingRecoverer`. This isolates poison pills without halting consumer offset progression.
+6. **`NotificationLogCleanupJob`** — daily cron (`0 0 3 * * *`) deletes logs older than 90 days.
 
 ## Database Schema
 
@@ -302,9 +303,9 @@ Key properties in `application.yml` (all overridable via environment variables):
 | `notification.providers.twilio.from-number` | — | Twilio sender number |
 | `notification.identity.base-url` | `http://localhost:8081` | identity-service URL for user preferences |
 | `notification.identity.preference-cache-ttl` | `60s` | TTL for cached user preferences |
-| `notification.order.base-url` | `http://localhost:8085` | order-service URL for order lookups |
+| `notification.order.base-url` | `http://localhost:8084` | order-service URL for order lookups |
 | `notification.delivery.default-eta-minutes` | `15` | Fallback ETA when not in event payload |
-| `notification.dlq-topic` | `notifications.dlq` | Kafka DLQ topic |
+| `notification.dlt-topic` | `notification.events.DLT` | Kafka DLT topic (canonical ADR-003) |
 | `notification.retry.batch-size` | `100` | Max rows per retry poll cycle |
 
 ## Tech Stack

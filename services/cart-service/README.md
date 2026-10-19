@@ -36,7 +36,7 @@ graph TB
         CHECKOUT[Checkout Orchestrator]
     end
 
-    subgraph cart-service [Cart Service :8088]
+    subgraph cart-service [Cart Service :8090]
         CC[CartController]
         CS[CartService]
         STORE[JpaCartStore]
@@ -45,12 +45,12 @@ graph TB
     end
 
     subgraph External
-        PRICING[Pricing Service :8087]
+        PRICING[Pricing Service :8089]
     end
 
     subgraph Infrastructure
         PG[(PostgreSQL<br/>carts + cart_items)]
-        KF{{Kafka<br/>cart-events}}
+        KF{{Kafka<br/>cart.events}}
         CACHE[Caffeine Cache]
     end
 

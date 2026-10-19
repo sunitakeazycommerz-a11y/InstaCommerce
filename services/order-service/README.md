@@ -1,6 +1,6 @@
 # Order Service
 
-> **Module path:** `services/order-service` · **Port:** `8085` · **Language:** Java 21 / Spring Boot 3  
+> **Module path:** `services/order-service` · **Port:** `8084` · **Language:** Java 21 / Spring Boot 4  
 > **Owner:** Transactional Core team · **Classification:** Money-path adjacent — order state of record
 
 ---
@@ -39,8 +39,8 @@ Order-service is the **system of record for order state**. It owns:
 
 | Concern | Owner |
 |---------|-------|
-| Checkout saga orchestration (authoritative) | `checkout-orchestrator-service` (port 8089) |
-| Payment state machine, PSP gateway calls | `payment-service` (port 8086) |
+| Checkout saga orchestration (authoritative) | `checkout-orchestrator-service` (port 8091) |
+| Payment state machine, PSP gateway calls | `payment-service` (port 8085) |
 | Inventory reservation lifecycle | `inventory-service` (port 8083) |
 | Fulfillment task assignment, picker/packer flows | `fulfillment-service` |
 | Pricing truth, coupon application | `pricing-service` |
@@ -87,19 +87,19 @@ flowchart TD
     end
 
     subgraph Checkout Orchestration
-        CO[checkout-orchestrator-service<br/>port 8089]
+        CO[checkout-orchestrator-service<br/>port 8091]
         TS[(Temporal Server)]
     end
 
     subgraph Order Domain
-        OS[order-service<br/>port 8085]
+        OS[order-service<br/>port 8084]
         PG[(PostgreSQL<br/>orders DB)]
     end
 
     subgraph Upstream Services
         INV[inventory-service<br/>port 8083]
-        PAY[payment-service<br/>port 8086]
-        CART[cart-service<br/>port 8084]
+        PAY[payment-service<br/>port 8085]
+        CART[cart-service<br/>port 8090]
     end
 
     subgraph Eventing
@@ -425,7 +425,8 @@ flowchart LR
 | `fulfillment.events` | `order-service-fulfillment` | `OrderPacked` | Advance to `PACKED` (bridges through `PACKING` if needed) |
 | `fulfillment.events` | `order-service-fulfillment` | `OrderDispatched` | Advance to `OUT_FOR_DELIVERY` |
 | `fulfillment.events` | `order-service-fulfillment` | `OrderDelivered` | Advance to `DELIVERED` |
-| `fulfillment.events` | `order-service-fulfillment` | `OrderModified` | Logged and ignored (pending dedicated handling) |
+| `fulfillment.events` | `order-service-fulfillment` | `OrderModified` | Applies item-level modification & refund tracking via `applyOrderModification` |
+| `fulfillment.events` | `order-service-fulfillment` | `DeliveryFailed`, `FulfillmentFailed` | Advance order status to terminal `FAILED` |
 
 **Dead-letter handling:** Kafka consumer errors are retried 3 times with 1-second fixed backoff. `JsonProcessingException` and `IllegalArgumentException` are non-retryable and route directly to `<topic>.DLT`.
 
@@ -433,22 +434,26 @@ flowchart LR
 
 ## 6. API Reference
 
-### Customer Endpoints (`/orders`)
+### Customer Endpoints (`/orders` and `/api/orders`)
 
 | Method | Path | Auth | Description | Response |
 |--------|------|------|-------------|----------|
+| `POST` | `/orders` | None / Internal | Create order from validated checkout quote | `201 Created` (`OrderCreationResult`) |
 | `GET` | `/orders` | JWT | List current user's orders (paginated, max 100/page) | `Page<OrderSummaryResponse>` |
 | `GET` | `/orders/{id}` | JWT | Get order detail (owner or admin) | `OrderResponse` |
 | `GET` | `/orders/{id}/status` | JWT | Get order status + timeline | `OrderStatusResponse` |
 | `POST` | `/orders/{id}/cancel` | JWT | Cancel order (user, `PENDING`/`PLACED` only) | `204 No Content` |
+| `POST` | `/orders/{id}/amend` | JWT | Validate order amendment window eligibility | `204 No Content` |
 
 Cancel request body: `{ "reason": "string (required, max 200 chars)" }`
 
-### Legacy Checkout (`/checkout`)
+### Legacy Checkout (`/checkout`) — Deprecated
+
+> **Notice:** Direct checkout in order-service has been decommissioned. `POST /checkout` unconditionally returns `410 Gone` with code `CHECKOUT_MOVED`. All checkout orchestration is owned by `checkout-orchestrator-service` (`:8091`).
 
 | Method | Path | Auth | Description | Response |
 |--------|------|------|-------------|----------|
-| `POST` | `/checkout` | JWT | Start legacy checkout saga | `200` → `CheckoutResponse` / `410` if disabled / `422` on saga failure |
+| `POST` | `/checkout` | JWT | Deprecated legacy checkout endpoint | `410 Gone` (`CHECKOUT_MOVED`) |
 
 **Request body:**
 
@@ -623,13 +628,13 @@ erDiagram
 
 | Property | Env Var | Default | Notes |
 |----------|---------|---------|-------|
-| Server port | `SERVER_PORT` | `8085` | Dockerfile overrides to `8080` |
+| Server port | `SERVER_PORT` | `8084` | Dockerfile overrides to `8080` |
 | Database URL | `ORDER_DB_URL` | `jdbc:postgresql://localhost:5432/orders` | |
 | Database user | `ORDER_DB_USER` | `postgres` | |
 | Database password | `ORDER_DB_PASSWORD` | — | Also supports GCP Secret Manager via `sm://db-password-order` |
 | Inventory service | `INVENTORY_SERVICE_URL` | `http://localhost:8083` | |
-| Cart service | `CART_SERVICE_URL` | `http://localhost:8084` | |
-| Payment service | `PAYMENT_SERVICE_URL` | `http://localhost:8086` | |
+| Cart service | `CART_SERVICE_URL` | `http://localhost:8090` | |
+| Payment service | `PAYMENT_SERVICE_URL` | `http://localhost:8085` | |
 | Kafka bootstrap | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | |
 | Temporal address | `TEMPORAL_HOST` | `localhost:7233` | Appends `:7233` in config |
 | Temporal namespace | `TEMPORAL_NAMESPACE` | `instacommerce` | |

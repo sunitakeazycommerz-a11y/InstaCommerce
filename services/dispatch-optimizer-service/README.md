@@ -67,17 +67,17 @@ This advisory posture means the optimizer can be disabled, upgraded, or rolled b
 ```mermaid
 graph TB
     subgraph "Edge"
-        MBF[mobile-bff-service<br/>:8097]
+        MBF[mobile-bff-service<br/>:8080]
     end
 
     subgraph "Orchestration"
-        CO[checkout-orchestrator<br/>:8089 Temporal]
+        CO[checkout-orchestrator<br/>:8091 Temporal]
     end
 
     subgraph "Fulfillment Layer"
-        FS[fulfillment-service<br/>:8087 Java]
-        RFS[rider-fleet-service<br/>:8091 Java<br/>assignment authority]
-        RES[routing-eta-service<br/>:8092 Java]
+        FS[fulfillment-service<br/>:8086 Java]
+        RFS[rider-fleet-service<br/>:8093 Java<br/>assignment authority]
+        RES[routing-eta-service<br/>:8094 Java]
         DOS[dispatch-optimizer-service<br/>:8102 Go<br/>stateless advisor]
         LIS[location-ingestion-service<br/>:8105 Go]
     end

@@ -426,10 +426,10 @@ docker compose up -d postgres kafka
 ./gradlew :services:audit-trail-service:bootRun
 
 # Health check
-curl http://localhost:8080/actuator/health
+curl http://localhost:8096/actuator/health
 
 # Ingest an event
-curl -X POST http://localhost:8080/audit/events \
+curl -X POST http://localhost:8096/audit/events \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{"eventType":"ORDER_PLACED","sourceService":"order-service","action":"CREATE"}'

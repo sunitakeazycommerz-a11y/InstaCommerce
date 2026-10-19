@@ -1,6 +1,6 @@
 # Fulfillment Service
 
-> **Module path:** `services/fulfillment-service` · **Port:** `8087` (local) / `8080` (container) · **Language:** Java 21 / Spring Boot 3
+> **Module path:** `services/fulfillment-service` · **Port:** `8086` (local) / `8080` (container) · **Language:** Java 21 / Spring Boot 4
 
 Pick-pack-deliver workflow engine. Consumes `OrderPlaced` events from Kafka,
 creates store-level pick tasks, manages item-level picking with substitution /
@@ -76,7 +76,7 @@ flowchart TB
         K[(Kafka)]
     end
 
-    subgraph "Fulfillment Service :8087"
+    subgraph "Fulfillment Service :8086"
         FS_API[REST API Layer]
         FS_CONSUMER[Kafka Consumers]
         FS_CORE[Pick / Delivery / Substitution]

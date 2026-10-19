@@ -237,12 +237,17 @@ classDiagram
 
 ```
 reconciliation-engine/
-├── main.go         # All types and logic: Config, Reconciler, Scheduler,
-│                   # PSPSource, LedgerStore, FixRegistry, KafkaPublisher,
-│                   # Metrics, HTTP handlers, helpers (~1 050 LOC)
-├── Dockerfile      # Multi-stage: golang:1.26-alpine → alpine:3.23, non-root
-├── go.mod          # Go 1.24, kafka-go, cron/v3, prometheus, OTel SDK
-└── go.sum
+├── api/
+│   ├── reconciliation_handlers.go       # REST API: /runs, /mismatches/pending, /fix
+│   └── reconciliation_handlers_test.go  # HTTP handler test suite
+├── pkg/
+│   ├── cdc/                             # Debezium CDC consumer & event parser
+│   └── reconciliation/                  # DBReconciler, models, SQL queries, auto-fix
+├── main.go                              # Server lifecycle, router setup, cron scheduler
+├── reconciliation_logic_test.go         # Core matching logic test suite
+├── schema_test.go                       # Event envelope schema compliance tests
+├── Dockerfile                           # Multi-stage build
+└── go.mod                               # Go 1.25 / 1.24 toolchain
 ```
 
 ---
@@ -474,6 +479,10 @@ Published to the `reconciliation.events` topic (configurable via `KAFKA_TOPIC`).
 | `/ready` | GET, HEAD | `{"status":"ready"}` or 503 `{"status":"not_ready"}` | Ready after scheduler starts |
 | `/health/ready` | GET, HEAD | _(same as `/ready`)_ | Readiness probe |
 | `/metrics` | GET | Prometheus exposition format | Via `promhttp.Handler()` |
+| `/api/v1/reconciliation/runs` | GET | `ListRunsResponse` | Historical reconciliation runs with mismatch counts |
+| `/api/v1/reconciliation/runs/{id}/mismatches` | GET | `ListMismatchesResponse` | Granular discrepancies for a given reconciliation run |
+| `/api/v1/reconciliation/mismatches/pending` | GET | `ListMismatchesResponse` | Unresolved discrepancies requiring manual review |
+| `/api/v1/reconciliation/mismatches/{id}/fix` | POST | 200 OK | Apply targeted settlement fix for a specific mismatch |
 
 All endpoints return `405 Method Not Allowed` with `Allow: GET, HEAD` for other HTTP methods.
 

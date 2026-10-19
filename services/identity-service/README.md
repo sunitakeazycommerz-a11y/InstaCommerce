@@ -414,6 +414,7 @@ Signature: RS256(header.payload, RSA-private-key)
 | `GET` | `/admin/users` | Bearer + ADMIN | List all users (paginated, default 20) |
 | `GET` | `/admin/users/{id}` | Bearer + ADMIN | Get user by ID |
 | `GET` | `/admin/users/{id}/notification-preferences` | Bearer + ADMIN | Get user's notification preferences |
+| `POST` | `/admin/users/{id}/unlock` | Bearer + ADMIN | Unlock locked user account (resets failed login attempts) |
 
 ### Infrastructure Endpoints
 

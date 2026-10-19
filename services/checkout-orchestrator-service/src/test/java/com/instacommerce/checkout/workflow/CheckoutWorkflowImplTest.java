@@ -405,8 +405,8 @@ class CheckoutWorkflowImplTest {
         verify(orderActivity).cancelOrder(ORDER_ID);
         verify(inventoryActivity).releaseStock(RESERVATION_ID);
 
-        // Verify payment compensation: capture was attempted so refund is initiated
-        verify(paymentActivity).refundPayment(eq(PAYMENT_ID), eq(8000L), anyString());
+        // Verify payment compensation: payment was authorized but not captured, so void is invoked
+        verify(paymentActivity).voidPayment(eq(PAYMENT_ID), anyString());
     }
 
     @Test

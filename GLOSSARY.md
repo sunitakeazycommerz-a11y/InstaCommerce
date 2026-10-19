@@ -48,7 +48,7 @@ stateDiagram-v2
   - Stock must be reserved and payment authorized before moving from `PENDING` to `PLACED`.
   - Warehouse pick-and-pack transitions status from `PACKING` to `PACKED`.
   - Dispatch assignment transitions status from `PACKED` to `OUT_FOR_DELIVERY`.
-  - Payment is captured upon delivery completion or dispatch per financial policy.
+  - Payment is authorized at checkout and captured upon dark store physical packing (OrderPacked event) or dispatch per financial policy (Issue #531).
 
 ---
 
@@ -63,7 +63,7 @@ stateDiagram-v2
 | `payment-service` | Java 21 / Spring Boot 4 | 8085 | PostgreSQL | `payments.events` | `payment-service` |
 | `fulfillment-service` | Java 21 / Spring Boot 4 | 8086 | PostgreSQL | `fulfillment.events` | `fulfillment-service` |
 | `notification-service` | Java 21 / Spring Boot 4 | 8087 | PostgreSQL | `notification.events` | `notification-service` |
-| `search-service` | Java 21 / Spring Boot 4 | 8088 | Elasticsearch / OpenSearch | `search.events` | `search-service` |
+| `search-service` | Java 21 / Spring Boot 4 | 8088 | PostgreSQL (tsvector FTS) | `search.events` | `search-service` |
 | `pricing-service` | Java 21 / Spring Boot 4 | 8089 | PostgreSQL + Redis | `pricing.events` | `pricing-service` |
 | `cart-service` | Java 21 / Spring Boot 4 | 8090 | Redis + PostgreSQL | `cart.events` | `cart-service` |
 | `checkout-orchestrator-service` | Java 21 / Spring Boot 4 | 8091 | Temporal Server | — | `checkout-orchestrator-service` |
@@ -75,7 +75,7 @@ stateDiagram-v2
 | `fraud-detection-service` | Java 21 / Spring Boot 4 | 8097 | PostgreSQL | `fraud.events` | `fraud-detection-service` |
 | `config-feature-flag-service` | Java 21 / Spring Boot 4 | 8098 | PostgreSQL + Redis | — | `config-feature-flag-service` |
 | `mobile-bff-service` | Java 21 / WebFlux Gateway | 8080 | Stateless | — | `mobile-bff-service` |
-| `admin-gateway-service` | Java 21 / WebFlux Gateway | 8099 | Stateless | — | `admin-gateway-service` |
+| `admin-gateway-service` | Java 21 / Spring Boot MVC | 8099 | Stateless | — | `admin-gateway-service` |
 | `cdc-consumer-service` | Go 1.25 | 8104 | Stateless | Consumes Debezium CDC | `cdc-consumer` |
 | `dispatch-optimizer-service` | Go 1.25 | 8102 | Stateless / Memory | — | `dispatch-optimizer-service` |
 | `location-ingestion-service` | Go 1.25 | 8105 | Redis Cluster | `rider.location.updates` | `location-ingestion` |

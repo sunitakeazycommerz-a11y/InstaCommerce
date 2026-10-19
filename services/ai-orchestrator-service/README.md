@@ -57,7 +57,7 @@ The AI orchestrator is the **agentic coordination layer** between InstaCommerce'
 - Transactional writes — no tool in the registry performs mutations; the eight registered tools are all reads
 - Model training or inference — that responsibility sits in `ai-inference-service` and `ml/`
 - Feature store reads — the orchestrator does not directly access the feature store
-- Authentication — inbound auth is not enforced by this service (see [Known Limitations](#known-limitations))
+- User identity issuance — tokens are issued by `identity-service`; inbound service identity is verified via `InternalServiceAuthMiddleware`
 
 ---
 
@@ -74,14 +74,14 @@ flowchart TD
     REDIS["Redis<br/>(checkpoints)"]
 
     subgraph DomainServices["Domain Services (read-only)"]
-        CAT["catalog-service :8080"]
-        PRC["pricing-service :8087"]
-        INV["inventory-service :8080"]
-        CART["cart-service :8088"]
-        ORD["order-service :8080"]
+        CAT["catalog-service :8082"]
+        PRC["pricing-service :8089"]
+        INV["inventory-service :8083"]
+        CART["cart-service :8090"]
+        ORD["order-service :8084"]
     end
 
-    INFER["ai-inference-service :8000"]
+    INFER["ai-inference-service :8101"]
 
     Client --> BFF
     BFF --> ORCH
@@ -796,7 +796,7 @@ pytest -v
 
 | Boundary | Current State | Gap |
 |---|---|---|
-| **Inbound authentication** | **Not enforced.** The FastAPI surface does not validate caller identity. | P0 — any internal caller (or attacker who bypasses the API gateway) can invoke agent endpoints. The [iter-3 governance review](../../docs/reviews/iter3/platform/ai-agent-governance.md) flags this as the #1 blocker for production scale. |
+| **Inbound authentication** | **Enforced.** `InternalServiceAuthMiddleware` validates caller token via `X-Internal-Token` or `Authorization: Bearer`. Exempts `/health*`, `/metrics`, `/docs`. | Token rotation / mTLS remains a future hardening goal. |
 | **Outbound auth** | When `AI_ORCHESTRATOR_INTERNAL_SERVICE_TOKEN` is set, tool calls attach it as `Authorization: Bearer <token>` (v2) or `X-Internal-Token` (v1). | Token is static; no rotation or per-call signing. |
 | **Tool allowlist** | `tool_allowlist` in `Settings` — a global `List[str]` with no per-user or per-role scoping. | A misconfigured deployment could add write tools via env alone; no secondary enforcement layer. |
 | **PII in logs** | `PiiRedactor` redacts email, SSN, credit card, phone in all JSON log output. | Address patterns are only matched in the `PIIVault` (guardrails module), not in the log redactor. |

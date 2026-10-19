@@ -21,6 +21,12 @@ public class AdminDashboardController {
 
     private final RestTemplate restTemplate;
 
+    @org.springframework.beans.factory.annotation.Value("${admin-gateway.upstream.feature-flag-url:http://config-feature-flag-service:8098}")
+    private String featureFlagUrl = "http://config-feature-flag-service:8098";
+
+    @org.springframework.beans.factory.annotation.Value("${admin-gateway.upstream.reconciliation-url:http://reconciliation-engine:8107}")
+    private String reconciliationUrl = "http://reconciliation-engine:8107";
+
     public AdminDashboardController(RestTemplate restTemplate) {
         this.restTemplate = restTemplate;
     }
@@ -39,7 +45,7 @@ public class AdminDashboardController {
     public Map<String, Object> featureFlags() {
         try {
             var response = restTemplate.exchange(
-                "http://config-feature-flag-service:8095/flags",
+                featureFlagUrl + "/flags",
                 HttpMethod.GET,
                 null,
                 MAP_TYPE
@@ -66,7 +72,7 @@ public class AdminDashboardController {
     public Map<String, Object> pendingReconciliation() {
         try {
             var response = restTemplate.exchange(
-                "http://reconciliation-engine:8098/pending",
+                reconciliationUrl + "/pending",
                 HttpMethod.GET,
                 null,
                 MAP_TYPE

@@ -333,16 +333,19 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 compensationPaymentActivity.refundPayment(paymentId, paymentAmountCents, refundIdempotencyKey);
                 return;
             }
-            if (paymentCaptureAttempted) {
-                try {
+            try {
+                compensationPaymentActivity.voidPayment(paymentId, voidIdempotencyKey);
+                return;
+            } catch (Exception voidFailure) {
+                if (paymentCaptureAttempted) {
+                    Workflow.getLogger(CheckoutWorkflowImpl.class)
+                        .warn("Void failed for payment {} after capture attempt, trying refund: {}",
+                            paymentId, voidFailure.getMessage());
                     compensationPaymentActivity.refundPayment(paymentId, paymentAmountCents, refundIdempotencyKey);
                     return;
-                } catch (Exception refundFailure) {
-                    Workflow.getLogger(CheckoutWorkflowImpl.class)
-                        .warn("Refund failed for payment {}, attempting void", paymentId, refundFailure);
                 }
+                throw voidFailure;
             }
-            compensationPaymentActivity.voidPayment(paymentId, voidIdempotencyKey);
         } catch (Exception compensationFailure) {
             String workflowId = Workflow.getInfo().getWorkflowId();
             Workflow.getLogger(CheckoutWorkflowImpl.class)

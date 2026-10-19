@@ -5,10 +5,10 @@
 | Property | Value |
 |----------|-------|
 | **Module** | `:services:search-service` |
-| **Port (local)** | `8086` (`application.yml`) · `8080` (Dockerfile) |
-| **Runtime** | Spring Boot · Java 21 · eclipse-temurin:25-jre-alpine |
+| **Port (local)** | `8088` (`application.yml`) |
+| **Runtime** | Spring Boot · Java 21 · eclipse-temurin:21-jre-alpine |
 | **Database** | PostgreSQL 15+ (tsvector FTS, Flyway-managed) |
-| **Messaging** | Kafka consumer (`catalog.events`, group `search-service`) |
+| **Messaging** | Kafka consumer (`catalog.events`, `inventory.events`, group `search-service`) |
 | **Cache** | Caffeine (JVM-local, 3 named caches) |
 | **Auth** | JWT RS256 (issuer: `instacommerce-identity`) |
 | **Secrets** | GCP Secret Manager (`sm://`) with env-var fallback |
@@ -61,18 +61,19 @@ search-service is the **dedicated read-projection for product search** in the In
 ```mermaid
 graph TB
     subgraph Edge Layer
-        BFF["mobile-bff-service<br/>:8097"]
+        BFF["mobile-bff-service<br/>:8080"]
         AGW["admin-gateway-service<br/>:8099"]
     end
 
     subgraph Read Plane
-        SC["search-service<br/>:8086"]
-        CAT["catalog-service<br/>:8088<br/>(Product SoT)"]
+        SC["search-service<br/>:8088"]
+        CAT["catalog-service<br/>:8082<br/>(Product SoT)"]
+        INV["inventory-service<br/>:8083<br/>(Stock SoT)"]
     end
 
     subgraph Infrastructure
         PG[("PostgreSQL<br/>search DB<br/>tsvector + GIN")]
-        KF{{"Kafka<br/>catalog.events"}}
+        KF{{"Kafka<br/>catalog.events · inventory.events"}}
         DLT{{"catalog.events.DLT"}}
         CACHE["Caffeine<br/>JVM-local Cache"]
     end
@@ -80,6 +81,7 @@ graph TB
     BFF -->|"GET /search<br/>GET /search/autocomplete<br/>GET /search/trending"| SC
     AGW -->|"POST/PUT /products"| CAT
     CAT -->|"Outbox → Kafka publish"| KF
+    INV -->|"Stock events → Kafka publish"| KF
     KF -->|"@KafkaListener<br/>group: search-service"| SC
     SC --> PG
     SC --> CACHE
@@ -195,7 +197,8 @@ com.instacommerce.search
 │   ├── SearchIndexService            # Upsert/delete documents, @CacheEvict, @Transactional
 │   └── TrendingService               # @Async record, @Scheduled cleanup (ShedLock), @Cacheable
 ├── kafka/
-│   └── CatalogEventConsumer          # @KafkaListener(topics="catalog.events")
+│   ├── CatalogEventConsumer          # @KafkaListener(topics="catalog.events")
+│   └── InventoryEventConsumer        # @KafkaListener(topics="inventory.events") — real-time stock sync
 ├── repository/
 │   ├── SearchDocumentRepository      # Native SQL: fullTextSearch, autocomplete, facetByBrand/Category
 │   └── TrendingQueryRepository       # Native SQL: upsertHit (ON CONFLICT DO UPDATE)
@@ -404,7 +407,7 @@ flowchart TD
 | `minPriceCents` | long | ❌ | ≥ 0 | Minimum price in cents |
 | `maxPriceCents` | long | ❌ | ≥ 0 | Maximum price in cents |
 | `page` | int | ❌ | ≥ 0 (default: 0) | Page number |
-| `size` | int | ❌ | 1–100 (default: 20) | Page size |
+| `size` | int | ❌ | 1–50 (default: 20) | Page size |
 
 **Response — `SearchResponse`:**
 ```json
@@ -667,6 +670,7 @@ FROM eclipse-temurin:25-jre-alpine (runtime)
 | Service | Interaction | Data |
 |---------|-------------|------|
 | `catalog-service` | Kafka consumer (`catalog.events`) | Product data for indexing |
+| `inventory-service` | Kafka consumer (`inventory.events`) | Stock adjustments and depletion for real-time availability sync |
 | `identity-service` | JWT public key (config, not runtime call) | Auth token validation |
 
 ### Infrastructure Dependencies
@@ -763,10 +767,10 @@ docker compose up -d postgres kafka
 ./gradlew :services:search-service:bootRun
 
 # 3. Verify
-curl http://localhost:8086/actuator/health
-curl "http://localhost:8086/search?query=milk"
-curl "http://localhost:8086/search/autocomplete?prefix=mi&limit=5"
-curl "http://localhost:8086/search/trending?limit=5"
+curl http://localhost:8088/actuator/health
+curl "http://localhost:8088/search?query=milk"
+curl "http://localhost:8088/search/autocomplete?prefix=mi&limit=5"
+curl "http://localhost:8088/search/trending?limit=5"
 ```
 
 ---

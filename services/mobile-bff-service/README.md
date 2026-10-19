@@ -93,7 +93,7 @@ graph TB
         IG["Gateway<br/>m.instacommerce.dev"]
     end
 
-    subgraph "mobile-bff-service :8097"
+    subgraph "mobile-bff-service :8080"
         APP["MobileBffServiceApplication"]
         CTRL["MobileBffController"]
         ACT["Actuator<br/>health · prometheus · metrics"]
