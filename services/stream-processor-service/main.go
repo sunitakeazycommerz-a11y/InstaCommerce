@@ -179,13 +179,21 @@ func main() {
 // Duplicate messages (identified by topic:partition:offset) are skipped but their offsets are still committed.
 func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, brokers []string, groupID, topic string, deduper *dedup.Checker, handler func(context.Context, kafka.Message) error) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:        brokers,
-		GroupID:        groupID,
-		Topic:          topic,
-		MinBytes:       1e3,  // 1KB
-		MaxBytes:       10e6, // 10MB
-		CommitInterval: 0,
-		StartOffset:    kafka.FirstOffset,
+		Brokers:           brokers,
+		GroupID:           groupID,
+		Topic:             topic,
+		MinBytes:          1e3,  // 1KB
+		MaxBytes:          10e6, // 10MB
+		CommitInterval:    0,
+		StartOffset:       kafka.FirstOffset,
+		SessionTimeout:    45 * time.Second,
+		HeartbeatInterval: 3 * time.Second,
+		RebalanceTimeout:  60 * time.Second,
+		JoinGroupBackoff:  3 * time.Second,
+		GroupBalancers: []kafka.GroupBalancer{
+			kafka.RangeGroupBalancer{},
+			kafka.RoundRobinGroupBalancer{},
+		},
 	})
 
 	dispatcher := processor.NewStreamDispatcher(

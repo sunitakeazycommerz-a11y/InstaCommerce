@@ -24,6 +24,14 @@ type ConsumerConfig struct {
 	MaxBytes int
 	// MaxWait is the maximum time the broker waits before returning a batch.
 	MaxWait time.Duration
+	// SessionTimeout sets the length of time that may pass without a heartbeat before rebalancing (default 45s).
+	SessionTimeout time.Duration
+	// HeartbeatInterval sets the frequency at which consumer heartbeats are sent (default 3s).
+	HeartbeatInterval time.Duration
+	// RebalanceTimeout sets the max time coordinator waits for members to join during rebalance (default 60s).
+	RebalanceTimeout time.Duration
+	// JoinGroupBackoff sets the wait time before re-joining group on error (default 3s).
+	JoinGroupBackoff time.Duration
 }
 
 // Message is a simplified representation of a consumed Kafka message.
@@ -76,16 +84,32 @@ func NewConsumer(cfg ConsumerConfig, handler MessageHandler, logger *slog.Logger
 	if cfg.MaxWait == 0 {
 		cfg.MaxWait = 3 * time.Second
 	}
+	if cfg.SessionTimeout == 0 {
+		cfg.SessionTimeout = 45 * time.Second
+	}
+	if cfg.HeartbeatInterval == 0 {
+		cfg.HeartbeatInterval = 3 * time.Second
+	}
+	if cfg.RebalanceTimeout == 0 {
+		cfg.RebalanceTimeout = 60 * time.Second
+	}
+	if cfg.JoinGroupBackoff == 0 {
+		cfg.JoinGroupBackoff = 3 * time.Second
+	}
 
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
-		Brokers:        cfg.Brokers,
-		GroupID:        cfg.GroupID,
-		GroupTopics:    cfg.Topics,
-		MinBytes:       cfg.MinBytes,
-		MaxBytes:       cfg.MaxBytes,
-		MaxWait:        cfg.MaxWait,
-		CommitInterval: 0,
-		StartOffset:    kafkago.LastOffset,
+		Brokers:           cfg.Brokers,
+		GroupID:           cfg.GroupID,
+		GroupTopics:       cfg.Topics,
+		MinBytes:          cfg.MinBytes,
+		MaxBytes:          cfg.MaxBytes,
+		MaxWait:           cfg.MaxWait,
+		CommitInterval:    0,
+		StartOffset:       kafkago.LastOffset,
+		SessionTimeout:    cfg.SessionTimeout,
+		HeartbeatInterval: cfg.HeartbeatInterval,
+		RebalanceTimeout:  cfg.RebalanceTimeout,
+		JoinGroupBackoff:  cfg.JoinGroupBackoff,
 		GroupBalancers: []kafkago.GroupBalancer{
 			kafkago.RangeGroupBalancer{},
 			kafkago.RoundRobinGroupBalancer{},
