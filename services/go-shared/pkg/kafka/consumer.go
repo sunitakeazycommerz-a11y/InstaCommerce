@@ -86,6 +86,10 @@ func NewConsumer(cfg ConsumerConfig, handler MessageHandler, logger *slog.Logger
 		MaxWait:        cfg.MaxWait,
 		CommitInterval: 0,
 		StartOffset:    kafkago.LastOffset,
+		GroupBalancers: []kafkago.GroupBalancer{
+			kafkago.RangeGroupBalancer{},
+			kafkago.RoundRobinGroupBalancer{},
+		},
 	})
 
 	logger.Info("kafka consumer initialised",

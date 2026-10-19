@@ -6,8 +6,8 @@
 # Kafka topic for reconciliation CDC events
 resource "kafka_topic" "reconciliation_cdc" {
   name              = "reconciliation.cdc"
-  partitions        = 3
-  replication_factor = 2
+  partitions        = 12
+  replication_factor = 3
 
   config = {
     "cleanup.policy"      = "delete"

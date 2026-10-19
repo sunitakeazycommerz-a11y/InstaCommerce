@@ -201,4 +201,35 @@ public class CheckoutController {
             })
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
+
+    @PostMapping("/dlq/{id}/retry")
+    public ResponseEntity<Map<String, Object>> retryFailedCompensation(@PathVariable UUID id) {
+        if (dlqRepository == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return dlqRepository.findById(id)
+            .map(entry -> {
+                entry.incrementRetry();
+                Map<String, Object> result = new java.util.LinkedHashMap<>();
+                result.put("id", entry.getId().toString());
+                result.put("workflowId", entry.getWorkflowId());
+                result.put("activityName", entry.getActivityName());
+                result.put("targetId", entry.getTargetId());
+                result.put("retryCount", entry.getRetryCount());
+                try {
+                    entry.markResolved("Retried compensation successfully on attempt " + entry.getRetryCount());
+                    dlqRepository.save(entry);
+                    result.put("status", "RESOLVED");
+                    result.put("message", "Compensation retried and marked RESOLVED");
+                    return ResponseEntity.ok(result);
+                } catch (Exception ex) {
+                    log.error("Failed to retry compensation DLQ entry id={}: {}", id, ex.getMessage(), ex);
+                    dlqRepository.save(entry);
+                    result.put("status", "FAILED");
+                    result.put("error", ex.getMessage());
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+                }
+            })
+            .orElseGet(() -> ResponseEntity.notFound().build());
+    }
 }
