@@ -42,6 +42,12 @@ subprojects {
         toolVersion = "0.8.12"
     }
 
+    tasks.withType<Test>().configureEach {
+        configure<JacocoTaskExtension> {
+            excludes = listOf("sun.*", "jdk.*", "java.*", "*\$MockitoMock\$*")
+        }
+    }
+
     tasks.withType<JacocoReport>().configureEach {
         reports {
             xml.required.set(true)
@@ -104,6 +110,7 @@ subprojects {
             dependency("org.testcontainers:junit-jupiter:1.19.3")
             dependency("com.redis.testcontainers:testcontainers-redis:1.6.1")
             dependency("io.temporal:temporal-sdk:1.22.3")
+            dependency("io.temporal:temporal-testing:1.22.3")
             dependency("org.mapstruct:mapstruct:1.5.5.Final")
             dependency("org.mapstruct:mapstruct-processor:1.5.5.Final")
             dependency("com.stripe:stripe-java:24.18.0")

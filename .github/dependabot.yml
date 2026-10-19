@@ -222,6 +222,20 @@ updates:
           - "minor"
           - "patch"
 
+  # Playwright End-to-End Suite
+  - package-ecosystem: "npm"
+    directory: "/tests/e2e"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
   # Docker Container Images (30 Services)
   - package-ecosystem: "docker"
     directory: "/services/admin-gateway-service"

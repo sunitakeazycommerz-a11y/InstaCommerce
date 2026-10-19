@@ -48,11 +48,15 @@ htmlcov/
 *.egg
 .venv/
 
-# Node.js (if any)
+# Node.js & Playwright
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
 
 # ============================================================================
 # IDE & EDITOR SPECIFIC FILES

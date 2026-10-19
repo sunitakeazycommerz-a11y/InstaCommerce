@@ -103,6 +103,7 @@ jackson-datatype-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-dat
 
 # Temporal Workflow
 temporal-sdk = { module = "io.temporal:temporal-sdk", version.ref = "temporal" }
+temporal-testing = { module = "io.temporal:temporal-testing", version.ref = "temporal" }
 
 # Testing
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }

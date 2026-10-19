@@ -694,8 +694,34 @@ jobs:
             helm template instacommerce deploy/helm/ -f "$values" > /dev/null
           done
 
+  e2e-synthetic-test:
+    name: Playwright Synthetic Browser Checkout Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: tests/e2e/package.json
+      - name: Install dependencies
+        working-directory: tests/e2e
+        run: |
+          npm ci || npm install
+          npx playwright install --with-deps chromium
+      - name: Run Playwright synthetic checkout tests
+        working-directory: tests/e2e
+        run: |
+          npx playwright test --project=chromium
+
   deploy-dev:
-    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation, data-platform-quality, ml-validation, helm-validation]
+    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation, data-platform-quality, ml-validation, helm-validation, e2e-synthetic-test]
     if: >-
       github.event_name == 'push'
       && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')

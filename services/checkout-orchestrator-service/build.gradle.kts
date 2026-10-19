@@ -26,6 +26,8 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-jackson")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
+    testImplementation("io.temporal:temporal-testing")
+    testImplementation("io.grpc:grpc-inprocess")
 }
 
 tasks.withType<Test> {
