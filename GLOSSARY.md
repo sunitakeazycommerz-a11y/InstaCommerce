@@ -82,7 +82,7 @@ stateDiagram-v2
 | `outbox-relay-service` | Go 1.25 | 8103 | PostgreSQL | Canonical Domain Topics | `outbox-relay` |
 | `payment-webhook-service` | Go 1.25 | 8106 | PostgreSQL | `payment.webhooks` | `payment-webhook` |
 | `reconciliation-engine` | Go 1.25 | 8107 | PostgreSQL | `reconciliation.events` | `reconciliation-engine` |
-| `reverse-etl-orchestrator` | Go 1.25 | 8080 | BigQuery / Postgres | — | `reverse-etl-orchestrator` |
+| `reverse-etl-orchestrator` | Go 1.25 | 8109 | BigQuery / Postgres | — | `reverse-etl-orchestrator` |
 | `stream-processor-service` | Go 1.25 | 8108 | Kafka Streams | Processed Streams | `stream-processor` |
 | `ai-orchestrator-service` | Python 3.12 / FastAPI | 8100 | LangGraph / Redis | `ai-orchestrator.events` | `ai-orchestrator-service` |
 | `ai-inference-service` | Python 3.12 / FastAPI | 8101 | Redis Cache | — | `ai-inference-service` |

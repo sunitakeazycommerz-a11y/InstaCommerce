@@ -267,4 +267,23 @@ class InternalServiceAuthFilterTest {
         assertNotNull(auth, "Should authenticate with shared token when no per-service tokens configured");
         assertEquals("order-service", auth.getPrincipal());
     }
+
+    @Test
+    @DisplayName("Strict per-service mode should reject shared token fallback")
+    void testStrictPerServiceTokenRejectsSharedFallback() throws Exception {
+        Map<String, String> allowedCallers = Map.of(
+            "payment-service", PAYMENT_SERVICE_TOKEN
+        );
+        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers, true);
+
+        when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
+        when(request.getHeader("X-Internal-Token")).thenReturn(SHARED_TOKEN);
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getRequestURI()).thenReturn("/api/v1/auth/verify");
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        Authentication auth = getContext().getAuthentication();
+        assertNull(auth, "Strict mode must reject flat shared token fallback");
+    }
 }

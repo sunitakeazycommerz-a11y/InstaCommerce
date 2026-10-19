@@ -19,8 +19,8 @@ The `reverse-etl-orchestrator` manages reverse ETL pipelines, subscription confi
 
 | Endpoint | Default Address / Port | Description |
 |---|---|---|
-| **API** | `:8080` (or `API_ADDR`) | REST API for managing subscriptions and sinks |
-| **Health** | `:8081` (or `HEALTH_ADDR`) | `/health`, `/health/live`, `/health/ready` |
+| **API** | `:8109` (or `API_ADDR`) | REST API for managing subscriptions and sinks |
+| **Health** | `:8110` (or `HEALTH_ADDR`) | `/health`, `/health/live`, `/health/ready` |
 | **Metrics** | `:9090` (or `METRICS_ADDR`) | `/metrics` Prometheus scrape endpoint |
 
 ---

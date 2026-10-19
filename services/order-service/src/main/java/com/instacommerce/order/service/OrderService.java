@@ -11,8 +11,10 @@ import com.instacommerce.order.dto.request.CartItem;
 import com.instacommerce.order.dto.response.OrderResponse;
 import com.instacommerce.order.dto.response.OrderStatusResponse;
 import com.instacommerce.order.dto.response.OrderSummaryResponse;
+import com.instacommerce.order.exception.ApiException;
 import com.instacommerce.order.exception.InvalidOrderStateException;
 import com.instacommerce.order.exception.OrderNotFoundException;
+import org.springframework.http.HttpStatus;
 import com.instacommerce.order.repository.OrderRepository;
 import com.instacommerce.order.repository.OrderStatusHistoryRepository;
 import com.instacommerce.order.workflow.model.CreateOrderCommand;
@@ -58,12 +60,24 @@ public class OrderService {
         if (existing.isPresent()) {
             return existing.get().getId().toString();
         }
+        if (command.getSubtotalCents() - command.getDiscountCents() != command.getTotalCents()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_TOTAL",
+                "Order total must equal subtotal minus discount: subtotal=" + command.getSubtotalCents()
+                + ", discount=" + command.getDiscountCents() + ", total=" + command.getTotalCents());
+        }
+        if (command.getDiscountCents() > 0 || (command.getCouponCode() != null && !command.getCouponCode().isBlank())) {
+            if (command.getQuoteId() == null || command.getQuoteToken() == null || command.getQuoteToken().isBlank()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "DISCOUNT_REQUIRES_QUOTE",
+                    "Orders with discounts or coupons must include a validated quoteId and quoteToken from pricing-service");
+            }
+        }
         if (command.getQuoteId() != null && command.getQuoteToken() != null) {
             boolean quoteValid = pricingQuoteClient.validateQuote(
                 command.getQuoteId(), command.getQuoteToken(),
                 command.getTotalCents(), command.getSubtotalCents(), command.getDiscountCents());
             if (!quoteValid) {
-                throw new IllegalStateException("Price quote validation failed for quoteId=" + command.getQuoteId());
+                throw new ApiException(HttpStatus.CONFLICT, "QUOTE_VALIDATION_FAILED",
+                    "Price quote validation failed for quoteId=" + command.getQuoteId());
             }
         }
         Order order = new Order();
@@ -130,7 +144,7 @@ public class OrderService {
 
     @Transactional
     public void cancelOrderByUser(UUID orderId, UUID userId, String reason) {
-        Order order = orderRepository.findByIdAndUserId(orderId, userId)
+        Order order = orderRepository.findByIdAndUserIdForUpdate(orderId, userId)
             .orElseThrow(() -> new OrderNotFoundException(orderId));
         if (order.getStatus() == OrderStatus.CANCELLED) {
             return;
@@ -162,7 +176,7 @@ public class OrderService {
 
     @Transactional
     public void cancelOrder(UUID orderId, String reason, String changedBy, UUID actorId) {
-        Order order = orderRepository.findById(orderId)
+        Order order = orderRepository.findByIdForUpdate(orderId)
             .orElseThrow(() -> new OrderNotFoundException(orderId));
         if (order.getStatus() == OrderStatus.CANCELLED) {
             return;
@@ -197,7 +211,7 @@ public class OrderService {
 
     @Transactional
     public void updateOrderStatus(UUID orderId, OrderStatus newStatus, String changedBy, String note, UUID actorId) {
-        Order order = orderRepository.findById(orderId)
+        Order order = orderRepository.findByIdForUpdate(orderId)
             .orElseThrow(() -> new OrderNotFoundException(orderId));
         if (order.getStatus() == newStatus) {
             return;
@@ -251,7 +265,7 @@ public class OrderService {
 
     @Transactional
     public void advanceLifecycleFromFulfillment(UUID orderId, OrderStatus targetStatus, String changedBy, String note) {
-        Order order = orderRepository.findById(orderId)
+        Order order = orderRepository.findByIdForUpdate(orderId)
             .orElseThrow(() -> new OrderNotFoundException(orderId));
         OrderStatus currentStatus = order.getStatus();
         if (currentStatus == OrderStatus.CANCELLED

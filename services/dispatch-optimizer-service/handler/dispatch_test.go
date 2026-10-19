@@ -316,3 +316,39 @@ func TestHandleDispatchAssign_LeadDispatcherAlertAfterThreeAttempts(t *testing.T
 	assert.Equal(t, 3, resp.AttemptCount)
 	assert.True(t, resp.LeadDispatcherAlert, "Attempt 3 must trigger lead dispatcher alert")
 }
+
+func TestHandleDispatchAssign_EmptyAvailableRidersDoesNotPanic(t *testing.T) {
+	matcher := optimizer.NewBipartiteMatcher(nil, nil)
+	pub := &mockPublisher{}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	handler := HandleDispatchAssign(matcher, pub, logger)
+
+	reqPayload := DispatchAssignRequest{
+		OrderID: "order-empty-riders",
+		StoreID: "store-empty",
+		OrderPosition: optimizer.Position{
+			Lat: 12.9716,
+			Lng: 77.5946,
+		},
+		AttemptCount:    1,
+		AvailableRiders: []optimizer.RiderState{},
+	}
+
+	body, _ := json.Marshal(reqPayload)
+	req := httptest.NewRequest(http.MethodPost, "/dispatch/assign", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	assert.NotPanics(t, func() {
+		handler.ServeHTTP(rec, req)
+	})
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var resp DispatchAssignResponse
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "QUEUED_NO_RIDERS", resp.Status)
+	assert.Equal(t, "order-empty-riders", resp.OrderID)
+}
+

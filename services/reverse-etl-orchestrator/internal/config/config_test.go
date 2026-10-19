@@ -21,8 +21,8 @@ func TestConfigDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	assert.Equal(t, ":8080", cfg.APIAddr)
-	assert.Equal(t, ":8081", cfg.HealthAddr)
+	assert.Equal(t, ":8109", cfg.APIAddr)
+	assert.Equal(t, ":8110", cfg.HealthAddr)
 	assert.Equal(t, ":9090", cfg.MetricsAddr)
 	assert.Equal(t, "localhost:6379", cfg.RedisAddr)
 	assert.Equal(t, 10, cfg.WorkerPoolConcurrency)

@@ -53,7 +53,7 @@ class OrderServiceFulfillmentLifecycleTest {
         order.setUserId(UUID.randomUUID());
         order.setStatus(OrderStatus.PLACED);
         order.setCurrency("INR");
-        when(orderRepository.findById(orderId)).thenReturn(Optional.of(order));
+        when(orderRepository.findByIdForUpdate(orderId)).thenReturn(Optional.of(order));
     }
 
     @Test

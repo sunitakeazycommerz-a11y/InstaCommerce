@@ -31,12 +31,21 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(InternalServiceAuthFilter.class);
     private final String sharedToken;
     private final Map<String, String> allowedCallers;
+    private final boolean strictPerServiceTokens;
 
     public InternalServiceAuthFilter(
             @Value("${internal.service.token}") String sharedToken,
             @Value("#{${internal.service.allowed-callers:{}}}") Map<String, String> allowedCallers) {
+        this(sharedToken, allowedCallers, false);
+    }
+
+    public InternalServiceAuthFilter(
+            String sharedToken,
+            Map<String, String> allowedCallers,
+            @Value("${internal.service.strict-per-service-tokens:false}") boolean strictPerServiceTokens) {
         this.sharedToken = sharedToken;
         this.allowedCallers = allowedCallers != null ? allowedCallers : Collections.emptyMap();
+        this.strictPerServiceTokens = strictPerServiceTokens;
     }
 
     @Override
@@ -78,11 +87,15 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
             return isValid;
         }
         // Fall back to shared token during migration
+        if (strictPerServiceTokens) {
+            log.warn("STRICT_PER_SERVICE_REJECTION: Caller '{}' attempted shared token fallback, but strict per-service tokens are enforced.", serviceName);
+            return false;
+        }
         boolean isValid = MessageDigest.isEqual(
                 sharedToken.getBytes(StandardCharsets.UTF_8),
                 token.getBytes(StandardCharsets.UTF_8));
         if (isValid) {
-            log.debug("Shared token fallback accepted for: {}", serviceName);
+            log.warn("DEPRECATION_WARNING: Caller '{}' authenticated via legacy flat shared token! Per-service tokens required under ADR-010/ADR-012.", serviceName);
         } else {
             log.debug("Shared token fallback rejected for: {}", serviceName);
         }
