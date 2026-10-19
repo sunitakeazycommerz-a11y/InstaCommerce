@@ -35,6 +35,10 @@ google-cloud-storage = "2.38.0"
 parquet = "1.13.1"
 javax-annotation = "1.3.2"
 
+# API & Benchmark
+springdoc = "2.8.5"
+jmh = "1.37"
+
 # Test Dependencies
 junit-jupiter = "5.10.2"
 assertj = "3.25.3"
@@ -117,6 +121,12 @@ stripe = { module = "com.stripe:stripe-java", version.ref = "stripe" }
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 google-cloud-storage = { module = "com.google.cloud:google-cloud-storage", version.ref = "google-cloud-storage" }
 parquet-column = { module = "org.apache.parquet:parquet-column", version.ref = "parquet" }
+
+# Benchmark & OpenAPI
+springdoc-openapi-starter-webmvc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
+springdoc-openapi-starter-webflux-ui = { module = "org.springdoc:springdoc-openapi-starter-webflux-ui", version.ref = "springdoc" }
+jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }
+jmh-generator-annprocess = { module = "org.openjdk.jmh:jmh-generator-annprocess", version.ref = "jmh" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }

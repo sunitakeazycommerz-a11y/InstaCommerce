@@ -37,6 +37,8 @@ dependencies {
     testImplementation("org.springframework.security:spring-security-test")
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.testcontainers:junit-jupiter")
+    testImplementation("org.openjdk.jmh:jmh-core")
+    testAnnotationProcessor("org.openjdk.jmh:jmh-generator-annprocess")
 }
 
 tasks.withType<Test> {

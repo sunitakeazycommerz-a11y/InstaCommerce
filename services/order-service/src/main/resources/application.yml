@@ -137,3 +137,11 @@ resilience4j:
         coreThreadPoolSize: 10
         queueCapacity: 40
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+

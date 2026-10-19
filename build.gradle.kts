@@ -112,6 +112,10 @@ subprojects {
             dependency("org.apache.parquet:parquet-column:1.13.1")
             dependency("com.squareup.okhttp3:mockwebserver:4.12.0")
             dependency("io.lettuce:lettuce-core:6.3.2.RELEASE")
+            dependency("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.5")
+            dependency("org.springdoc:springdoc-openapi-starter-webflux-ui:2.8.5")
+            dependency("org.openjdk.jmh:jmh-core:1.37")
+            dependency("org.openjdk.jmh:jmh-generator-annprocess:1.37")
         }
     }
 }

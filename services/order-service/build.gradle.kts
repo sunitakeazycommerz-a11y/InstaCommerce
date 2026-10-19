@@ -23,6 +23,7 @@ dependencies {
     implementation("net.javacrumbs.shedlock:shedlock-spring")
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template")
     implementation("io.jsonwebtoken:jjwt-api")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation(project(":contracts"))
     runtimeOnly("io.jsonwebtoken:jjwt-impl")

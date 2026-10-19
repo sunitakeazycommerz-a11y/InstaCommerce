@@ -206,6 +206,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      security-events: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -220,8 +221,15 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
           severity: CRITICAL,HIGH
           exit-code: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+      - name: Upload Trivy SARIF report
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
 
   dependency-review:
     if: github.event_name == 'pull_request'
@@ -662,8 +670,32 @@ jobs:
           npm install -g pyright@1.1.414
           pyright ml
 
+  helm-validation:
+    name: Helm Chart Lint & Template Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+      - name: Lint Helm Chart
+        run: |
+          helm lint deploy/helm/
+      - name: Dry-run template validation across environments
+        run: |
+          for values in deploy/helm/values*.yaml; do
+            echo "Validating $values..."
+            helm template instacommerce deploy/helm/ -f "$values" > /dev/null
+          done
+
   deploy-dev:
-    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation, data-platform-quality, ml-validation]
+    needs: [detect-changes, security-scan, build-test, go-build-test, python-build-test, contract-validation, data-platform-quality, ml-validation, helm-validation]
     if: >-
       github.event_name == 'push'
       && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
