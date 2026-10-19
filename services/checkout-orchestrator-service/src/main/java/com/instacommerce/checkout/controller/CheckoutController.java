@@ -100,7 +100,7 @@ public class CheckoutController {
         WorkflowOptions options = WorkflowOptions.newBuilder()
             .setWorkflowId(workflowId)
             .setTaskQueue(taskQueue)
-            .setWorkflowExecutionTimeout(Duration.ofMinutes(5))
+            .setWorkflowExecutionTimeout(Duration.ofMinutes(10))
             .build();
 
         CheckoutWorkflow workflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, options);

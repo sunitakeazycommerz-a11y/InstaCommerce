@@ -90,6 +90,14 @@ public class OrderController {
         orderService.cancelOrderByUser(id, userId, request.reason());
     }
 
+    @PostMapping("/{id}/amend")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void validateAmendment(@PathVariable UUID id,
+                                  @AuthenticationPrincipal String principal,
+                                  Authentication authentication) {
+        orderService.validateOrderAmendmentWindow(id);
+    }
+
     private UUID toUserId(String principal) {
         if (principal == null) {
             return null;

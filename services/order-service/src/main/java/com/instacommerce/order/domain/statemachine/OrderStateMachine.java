@@ -1,7 +1,7 @@
 package com.instacommerce.order.domain.statemachine;
 
 import com.instacommerce.order.domain.model.OrderStatus;
-import com.instacommerce.order.exception.InvalidOrderStateException;
+import com.instacommerce.order.exception.IllegalOrderStateTransitionException;
 import java.util.Map;
 import java.util.Set;
 
@@ -20,9 +20,16 @@ public final class OrderStateMachine {
     private OrderStateMachine() {
     }
 
+    public static boolean canTransition(OrderStatus from, OrderStatus to) {
+        if (from == null || to == null) {
+            return false;
+        }
+        return TRANSITIONS.getOrDefault(from, Set.of()).contains(to);
+    }
+
     public static void validate(OrderStatus from, OrderStatus to) {
-        if (!TRANSITIONS.getOrDefault(from, Set.of()).contains(to)) {
-            throw new InvalidOrderStateException("Cannot transition from " + from + " to " + to);
+        if (from == null || to == null || !canTransition(from, to)) {
+            throw new IllegalOrderStateTransitionException(from, to);
         }
     }
 }
