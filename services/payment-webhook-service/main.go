@@ -43,7 +43,7 @@ const (
 	defaultDedupeTTLSeconds   = 86400
 	defaultCleanupSeconds     = 60
 	defaultPublishQueueSize   = 1000
-	defaultPublishTimeoutMS   = 2000
+	defaultPublishTimeoutMS   = 5000
 	defaultShutdownSeconds    = 15
 )
 

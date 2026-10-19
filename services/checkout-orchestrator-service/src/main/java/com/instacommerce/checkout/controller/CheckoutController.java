@@ -40,6 +40,8 @@ import com.instacommerce.checkout.domain.CompensationDlq;
 import com.instacommerce.checkout.repository.CompensationDlqRepository;
 import java.util.List;
 
+import java.util.concurrent.Semaphore;
+
 @RestController
 @RequestMapping("/checkout")
 public class CheckoutController {
@@ -49,15 +51,25 @@ public class CheckoutController {
     private final String taskQueue;
     private final CheckoutIdempotencyService idempotencyService;
     private final CompensationDlqRepository dlqRepository;
+    private final Semaphore checkoutRateLimiter;
 
     public CheckoutController(WorkflowClient workflowClient,
                                @Value("${temporal.task-queue}") String taskQueue,
                                CheckoutIdempotencyService idempotencyService,
                                CompensationDlqRepository dlqRepository) {
+        this(workflowClient, taskQueue, idempotencyService, dlqRepository, 1500);
+    }
+
+    public CheckoutController(WorkflowClient workflowClient,
+                               String taskQueue,
+                               CheckoutIdempotencyService idempotencyService,
+                               CompensationDlqRepository dlqRepository,
+                               int maxConcurrentCheckouts) {
         this.workflowClient = workflowClient;
         this.taskQueue = taskQueue;
         this.idempotencyService = idempotencyService;
         this.dlqRepository = dlqRepository;
+        this.checkoutRateLimiter = new Semaphore(maxConcurrentCheckouts >= 0 ? maxConcurrentCheckouts : 1500);
     }
 
     public CheckoutController(WorkflowClient workflowClient,
@@ -77,52 +89,73 @@ public class CheckoutController {
     public ResponseEntity<CheckoutResponse> initiateCheckout(
             @Valid @RequestBody CheckoutRequest request,
             @AuthenticationPrincipal String principal,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestHeader(value = "X-Tenant-Id", required = false) String tenantId,
+            @RequestHeader(value = "X-Store-Id", required = false) String storeId) {
 
-        if (principal == null || !principal.equals(request.userId())) {
-            throw new CheckoutException("FORBIDDEN", "Cannot checkout for another user", HttpStatus.FORBIDDEN);
+        if (!checkoutRateLimiter.tryAcquire()) {
+            log.warn("Checkout request rate limit exceeded under flash sale traffic");
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", "5")
+                .body(new CheckoutResponse(null, "RATE_LIMIT_EXCEEDED: Flash sale checkout spike backpressure active", 0, 0));
         }
-
-        if (idempotencyKey == null || idempotencyKey.isBlank()) {
-            idempotencyKey = UUID.randomUUID().toString();
-        }
-
-        // DB-backed idempotency check committed in its own short TX;
-        // the DB connection is returned to the pool before the workflow call below.
-        Optional<CheckoutResponse> cached = idempotencyService.findValidResponse(idempotencyKey);
-        if (cached.isPresent()) {
-            log.info("Duplicate checkout detected idempotencyKey={}, returning cached response", idempotencyKey);
-            return ResponseEntity.ok(cached.get());
-        }
-
-        String workflowId = "checkout-" + principal + "-" + idempotencyKey;
-
-        WorkflowOptions options = WorkflowOptions.newBuilder()
-            .setWorkflowId(workflowId)
-            .setTaskQueue(taskQueue)
-            .setWorkflowExecutionTimeout(Duration.ofMinutes(10))
-            .build();
-
-        CheckoutWorkflow workflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, options);
-
-        log.info("Starting checkout saga workflowId={} user={}", workflowId, principal);
-        CheckoutResponse result;
+        com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor.setTenantContext(tenantId, storeId);
         try {
-            result = workflow.checkout(request);
-        } catch (WorkflowExecutionAlreadyStarted ex) {
-            return handleAlreadyStarted(workflowId);
-        } catch (WorkflowException ex) {
-            if (ex.getCause() instanceof WorkflowExecutionAlreadyStarted
-                    || (ex.getMessage() != null && ex.getMessage().contains("WorkflowExecutionAlreadyStarted"))) {
-                return handleAlreadyStarted(workflowId);
+            if (principal == null || !principal.equals(request.userId())) {
+                throw new CheckoutException("FORBIDDEN", "Cannot checkout for another user", HttpStatus.FORBIDDEN);
             }
-            throw ex;
+
+            if (idempotencyKey == null || idempotencyKey.isBlank()) {
+                idempotencyKey = UUID.randomUUID().toString();
+            }
+
+            // DB-backed idempotency check committed in its own short TX;
+            // the DB connection is returned to the pool before the workflow call below.
+            Optional<CheckoutResponse> cached = idempotencyService.findValidResponse(idempotencyKey);
+            if (cached.isPresent()) {
+                log.info("Duplicate checkout detected idempotencyKey={}, returning cached response", idempotencyKey);
+                return ResponseEntity.ok(cached.get());
+            }
+
+            String workflowId = "checkout-" + principal + "-" + idempotencyKey;
+
+            WorkflowOptions options = WorkflowOptions.newBuilder()
+                .setWorkflowId(workflowId)
+                .setTaskQueue(taskQueue)
+                .setWorkflowExecutionTimeout(Duration.ofMinutes(10))
+                .build();
+
+            CheckoutWorkflow workflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, options);
+
+            log.info("Starting checkout saga workflowId={} user={}", workflowId, principal);
+            CheckoutResponse result;
+            try {
+                result = workflow.checkout(request);
+            } catch (WorkflowExecutionAlreadyStarted ex) {
+                return handleAlreadyStarted(workflowId);
+            } catch (WorkflowException ex) {
+                if (ex.getCause() instanceof WorkflowExecutionAlreadyStarted
+                        || (ex.getMessage() != null && ex.getMessage().contains("WorkflowExecutionAlreadyStarted"))) {
+                    return handleAlreadyStarted(workflowId);
+                }
+                throw ex;
+            }
+
+            // Persist idempotency key + response in its own short TX (connection returned immediately)
+            idempotencyService.recordResponse(idempotencyKey, result);
+
+            return ResponseEntity.ok(result);
+        } finally {
+            com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor.clear();
+            checkoutRateLimiter.release();
         }
+    }
 
-        // Persist idempotency key + response in its own short TX (connection returned immediately)
-        idempotencyService.recordResponse(idempotencyKey, result);
-
-        return ResponseEntity.ok(result);
+    public ResponseEntity<CheckoutResponse> initiateCheckout(
+            CheckoutRequest request,
+            String principal,
+            String idempotencyKey) {
+        return initiateCheckout(request, principal, idempotencyKey, null, null);
     }
 
     @GetMapping("/{workflowId}/status")

@@ -151,6 +151,25 @@ class CheckoutControllerTest {
         assertThat(savedKey.getExpiresAt()).isAfter(Instant.now().plus(Duration.ofMinutes(29)));
     }
 
+    @Test
+    void returnsTooManyRequestsWhenRateLimitExceeded() {
+        CheckoutController rateLimitedController = new CheckoutController(
+            workflowClient,
+            TASK_QUEUE,
+            new com.instacommerce.checkout.service.CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            null,
+            0 // 0 permits -> instantly throttled
+        );
+
+        CheckoutRequest request = request();
+        ResponseEntity<CheckoutResponse> response = rateLimitedController.initiateCheckout(request, "user-123", "idem-rate-123");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(response.getHeaders().getFirst("Retry-After")).isEqualTo("5");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).contains("RATE_LIMIT_EXCEEDED");
+    }
+
     private CheckoutRequest request() {
         return new CheckoutRequest("user-123", "pm-123", "SAVE20", "addr-123");
     }

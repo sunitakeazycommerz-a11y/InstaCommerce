@@ -33,6 +33,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.util.concurrent.TimeUnit;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.lang.Nullable;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,17 +52,56 @@ public class OrderService {
     private final OutboxService outboxService;
     private final AuditLogService auditLogService;
     private final PricingQuoteClient pricingQuoteClient;
+    private final MeterRegistry meterRegistry;
 
     public OrderService(OrderRepository orderRepository,
                         OrderStatusHistoryRepository statusHistoryRepository,
                         OutboxService outboxService,
                         AuditLogService auditLogService,
                         PricingQuoteClient pricingQuoteClient) {
+        this(orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public OrderService(OrderRepository orderRepository,
+                        OrderStatusHistoryRepository statusHistoryRepository,
+                        OutboxService outboxService,
+                        AuditLogService auditLogService,
+                        PricingQuoteClient pricingQuoteClient,
+                        @Nullable MeterRegistry meterRegistry) {
         this.orderRepository = orderRepository;
         this.statusHistoryRepository = statusHistoryRepository;
         this.outboxService = outboxService;
         this.auditLogService = auditLogService;
         this.pricingQuoteClient = pricingQuoteClient;
+        this.meterRegistry = meterRegistry;
+    }
+
+    private Order lockOrder(UUID orderId) {
+        long start = System.nanoTime();
+        try {
+            return orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+        } finally {
+            recordLockContention(start);
+        }
+    }
+
+    private Order lockOrderForUser(UUID orderId, UUID userId) {
+        long start = System.nanoTime();
+        try {
+            return orderRepository.findByIdAndUserIdForUpdate(orderId, userId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+        } finally {
+            recordLockContention(start);
+        }
+    }
+
+    private void recordLockContention(long startNano) {
+        if (meterRegistry != null) {
+            meterRegistry.timer("order.lock.contention.duration")
+                .record(System.nanoTime() - startNano, TimeUnit.NANOSECONDS);
+        }
     }
 
     @Transactional
@@ -146,10 +192,13 @@ public class OrderService {
         cancelOrder(orderId, reason, changedBy, null);
     }
 
+    @Retryable(
+        retryFor = {ObjectOptimisticLockingFailureException.class, OptimisticLockingFailureException.class},
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
     @Transactional
     public void cancelOrderByUser(UUID orderId, UUID userId, String reason) {
-        Order order = orderRepository.findByIdAndUserIdForUpdate(orderId, userId)
-            .orElseThrow(() -> new OrderNotFoundException(orderId));
+        Order order = lockOrderForUser(orderId, userId);
         if (order.getStatus() == OrderStatus.CANCELLED) {
             return;
         }
@@ -180,10 +229,13 @@ public class OrderService {
         // Payment refund should be handled by a consumer of the OrderCancelled event
     }
 
+    @Retryable(
+        retryFor = {ObjectOptimisticLockingFailureException.class, OptimisticLockingFailureException.class},
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
     @Transactional
     public void cancelOrder(UUID orderId, String reason, String changedBy, UUID actorId) {
-        Order order = orderRepository.findByIdForUpdate(orderId)
-            .orElseThrow(() -> new OrderNotFoundException(orderId));
+        Order order = lockOrder(orderId);
         if (order.getStatus() == OrderStatus.CANCELLED) {
             return;
         }
@@ -217,10 +269,13 @@ public class OrderService {
         updateOrderStatus(orderId, newStatus, changedBy, note, null);
     }
 
+    @Retryable(
+        retryFor = {ObjectOptimisticLockingFailureException.class, OptimisticLockingFailureException.class},
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
     @Transactional
     public void updateOrderStatus(UUID orderId, OrderStatus newStatus, String changedBy, String note, UUID actorId) {
-        Order order = orderRepository.findByIdForUpdate(orderId)
-            .orElseThrow(() -> new OrderNotFoundException(orderId));
+        Order order = lockOrder(orderId);
         if (order.getStatus() == newStatus) {
             return;
         }
@@ -287,10 +342,13 @@ public class OrderService {
         }
     }
 
+    @Retryable(
+        retryFor = {ObjectOptimisticLockingFailureException.class, OptimisticLockingFailureException.class},
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
     @Transactional
     public void advanceLifecycleFromFulfillment(UUID orderId, OrderStatus targetStatus, String changedBy, String note) {
-        Order order = orderRepository.findByIdForUpdate(orderId)
-            .orElseThrow(() -> new OrderNotFoundException(orderId));
+        Order order = lockOrder(orderId);
         OrderStatus currentStatus = order.getStatus();
         if (currentStatus.isTerminal()) {
             logger.info("Ignoring fulfillment event for order {} in terminal state {}", orderId, currentStatus);
@@ -433,18 +491,20 @@ public class OrderService {
 
     @Transactional
     public void validateOrderAmendmentWindow(UUID orderId) {
-        Order order = orderRepository.findByIdForUpdate(orderId)
-            .orElseThrow(() -> new OrderNotFoundException(orderId));
+        Order order = lockOrder(orderId);
         if (order.getStatus() != OrderStatus.PENDING && order.getStatus() != OrderStatus.PLACED) {
             throw new OrderAmendmentForbiddenException(
                 "Order amendment rejected: modifications only permitted prior to packing. Current status: " + order.getStatus());
         }
     }
 
+    @Retryable(
+        retryFor = {ObjectOptimisticLockingFailureException.class, OptimisticLockingFailureException.class},
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
     @Transactional
     public void applyOrderModification(UUID orderId, UUID productId, int missingQty, long refundCents) {
-        Order order = orderRepository.findByIdForUpdate(orderId)
-            .orElseThrow(() -> new OrderNotFoundException(orderId));
+        Order order = lockOrder(orderId);
         if (order.getStatus().isTerminal()) {
             logger.warn("Ignoring OrderModified event for order {} in terminal state {}", orderId, order.getStatus());
             return;

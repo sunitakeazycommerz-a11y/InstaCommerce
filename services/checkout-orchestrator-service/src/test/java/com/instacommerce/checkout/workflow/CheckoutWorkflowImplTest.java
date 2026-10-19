@@ -263,6 +263,28 @@ class CheckoutWorkflowImplTest {
     }
 
     @Test
+    void shouldHandleTokenExpiredWithReauthenticationRequired() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 5000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(5000L, 0L, 0L, 5000L, "INR", null, null));
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(eq(5000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(null, false, "TOKEN_EXPIRED"));
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).contains("PAYMENT_TOKEN_EXPIRED");
+        assertThat(response.status()).contains("Client re-authentication required");
+        assertThat(response.orderId()).isNull();
+        verify(inventoryActivity).releaseStock(RESERVATION_ID);
+    }
+
+    @Test
     void shouldCompensateOnOrderCreationFailure() {
         CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
 

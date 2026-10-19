@@ -5,7 +5,9 @@ option java_package = "com.instacommerce.contracts.common.v1";
 option java_multiple_files = true;
 option go_package = "github.com/instacommerce/go-shared/pkg/proto/common/v1;commonv1";
 
+// Money represents a monetary amount with an explicit ISO-4217 currency code.
+// Callers must provide a valid 3-letter ISO-4217 currency code (e.g., "INR", "USD").
 message Money {
   int64  amount_minor = 1;
-  string currency     = 2;
+  string currency     = 2; // Mandatory ISO-4217 currency code (e.g. "INR", "USD")
 }

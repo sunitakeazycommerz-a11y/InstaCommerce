@@ -129,4 +129,21 @@ class OrderConcurrencyTest {
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PACKING);
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderStatusChanged"), any());
     }
+
+    @Test
+    @DisplayName("measures lock contention duration via Micrometer timer")
+    void measuresLockContentionDurationViaMicrometerTimer() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry meterRegistry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        OrderService serviceWithMetrics = new OrderService(
+            orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient, meterRegistry);
+
+        when(orderRepository.findByIdForUpdate(orderId)).thenReturn(Optional.of(order));
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        serviceWithMetrics.updateOrderStatus(orderId, OrderStatus.PACKING, "warehouse:robot", "Packing started");
+
+        io.micrometer.core.instrument.Timer timer = meterRegistry.find("order.lock.contention.duration").timer();
+        assertThat(timer).isNotNull();
+        assertThat(timer.count()).isGreaterThanOrEqualTo(1L);
+    }
 }

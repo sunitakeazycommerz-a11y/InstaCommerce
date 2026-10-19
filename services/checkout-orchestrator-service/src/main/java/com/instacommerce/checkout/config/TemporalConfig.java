@@ -14,6 +14,7 @@ import com.instacommerce.checkout.workflow.activity.InventoryActivityImpl;
 import com.instacommerce.checkout.workflow.activity.PaymentActivityImpl;
 import com.instacommerce.checkout.workflow.activity.OrderActivityImpl;
 import com.instacommerce.checkout.workflow.activity.CompensationDlqActivityImpl;
+import java.time.Duration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -24,6 +25,11 @@ public class TemporalConfig {
     public WorkflowServiceStubs workflowServiceStubs(TemporalProperties properties) {
         WorkflowServiceStubsOptions options = WorkflowServiceStubsOptions.newBuilder()
             .setTarget(properties.getServiceAddress())
+            .setEnableKeepAlive(true)
+            .setKeepAliveTime(Duration.ofSeconds(30))
+            .setKeepAliveTimeout(Duration.ofSeconds(10))
+            .setKeepAlivePermitWithoutStream(true)
+            .setRpcTimeout(Duration.ofSeconds(10))
             .build();
         return WorkflowServiceStubs.newServiceStubs(options);
     }
@@ -32,6 +38,7 @@ public class TemporalConfig {
     public WorkflowClient workflowClient(WorkflowServiceStubs serviceStubs, TemporalProperties properties) {
         WorkflowClientOptions options = WorkflowClientOptions.newBuilder()
             .setNamespace(properties.getNamespace())
+            .setContextPropagators(java.util.List.of(new com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor()))
             .build();
         return WorkflowClient.newInstance(serviceStubs, options);
     }

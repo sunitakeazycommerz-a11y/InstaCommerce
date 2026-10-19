@@ -27,6 +27,12 @@ class TemplateRegistryTest {
         assertThat(registry.resolve("OrderPlaced")).isPresent();
         assertThat(registry.resolve("OrderCancelled")).isPresent();
         assertThat(registry.resolve("ETABreachRisk")).isPresent();
+        assertThat(registry.resolve("OrderFailed")).isPresent();
+        assertThat(registry.resolve("OrderFailed").get().channels())
+            .contains(NotificationChannel.EMAIL, NotificationChannel.SMS, NotificationChannel.PUSH);
+        assertThat(registry.resolve("SagaCompensationFailed")).isPresent();
+        assertThat(registry.resolve("SagaCompensationFailed").get().channels())
+            .contains(NotificationChannel.SMS, NotificationChannel.PUSH);
     }
 
     @Test

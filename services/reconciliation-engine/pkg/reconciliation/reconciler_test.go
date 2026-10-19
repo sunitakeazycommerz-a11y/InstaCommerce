@@ -147,3 +147,12 @@ func TestReconciliationResultCalculations(t *testing.T) {
 	assert.Equal(t, res.MismatchCount, res.AutoFixedCount+res.ManualReviewCount)
 	assert.Equal(t, 500*time.Millisecond, res.Duration)
 }
+
+func TestCalculateDiscrepancyCents(t *testing.T) {
+	assert.Equal(t, int64(0), calculateDiscrepancyCents("1000", "1000"))
+	assert.Equal(t, int64(50), calculateDiscrepancyCents("1050", "1000"))
+	assert.Equal(t, int64(50), calculateDiscrepancyCents("1000", "1050"))
+	assert.Equal(t, int64(1000), calculateDiscrepancyCents("1000", "0.00"))
+	assert.Equal(t, int64(2500), calculateDiscrepancyCents("0.00", "2500"))
+	assert.Equal(t, int64(1000), calculateDiscrepancyCents("1000", ""))
+}
