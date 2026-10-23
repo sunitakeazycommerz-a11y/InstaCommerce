@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:24-jre-alpine AS runtime
 RUN apk upgrade --no-cache && addgroup -g 1001 app && adduser -u 1001 -G app -D app
 WORKDIR /app
 COPY build/libs/*.jar app.jar
