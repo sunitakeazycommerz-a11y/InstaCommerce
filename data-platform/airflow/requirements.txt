@@ -1,7 +1,7 @@
-apache-airflow==3.2.0b1
+apache-airflow==3.4.0b1
 apache-airflow-providers-google==10.14.0
 apache-airflow-providers-slack==8.4.0
 great-expectations==0.18.0
-dbt-bigquery==1.7.0
+dbt-bigquery==1.12.1
 openlineage-airflow>=1.0.0
 marquez-python>=0.8.0
