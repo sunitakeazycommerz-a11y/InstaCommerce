@@ -1,5 +1,5 @@
 apache-airflow==3.2.0b1
-apache-airflow-providers-google==10.14.0
+apache-airflow-providers-google==22.2.1
 apache-airflow-providers-slack==8.4.0
 great-expectations==0.18.0
 dbt-bigquery==1.7.0
