@@ -5,8 +5,8 @@
 The reconciliation-engine is the authoritative source for financial data integrity in InstaCommerce. It performs daily automated reconciliation between the payment ledger and order ledger, detects discrepancies, applies auto-fix rules, and maintains an immutable audit trail for PCI DSS compliance.
 
 **Service Ownership**: Finance Platform Team - Core Services
-**Language**: Go 1.22 + PostgreSQL
-**Default Port**: 8098
+**Language**: Go 1.25 + PostgreSQL
+**Default Port**: 8107
 **Status**: Tier 1 Critical (Financial reconciliation)
 
 ## SLOs & Availability

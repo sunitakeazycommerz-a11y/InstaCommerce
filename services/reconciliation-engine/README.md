@@ -40,7 +40,7 @@ Batch reconciliation service in the InstaCommerce money path. Runs on a configur
 | **Downstream outputs** | Kafka topic `reconciliation.events`, updated ledger JSON (if fixes applied), fix-state JSON |
 | **Cluster** | Transactional Core (`checkout-orchestrator-service`, `order-service`, `payment-service`, `payment-webhook-service`) |
 | **Port** | 8107 |
-| **Language** | Go 1.24 (single-binary, ~1 050 LOC in `main.go`) |
+| **Language** | Go 1.25 (PostgreSQL datastore, CDC consumer, REST management API) |
 
 ---
 
