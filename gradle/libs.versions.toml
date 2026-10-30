@@ -1,9 +1,9 @@
 [versions]
 # Core Toolchain & Plugins
-spring-boot = "4.0.0"
+spring-boot = "4.1.2"
 spring-dependency-management = "1.1.7"
 spotless = "7.0.2"
-protobuf-plugin = "0.9.6"
+protobuf-plugin = "0.10.0"
 jacoco = "0.8.12"
 
 # BOMs
@@ -14,25 +14,25 @@ grpc = "1.79.0"
 # Shared Libraries
 jackson-v2 = "2.18.11"
 jackson-v3 = "3.1.4"
-jackson-datatype-v2 = "2.20.1"
+jackson-datatype-v2 = "2.22.4"
 jackson-datatype-v3 = "3.1.0"
 jjwt = "0.12.5"
 protobuf = "4.32.0"
 protoc = "3.25.3"
 lz4 = "1.11.4"
 spring-kafka = "4.0.6"
-caffeine = "3.1.8"
+caffeine = "3.3.1"
 resilience4j = "2.2.0"
 shedlock = "5.12.0"
-postgres-socket-factory = "1.15.0"
+postgres-socket-factory = "1.30.2"
 logstash-logback = "7.4"
 temporal = "1.22.3"
 mapstruct = "1.5.5.Final"
 stripe = "24.18.0"
 lettuce = "6.3.2.RELEASE"
-guava = "33.0.0-jre"
-google-cloud-storage = "2.38.0"
-parquet = "1.13.1"
+guava = "33.7.2-jre"
+google-cloud-storage = "2.75.0"
+parquet = "1.18.1"
 javax-annotation = "1.3.2"
 
 # API & Benchmark
@@ -41,9 +41,9 @@ jmh = "1.37"
 
 # Test Dependencies
 junit-jupiter = "5.10.2"
-assertj = "3.25.3"
+assertj = "3.27.7"
 testcontainers = "1.19.3"
-testcontainers-redis = "1.6.1"
+testcontainers-redis = "1.6.4"
 mockwebserver = "4.12.0"
 
 [libraries]
