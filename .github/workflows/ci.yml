@@ -389,6 +389,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
+          install-mode: "goinstall"
           working-directory: services/${{ matrix.service }}
           args: --config=${{ github.workspace }}/.golangci.yml
       - name: Test with race detector and coverage

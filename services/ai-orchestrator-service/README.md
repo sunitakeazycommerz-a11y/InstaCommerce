@@ -673,6 +673,8 @@ All `Settings` fields use the `AI_ORCHESTRATOR_` env prefix (case-insensitive vi
 | `opentelemetry-exporter-otlp` | 1.27.0 | OTLP trace exporter |
 | `opentelemetry-instrumentation-fastapi` | 0.48b0 | Auto-instrumentation for FastAPI |
 | `opentelemetry-instrumentation-httpx` | 0.48b0 | Auto-instrumentation for httpx |
+| `numpy` | >=1.26.0 | Semantic cache cosine similarity and numerical vector ops |
+| `prometheus-client` | >=0.20.0 | Guardrail token bucket metrics and rate limiter observability |
 
 ### Optional Runtime
 

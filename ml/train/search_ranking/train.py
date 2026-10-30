@@ -16,23 +16,26 @@ import time
 from typing import Any
 
 try:
-    import lightgbm as lgb
+    import lightgbm as _lgb  # type: ignore
+    lgb: Any = _lgb
 except (ImportError, OSError):
-    lgb = None
+    lgb: Any = None
 
 try:
-    import mlflow  # type: ignore
+    import mlflow as _mlflow  # type: ignore
     import mlflow.lightgbm  # type: ignore
+    mlflow: Any = _mlflow
 except (ImportError, OSError):
-    mlflow = None
+    mlflow: Any = None
 
 import numpy as np
 import pandas as pd
 
 try:
-    import shap
+    import shap as _shap  # type: ignore
+    shap: Any = _shap
 except (ImportError, OSError):
-    shap = None
+    shap: Any = None
 
 import yaml
 from google.cloud import bigquery
@@ -82,7 +85,7 @@ class SearchRankingTrainer:
 
     def __init__(self, config: dict):
         self.config = config
-        self.model: lgb.LGBMRanker | None = None
+        self.model: Any | None = None
         self.feature_columns = config.get("features", FEATURE_COLUMNS)
 
     def load_data(self, query: str) -> pd.DataFrame:
@@ -113,7 +116,7 @@ class SearchRankingTrainer:
 
         return X_train, y_train, groups_train, X_val, y_val, groups_val
 
-    def train(self, df: pd.DataFrame) -> lgb.LGBMRanker:
+    def train(self, df: pd.DataFrame) -> Any:
         """Train LambdaMART model with GroupKFold cross-validation."""
         logger.info("Starting LambdaMART training")
         hp = self.config["hyperparameters"]
@@ -332,7 +335,7 @@ def _check_promotion_gates(
 def promote_in_mlflow_registry(model_name: str, version: str) -> bool:
     """Automatically promote model version in MLflow registry upon gate passage."""
     try:
-        from mlflow.tracking import MlflowClient
+        from mlflow.tracking import MlflowClient  # type: ignore
 
         client = MlflowClient()
         logger.info(

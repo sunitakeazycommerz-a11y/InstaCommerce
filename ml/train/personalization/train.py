@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 try:
     import mlflow  # type: ignore
@@ -158,7 +158,7 @@ class PersonalizationTrainer:
         df = df.copy()
         if max_timestamp is not None and "timestamp" in df.columns:
             df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df = df[df["timestamp"] <= max_timestamp]
+            df = cast(pd.DataFrame, df[df["timestamp"] <= max_timestamp])
 
         weights = self.config.get("interaction_weights", {
             "view": 1.0,

@@ -72,7 +72,7 @@ class ModelMonitor:
         self.model_name: str = model_name
 
         # Safe metric registration handling registry re-use
-        def _get_or_create(metric_cls, name, doc, labelnames, **kwargs):
+        def _get_or_create(metric_cls: Any, name: str, doc: str, labelnames: list[str], **kwargs: Any) -> Any:
             full_name = f"ml_{name}"
             if full_name in REGISTRY._names_to_collectors:
                 return REGISTRY._names_to_collectors[full_name]
@@ -228,9 +228,9 @@ class ModelMonitor:
         r_clean = r_clean[~np.isnan(r_clean)]
         b_clean = b_clean[~np.isnan(b_clean)]
 
-        res = stats.ks_2samp(r_clean, b_clean)
-        d_stat = float(res.statistic)
-        p_val = float(res.pvalue)
+        res: Any = stats.ks_2samp(r_clean, b_clean)
+        d_stat = float(getattr(res, "statistic", 0.0))
+        p_val = float(getattr(res, "pvalue", 1.0))
         is_drifted = bool(p_val < alpha)
 
         self.ks_statistic.labels(model=self.model_name, feature=feature_name).set(d_stat)
