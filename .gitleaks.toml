@@ -14,3 +14,13 @@ id = "generic-api-key"
     '''(?:^|/)services/order-service/README\.md$''',
     '''(?:^|/)services/payment-service/README\.md$'''
   ]
+
+[[rules]]
+id = "curl-auth-header"
+
+  [[rules.allowlists]]
+  description = "Ignore documentation and runbook curl examples"
+  paths = [
+    '''(?:^|/)docs/.*''',
+    '''(?:^|/)services/.*/README\.md$'''
+  ]

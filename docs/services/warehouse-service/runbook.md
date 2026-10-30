@@ -24,7 +24,7 @@
   ```bash
   kubectl exec deploy/warehouse-service -- \
     curl -s "http://localhost:8092/admin/stores?status=ACTIVE" \
-    -H "Authorization: Bearer admin-token" | jq 'length'
+    -H "Authorization: Bearer \$ADMIN_TOKEN" | jq 'length'
   ```
 
 - [ ] Verify Kafka topic availability (warehouse.events)
@@ -202,58 +202,29 @@ jq '.regions[] | select(.coverage_percent < 100)' <coverage-output>
 
 ```bash
 # Check consistency
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/v1/admin/geo-index-consistency | jq '.status'
-
-# If inconsistent, rebuild:
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -X POST http://localhost:8092/v1/admin/rebuild-geo-index \
-  -H "Authorization: Bearer admin-token" | jq '.status'
-
-# Monitor rebuild progress
-kubectl logs -n warehouse deploy/warehouse-service | grep "rebuild"
-```
-
-### Issue: Database Indices Missing
+### Issue: Nearest Store Query Latency Regression
 
 ```bash
-# Check indices
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/v1/admin/db-indices | jq '.missing_indices'
+# Debug geospatial query plan directly in PostgreSQL
+kubectl exec -i deploy/warehouse-service -- \
+  psql -U postgres -d warehouse -c "EXPLAIN ANALYZE SELECT id, name, (6371 * acos(cos(radians(12.9716)) * cos(radians(latitude)) * cos(radians(longitude) - radians(77.6412)) + sin(radians(12.9716)) * sin(radians(latitude)))) AS dist FROM stores WHERE latitude BETWEEN 12.88 AND 13.06 AND longitude BETWEEN 77.55 AND 77.73 AND status = 'ACTIVE' ORDER BY dist LIMIT 5;"
 
-# Create indices (direct SQL or migration)
-kubectl exec -n warehouse -i deploy/warehouse-service -- \
-  psql -U postgres -d warehouse_db -c "CREATE INDEX idx_warehouse_location ON warehouses(ST_GeographyFromText(CONCAT('SRID=4326;POINT(', longitude, ' ', latitude, ')')));"
-
-# Restart service to pick up indices
-kubectl rollout restart deploy/warehouse-service -n warehouse
+# Verify composite index presence
+kubectl exec -i deploy/warehouse-service -- \
+  psql -U postgres -d warehouse -c "\d stores"
 ```
 
-### Issue: Capacity Exhaustion in Region
+### Issue: Capacity Slot Exhaustion
 
 ```bash
-# Check capacity by region
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/v1/admin/capacity-by-region | jq '.regions | map(select(.available_capacity == 0))'
+# Check current hour capacity for store
+kubectl exec deploy/warehouse-service -- \
+  curl -s "http://localhost:8092/stores/$STORE_ID/capacity" | jq .
 
-# Alert other services to reduce load or reroute orders
-# Activate backup warehouse
-kubectl patch -n warehouse deploy warehouse-service \
-  -p '{"spec":{"template":{"spec":{"env":[{"name":"BACKUP_WAREHOUSE_ENABLED","value":"true"}]}}}}'
+# If capacity exhausted, inspect pending order queue in fulfillment-service
+kubectl exec deploy/fulfillment-service -- \
+  curl -s http://localhost:8086/actuator/metrics/fulfillment.pending.orders
 ```
-
-### Issue: Nearest Warehouse Query Wrong Results
-
-```bash
-# Debug geospatial query
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s "http://localhost:8092/v1/admin/debug-nearest?lat=40.7128&lng=-74.0060" \
-  -H "Authorization: Bearer admin-token" | jq '.query_plan'
-
-# Check coordinate format (should be lat,lng in decimal degrees)
-# Verify warehouse coordinates are valid
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/v1/admin/coordinates | jq '.warehouses[] | select(.lat > 90 or .lng > 180)'
 ```
 
 ---
