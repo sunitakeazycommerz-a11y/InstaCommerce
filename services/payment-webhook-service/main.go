@@ -781,20 +781,6 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorResponse{Error: message})
 }
 
-func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration, logger *slog.Logger) {
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return
-	case <-time.After(timeout):
-		logger.Warn("publish shutdown timeout exceeded")
-	}
-}
-
 func envOr(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		return value

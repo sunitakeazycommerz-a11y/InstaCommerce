@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"sort"
-	"sync"
 	"time"
 )
 
@@ -170,7 +169,6 @@ type SolverMetrics struct {
 type Solver struct {
 	cfg     SolverConfig
 	checker *ConstraintChecker
-	mu      sync.Mutex // guards nothing mutable today; reserved for future caches
 }
 
 // NewSolver creates a Solver with the supplied configuration. Zero-valued

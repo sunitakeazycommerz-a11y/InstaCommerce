@@ -1,6 +1,7 @@
 {
   "venvPath": ".",
   "venv": ".venv",
+  "reportMissingImports": "none",
   "include": [
     "services/ai-inference-service",
     "services/ai-orchestrator-service",

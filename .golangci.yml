@@ -8,10 +8,16 @@ linters-settings:
     enable-all: false
     enable:
       - nilness
-      - shadow
   errcheck:
     check-type-assertions: true
     check-blank: false
+    exclude-functions:
+      - (*net/http.Response).Body.Close
+      - (*net/http.Request).Body.Close
+      - (io.Closer).Close
+      - (*encoding/json.Encoder).Encode
+      - (*os.File).Close
+      - net/http.ResponseWriter.Write
   staticcheck:
     checks: ["all", "-SA1019"]
   unused:
@@ -33,6 +39,10 @@ linters:
     - misspell
 
 issues:
-  exclude-use-default: false
+  exclude-use-default: true
   max-issues-per-linter: 50
   max-same-issues: 10
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck

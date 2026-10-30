@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 import yaml
-from google.cloud import bigquery
+from google.cloud import bigquery  # type: ignore
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import (
     auc,

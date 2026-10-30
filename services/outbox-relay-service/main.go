@@ -97,14 +97,6 @@ type outboxEvent struct {
 	SchemaVersion string
 }
 
-type errorResponse struct {
-	Error string `json:"error"`
-}
-
-type statusResponse struct {
-	Status string `json:"status"`
-}
-
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -328,7 +320,7 @@ func setupTelemetry(ctx context.Context, cfg Config, logger *slog.Logger) (*tele
 
 	shutdown := func(ctx context.Context) error {
 		var shutdownErr error
-		if err := traceProvider.Shutdown(ctx); err != nil && shutdownErr == nil {
+		if err := traceProvider.Shutdown(ctx); err != nil {
 			shutdownErr = err
 		}
 		if err := metricProvider.Shutdown(ctx); err != nil && shutdownErr == nil {
@@ -927,16 +919,4 @@ func isSafeIdentifier(value string) bool {
 		}
 	}
 	return true
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(payload)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, errorResponse{Error: message})
 }

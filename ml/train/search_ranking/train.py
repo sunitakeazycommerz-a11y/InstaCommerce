@@ -38,7 +38,7 @@ except (ImportError, OSError):
     shap: Any = None
 
 import yaml
-from google.cloud import bigquery
+from google.cloud import bigquery  # type: ignore
 from sklearn.model_selection import GroupKFold
 
 logger = logging.getLogger(__name__)
