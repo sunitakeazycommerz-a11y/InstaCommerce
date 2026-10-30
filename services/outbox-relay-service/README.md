@@ -36,7 +36,7 @@ Single-binary Go service that polls PostgreSQL `outbox_events` tables and reliab
 
 | Attribute | Value |
 |---|---|
-| **Language / Runtime** | Go 1.24 (single binary, `main.go`) |
+| **Language / Runtime** | Go 1.25.0 (`toolchain go1.25.1`, single binary, `main.go`) |
 | **Port** | `8103` (configurable via `PORT` / `SERVER_PORT`) |
 | **Owns** | Outbox-to-Kafka relay loop, canonical event envelope construction, aggregate→topic routing |
 | **Does not own** | Outbox table writes (owned by 13 Java producer services), Debezium CDC path, consumer-side processing, DLQ management |

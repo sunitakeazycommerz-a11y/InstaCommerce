@@ -14,6 +14,7 @@ Dataflow, and sinks results into BigQuery for analytics and alerting.
   rider.location     ──►  rider_location_pipeline     ──►  BigQuery (analytics.rider_utilization)
   inventory.events   ──►  inventory_events_pipeline   ──►  BigQuery (analytics.inventory_velocity)
   cart.events        ──►  cart_events_pipeline         ──►  BigQuery (analytics.cart_abandonment)
+  orders + payments  ──►  order_payment_join_pipeline  ──►  BigQuery (analytics.realtime_order_payments)
 ```
 
 ## Pipelines
@@ -25,6 +26,7 @@ Dataflow, and sinks results into BigQuery for analytics and alerting.
 | `rider_location_pipeline` | `rider.location` | 1-min fixed | Rider utilization per zone |
 | `inventory_events_pipeline` | `inventory.events` | 5-min fixed | Inventory velocity, stockout detection |
 | `cart_events_pipeline` | `cart.events` | 15-min session | Cart abandonment rate |
+| `order_payment_join_pipeline` | `orders.events` + `payments.events` | CoGroupByKey (10-min skew) | Real-time order-to-payment conversion & settlement |
 
 ## Deployment
 

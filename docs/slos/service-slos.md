@@ -187,6 +187,34 @@ All SLOs measured on a **calendar month** basis. See `docs/adr/015-slo-error-bud
 - **Recall**: >90% (catch >90% of fraudulent txns)
 - **Context**: High-importance but not blocking; can fail open (allow txn)
 
+## AI & Intelligence
+
+### AI Orchestrator Service
+- **Availability**: 99.5% (< 43 min downtime/month)
+- **Latency**: <1500ms p99 (multi-step LangGraph agent workflow)
+- **Guardrail Pass Rate**: >99.9% (prompt injection & PII scrubbing)
+- **Context**: Customer shopping copilot and agentic substitution
+
+### AI Inference Service
+- **Availability**: 99.9% (< 8.6 min downtime/month)
+- **Latency**: <50ms p99 (real-time ONNX / LightGBM scoring)
+- **Cache Hit Rate**: >60% (in-memory LRU cache)
+- **Context**: Low-latency online predictions for ETA, ranking, demand, and fraud
+
+## Data Activation & Ingestion
+
+### Payment Webhook Service
+- **Availability**: 99.99% (< 4.3 min downtime/month)
+- **Latency**: <200ms p99 (idempotent webhook acknowledgement)
+- **Idempotency Guarantee**: 100% (zero duplicate captures or refunds)
+- **Context**: External PSP callback receiver emitting to `payment.webhooks`
+
+### Reverse ETL Orchestrator
+- **Availability**: 99.5% (< 43 min downtime/month)
+- **Sync Lag**: <60 min (BigQuery analytical marts → operational caches)
+- **Data Accuracy**: 100% (checksum verification between warehouse and operational datastores)
+- **Context**: Customer tier sync, recommendation caching, and feature hydration
+
 ## Error Budget Allocation
 
 **Monthly error budget** = (1 - Availability SLO) × monthly minutes

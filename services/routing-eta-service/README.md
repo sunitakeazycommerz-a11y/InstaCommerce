@@ -379,7 +379,7 @@ stateDiagram-v2
 
 ## Database Schema
 
-Managed by Flyway (`V1` through `V5`).
+Managed by Flyway (`V1` through `V10`).
 
 ```mermaid
 erDiagram
@@ -396,6 +396,11 @@ erDiagram
         int estimated_minutes
         int actual_minutes
         decimal_8_3 distance_km
+        boolean is_breach_risk "default false"
+        boolean compensation_triggered "default false"
+        int compensation_amount_cents "default 0"
+        varchar_32 vehicle_type "default MOTORCYCLE"
+        boolean weather_delay_active "default false"
         timestamptz started_at
         timestamptz delivered_at
         timestamptz created_at "NOT NULL DEFAULT now()"
@@ -410,6 +415,32 @@ erDiagram
         decimal_6_2 speed_kmh
         decimal_6_2 heading
         timestamptz recorded_at "NOT NULL DEFAULT now()"
+    }
+    routing_barriers {
+        uuid id PK
+        varchar_128 name "NOT NULL"
+        varchar_255 reason
+        numeric min_lat "NOT NULL"
+        numeric min_lng "NOT NULL"
+        numeric max_lat "NOT NULL"
+        numeric max_lng "NOT NULL"
+        numeric detour_penalty_km "default 3.5"
+        int detour_penalty_minutes "default 12"
+        boolean is_active "default true"
+        timestamptz expires_at
+    }
+    weather_conditions {
+        uuid id PK
+        uuid store_id UK "NOT NULL"
+        varchar_64 condition_type "default CLEAR"
+        numeric speed_penalty_multiplier "default 1.0"
+        boolean monsoon_delay_banner "default false"
+    }
+    traffic_congestion_feeds {
+        uuid id PK
+        varchar_64 zone_id UK "NOT NULL"
+        numeric congestion_factor "default 1.0"
+        varchar_64 source "default MUNICIPAL_FEED"
     }
     outbox_events {
         uuid id PK "gen_random_uuid()"
@@ -437,6 +468,9 @@ erDiagram
 | `deliveries` | `idx_deliveries_rider` | `(rider_id, status)` |
 | `deliveries` | `idx_deliveries_order` | `(order_id)` |
 | `delivery_tracking` | `idx_tracking_delivery_time` | `(delivery_id, recorded_at DESC)` |
+| `routing_barriers` | `idx_routing_barriers_active` | `(is_active)` |
+| `weather_conditions` | `idx_weather_store` | `UNIQUE (store_id)` |
+| `traffic_congestion_feeds` | `idx_traffic_zone` | `UNIQUE (zone_id)` |
 | `outbox_events` | `idx_outbox_unsent` | `(sent) WHERE sent = false` |
 
 **Partitioning:** `delivery_tracking` is `PARTITION BY RANGE (recorded_at)`. `V5` dynamically creates 6 monthly partitions starting from the current month, plus a `delivery_tracking_default` catch-all partition created in `V2`.

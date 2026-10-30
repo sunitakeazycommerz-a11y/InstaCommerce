@@ -95,12 +95,15 @@ data-platform/
 │       └── marts/                     # Consumption-ready analytics
 │           ├── schema.yml
 │           ├── mart_daily_revenue.sql
+│           ├── mart_daily_sales.sql
+│           ├── mart_order_fulfillment.sql
 │           ├── mart_store_performance.sql
 │           ├── mart_rider_performance.sql
 │           ├── mart_search_funnel.sql
 │           ├── mart_product_analytics.sql
 │           ├── mart_user_cohort_retention.sql
-│           └── mart_sponsored_opportunities.sql
+│           ├── mart_sponsored_opportunities.sql
+│           └── mart_experiment_conversions.sql
 │
 ├── airflow/                           # Cloud Composer DAGs
 │   ├── requirements.txt
@@ -110,7 +113,9 @@ data-platform/
 │   │   ├── data_quality.py            # Post-load quality checks
 │   │   ├── ml_feature_refresh.py      # Recompute ML features
 │   │   ├── ml_training.py             # Trigger model training
-│   │   └── monitoring_alerts.py       # SLA & freshness alerts
+│   │   ├── monitoring_alerts.py       # SLA & freshness alerts
+│   │   ├── historical_backfill.py     # Parameterized manual backfill
+│   │   └── search_ranking_retraining.py # Weekly LambdaMART search retraining
 │   └── plugins/
 │       ├── __init__.py
 │       └── slack_alerts.py            # Slack notification hooks
@@ -123,7 +128,8 @@ data-platform/
 │   │   ├── payment_events_pipeline.py
 │   │   ├── cart_events_pipeline.py
 │   │   ├── inventory_events_pipeline.py
-│   │   └── rider_location_pipeline.py
+│   │   ├── rider_location_pipeline.py
+│   │   └── order_payment_join_pipeline.py
 │   └── deploy/
 │       └── dataflow_template.yaml
 │
@@ -135,12 +141,14 @@ data-platform/
     │   ├── orders.json
     │   ├── payments.json
     │   ├── inventory.json
-    │   └── users.json
+    │   ├── users.json
+    │   └── daily_sales.json
     └── expectations/
         ├── orders_suite.yaml
         ├── payments_suite.yaml
         ├── users_suite.yaml
-        └── inventory_suite.yaml
+        ├── inventory_suite.yaml
+        └── daily_sales_suite.yaml
 ```
 
 ---

@@ -5,19 +5,19 @@
 - [ ] Verify feature-flag-db (PostgreSQL) migrations current
   ```bash
   kubectl exec -n platform deploy/config-feature-flag-service -- \
-    curl -s http://localhost:8095/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8098/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check Redis pub/sub connectivity (cache invalidation)
   ```bash
   kubectl exec -n platform deploy/config-feature-flag-service -- \
-    curl -s http://localhost:8095/actuator/health | jq '.components.redis'
+    curl -s http://localhost:8098/actuator/health | jq '.components.redis'
   ```
 
 - [ ] Verify Kafka is accessible (flag.events topic for broadcasts)
   ```bash
   kubectl exec -n platform deploy/config-feature-flag-service -- \
-    curl -s http://localhost:8095/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8098/actuator/health | jq '.components.kafka'
   ```
 
 - [ ] Check admin-gateway-service connectivity (requires config-feature-flag endpoints)
@@ -29,7 +29,7 @@
 - [ ] Validate flag count loaded (should be 50+ flags in production)
   ```bash
   kubectl exec -n platform deploy/config-feature-flag-service -- \
-    curl -s http://localhost:8095/metrics/flags-count | jq '.value'
+    curl -s http://localhost:8098/metrics/flags-count | jq '.value'
   ```
 
 ---
@@ -41,11 +41,11 @@
 ```bash
 # Flag cache hit rate (typically 99%+ for internal lookups)
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/flag-cache-hit-rate | jq '.value'
+  curl -s http://localhost:8098/metrics/flag-cache-hit-rate | jq '.value'
 
 # Current flag evaluation latency (p99 should be <10ms with cache)
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/flag-evaluation-latency-p99 | jq '.value'
+  curl -s http://localhost:8098/metrics/flag-evaluation-latency-p99 | jq '.value'
 
 # Current replica count
 kubectl get deploy config-feature-flag-service -n platform -o jsonpath='{.spec.replicas}'
@@ -68,11 +68,11 @@ kubectl rollout status deploy/config-feature-flag-service -n platform --timeout=
 
 # 4. Verify cache hit rate recovered to 99%+
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/flag-cache-hit-rate | jq '.value'
+  curl -s http://localhost:8098/metrics/flag-cache-hit-rate | jq '.value'
 
 # 5. Verify flag evaluation latency still <10ms
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/flag-evaluation-latency-p99 | jq '.value'
+  curl -s http://localhost:8098/metrics/flag-evaluation-latency-p99 | jq '.value'
 ```
 
 ### Rollback
@@ -83,7 +83,7 @@ kubectl rollout status deploy/config-feature-flag-service -n platform --timeout=
 
 # Verify cache recovered
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/flag-cache-hit-rate | jq '.value'
+  curl -s http://localhost:8098/metrics/flag-cache-hit-rate | jq '.value'
 ```
 
 ---
@@ -98,7 +98,7 @@ kubectl logs -n platform deploy/config-feature-flag-service --tail=30
 
 # Verify port listening
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  netstat -tlnp | grep 8095
+  netstat -tlnp | grep 8098
 ```
 
 ### Smoke Tests
@@ -108,19 +108,19 @@ POD=$(kubectl get pods -n platform -l app=config-feature-flag-service -o jsonpat
 
 # 1. Health check
 kubectl exec -n platform pod/$POD -- \
-  curl -s http://localhost:8095/actuator/health | jq '.status'
+  curl -s http://localhost:8098/actuator/health | jq '.status'
 
 # 2. Evaluate a flag
 kubectl exec -n platform pod/$POD -- \
-  curl -s "http://localhost:8095/v1/flags/test-flag/evaluate?userId=test-001" | jq '.enabled'
+  curl -s "http://localhost:8098/v1/flags/test-flag/evaluate?userId=test-001" | jq '.enabled'
 
 # 3. List all flags
 kubectl exec -n platform pod/$POD -- \
-  curl -s http://localhost:8095/v1/flags?limit=5 | jq '.flags | length'
+  curl -s http://localhost:8098/v1/flags?limit=5 | jq '.flags | length'
 
 # 4. Test admin endpoint (override flag)
 kubectl exec -n platform pod/$POD -- \
-  curl -X POST http://localhost:8095/admin/v1/flags/test-flag/override \
+  curl -X POST http://localhost:8098/admin/v1/flags/test-flag/override \
   -H "Authorization: Bearer admin-token" \
   -H "Content-Type: application/json" \
   -d '{"value":true,"ttlSeconds":600}' | jq '.status'
@@ -154,15 +154,15 @@ kubectl logs -n platform deploy/config-feature-flag-service --tail=100 | grep -i
 
 # Test flag evaluation
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s "http://localhost:8095/v1/flags/test/evaluate"
+  curl -s "http://localhost:8098/v1/flags/test/evaluate"
 
 # Check database
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/actuator/health/db | jq '.status'
+  curl -s http://localhost:8098/actuator/health/db | jq '.status'
 
 # Check Redis
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/actuator/health | jq '.components.redis'
+  curl -s http://localhost:8098/actuator/health | jq '.components.redis'
 ```
 
 **Resolution**:
@@ -179,14 +179,14 @@ kubectl exec -n platform deploy/config-feature-flag-service -- \
 ```bash
 # Check Redis pub/sub traffic
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/redis-pubsub-latency | jq '.value'
+  curl -s http://localhost:8098/metrics/redis-pubsub-latency | jq '.value'
 
 # Check flag update frequency
 kubectl logs -n platform deploy/config-feature-flag-service --tail=100 | grep "flag.*updated"
 
 # Check Kafka flag.events topic lag
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/kafka-lag | jq '.value'
+  curl -s http://localhost:8098/metrics/kafka-lag | jq '.value'
 ```
 
 **Resolution**:
@@ -200,11 +200,11 @@ kubectl exec -n platform deploy/config-feature-flag-service -- \
 ```bash
 # Check cache stats
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/flag-cache-stats | jq '.'
+  curl -s http://localhost:8098/metrics/flag-cache-stats | jq '.'
 
 # Check if many unique flags being evaluated
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/metrics/unique-flags-evaluated | jq '.value'
+  curl -s http://localhost:8098/metrics/unique-flags-evaluated | jq '.value'
 ```
 
 **Resolution**:
@@ -221,11 +221,11 @@ kubectl exec -n platform deploy/config-feature-flag-service -- \
 ```bash
 # Check override exists
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/admin/v1/flags/test-flag/overrides | jq '.overrides'
+  curl -s http://localhost:8098/admin/v1/flags/test-flag/overrides | jq '.overrides'
 
 # Clear override cache
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -X POST http://localhost:8095/admin/v1/cache/clear \
+  curl -X POST http://localhost:8098/admin/v1/cache/clear \
   -H "Authorization: Bearer admin-token" | jq '.status'
 
 # Verify update propagated via pub/sub
@@ -241,7 +241,7 @@ kubectl exec -n platform deploy/config-feature-flag-service -- \
 
 # Check Redis in-memory cache as fallback
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/v1/flags/test-flag/evaluate | jq '.cached_from'
+  curl -s http://localhost:8098/v1/flags/test-flag/evaluate | jq '.cached_from'
 
 # If Redis down, service still works but slower (in-memory cache only)
 ```
@@ -251,11 +251,11 @@ kubectl exec -n platform deploy/config-feature-flag-service -- \
 ```bash
 # Check cache TTL for this flag
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -s http://localhost:8095/admin/v1/flags/test-flag/cache-info | jq '.ttl_remaining'
+  curl -s http://localhost:8098/admin/v1/flags/test-flag/cache-info | jq '.ttl_remaining'
 
 # Force cache refresh
 kubectl exec -n platform deploy/config-feature-flag-service -- \
-  curl -X POST http://localhost:8095/admin/v1/flags/test-flag/refresh \
+  curl -X POST http://localhost:8098/admin/v1/flags/test-flag/refresh \
   -H "Authorization: Bearer admin-token" | jq '.status'
 ```
 
@@ -307,9 +307,9 @@ config_flag_overrides_count
 
 ## On-Call Handoff
 
-- [ ] Flag cache hit rate? `kubectl exec -n platform deploy/config-feature-flag-service -- curl -s http://localhost:8095/metrics/flag-cache-hit-rate`
+- [ ] Flag cache hit rate? `kubectl exec -n platform deploy/config-feature-flag-service -- curl -s http://localhost:8098/metrics/flag-cache-hit-rate`
 - [ ] Any failed flag evaluations? `kubectl logs -n platform deploy/config-feature-flag-service --tail=50 | grep error`
-- [ ] Redis pub/sub latency acceptable? `kubectl exec -n platform deploy/config-feature-flag-service -- curl -s http://localhost:8095/metrics/redis-pubsub-latency`
+- [ ] Redis pub/sub latency acceptable? `kubectl exec -n platform deploy/config-feature-flag-service -- curl -s http://localhost:8098/metrics/redis-pubsub-latency`
 
 ---
 

@@ -28,18 +28,20 @@
 `dispatch-optimizer-service` computes optimal rider-to-order assignments by minimising a weighted combination of delivery time, rider idle time, and SLA breach probability. It is a **stateless, request-scoped advisory service** — it owns no persistent state, produces no Kafka events, and never mutates rider or order records.
 
 | Attribute | Value |
-|-----------|-------|
-| Language | Go 1.24 (`go.mod`) |
+|---|---|
+| Language | Go 1.25.0 (`toolchain go1.25.1`) |
 | Port | 8102 |
 | State ownership | None — request-scoped computation only |
 | Event authority | None — consulted via synchronous HTTP |
 | Caller | `rider-fleet-service` (target integration via circuit breaker) |
 | SLO target | 99.9 % HTTP availability (43.2 min error budget / 30 d) |
 
-The service exposes two API versions:
+The service exposes the following API routes:
 
 - **V1** (`POST /optimize/assign`) — greedy nearest-neighbour with configurable capacity/zone constraints, implemented in `main.go`.
-- **V2** (`POST /v2/optimize/assign`) — full multi-objective solver with cost-matrix construction, hard-constraint feasibility masking, order batching, modified Hungarian assignment, and iterative post-optimisation swaps. Implemented across `handler/assign_v2.go` and the `optimizer/` package (`solver.go`, `constraints.go`, `haversine.go`, `metrics.go`).
+- **V2** (`POST /v2/optimize/assign`) — full multi-objective solver with cost-matrix construction, hard-constraint feasibility masking, order batching, modified Hungarian assignment, and iterative post-optimisation swaps.
+- **Dispatch Candidate Lock** (`POST /dispatch/assign`) — bipartite matching with candidate rider locking (`handler/dispatch.go`).
+- **Rider Response Flow** (`POST /dispatch/response`) — handles rider acceptance or rejection callbacks and updates dispatch state.
 
 **What this service does NOT do:** persist assignments, track rider locations, publish domain events, manage rider availability, or hold locks. All state mutation happens in `rider-fleet-service`, which owns `rider_assignments` and rider availability.
 

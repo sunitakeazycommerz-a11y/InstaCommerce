@@ -65,10 +65,10 @@ cd /Users/omkarkumar/InstaCommerce
 
 # Run
 ./gradlew :services:checkout-orchestrator-service:bootRun \
-  --args='--server.port=8089'
+  --args='--server.port=8091'
 
 # Verify
-curl http://localhost:8089/actuator/health
+curl http://localhost:8091/actuator/health
 ```
 
 ---
@@ -81,7 +81,7 @@ curl http://localhost:8089/actuator/health
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY build/libs/checkout-orchestrator-service-*.jar app.jar
-EXPOSE 8089
+EXPOSE 8091
 ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
@@ -120,7 +120,7 @@ spec:
       - name: checkout-orchestrator
         image: gcr.io/instacommerce/checkout-orchestrator:v1.0.0
         ports:
-        - containerPort: 8089
+        - containerPort: 8091
         env:
         - name: SERVER_PORT
           value: "8089"
@@ -141,13 +141,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/live
-            port: 8089
+            port: 8091
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /actuator/health/ready
-            port: 8089
+            port: 8091
           initialDelaySeconds: 20
           periodSeconds: 5
 ```
@@ -172,7 +172,7 @@ argocd app sync checkout-orchestrator
 **Endpoint**: `GET /actuator/health/live`
 
 ```bash
-curl http://localhost:8089/actuator/health/live
+curl http://localhost:8091/actuator/health/live
 ```
 
 **Response (healthy)**:
@@ -189,7 +189,7 @@ curl http://localhost:8089/actuator/health/live
 **Depends On**: Database connectivity, Temporal server connection
 
 ```bash
-curl http://localhost:8089/actuator/health/ready
+curl http://localhost:8091/actuator/health/ready
 ```
 
 **Response (ready)**:
@@ -209,7 +209,7 @@ curl http://localhost:8089/actuator/health/ready
 **Endpoint**: `GET /actuator/prometheus`
 
 ```bash
-curl http://localhost:8089/actuator/prometheus | grep checkout
+curl http://localhost:8091/actuator/prometheus | grep checkout
 ```
 
 ---
@@ -316,7 +316,7 @@ kubectl logs -n money-path -l app=checkout-orchestrator \
   --tail=100 | grep "latency"
 
 # Check circuit breaker state
-curl http://localhost:8089/actuator/health | jq '.components.circuitbreaker'
+curl http://localhost:8091/actuator/health | jq '.components.circuitbreaker'
 
 # Check Temporal workflow status
 temporal workflow list \
@@ -344,7 +344,7 @@ WHERE expires_at < now();
 
 ```bash
 # Check which service is failing
-curl http://localhost:8089/actuator/health/live \
+curl http://localhost:8091/actuator/health/live \
   | jq '.components.circuitBreaker'
 
 # Restart the failing downstream service
@@ -352,7 +352,7 @@ kubectl rollout restart deployment/payment-service \
   -n money-path
 
 # Monitor recovery
-watch -n 2 'curl http://localhost:8089/actuator/health/live | jq'
+watch -n 2 'curl http://localhost:8091/actuator/health/live | jq'
 ```
 
 ---

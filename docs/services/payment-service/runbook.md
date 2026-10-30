@@ -5,7 +5,7 @@
 - [ ] Verify payment-db (PostgreSQL) is accessible and migrations are up-to-date
   ```bash
   kubectl exec -n payment deploy/payment-service -- \
-    curl -s http://localhost:8080/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8085/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check Secret availability (PCI-DSS credentials, payment gateway keys)
@@ -16,7 +16,7 @@
 - [ ] Verify connection pool capacity (should be 20-30 available)
   ```bash
   kubectl exec -n payment deploy/payment-service -- \
-    curl -s http://localhost:8080/actuator/health | jq '.components.db'
+    curl -s http://localhost:8085/actuator/health | jq '.components.db'
   ```
 
 - [ ] Validate capacity planning (current load vs max TPS quota)
@@ -80,7 +80,7 @@ The deployment includes:
 livenessProbe:
   httpGet:
     path: /actuator/health/live
-    port: 8080
+    port: 8085
   initialDelaySeconds: 30
   periodSeconds: 10
   timeoutSeconds: 5
@@ -90,7 +90,7 @@ livenessProbe:
 readinessProbe:
   httpGet:
     path: /actuator/health/ready
-    port: 8080
+    port: 8085
   initialDelaySeconds: 15
   periodSeconds: 5
   timeoutSeconds: 3
@@ -124,7 +124,7 @@ helm history payment-service -n payment
 kubectl logs -n payment deploy/payment-service --tail=50 | grep -i "failed\|error\|exception"
 
 # Verify port is listening
-kubectl exec -n payment deploy/payment-service -- netstat -tlnp | grep 8080
+kubectl exec -n payment deploy/payment-service -- netstat -tlnp | grep 8085
 
 # Check Spring Boot startup banner
 kubectl logs -n payment deploy/payment-service --tail=20 | head -10
@@ -138,18 +138,18 @@ POD=$(kubectl get pods -n payment -l app=payment-service -o jsonpath='{.items[0]
 
 # 1. Health check
 kubectl exec -n payment pod/$POD -- \
-  curl -s http://localhost:8080/actuator/health | jq '.status'
+  curl -s http://localhost:8085/actuator/health | jq '.status'
 
 # 2. Process payment endpoint
 kubectl exec -n payment pod/$POD -- \
-  curl -X POST http://localhost:8080/v1/payments \
+  curl -X POST http://localhost:8085/v1/payments \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer test-token" \
   -d '{"orderId":"smoke-test-001","amount":1000,"currency":"USD"}' | jq '.status'
 
 # 3. Get payment status
 kubectl exec -n payment pod/$POD -- \
-  curl -s http://localhost:8080/v1/payments/smoke-test-001 \
+  curl -s http://localhost:8085/v1/payments/smoke-test-001 \
   -H "Authorization: Bearer test-token" | jq '.status'
 ```
 
@@ -158,11 +158,11 @@ kubectl exec -n payment pod/$POD -- \
 ```bash
 # Verify all replicas can connect to PostgreSQL
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health/db | jq '.components.db | {status, details}'
+  curl -s http://localhost:8085/actuator/health/db | jq '.components.db | {status, details}'
 
 # Check connection pool stats
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/metrics/hikaricp.connections | jq '.measurements'
+  curl -s http://localhost:8085/actuator/metrics/hikaricp.connections | jq '.measurements'
 ```
 
 ### External Service Connectivity
@@ -174,7 +174,7 @@ kubectl exec -n payment deploy/payment-service -- \
 
 # Payment gateway (Stripe/Square - async with retry)
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health | jq '.components'
+  curl -s http://localhost:8085/actuator/health | jq '.components'
 ```
 
 ---
@@ -187,7 +187,7 @@ Endpoint: `GET /actuator/health/live`
 
 ```bash
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health/live | jq .
+  curl -s http://localhost:8085/actuator/health/live | jq .
 
 # Expected response (UP = pod stays running):
 # { "status": "UP" }
@@ -204,7 +204,7 @@ Endpoint: `GET /actuator/health/ready`
 
 ```bash
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health/ready | jq .
+  curl -s http://localhost:8085/actuator/health/ready | jq .
 
 # Expected response (UP = receives traffic):
 # { "status": "UP", "components": { "wallet-loyalty": { "status": "UP" } } }
@@ -219,11 +219,11 @@ kubectl exec -n payment deploy/payment-service -- \
 ```bash
 # Payment gateway readiness (may be in GRACEFUL_SHUTDOWN if degraded)
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health | jq '.components."payment-gateway"'
+  curl -s http://localhost:8085/actuator/health | jq '.components."payment-gateway"'
 
 # Database connection pool health
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health | jq '.components.db'
+  curl -s http://localhost:8085/actuator/health | jq '.components.db'
 ```
 
 ### Metrics Endpoint Verification
@@ -231,7 +231,7 @@ kubectl exec -n payment deploy/payment-service -- \
 ```bash
 # Prometheus metrics
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/prometheus | head -20
+  curl -s http://localhost:8085/actuator/prometheus | head -20
 
 # Key metrics to verify:
 # - http_server_requests_seconds_count
@@ -258,11 +258,11 @@ kubectl logs -n payment deploy/payment-service --tail=100 | grep -iE "exception|
 
 # 3. Check database connectivity
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health/db | jq '.status'
+  curl -s http://localhost:8085/actuator/health/db | jq '.status'
 
 # 4. Check payment gateway connectivity
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health | jq '.components."payment-gateway"'
+  curl -s http://localhost:8085/actuator/health | jq '.components."payment-gateway"'
 ```
 
 **Resolution**:
@@ -279,7 +279,7 @@ kubectl exec -n payment deploy/payment-service -- \
 ```bash
 # Check error rate
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/metrics/http.server.requests | \
+  curl -s http://localhost:8085/actuator/metrics/http.server.requests | \
   jq '.measurements[] | select(.tags.status == "500")'
 
 # Check latency
@@ -287,7 +287,7 @@ kubectl logs -n payment deploy/payment-service --tail=50 | grep "duration="
 
 # Check circuit breaker status
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health | jq '.components.circuitBreaker'
+  curl -s http://localhost:8085/actuator/health | jq '.components.circuitBreaker'
 ```
 
 **Resolution**:
@@ -327,7 +327,7 @@ kubectl logs -n payment deploy/payment-service | grep -i "gc pause"
 
 # Check cache hit rates
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/metrics | grep -i cache
+  curl -s http://localhost:8085/actuator/metrics | grep -i cache
 ```
 
 **Resolution**:
@@ -372,7 +372,7 @@ kubectl apply -f deploy/k8s/network-policies/payment-wallet-egress.yaml
 ```bash
 # Check pool status
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/metrics/hikaricp | jq '.measurements[] | select(.tags.pool | contains("idle"))'
+  curl -s http://localhost:8085/actuator/metrics/hikaricp | jq '.measurements[] | select(.tags.pool | contains("idle"))'
 
 # Increase pool size (in values.yaml)
 # db.pool.size: 20 -> 30
@@ -415,7 +415,7 @@ grep "BLOCKED" /tmp/thread_dump.txt
 
 # Check for database lock contention
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/v1/payments/locks
+  curl -s http://localhost:8085/v1/payments/locks
 
 # Resolution: Kill and restart the pod
 kubectl delete pod -n payment <pod-name>
@@ -426,12 +426,12 @@ kubectl delete pod -n payment <pod-name>
 ```bash
 # Check payment gateway circuit breaker
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/health | jq '.components."payment-gateway"'
+  curl -s http://localhost:8085/actuator/health | jq '.components."payment-gateway"'
 
 # If OPEN, the circuit breaker is protecting the service
 # Wait 30 seconds for automatic recovery attempt, or manually reset:
 kubectl exec -n payment deploy/payment-service -- \
-  curl -X POST http://localhost:8080/actuator/circuitbreakers/paymentGateway/reset
+  curl -X POST http://localhost:8085/actuator/circuitbreakers/paymentGateway/reset
 
 # Check and increase timeout
 kubectl logs -n payment deploy/payment-service | grep "timeout\|exceeded"
@@ -463,12 +463,12 @@ kubectl logs -n payment deploy/payment-service --tail=20 | grep -i "error\|excep
 ```bash
 # Check if any pending payments are in uncertain state
 kubectl exec -n payment deploy/payment-service -- \
-  curl -X GET http://localhost:8080/v1/payments/pending-reconcile \
+  curl -X GET http://localhost:8085/v1/payments/pending-reconcile \
   -H "Authorization: Bearer admin-token" | jq '.count'
 
 # Validate database consistency after rollback
 kubectl exec -n payment deploy/payment-service -- \
-  curl -X POST http://localhost:8080/v1/admin/verify-consistency \
+  curl -X POST http://localhost:8085/v1/admin/verify-consistency \
   -H "Authorization: Bearer admin-token" | jq '.status'
 ```
 
@@ -477,7 +477,7 @@ kubectl exec -n payment deploy/payment-service -- \
 ```bash
 # Clear payment method cache across clients
 kubectl exec -n payment deploy/payment-service -- \
-  curl -X POST http://localhost:8080/v1/admin/cache/clear \
+  curl -X POST http://localhost:8085/v1/admin/cache/clear \
   -H "Authorization: Bearer admin-token"
 
 # Verify checkout-orchestrator is re-fetching
@@ -503,7 +503,7 @@ kubectl wait --for=condition=ready pod -l app=payment-service -n payment --timeo
 ```bash
 # Current heap usage
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/metrics/jvm.memory.used | \
+  curl -s http://localhost:8085/actuator/metrics/jvm.memory.used | \
   jq '.measurements[] | select(.tags.area == "heap")'
 
 # Recommendation: Heap = 60% of container memory limit
@@ -520,7 +520,7 @@ helm upgrade payment-service deploy/helm/payment-service \
 ```bash
 # Current pool status
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/metrics/hikaricp.connections | jq .
+  curl -s http://localhost:8085/actuator/metrics/hikaricp.connections | jq .
 
 # Tuning formula: connections = (threads) + 5
 # If peak transactions = 50 concurrent:
@@ -537,7 +537,7 @@ kubectl set env deploy/payment-service -n payment \
 ```bash
 # Check cache performance
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/metrics | grep -i cache
+  curl -s http://localhost:8085/actuator/metrics | grep -i cache
 
 # Increase Caffeine cache size for payment methods
 helm upgrade payment-service deploy/helm/payment-service \
@@ -551,7 +551,7 @@ helm upgrade payment-service deploy/helm/payment-service \
 ```bash
 # Monitor GC pauses
 kubectl exec -n payment deploy/payment-service -- \
-  curl -s http://localhost:8080/actuator/metrics/jvm.gc.pause | jq '.measurements'
+  curl -s http://localhost:8085/actuator/metrics/jvm.gc.pause | jq '.measurements'
 
 # Switch to G1GC if pauses > 100ms
 helm upgrade payment-service deploy/helm/payment-service \
@@ -651,7 +651,7 @@ hikaricp_connections_active / hikaricp_connections_max
 - [ ] Payment volumes (should spike during meal hours)
   ```bash
   kubectl exec -n payment deploy/payment-service -- \
-    curl -s http://localhost:8080/metrics/payment-volume-1h | jq '.total'
+    curl -s http://localhost:8085/metrics/payment-volume-1h | jq '.total'
   ```
 
 - [ ] Next scheduled maintenance?

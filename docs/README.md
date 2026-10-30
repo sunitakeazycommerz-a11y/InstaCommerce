@@ -232,6 +232,7 @@ graph TB
         outbox["outbox-relay 🔵"]
         cdc["cdc-consumer 🔵"]
         stream["stream-processor 🔵"]
+        reverse_etl["reverse-etl-orchestrator 🔵"]
         contracts_node["contracts/"]
     end
 

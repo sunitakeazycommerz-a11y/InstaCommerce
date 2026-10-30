@@ -297,6 +297,21 @@ classDiagram
 
 **V2 — `shedlock`** (standard ShedLock table for distributed job locking)
 
+**V3 — `compensation_dlq`** (Dead-Letter Queue for failed compensation activities in saga rollback)
+
+| Column | Type | Constraint |
+|---|---|---|
+| `id` | `UUID` | PK, `gen_random_uuid()` |
+| `workflow_id` | `VARCHAR(255)` | Index `idx_compensation_dlq_workflow_id` |
+| `activity_name` | `VARCHAR(100)` | NOT NULL |
+| `target_id` | `VARCHAR(255)` | NOT NULL |
+| `reason` | `TEXT` | NOT NULL |
+| `payload` | `TEXT` | JSON payload of failed activity |
+| `status` | `VARCHAR(50)` | Index `idx_compensation_dlq_status`, default `'FAILED'` |
+| `retry_count` | `INT` | Default `0` |
+| `created_at` | `TIMESTAMPTZ` | `DEFAULT now()` |
+| `updated_at` | `TIMESTAMPTZ` | `DEFAULT now()` |
+
 ---
 
 ## 5. Checkout Money-Path Sequence
@@ -830,7 +845,7 @@ Step 7 (`clearCart`) swallows exceptions. A stale cart after successful checkout
 
 ### Deployment considerations
 
-- **Schema-first:** Flyway migrations (`V1`, `V2`) must run before the application starts. Ensure DB credentials and connectivity before deploying a new version.
+- **Schema-first:** Flyway migrations (`V1`, `V2`, `V3`) must run before the application starts. Ensure DB credentials and connectivity before deploying a new version.
 - **Temporal namespace:** The `instacommerce` namespace and `CHECKOUT_ORCHESTRATOR_TASK_QUEUE` task queue must exist in Temporal before the worker starts. The `WorkerFactory` bean has `initMethod = "start"` — if Temporal is unreachable, the application will fail to start.
 - **Graceful shutdown:** Configured with `server.shutdown=graceful` and a 30-second drain timeout (`spring.lifecycle.timeout-per-shutdown-phase=30s`). In-flight Temporal activities will be rescheduled by Temporal after the worker disconnects.
 - **JPA validation:** `spring.jpa.hibernate.ddl-auto=validate` — Hibernate validates the schema against entity mappings at startup. Schema drift will prevent boot.
@@ -845,7 +860,7 @@ Step 7 (`clearCart`) swallows exceptions. A stale cart after successful checkout
 ### Rollback
 
 - **Application rollback:** Deploy the previous container image. Temporal workflows started by the new version will continue executing on old-version workers (assuming no workflow definition changes that break determinism).
-- **Schema rollback:** If a new Flyway migration was applied, a manual `DELETE` or reverse migration script is needed. The current schema (V1 + V2) is simple enough that rollback is low-risk.
+- **Schema rollback:** If a new Flyway migration was applied, a manual `DELETE` or reverse migration script is needed. The current schema (V1 + V2 + V3) is simple enough that rollback is low-risk.
 - **Temporal workflow compatibility:** If a new version changes `CheckoutWorkflowImpl` in a non-deterministic way (reordering activities, changing activity options), in-flight workflows from the old version will fail replay. Use Temporal's versioning API (`Workflow.getVersion()`) for safe migrations.
 
 ### Feature flag considerations (from review docs)

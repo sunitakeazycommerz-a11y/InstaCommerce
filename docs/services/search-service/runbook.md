@@ -73,7 +73,7 @@ kubectl logs -f deployment/search-service -n default --tail=100
 for i in {1..3}; do
   kubectl port-forward -n default \
     search-service-$i 8086:8086 &>/dev/null &
-  curl -s http://localhost:8086/actuator/health/ready | jq .status
+  curl -s http://localhost:8088/actuator/health/ready | jq .status
   kill %1
 done
 
@@ -81,7 +81,7 @@ done
 
 # Verify metrics are being exported
 kubectl port-forward -n default search-service-0 8086:8086 &>/dev/null &
-curl -s http://localhost:8086/actuator/metrics | jq .names | head -10
+curl -s http://localhost:8088/actuator/metrics | jq .names | head -10
 kill %1
 ```
 
@@ -90,15 +90,15 @@ kill %1
 ```bash
 # Test search endpoint
 kubectl exec -it search-service-0 -n default -- bash -c \
-  'curl -X GET http://localhost:8086/search?query=milk'
+  'curl -X GET http://localhost:8088/search?query=milk'
 
 # Expected: 200 OK with search results
 
 # Test autocomplete
-curl -X GET "http://localhost:8086/search/autocomplete?prefix=mir"
+curl -X GET "http://localhost:8088/search/autocomplete?prefix=mir"
 
 # Test trending
-curl -X GET "http://localhost:8086/search/trending?limit=10"
+curl -X GET "http://localhost:8088/search/trending?limit=10"
 
 # Expected: All return 200 with valid responses
 ```

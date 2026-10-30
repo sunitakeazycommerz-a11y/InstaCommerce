@@ -34,6 +34,11 @@ graph TD
     C --> Y[cdc-consumer]
     C --> Z[mobile-bff-service]
     C --> AA[admin-gateway-service]
+    C --> AB[stream-processor-service]
+    C --> AC[reverse-etl-orchestrator]
+    C --> AD[location-ingestion-service]
+    C --> AE[payment-webhook-service]
+    C --> AF[reconciliation-engine]
 
     style A fill:#e44d26,color:#fff
     style B fill:#326ce5,color:#fff
@@ -73,14 +78,45 @@ sequenceDiagram
     Argo-->>Dev: Sync success / degraded notification
 ```
 
-### Environments
+### Environments & Progressive Delivery
 
-| Environment | Values File | Trigger |
-|-------------|------------|---------|
-| **dev** | `values-dev.yaml` | Automatic on merge to `main` |
-| **prod** | `values-prod.yaml` | Manual promotion / tag-based |
+| Environment | Values File | Application Manifest | Target Namespace | Traffic Strategy |
+|---|---|---|---|---|
+| **dev** | `values-dev.yaml` | `app-of-apps.yaml` | `instacommerce` | Direct rolling update |
+| **staging** | `values-staging.yaml` | `app-of-apps.yaml` | `instacommerce-staging` | Integration gating |
+| **prod** | `values-prod.yaml` | `app-of-apps.yaml` | `instacommerce-prod` | Manual promotion / GitOps tag |
+| **Canary SF** | `values-canary-sf.yaml` | `applications/canary-sf-fulfillment.yaml` | `instacommerce-canary` | Phase 2 W1 Dark store pilot (100% traffic) |
+| **Canary Seattle**| `values-canary-seattle.yaml` | `applications/canary-seattle-fulfillment.yaml` | `instacommerce-canary` | Phase 2 W2 Gated canary (10% traffic) |
+| **Canary Austin** | `values-canary-austin.yaml` | `applications/canary-austin-fulfillment.yaml` | `instacommerce-canary` | Phase 2 W3 Staged ramp (5% → 100%) |
 
-## Rollback Procedure
+## ArgoCD Sync Wave Architecture
+
+InstaCommerce coordinates cross-service initialization dependencies using ArgoCD sync waves:
+
+| Sync Wave | Phase / Tier | Target Resources | Description |
+|---|---|---|---|
+| **Wave 0** | Core Security & Identity | `ServiceAccount`, `SecretStore`, `GCP IAM` | Workload Identity bindings and service accounts |
+| **Wave 1** | Transactional Core | `fulfillment-service`, `order-service` | Ingress and core stateful workflow engines |
+| **Wave 2** | Dark Store Warehouses | `warehouse-service`, `inventory-service` | Store layout, inventory locks, staging bins |
+| **Wave 3** | Logistics & Dispatch | `rider-fleet-service`, `routing-eta-service` | Real-time GPS ingestion and dispatch solver |
+
+## Progressive Delivery with Argo Rollouts
+
+High-risk services leverage Argo Rollouts (`argocd/rollouts/canary-rollout-template.yaml`) integrated with Istio:
+- **Traffic Ramp:** 10% (5 min) $\rightarrow$ 25% (5 min) $\rightarrow$ 50% (10 min) $\rightarrow$ 100%.
+- **Automated Metric Gate:** Evaluates Prometheus queries via `argocd/rollouts/analysis-template-error-rate.yaml`:
+  - 5xx Error Rate $\le 1\%$ over a 5-minute rolling window.
+  - P99 HTTP Latency $\le 1000$ ms.
+- **Automated Rollback:** If the `AnalysisTemplate` fails 2 consecutive measurements, Argo Rollouts aborts the step and instantly reverts traffic to the stable ReplicaSet.
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `app-of-apps.yaml` | Root ArgoCD Application pointing to `deploy/helm` |
+| `applications/canary-*.yaml` | Multi-region Canary Application manifests (SF, Seattle, Austin) |
+| `rollouts/canary-rollout-template.yaml` | Istio-integrated progressive delivery Rollout definition |
+| `rollouts/analysis-template-error-rate.yaml` | Prometheus SLO error-rate and latency gate for canary promotion |
 
 ### Automatic Rollback (Self-Heal)
 

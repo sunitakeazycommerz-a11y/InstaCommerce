@@ -5,7 +5,7 @@
 - [ ] Verify fulfillment-db (PostgreSQL) migrations current
   ```bash
   kubectl exec -n fulfillment deploy/fulfillment-service -- \
-    curl -s http://localhost:8084/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8086/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check order-service, inventory-service, warehouse-service connectivity
@@ -19,7 +19,7 @@
 - [ ] Verify Kafka connectivity (order.created, fulfillment.events topics)
   ```bash
   kubectl exec -n fulfillment deploy/fulfillment-service -- \
-    curl -s http://localhost:8084/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8086/actuator/health | jq '.components.kafka'
   ```
 
 - [ ] Validate rider-fleet-service connectivity (dispatch assignment)
@@ -31,7 +31,7 @@
 - [ ] Check capacity: Available warehouse slots for new orders
   ```bash
   kubectl exec -n fulfillment deploy/fulfillment-service -- \
-    curl -s http://localhost:8084/metrics/warehouse-capacity-available | jq '.value'
+    curl -s http://localhost:8086/metrics/warehouse-capacity-available | jq '.value'
   ```
 
 ---
@@ -43,11 +43,11 @@
 ```bash
 # Current fulfillment queue depth (should be processed < 30 sec)
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/fulfillment-queue-depth | jq '.value'
+  curl -s http://localhost:8086/metrics/fulfillment-queue-depth | jq '.value'
 
 # SLA compliance rate (should be >95%)
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/sla-compliance-rate | jq '.value'
+  curl -s http://localhost:8086/metrics/sla-compliance-rate | jq '.value'
 ```
 
 ### Blue-Green Deployment
@@ -70,7 +70,7 @@ kubectl logs -n fulfillment deploy/fulfillment-service --tail=20 | grep -i "join
 
 # 5. Verify SLA compliance rate recovered
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/sla-compliance-rate | jq '.value'
+  curl -s http://localhost:8086/metrics/sla-compliance-rate | jq '.value'
 ```
 
 ### Rollback
@@ -81,7 +81,7 @@ kubectl rollout status deploy/fulfillment-service -n fulfillment --timeout=5m
 
 # Check if any in-flight fulfillments are orphaned
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/v1/admin/orphaned-orders | jq '.count'
+  curl -s http://localhost:8086/v1/admin/orphaned-orders | jq '.count'
 ```
 
 ---
@@ -96,7 +96,7 @@ kubectl logs -n fulfillment deploy/fulfillment-service --tail=30 | grep "joined\
 
 # Verify port listening
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  netstat -tlnp | grep 8084
+  netstat -tlnp | grep 8086
 ```
 
 ### Smoke Tests
@@ -106,16 +106,16 @@ POD=$(kubectl get pods -n fulfillment -l app=fulfillment-service -o jsonpath='{.
 
 # 1. Health check
 kubectl exec -n fulfillment pod/$POD -- \
-  curl -s http://localhost:8084/actuator/health | jq '.status'
+  curl -s http://localhost:8086/actuator/health | jq '.status'
 
 # 2. Get active fulfillments
 kubectl exec -n fulfillment pod/$POD -- \
-  curl -s http://localhost:8084/v1/fulfillments?status=PENDING&limit=5 \
+  curl -s http://localhost:8086/v1/fulfillments?status=PENDING&limit=5 \
   -H "Authorization: Bearer admin-token" | jq '.count'
 
 # 3. Test fulfillment assignment
 kubectl exec -n fulfillment pod/$POD -- \
-  curl -X POST http://localhost:8084/v1/fulfillments \
+  curl -X POST http://localhost:8086/v1/fulfillments \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer admin-token" \
   -d '{"orderId":"test-001","warehouse":"main","items":1}' | jq '.fulfillmentId'
@@ -129,7 +129,7 @@ kubectl exec -n fulfillment pod/$POD -- \
 
 ```bash
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/actuator/health/live | jq .
+  curl -s http://localhost:8086/actuator/health/live | jq .
 ```
 
 **Restart triggers**: Kafka consumer stuck, database down
@@ -138,7 +138,7 @@ kubectl exec -n fulfillment deploy/fulfillment-service -- \
 
 ```bash
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/actuator/health/ready | jq .
+  curl -s http://localhost:8086/actuator/health/ready | jq .
 ```
 
 **Load balancer removal triggers**: Consumer lag > 60 sec, fulfillment queue overflowing
@@ -158,15 +158,15 @@ kubectl logs -n fulfillment deploy/fulfillment-service --tail=50 | grep -i "cons
 
 # Check queue depth and age
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/fulfillment-queue-depth | jq '.value'
+  curl -s http://localhost:8086/metrics/fulfillment-queue-depth | jq '.value'
 
 # Check oldest pending fulfillment (should be <30 min)
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/v1/fulfillments/oldest-pending | jq '.createdAt'
+  curl -s http://localhost:8086/v1/fulfillments/oldest-pending | jq '.createdAt'
 
 # Check database
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/actuator/health/db | jq '.status'
+  curl -s http://localhost:8086/actuator/health/db | jq '.status'
 
 # Check warehouse-service availability
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
@@ -187,19 +187,19 @@ kubectl exec -n fulfillment deploy/fulfillment-service -- \
 ```bash
 # SLA compliance rate
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/sla-compliance-rate | jq '.value'
+  curl -s http://localhost:8086/metrics/sla-compliance-rate | jq '.value'
 
 # Processing latency
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/fulfillment-latency-p99 | jq '.value'
+  curl -s http://localhost:8086/metrics/fulfillment-latency-p99 | jq '.value'
 
 # Check warehouse capacity
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/warehouse-capacity-available | jq '.value'
+  curl -s http://localhost:8086/metrics/warehouse-capacity-available | jq '.value'
 
 # Check rider availability (dispatch impact)
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/available-riders | jq '.value'
+  curl -s http://localhost:8086/metrics/available-riders | jq '.value'
 ```
 
 **Resolution**:
@@ -217,7 +217,7 @@ kubectl logs -n fulfillment deploy/fulfillment-service --tail=200 | grep -i "ass
 
 # Check rider-fleet-service latency
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/rider-fleet-latency-p99 | jq '.value'
+  curl -s http://localhost:8086/metrics/rider-fleet-latency-p99 | jq '.value'
 ```
 
 **Resolution**:
@@ -234,7 +234,7 @@ kubectl exec -n fulfillment deploy/fulfillment-service -- \
 ```bash
 # Check consumer group lag
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/metrics/kafka-consumer-lag | jq '.value'
+  curl -s http://localhost:8086/metrics/kafka-consumer-lag | jq '.value'
 
 # If lag > 60 seconds and not recovering:
 # 1. Check pod logs
@@ -289,7 +289,7 @@ kubectl set env deploy/fulfillment-service -n fulfillment \
 ```bash
 # Check pool status
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/actuator/metrics/hikaricp.connections | jq '.measurements'
+  curl -s http://localhost:8086/actuator/metrics/hikaricp.connections | jq '.measurements'
 
 # Increase pool size
 kubectl set env deploy/fulfillment-service -n fulfillment \
@@ -312,7 +312,7 @@ kubectl rollout status deploy/fulfillment-service -n fulfillment --timeout=5m
 
 # 3. Check for orphaned fulfillments
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -s http://localhost:8084/v1/admin/orphaned-orders | jq '.orphanedOrders'
+  curl -s http://localhost:8086/v1/admin/orphaned-orders | jq '.orphanedOrders'
 
 # 4. Manually complete any in-flight fulfillments
 ```
@@ -363,8 +363,8 @@ rate(warehouse_assignment_total{status="success"}[5m]) / rate(warehouse_assignme
 
 ## On-Call Handoff
 
-- [ ] Fulfillment queue depth? `kubectl exec -n fulfillment deploy/fulfillment-service -- curl -s http://localhost:8084/metrics/fulfillment-queue-depth`
-- [ ] SLA compliance rate? `kubectl exec -n fulfillment deploy/fulfillment-service -- curl -s http://localhost:8084/metrics/sla-compliance-rate`
+- [ ] Fulfillment queue depth? `kubectl exec -n fulfillment deploy/fulfillment-service -- curl -s http://localhost:8086/metrics/fulfillment-queue-depth`
+- [ ] SLA compliance rate? `kubectl exec -n fulfillment deploy/fulfillment-service -- curl -s http://localhost:8086/metrics/sla-compliance-rate`
 - [ ] Kafka consumer lag trending?
 - [ ] Warehouse capacity status?
 

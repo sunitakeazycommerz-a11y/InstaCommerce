@@ -36,10 +36,10 @@ docker run -d --name debezium \
 
 ```bash
 ./gradlew :services:order-service:build
-./gradlew :services:order-service:bootRun --args='--server.port=8085'
+./gradlew :services:order-service:bootRun --args='--server.port=8084'
 
 # Verify
-curl http://localhost:8085/actuator/health
+curl http://localhost:8084/actuator/health
 ```
 
 ---
@@ -50,7 +50,7 @@ curl http://localhost:8085/actuator/health
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY build/libs/order-service-*.jar app.jar
-EXPOSE 8085
+EXPOSE 8084
 ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
@@ -87,14 +87,14 @@ argocd app sync order-service
 ### Liveness
 
 ```bash
-curl http://localhost:8085/actuator/health/live
+curl http://localhost:8084/actuator/health/live
 # { "status": "UP" }
 ```
 
 ### Readiness
 
 ```bash
-curl http://localhost:8085/actuator/health/ready
+curl http://localhost:8084/actuator/health/ready
 # { "status": "UP", "components": { "db": { "status": "UP" } } }
 ```
 
@@ -184,7 +184,7 @@ psql -h order-db -U postgres -d orders \
 ```bash
 # Check active connections
 kubectl exec -it deployment/order-service -n money-path -- \
-  curl localhost:8085/actuator/metrics/jdbc.connections.active
+  curl localhost:8084/actuator/metrics/jdbc.connections.active
 
 # If maxed out, restart
 kubectl rollout restart deployment/order-service -n money-path
@@ -238,10 +238,10 @@ public void batchInsertItems(@Param("items") List<OrderItem> items);
 
 ```bash
 # Order creation rate
-curl http://localhost:8085/actuator/prometheus | grep order_created_total
+curl http://localhost:8084/actuator/prometheus | grep order_created_total
 
 # Database connection pool
-curl http://localhost:8085/actuator/prometheus | grep jdbc_connections
+curl http://localhost:8084/actuator/prometheus | grep jdbc_connections
 
 # Outbox lag
 psql -c "SELECT COUNT(*) FROM outbox_events WHERE sent = false;"

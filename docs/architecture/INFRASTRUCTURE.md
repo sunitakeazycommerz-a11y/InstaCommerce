@@ -733,19 +733,42 @@ services:
 
 ## 7. Monitoring Stack
 
-Observability is built on three pillars: metrics (Prometheus), traces (OpenTelemetry), and logs (Cloud Logging).
+Observability is built on metrics (Prometheus), distributed traces (OpenTelemetry Collector with deterministic tail sampling), kernel-level network profiling (eBPF Grafana Beyla), and logs (Cloud Logging).
 
 ```mermaid
 graph LR
-    Apps[Applications] -->|Metrics| Prom[Prometheus]
-    Apps -->|Traces| OTel[OpenTelemetry Collector]
-    Apps -->|Logs| Stdout[stdout/stderr]
-    Prom --> Graf[Grafana]
-    OTel --> Tempo[Tempo/Jaeger]
-    Stdout --> CL[Cloud Logging]
-    Prom -->|Alerts| AM[AlertManager]
-    AM --> PD[PagerDuty/Slack]
+    Apps[Applications] -->|Metrics / Traces| OTel[OpenTelemetry Collector<br/>Tail Sampling 6 Policies]
+    Beyla[eBPF Beyla DaemonSet<br/>Zero-Code Profiler] -->|HTTP / gRPC Spans & RED| OTel
+    Apps -->|Direct Metrics Scrape| Prom[Prometheus Server]
+    OTel -->|Sampled Traces| Tempo[Tempo / Jaeger]
+    OTel -->|Remote Write Metrics| Prom
+    Apps -->|Structured JSON Logs| Stdout[stdout / stderr]
+    Stdout --> CL[Google Cloud Logging]
+    Prom --> Graf[Grafana Dashboards]
+    Prom -->|Alert Rules| AM[AlertManager]
+    AM --> PD[PagerDuty / Slack Pager]
 ```
+
+### eBPF Zero-Code Network Profiler (`grafana/beyla`)
+
+Deploys as a Kubernetes DaemonSet (`deploy/helm/templates/observability/ebpf-network-profiler.yaml`) across all nodes:
+- Uses Linux kernel eBPF probes with `hostPID`, `hostNetwork`, `SYS_ADMIN`, and `BPF` capabilities.
+- Automatically instruments TCP, HTTP, and gRPC traffic on microservice ports (`80, 443, 8080, 8081, 8090-8099, 9090`).
+- Measures precise kernel-level socket latency, throughput, and error rates without changing application code.
+- Tags all network telemetry with `k8s.pod.name` and exports OTLP spans to `http://otel-collector.monitoring:4318`.
+
+### OpenTelemetry Collector Tail-Sampling Policies
+
+The OpenTelemetry Collector (`deploy/helm/templates/observability/otel-collector.yaml`) runs a memory-limited tail-sampling pipeline to retain 100% of high-value traces while reducing telemetry cost:
+
+| Policy Name | Type | Condition | Sample Rate |
+|---|---|---|---|
+| `error-http-status-filter` | Numeric Attribute | HTTP Status $\in [500, 599]$ | **100%** |
+| `error-status-code-filter` | Status Code | Span Status == `ERROR` | **100%** |
+| `high-latency-filter` | Latency | Duration $> 2000$ ms | **100%** |
+| `vip-customer-filter` | String Attribute | `customer_tier` in `["vip", "VIP"]` | **100%** |
+| `search-probabilistic-filter` | Probabilistic & String | `service.name == search-service` (low latency) | **0.1%** |
+| `default-probabilistic-filter` | Probabilistic | All other non-error traffic | **5.0%** |
 
 ### Metrics (Prometheus + Grafana)
 

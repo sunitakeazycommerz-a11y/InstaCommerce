@@ -5,25 +5,25 @@
 - [ ] Verify notification-db (PostgreSQL) accessibility
   ```bash
   kubectl exec -n engagement deploy/notification-service -- \
-    curl -s http://localhost:8090/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8087/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check Kafka connectivity (order.created, payment.completed, fulfillment.* topics)
   ```bash
   kubectl exec -n engagement deploy/notification-service -- \
-    curl -s http://localhost:8090/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8087/actuator/health | jq '.components.kafka'
   ```
 
 - [ ] Verify email provider connectivity (SendGrid/Mailgun)
   ```bash
   kubectl exec -n engagement deploy/notification-service -- \
-    curl -s http://localhost:8090/v1/admin/email-provider-health | jq '.status'
+    curl -s http://localhost:8087/v1/admin/email-provider-health | jq '.status'
   ```
 
 - [ ] Check SMS provider connectivity (Twilio)
   ```bash
   kubectl exec -n engagement deploy/notification-service -- \
-    curl -s http://localhost:8090/v1/admin/sms-provider-health | jq '.status'
+    curl -s http://localhost:8087/v1/admin/sms-provider-health | jq '.status'
   ```
 
 ---
@@ -35,15 +35,15 @@
 ```bash
 # Pending notifications queue
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/pending-notifications-count | jq '.value'
+  curl -s http://localhost:8087/metrics/pending-notifications-count | jq '.value'
 
 # Notification delivery success rate (should be >98%)
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/delivery-success-rate | jq '.value'
+  curl -s http://localhost:8087/metrics/delivery-success-rate | jq '.value'
 
 # Consumer lag (should be <60 sec)
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/kafka-consumer-lag | jq '.value'
+  curl -s http://localhost:8087/metrics/kafka-consumer-lag | jq '.value'
 ```
 
 ### Blue-Green Deployment
@@ -57,7 +57,7 @@ kubectl logs -n engagement deploy/notification-service --tail=20 | grep -i "join
 
 # Verify queue draining
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/pending-notifications-count | jq '.value'
+  curl -s http://localhost:8087/metrics/pending-notifications-count | jq '.value'
 ```
 
 ---
@@ -85,26 +85,26 @@ kubectl logs -n engagement deploy/notification-service --tail=100 | grep -i "err
 
 # Check Kafka consumer
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/kafka-consumer-lag | jq '.value'
+  curl -s http://localhost:8087/metrics/kafka-consumer-lag | jq '.value'
 
 # Check email provider
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/v1/admin/email-provider-health | jq '.status'
+  curl -s http://localhost:8087/v1/admin/email-provider-health | jq '.status'
 
 # Check SMS provider
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/v1/admin/sms-provider-health | jq '.status'
+  curl -s http://localhost:8087/v1/admin/sms-provider-health | jq '.status'
 
 # Check pending notifications
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/pending-notifications-count | jq '.value'
+  curl -s http://localhost:8087/metrics/pending-notifications-count | jq '.value'
 ```
 
 **Resolution**:
 1. Scale up: `kubectl scale deploy notification-service -n engagement --replicas=5`
 2. If Kafka consumer stuck: `kubectl rollout restart deploy/notification-service -n engagement`
 3. If email provider down: Enable SMS fallback or manual intervention
-4. Drain queue: `kubectl exec deploy/notification-service -n engagement -- curl -X POST http://localhost:8090/v1/admin/drain-queue`
+4. Drain queue: `kubectl exec deploy/notification-service -n engagement -- curl -X POST http://localhost:8087/v1/admin/drain-queue`
 
 ### P1 - Slow Notification Delivery (>5min lag)
 
@@ -112,15 +112,15 @@ kubectl exec -n engagement deploy/notification-service -- \
 ```bash
 # Check Kafka consumer lag
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/kafka-consumer-lag | jq '.value'
+  curl -s http://localhost:8087/metrics/kafka-consumer-lag | jq '.value'
 
 # Check notification processing latency
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/processing-latency-p99 | jq '.value'
+  curl -s http://localhost:8087/metrics/processing-latency-p99 | jq '.value'
 
 # Check provider response time
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/email-provider-latency-p99 | jq '.value'
+  curl -s http://localhost:8087/metrics/email-provider-latency-p99 | jq '.value'
 ```
 
 **Resolution**:
@@ -134,7 +134,7 @@ kubectl exec -n engagement deploy/notification-service -- \
 ```bash
 # Check bounce rate
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/bounce-rate | jq '.value'
+  curl -s http://localhost:8087/metrics/bounce-rate | jq '.value'
 
 # Check failed delivery reasons
 kubectl logs -n engagement deploy/notification-service --tail=200 | grep "delivery failed"
@@ -154,7 +154,7 @@ kubectl logs -n engagement deploy/notification-service --tail=200 | grep "delive
 ```bash
 # Check rate limit status
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/v1/admin/email-provider-health | jq '.rate_limit'
+  curl -s http://localhost:8087/v1/admin/email-provider-health | jq '.rate_limit'
 
 # Reduce sending rate
 kubectl set env deploy/notification-service -n engagement \
@@ -167,7 +167,7 @@ kubectl set env deploy/notification-service -n engagement \
 ```bash
 # Check SMS provider connectivity
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/v1/admin/sms-provider-health | jq '.status'
+  curl -s http://localhost:8087/v1/admin/sms-provider-health | jq '.status'
 
 # Check failed SMS messages
 kubectl logs -n engagement deploy/notification-service | grep "SMS.*failed"
@@ -182,11 +182,11 @@ kubectl set env deploy/notification-service -n engagement \
 ```bash
 # Check duplicate detection
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/v1/admin/dedup-cache | jq '.size'
+  curl -s http://localhost:8087/v1/admin/dedup-cache | jq '.size'
 
 # Clear dedup cache if needed
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -X POST http://localhost:8090/v1/admin/clear-dedup-cache \
+  curl -X POST http://localhost:8087/v1/admin/clear-dedup-cache \
   -H "Authorization: Bearer admin-token" | jq '.status'
 ```
 
@@ -200,7 +200,7 @@ kubectl rollout status deploy/notification-service -n engagement --timeout=5m
 
 # Verify queue draining
 kubectl exec -n engagement deploy/notification-service -- \
-  curl -s http://localhost:8090/metrics/pending-notifications-count
+  curl -s http://localhost:8087/metrics/pending-notifications-count
 ```
 
 ---
@@ -250,9 +250,9 @@ notification_bounce_rate
 
 ## On-Call Handoff
 
-- [ ] Pending notifications? `kubectl exec -n engagement deploy/notification-service -- curl -s http://localhost:8090/metrics/pending-notifications-count`
-- [ ] Delivery success rate? `kubectl exec -n engagement deploy/notification-service -- curl -s http://localhost:8090/metrics/delivery-success-rate`
-- [ ] Consumer lag? `kubectl exec -n engagement deploy/notification-service -- curl -s http://localhost:8090/metrics/kafka-consumer-lag`
+- [ ] Pending notifications? `kubectl exec -n engagement deploy/notification-service -- curl -s http://localhost:8087/metrics/pending-notifications-count`
+- [ ] Delivery success rate? `kubectl exec -n engagement deploy/notification-service -- curl -s http://localhost:8087/metrics/delivery-success-rate`
+- [ ] Consumer lag? `kubectl exec -n engagement deploy/notification-service -- curl -s http://localhost:8087/metrics/kafka-consumer-lag`
 
 ---
 

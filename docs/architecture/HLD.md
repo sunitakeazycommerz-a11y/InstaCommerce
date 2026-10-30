@@ -163,6 +163,7 @@ C4Container
             Container(recon, "Reconciliation Engine", "Go", "Payment & inventory reconciliation")
             Container(stream, "Stream Processor", "Go", "Real-time event enrichment & aggregation")
             Container(webhook, "Payment Webhook", "Go", "Idempotent payment callback handler")
+            Container(retl, "Reverse ETL Orchestrator", "Go", "Sync BigQuery marts → operational Redis/PostgreSQL")
             Container(goshared, "Go Shared Libs", "Go", "Common middleware, telemetry, error handling")
         }
     }

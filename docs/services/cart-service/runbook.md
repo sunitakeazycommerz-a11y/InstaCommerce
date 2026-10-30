@@ -5,13 +5,13 @@
 - [ ] Verify cart-db (PostgreSQL) connectivity
   ```bash
   kubectl exec -n engagement deploy/cart-service -- \
-    curl -s http://localhost:8111/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8090/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check Redis connectivity (cart session cache)
   ```bash
   kubectl exec -n engagement deploy/cart-service -- \
-    curl -s http://localhost:8111/actuator/health | jq '.components.redis'
+    curl -s http://localhost:8090/actuator/health | jq '.components.redis'
   ```
 
 - [ ] Verify inventory-service, pricing-service connectivity
@@ -24,7 +24,7 @@
 - [ ] Check Kafka connectivity (cart.events topic)
   ```bash
   kubectl exec -n engagement deploy/cart-service -- \
-    curl -s http://localhost:8111/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8090/actuator/health | jq '.components.kafka'
   ```
 
 ---
@@ -36,11 +36,11 @@
 ```bash
 # Active carts in session
 kubectl exec -n engagement deploy/cart-service -- \
-  curl -s http://localhost:8111/metrics/active-carts-count | jq '.value'
+  curl -s http://localhost:8090/metrics/active-carts-count | jq '.value'
 
 # Session cache hit rate (should be >90%)
 kubectl exec -n engagement deploy/cart-service -- \
-  curl -s http://localhost:8111/metrics/cache-hit-rate | jq '.value'
+  curl -s http://localhost:8090/metrics/cache-hit-rate | jq '.value'
 ```
 
 ### Blue-Green Deployment
@@ -57,7 +57,7 @@ kubectl rollout status deploy/cart-service -n engagement --timeout=10m
 
 # 4. Verify session cache recovered
 kubectl exec -n engagement deploy/cart-service -- \
-  curl -s http://localhost:8111/metrics/cache-hit-rate | jq '.value'
+  curl -s http://localhost:8090/metrics/cache-hit-rate | jq '.value'
 ```
 
 ---
@@ -82,7 +82,7 @@ kubectl exec -n engagement deploy/cart-service -- \
 ```bash
 kubectl get pods -n engagement -l app=cart-service
 kubectl logs -n engagement deploy/cart-service --tail=100 | grep -i "error"
-kubectl exec -n engagement deploy/cart-service -- curl -s http://localhost:8111/actuator/health | jq '.'
+kubectl exec -n engagement deploy/cart-service -- curl -s http://localhost:8090/actuator/health | jq '.'
 ```
 
 **Resolution**:
@@ -95,7 +95,7 @@ kubectl exec -n engagement deploy/cart-service -- curl -s http://localhost:8111/
 **Diagnosis**:
 ```bash
 kubectl exec -n engagement deploy/cart-service -- \
-  curl -s http://localhost:8111/metrics/cart-operation-latency-p99 | jq '.value'
+  curl -s http://localhost:8090/metrics/cart-operation-latency-p99 | jq '.value'
 ```
 
 **Resolution**:
@@ -112,11 +112,11 @@ kubectl exec -n engagement deploy/cart-service -- \
 ```bash
 # Check Redis
 kubectl exec -n engagement deploy/cart-service -- \
-  curl -s http://localhost:8111/actuator/health | jq '.components.redis'
+  curl -s http://localhost:8090/actuator/health | jq '.components.redis'
 
 # Check database backup
 kubectl exec -n engagement deploy/cart-service -- \
-  curl -s http://localhost:8111/v1/carts/USER-ID | jq '.items'
+  curl -s http://localhost:8090/v1/carts/USER-ID | jq '.items'
 ```
 
 ### Issue: Stale Prices in Cart
@@ -124,12 +124,12 @@ kubectl exec -n engagement deploy/cart-service -- \
 ```bash
 # Force price refresh
 kubectl exec -n engagement deploy/cart-service -- \
-  curl -X POST http://localhost:8111/v1/admin/refresh-prices \
+  curl -X POST http://localhost:8090/v1/admin/refresh-prices \
   -H "Authorization: Bearer admin-token" | jq '.status'
 
 # Check pricing-service latency
 kubectl exec -n engagement deploy/cart-service -- \
-  curl -s http://localhost:8111/metrics/pricing-service-latency | jq '.value'
+  curl -s http://localhost:8090/metrics/pricing-service-latency | jq '.value'
 ```
 
 ---
@@ -153,8 +153,8 @@ histogram_quantile(0.99, rate(cart_session_duration_seconds_bucket[5m]))
 
 ## On-Call Handoff
 
-- [ ] Active carts? `kubectl exec -n engagement deploy/cart-service -- curl -s http://localhost:8111/metrics/active-carts-count`
-- [ ] Cache hit rate? `kubectl exec -n engagement deploy/cart-service -- curl -s http://localhost:8111/metrics/cache-hit-rate`
+- [ ] Active carts? `kubectl exec -n engagement deploy/cart-service -- curl -s http://localhost:8090/metrics/active-carts-count`
+- [ ] Cache hit rate? `kubectl exec -n engagement deploy/cart-service -- curl -s http://localhost:8090/metrics/cache-hit-rate`
 
 ---
 

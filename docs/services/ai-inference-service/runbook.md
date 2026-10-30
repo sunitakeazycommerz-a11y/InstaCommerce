@@ -5,19 +5,19 @@
 - [ ] Verify GPU/accelerator availability (CUDA, TensorRT)
   ```bash
   kubectl exec -n ai deploy/ai-inference-service -- \
-    curl -s http://localhost:8118/v1/admin/gpu-status | jq '.available_gpus'
+    curl -s http://localhost:8101/v1/admin/gpu-status | jq '.available_gpus'
   ```
 
 - [ ] Check ML model cache (models should be pre-loaded)
   ```bash
   kubectl exec -n ai deploy/ai-inference-service -- \
-    curl -s http://localhost:8118/v1/admin/model-cache-status | jq '.loaded_models'
+    curl -s http://localhost:8101/v1/admin/model-cache-status | jq '.loaded_models'
   ```
 
 - [ ] Verify connection to model registry / storage
   ```bash
   kubectl exec -n ai deploy/ai-inference-service -- \
-    curl -s http://localhost:8118/v1/admin/model-registry-health | jq '.status'
+    curl -s http://localhost:8101/v1/admin/model-registry-health | jq '.status'
   ```
 
 ---
@@ -29,11 +29,11 @@
 ```bash
 # Model inference latency (p99 should be <200ms)
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/metrics/inference-latency-p99 | jq '.value'
+  curl -s http://localhost:8101/metrics/inference-latency-p99 | jq '.value'
 
 # GPU memory utilization (should be 70-90%)
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/gpu-memory-usage | jq '.percent'
+  curl -s http://localhost:8101/v1/admin/gpu-memory-usage | jq '.percent'
 
 # Current replica count
 kubectl get deploy ai-inference-service -n ai -o jsonpath='{.spec.replicas}'
@@ -53,11 +53,11 @@ kubectl rollout status deploy/ai-inference-service -n ai --timeout=15m
 
 # Verify models loaded and inference working
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/model-cache-status | jq '.loaded_models | length'
+  curl -s http://localhost:8101/v1/admin/model-cache-status | jq '.loaded_models | length'
 
 # Verify inference latency maintained
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/metrics/inference-latency-p99 | jq '.value'
+  curl -s http://localhost:8101/metrics/inference-latency-p99 | jq '.value'
 ```
 
 ---
@@ -75,15 +75,15 @@ kubectl logs -n ai deploy/ai-inference-service --tail=100 | grep -i "error\|exce
 
 # Check GPU availability
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/gpu-status | jq '.'
+  curl -s http://localhost:8101/v1/admin/gpu-status | jq '.'
 
 # Check model cache
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/model-cache-status | jq '.loaded_models'
+  curl -s http://localhost:8101/v1/admin/model-cache-status | jq '.loaded_models'
 
 # Check model registry
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/model-registry-health | jq '.status'
+  curl -s http://localhost:8101/v1/admin/model-registry-health | jq '.status'
 ```
 
 **Resolution**:
@@ -98,14 +98,14 @@ kubectl exec -n ai deploy/ai-inference-service -- \
 ```bash
 # Check GPU memory
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/gpu-memory-usage | jq '.percent'
+  curl -s http://localhost:8101/v1/admin/gpu-memory-usage | jq '.percent'
 
 # Check if model swapping/thrashing
 kubectl logs -n ai deploy/ai-inference-service | grep "model.*swap\|memory.*low"
 
 # Check inference queue depth
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/metrics/inference-queue-depth | jq '.value'
+  curl -s http://localhost:8101/metrics/inference-queue-depth | jq '.value'
 ```
 
 **Resolution**:
@@ -119,15 +119,15 @@ kubectl exec -n ai deploy/ai-inference-service -- \
 ```bash
 # Check model version
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/model-version | jq '.versions'
+  curl -s http://localhost:8101/v1/admin/model-version | jq '.versions'
 
 # Check model registry version
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/model-registry-version | jq '.latest_version'
+  curl -s http://localhost:8101/v1/admin/model-registry-version | jq '.latest_version'
 ```
 
 **Resolution**:
-1. Pull new model: `kubectl exec deploy/ai-inference-service -n ai -- curl -X POST http://localhost:8118/v1/admin/reload-models`
+1. Pull new model: `kubectl exec deploy/ai-inference-service -n ai -- curl -X POST http://localhost:8101/v1/admin/reload-models`
 2. Restart pods: `kubectl rollout restart deploy/ai-inference-service -n ai`
 
 ---
@@ -139,7 +139,7 @@ kubectl exec -n ai deploy/ai-inference-service -- \
 ```bash
 # Check GPU memory
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/gpu-memory-usage | jq '.percent'
+  curl -s http://localhost:8101/v1/admin/gpu-memory-usage | jq '.percent'
 
 # If > 95%:
 # 1. Reduce inference batch size
@@ -159,7 +159,7 @@ kubectl rollout restart deploy/ai-inference-service -n ai
 ```bash
 # Check CUDA version compatibility
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/cuda-diagnostics | jq '.errors'
+  curl -s http://localhost:8101/v1/admin/cuda-diagnostics | jq '.errors'
 
 # If incompatible:
 # 1. Update node GPU drivers
@@ -172,17 +172,17 @@ kubectl exec -n ai deploy/ai-inference-service -- \
 ```bash
 # Test model with known input
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -X POST http://localhost:8118/v1/infer \
+  curl -X POST http://localhost:8101/v1/infer \
   -H "Content-Type: application/json" \
   -d '{"model":"fraud_model","input":[...]}' | jq '.result'
 
 # Check model version matches expected
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8118/v1/admin/model-version | jq '.fraud_model'
+  curl -s http://localhost:8101/v1/admin/model-version | jq '.fraud_model'
 
 # If wrong version: Reload models
 kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -X POST http://localhost:8118/v1/admin/reload-models
+  curl -X POST http://localhost:8101/v1/admin/reload-models
 ```
 
 ---
@@ -238,9 +238,9 @@ rate(ai_inferences_total[5m])
 
 ## On-Call Handoff
 
-- [ ] GPU memory usage? `kubectl exec -n ai deploy/ai-inference-service -- curl -s http://localhost:8118/v1/admin/gpu-memory-usage`
-- [ ] Model versions loaded? `kubectl exec -n ai deploy/ai-inference-service -- curl -s http://localhost:8118/v1/admin/model-cache-status`
-- [ ] Inference latency? `kubectl exec -n ai deploy/ai-inference-service -- curl -s http://localhost:8118/metrics/inference-latency-p99`
+- [ ] GPU memory usage? `kubectl exec -n ai deploy/ai-inference-service -- curl -s http://localhost:8101/v1/admin/gpu-memory-usage`
+- [ ] Model versions loaded? `kubectl exec -n ai deploy/ai-inference-service -- curl -s http://localhost:8101/v1/admin/model-cache-status`
+- [ ] Inference latency? `kubectl exec -n ai deploy/ai-inference-service -- curl -s http://localhost:8101/metrics/inference-latency-p99`
 
 ---
 

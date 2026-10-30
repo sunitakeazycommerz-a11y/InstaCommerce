@@ -8,7 +8,7 @@
 | **Port** | `8092` |
 | **Database** | PostgreSQL — `warehouse` |
 | **Kafka topic** | `warehouse.events` (canonical in `TopicNames.java`, via outbox + CDC relay) |
-| **Flyway migrations** | V1–V7 |
+| **Flyway migrations** | V1–V10 |
 | **Runtime** | JDK 21, ZGC, Eclipse Temurin Alpine |
 
 ---
@@ -257,9 +257,39 @@ erDiagram
         timestamptz locked_at
         varchar_255 locked_by
     }
+    warehouse_bins {
+        uuid id PK
+        uuid store_id FK "ON DELETE CASCADE"
+        varchar_20 aisle "NOT NULL"
+        varchar_20 rack "NOT NULL"
+        varchar_20 shelf "NOT NULL"
+        varchar_20 bin_number "NOT NULL"
+        varchar_100 sku
+        int max_volume_cm3 "default 50000"
+        int current_volume_cm3 "default 0"
+        int max_weight_grams "default 25000"
+        int current_weight_grams "default 0"
+        boolean occupied "default false"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    staging_temperature_telemetry {
+        uuid id PK
+        uuid store_id FK "ON DELETE CASCADE"
+        varchar_50 sensor_id "NOT NULL"
+        varchar_50 bay_id "NOT NULL"
+        varchar_20 storage_type "NOT NULL"
+        decimal_5_2 temperature_celsius "NOT NULL"
+        int battery_pct
+        timestamptz recorded_at
+        boolean breached "default false"
+        boolean alert_triggered "default false"
+    }
     stores ||--o{ store_hours : "operates"
     stores ||--o{ store_capacity : "tracks"
     stores ||--o{ store_zones : "serves"
+    stores ||--o{ warehouse_bins : "houses"
+    stores ||--o{ staging_temperature_telemetry : "monitors"
 ```
 
 **Key database constraints and indexes:**
@@ -268,6 +298,8 @@ erDiagram
 |---|---|---|
 | `stores` | `idx_stores_status`, `idx_stores_city`, `idx_stores_pincode`, `idx_stores_lat_lng` | Filtered lookups, bounding-box pre-filter for Haversine |
 | `store_hours` | `UNIQUE (store_id, day_of_week)` | One schedule entry per day per store |
+| `warehouse_bins` | `UNIQUE (store_id, aisle, rack, shelf, bin_number)`, `idx_warehouse_bins_store_sku` | Dark store physical slotting & picker routing |
+| `staging_temperature_telemetry` | `idx_staging_telemetry_store_bay` | Cold-chain staging temperature audit & breach alerts |
 | `store_capacity` | `UNIQUE (store_id, date, hour)` | Enables atomic UPSERT via `ON CONFLICT` |
 | `store_zones` | `UNIQUE (store_id, pincode)`, `idx_store_zones_pincode` | One zone-mapping per pincode per store |
 | `outbox_events` | `idx_outbox_unsent WHERE sent = false` | Partial index for CDC relay polling |
@@ -661,9 +693,9 @@ The `build.gradle.kts` wires Testcontainers (PostgreSQL 1.19.3) and `spring-boot
 
 ### 14.2 Flyway Migration Safety
 
-Migrations V1–V7 are applied on startup (`spring.flyway.enabled: true`, `spring.jpa.hibernate.ddl-auto: validate`). Rolling forward a new migration requires:
+Migrations V1–V10 are applied on startup (`spring.flyway.enabled: true`, `spring.jpa.hibernate.ddl-auto: validate`). Rolling forward a new migration requires:
 
-1. New `V8__*.sql` file in `src/main/resources/db/migration/`.
+1. New `V11__*.sql` file in `src/main/resources/db/migration/`.
 2. Migration must be backward-compatible (additive columns with defaults, new tables) to support blue-green deploy.
 3. For breaking schema changes, use a two-phase approach: add in V(N), backfill, then drop old column in V(N+1) after all instances are on V(N).
 

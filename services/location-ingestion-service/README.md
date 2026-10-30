@@ -38,7 +38,7 @@ reads `rider.location.updates` for analytics; `routing-eta-service` and
 
 | Attribute | Value |
 |---|---|
-| **Language / Runtime** | Go 1.24 (`go.mod`), single static binary |
+| **Language / Runtime** | Go 1.25.0 (`toolchain go1.25.1`), single static binary |
 | **Port** | `8105` (configurable via `PORT` / `SERVER_PORT`) |
 | **Owns** | Ingestion, validation, normalization, optional H3 enrichment, Redis latest-position write, Kafka batch publish |
 | **Does not own** | Dispatch scoring, ETA calculation, assignment, order state, persistent rider profiles |
@@ -60,7 +60,10 @@ location-ingestion-service/
 ├── handler/
 │   ├── location.go         # LocationHandler — HTTP POST + WebSocket (handler-layer abstraction)
 │   ├── geofence.go         # GeofenceChecker — Haversine + H3 stub zone detection
-│   └── batcher.go          # LocationBatcher — time/size Kafka batching with KafkaProducer interface
+│   ├── batcher.go          # LocationBatcher — time/size Kafka batching with KafkaProducer interface
+│   ├── kalman.go           # Kalman GPS smoothing filter for jitter reduction
+│   ├── h3.go               # Uber H3 spatial index resolution and hexagon lookup
+│   └── ratelimit.go        # Per-rider token bucket ingestion rate limiter
 ├── store/
 │   └── redis.go            # LatestPositionStore — Redis SET/GET/GetNearby (SCAN-based)
 ├── Dockerfile              # Multi-stage alpine build, non-root user, HEALTHCHECK

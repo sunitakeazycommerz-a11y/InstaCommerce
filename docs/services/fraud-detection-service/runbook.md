@@ -5,25 +5,25 @@
 - [ ] Verify fraud-detection-db (PostgreSQL) is accessible
   ```bash
   kubectl exec -n engagement deploy/fraud-detection-service -- \
-    curl -s http://localhost:8100/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8097/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check ML model availability (fraud scoring model)
   ```bash
   kubectl exec -n engagement deploy/fraud-detection-service -- \
-    curl -s http://localhost:8100/v1/admin/model-status | jq '.status'
+    curl -s http://localhost:8097/v1/admin/model-status | jq '.status'
   ```
 
 - [ ] Verify Redis connectivity (rule caching)
   ```bash
   kubectl exec -n engagement deploy/fraud-detection-service -- \
-    curl -s http://localhost:8100/actuator/health | jq '.components.redis'
+    curl -s http://localhost:8097/actuator/health | jq '.components.redis'
   ```
 
 - [ ] Check Kafka connectivity (order.created, payment.initiated topics)
   ```bash
   kubectl exec -n engagement deploy/fraud-detection-service -- \
-    curl -s http://localhost:8100/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8097/actuator/health | jq '.components.kafka'
   ```
 
 ---
@@ -35,15 +35,15 @@
 ```bash
 # ML model accuracy on recent data (should be >95%)
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/model-accuracy | jq '.value'
+  curl -s http://localhost:8097/metrics/model-accuracy | jq '.value'
 
 # False positive rate (should be <1%)
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/false-positive-rate | jq '.value'
+  curl -s http://localhost:8097/metrics/false-positive-rate | jq '.value'
 
 # Fraud detection latency (p99 should be <500ms)
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/detection-latency-p99 | jq '.value'
+  curl -s http://localhost:8097/metrics/detection-latency-p99 | jq '.value'
 ```
 
 ### Blue-Green Deployment
@@ -54,11 +54,11 @@ kubectl rollout status deploy/fraud-detection-service -n engagement --timeout=10
 
 # Verify model still loaded
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/v1/admin/model-status | jq '.status'
+  curl -s http://localhost:8097/v1/admin/model-status | jq '.status'
 
 # Verify accuracy maintained
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/model-accuracy | jq '.value'
+  curl -s http://localhost:8097/metrics/model-accuracy | jq '.value'
 ```
 
 ---
@@ -86,11 +86,11 @@ kubectl logs -n engagement deploy/fraud-detection-service --tail=100
 
 # Check ML model
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/v1/admin/model-status | jq '.'
+  curl -s http://localhost:8097/v1/admin/model-status | jq '.'
 
 # Check Kafka consumer
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/kafka-consumer-lag | jq '.value'
+  curl -s http://localhost:8097/metrics/kafka-consumer-lag | jq '.value'
 ```
 
 **Resolution**:
@@ -104,11 +104,11 @@ kubectl exec -n engagement deploy/fraud-detection-service -- \
 ```bash
 # Check false positive rate
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/false-positive-rate | jq '.value'
+  curl -s http://localhost:8097/metrics/false-positive-rate | jq '.value'
 
 # Check model accuracy
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/model-accuracy | jq '.value'
+  curl -s http://localhost:8097/metrics/model-accuracy | jq '.value'
 
 # Analyze recent predictions
 kubectl logs -n engagement deploy/fraud-detection-service --tail=100 | grep "fraud.*detected"
@@ -124,7 +124,7 @@ kubectl logs -n engagement deploy/fraud-detection-service --tail=100 | grep "fra
 **Diagnosis**:
 ```bash
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/detection-latency-p99 | jq '.value'
+  curl -s http://localhost:8097/metrics/detection-latency-p99 | jq '.value'
 ```
 
 **Resolution**:
@@ -141,7 +141,7 @@ kubectl exec -n engagement deploy/fraud-detection-service -- \
 ```bash
 # Check model load time
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/v1/admin/model-stats | jq '.inference_time_ms'
+  curl -s http://localhost:8097/v1/admin/model-stats | jq '.inference_time_ms'
 
 # If >100ms, increase GPU resources or use quantized model
 helm upgrade fraud-detection-service deploy/helm/fraud-detection-service \
@@ -155,11 +155,11 @@ helm upgrade fraud-detection-service deploy/helm/fraud-detection-service \
 ```bash
 # Check model accuracy trend
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -s http://localhost:8100/metrics/model-accuracy-24h | jq '.hourly_accuracy'
+  curl -s http://localhost:8097/metrics/model-accuracy-24h | jq '.hourly_accuracy'
 
 # If declining: Trigger model retraining
 kubectl exec -n engagement deploy/fraud-detection-service -- \
-  curl -X POST http://localhost:8100/v1/admin/retrain-model \
+  curl -X POST http://localhost:8097/v1/admin/retrain-model \
   -H "Authorization: Bearer admin-token" | jq '.status'
 ```
 
@@ -225,9 +225,9 @@ rate(fraud_transactions_detected_total[5m])
 
 ## On-Call Handoff
 
-- [ ] Model accuracy? `kubectl exec -n engagement deploy/fraud-detection-service -- curl -s http://localhost:8100/metrics/model-accuracy`
-- [ ] False positive rate? `kubectl exec -n engagement deploy/fraud-detection-service -- curl -s http://localhost:8100/metrics/false-positive-rate`
-- [ ] Detection latency? `kubectl exec -n engagement deploy/fraud-detection-service -- curl -s http://localhost:8100/metrics/detection-latency-p99`
+- [ ] Model accuracy? `kubectl exec -n engagement deploy/fraud-detection-service -- curl -s http://localhost:8097/metrics/model-accuracy`
+- [ ] False positive rate? `kubectl exec -n engagement deploy/fraud-detection-service -- curl -s http://localhost:8097/metrics/false-positive-rate`
+- [ ] Detection latency? `kubectl exec -n engagement deploy/fraud-detection-service -- curl -s http://localhost:8097/metrics/detection-latency-p99`
 
 ---
 

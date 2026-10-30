@@ -5,19 +5,19 @@
 - [ ] Verify rider-fleet-db (PostgreSQL) is accessible
   ```bash
   kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-    curl -s http://localhost:8087/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8093/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check Redis connectivity (rider location tracking)
   ```bash
   kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-    curl -s http://localhost:8087/actuator/health | jq '.components.redis'
+    curl -s http://localhost:8093/actuator/health | jq '.components.redis'
   ```
 
 - [ ] Verify Kafka connectivity (rider.location, rider.status topics)
   ```bash
   kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-    curl -s http://localhost:8087/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8093/actuator/health | jq '.components.kafka'
   ```
 
 - [ ] Check fulfillment-service connectivity (delivery assignment)
@@ -29,7 +29,7 @@
 - [ ] Validate rider availability (should be >50 active riders in production)
   ```bash
   kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-    curl -s http://localhost:8087/metrics/active-riders-count | jq '.value'
+    curl -s http://localhost:8093/metrics/active-riders-count | jq '.value'
   ```
 
 ---
@@ -41,11 +41,11 @@
 ```bash
 # Active riders
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/active-riders-count | jq '.value'
+  curl -s http://localhost:8093/metrics/active-riders-count | jq '.value'
 
 # Average response time to assignments (should be <10 sec)
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/assignment-response-time-avg | jq '.value'
+  curl -s http://localhost:8093/metrics/assignment-response-time-avg | jq '.value'
 
 # Current replica count
 kubectl get deploy rider-fleet-service -n rider-fleet -o jsonpath='{.spec.replicas}'
@@ -71,7 +71,7 @@ kubectl logs -n rider-fleet deploy/rider-fleet-service --tail=20 | grep -i "join
 
 # 5. Verify active riders count still stable
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/active-riders-count | jq '.value'
+  curl -s http://localhost:8093/metrics/active-riders-count | jq '.value'
 ```
 
 ### Rollback
@@ -82,7 +82,7 @@ kubectl rollout status deploy/rider-fleet-service -n rider-fleet --timeout=5m
 
 # Verify riders still online
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/active-riders-count | jq '.value'
+  curl -s http://localhost:8093/metrics/active-riders-count | jq '.value'
 ```
 
 ---
@@ -97,7 +97,7 @@ kubectl logs -n rider-fleet deploy/rider-fleet-service --tail=30 | grep "joined\
 
 # Verify port listening
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  netstat -tlnp | grep 8087
+  netstat -tlnp | grep 8093
 ```
 
 ### Smoke Tests
@@ -107,16 +107,16 @@ POD=$(kubectl get pods -n rider-fleet -l app=rider-fleet-service -o jsonpath='{.
 
 # 1. Health check
 kubectl exec -n rider-fleet pod/$POD -- \
-  curl -s http://localhost:8087/actuator/health | jq '.status'
+  curl -s http://localhost:8093/actuator/health | jq '.status'
 
 # 2. Get active riders
 kubectl exec -n rider-fleet pod/$POD -- \
-  curl -s http://localhost:8087/v1/riders?status=AVAILABLE&limit=5 \
+  curl -s http://localhost:8093/v1/riders?status=AVAILABLE&limit=5 \
   -H "Authorization: Bearer admin-token" | jq '.riders | length'
 
 # 3. Test assignment endpoint
 kubectl exec -n rider-fleet pod/$POD -- \
-  curl -X POST http://localhost:8087/v1/assignments \
+  curl -X POST http://localhost:8093/v1/assignments \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer admin-token" \
   -d '{"deliveryId":"test-001","riderId":"rider-001"}' | jq '.assignmentId'
@@ -150,14 +150,14 @@ kubectl logs -n rider-fleet deploy/rider-fleet-service --tail=100 | grep -i "err
 
 # Check active riders
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/active-riders-count | jq '.value'
+  curl -s http://localhost:8093/metrics/active-riders-count | jq '.value'
 
 # Check Kafka consumer
 kubectl logs -n rider-fleet deploy/rider-fleet-service --tail=30 | grep -i "offset\|lag"
 
 # Check database
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/actuator/health/db | jq '.status'
+  curl -s http://localhost:8093/actuator/health/db | jq '.status'
 ```
 
 **Resolution**:
@@ -172,19 +172,19 @@ kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
 ```bash
 # Check assignment latency
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/assignment-response-time-p99 | jq '.value'
+  curl -s http://localhost:8093/metrics/assignment-response-time-p99 | jq '.value'
 
 # Check Kafka consumer lag
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/kafka-consumer-lag | jq '.value'
+  curl -s http://localhost:8093/metrics/kafka-consumer-lag | jq '.value'
 
 # Check database query performance
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/db-query-latency-p99 | jq '.value'
+  curl -s http://localhost:8093/metrics/db-query-latency-p99 | jq '.value'
 
 # Check Redis operations
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/redis-op-latency-p99 | jq '.value'
+  curl -s http://localhost:8093/metrics/redis-op-latency-p99 | jq '.value'
 ```
 
 **Resolution**:
@@ -201,7 +201,7 @@ kubectl logs -n rider-fleet deploy/rider-fleet-service --tail=200 | grep "assign
 
 # Check if some riders are offline
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/v1/admin/rider-connectivity | jq '.offline_riders'
+  curl -s http://localhost:8093/v1/admin/rider-connectivity | jq '.offline_riders'
 ```
 
 **Resolution**:
@@ -218,11 +218,11 @@ kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
 ```bash
 # Check active rider count
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/active-riders-count | jq '.value'
+  curl -s http://localhost:8093/metrics/active-riders-count | jq '.value'
 
 # Check rider status distribution
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/v1/admin/rider-status-distribution | jq '.statuses'
+  curl -s http://localhost:8093/v1/admin/rider-status-distribution | jq '.statuses'
 
 # If 0 riders: Check if rider app is having issues
 # Check Kafka rider.status topic for heartbeats
@@ -235,16 +235,16 @@ kubectl rollout restart deploy/rider-fleet-service -n rider-fleet
 ```bash
 # Check location update freshness
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/location-update-staleness | jq '.value'
+  curl -s http://localhost:8093/metrics/location-update-staleness | jq '.value'
 
 # If > 60 seconds:
 # 1. Check if riders are sending updates
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/v1/admin/location-update-rate | jq '.updates_per_sec'
+  curl -s http://localhost:8093/v1/admin/location-update-rate | jq '.updates_per_sec'
 
 # 2. Check Kafka topic
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/v1/admin/kafka-consumer-lag | jq '.lag'
+  curl -s http://localhost:8093/v1/admin/kafka-consumer-lag | jq '.lag'
 
 # 3. Restart consumer if stuck
 kubectl rollout restart deploy/rider-fleet-service -n rider-fleet
@@ -255,11 +255,11 @@ kubectl rollout restart deploy/rider-fleet-service -n rider-fleet
 ```bash
 # Check consistency
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/v1/admin/location-cache-consistency | jq '.status'
+  curl -s http://localhost:8093/v1/admin/location-cache-consistency | jq '.status'
 
 # If inconsistent, rebuild:
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -X POST http://localhost:8087/v1/admin/rebuild-location-cache \
+  curl -X POST http://localhost:8093/v1/admin/rebuild-location-cache \
   -H "Authorization: Bearer admin-token" | jq '.status'
 
 # Monitor rebuild
@@ -271,7 +271,7 @@ kubectl logs -n rider-fleet deploy/rider-fleet-service | grep "rebuild"
 ```bash
 # Check rider notification delivery
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/notification-delivery-rate | jq '.value'
+  curl -s http://localhost:8093/metrics/notification-delivery-rate | jq '.value'
 
 # Check push notification service connectivity
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
@@ -295,7 +295,7 @@ kubectl rollout status deploy/rider-fleet-service -n rider-fleet --timeout=5m
 
 # 3. Verify riders still online
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -s http://localhost:8087/metrics/active-riders-count
+  curl -s http://localhost:8093/metrics/active-riders-count
 ```
 
 ---
@@ -345,9 +345,9 @@ rider_location_update_staleness_seconds
 
 ## On-Call Handoff
 
-- [ ] Active rider count? `kubectl exec -n rider-fleet deploy/rider-fleet-service -- curl -s http://localhost:8087/metrics/active-riders-count`
-- [ ] Any offline riders? `kubectl exec -n rider-fleet deploy/rider-fleet-service -- curl -s http://localhost:8087/v1/admin/rider-connectivity`
-- [ ] Kafka consumer lag? `kubectl exec -n rider-fleet deploy/rider-fleet-service -- curl -s http://localhost:8087/metrics/kafka-consumer-lag`
+- [ ] Active rider count? `kubectl exec -n rider-fleet deploy/rider-fleet-service -- curl -s http://localhost:8093/metrics/active-riders-count`
+- [ ] Any offline riders? `kubectl exec -n rider-fleet deploy/rider-fleet-service -- curl -s http://localhost:8093/v1/admin/rider-connectivity`
+- [ ] Kafka consumer lag? `kubectl exec -n rider-fleet deploy/rider-fleet-service -- curl -s http://localhost:8093/metrics/kafka-consumer-lag`
 
 ---
 

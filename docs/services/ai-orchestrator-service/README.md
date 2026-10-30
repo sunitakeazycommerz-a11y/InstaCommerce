@@ -5,8 +5,8 @@
 The AI orchestrator service is the central hub for AI/ML model selection, request routing, and batch optimization in InstaCommerce. It manages the lifecycle of AI inference requests, routes them to appropriate specialized models (ranking, recommendation, fraud detection), implements intelligent batching for cost optimization, and provides fallback mechanisms for reliability.
 
 **Service Ownership**: AI Platform Team - Model Orchestration
-**Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8089
+**Language**: Python 3.11+ / FastAPI / LangGraph
+**Default Port**: 8100
 **Status**: Tier 1 Critical (AI-driven business logic)
 
 ## SLOs & Availability
@@ -98,18 +98,15 @@ Output:
 ## Endpoints
 
 ### Public (Unauthenticated)
-- `GET /actuator/health` - Liveness probe
-- `GET /actuator/metrics` - Prometheus metrics
-- `GET /ai/health` - AI orchestrator health (unprotected)
-- `GET /ai/metrics` - Orchestration metrics (unprotected)
+- `GET /health` - Health check
+- `GET /health/ready` - Readiness probe
+- `GET /health/live` - Liveness probe
+- `GET /metrics` - Prometheus metrics
 
-### Internal API (Requires X-Internal-Token)
-- `POST /api/v1/infer` - Synchronous inference request
-- `POST /api/v1/infer/batch` - Batch inference requests (for operational dashboards)
-- `GET /api/v1/models/status` - Available models and their status
-- `GET /api/v1/requests/{requestId}/status` - Check async request status
-- `POST /api/v1/requests/{requestId}/cancel` - Cancel pending request
-- `GET /api/v1/metrics/deduplication` - Cache hit rate and deduplication efficiency
+### AI Agent Endpoints
+- `POST /agent/assist` - Customer support AI assist workflow
+- `POST /agent/substitute` - Out-of-stock item substitution recommendation
+- `POST /agent/recommend` - Personalized basket and cart recommendations
 
 ### Example Requests
 

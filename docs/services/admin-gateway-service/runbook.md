@@ -20,7 +20,7 @@ kubectl logs -n admin deploy/admin-gateway-service | grep "TOKEN_INVALID\|audien
 kubectl get pods -n admin -l app=admin-gateway-service
 
 # Check identity-service JWKS endpoint
-kubectl exec -n identity deploy/identity-service -- curl -s http://localhost:8080/jwt/jwks | jq .
+kubectl exec -n identity deploy/identity-service -- curl -s http://localhost:8099/jwt/jwks | jq .
 
 # Verify clock sync between services
 kubectl exec -n admin deploy/admin-gateway-service -- date -u

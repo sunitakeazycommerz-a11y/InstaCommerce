@@ -1,115 +1,79 @@
-# Location Ingestion Service Runbook
+# Location Ingestion Service - Operational Runbook
+
+## Service Metadata
+- **Module Path:** `services/location-ingestion-service`
+- **Canonical Port:** `8105` (API, Health, and Metrics)
+- **Readiness Probe:** `http://localhost:8105/health/ready`
+- **Liveness Probe:** `http://localhost:8105/health/live`
+- **Metrics Endpoint:** `http://localhost:8105/metrics`
+- **Local Startup:** `cd services/location-ingestion-service && go run main.go`
+- **State Ownership:** Ephemeral Redis H3 spatial indexing and Kafka producer to `rider.location.updates`.
+
+---
 
 ## Pre-Deployment Verification Checklist
 
-- [ ] Verify location-db (PostgreSQL/TimescaleDB for time-series)
+- [ ] Check Redis connectivity (spatial indexing)
   ```bash
-  kubectl exec -n data deploy/location-ingestion-service -- \
-    curl -s http://localhost:8113/actuator/health/db | jq '.components.db.status'
+  kubectl exec -n instacommerce deploy/location-ingestion-service -- \
+    curl -s http://localhost:8105/health/ready
   ```
 
-- [ ] Check Redis GEO connectivity (location indexing)
+- [ ] Verify Kafka broker reachability (`rider.location.updates` topic)
   ```bash
-  kubectl exec -n data deploy/location-ingestion-service -- \
-    curl -s http://localhost:8113/actuator/health | jq '.components.redis'
-  ```
-
-- [ ] Verify Kafka connectivity (rider.location topic)
-  ```bash
-  kubectl exec -n data deploy/location-ingestion-service -- \
-    curl -s http://localhost:8113/actuator/health | jq '.components.kafka'
+  kubectl exec -n instacommerce deploy/location-ingestion-service -- \
+    curl -s http://localhost:8105/health/ready | jq '.details.kafka'
   ```
 
 ---
 
 ## Deployment Procedures
 
-### Pre-Deployment Baseline
-
+### Baseline Verification
 ```bash
-# Consumer lag (should be <5 seconds for real-time tracking)
-kubectl exec -n data deploy/location-ingestion-service -- \
-  curl -s http://localhost:8113/metrics/kafka-consumer-lag | jq '.value'
+# Check location ingestion rate and dropped updates
+curl -s http://localhost:8105/metrics | grep -E "location_ingestion_updates_total|location_ingestion_drop_total"
 
-# Location ingestion rate (events/sec)
-kubectl exec -n data deploy/location-ingestion-service -- \
-  curl -s http://localhost:8113/metrics/ingestion-rate-events-per-sec | jq '.value'
+# Check processing duration
+curl -s http://localhost:8105/metrics | grep location_ingestion_duration_seconds
 ```
 
-### Blue-Green Deployment
-
+### Canary Rollout
 ```bash
-helm upgrade location-ingestion-service deploy/helm/location-ingestion-service -n data
-kubectl rollout status deploy/location-ingestion-service -n data --timeout=10m
+helm upgrade location-ingestion-service deploy/helm/ -n instacommerce
+kubectl rollout status deploy/location-ingestion-service -n instacommerce --timeout=5m
 
-# Verify consumer lag recovered
-kubectl exec -n data deploy/location-ingestion-service -- \
-  curl -s http://localhost:8113/metrics/kafka-consumer-lag | jq '.value'
+# Verify readiness after rollout
+curl -s http://localhost:8105/health/ready | jq .
 ```
 
 ---
 
-## Incident Response Procedures
+## Common Incidents and Triage
 
-### P0 - Location Tracking Down
-
-**Symptom**: Rider locations not updating, real-time dispatch not working
-
-**Diagnosis**:
+### 1. High Ingestion Drop Rate
+**Symptoms:** `location_ingestion_drop_total` metric increases. Riders report stale location tracking.
+**Diagnosis:**
 ```bash
-kubectl get pods -n data -l app=location-ingestion-service
-kubectl logs -n data deploy/location-ingestion-service --tail=100
-kubectl exec -n data deploy/location-ingestion-service -- \
-  curl -s http://localhost:8113/metrics/kafka-consumer-lag | jq '.value'
+# Check drop metrics broken down by reason (rate_limit, invalid, stale, redis, kafka)
+curl -s http://localhost:8105/metrics | grep location_ingestion_drop_total
+
+# Inspect application logs
+kubectl logs -n instacommerce deploy/location-ingestion-service --tail=100 | grep -i "drop\|error\|stale"
 ```
+**Resolution:**
+1. If dropped due to `rate_limit`: check if rider mobile app GPS ping frequency exceeds configured threshold (`LOCATION_RATE_LIMIT_RIDER`).
+2. If dropped due to `stale`: check for clock skew on rider mobile devices or delayed cellular data transmission.
+3. If dropped due to `kafka buffer full`: scale pod replicas or increase `KAFKA_BUFFER` buffer size.
 
-**Resolution**:
-1. Restart: `kubectl rollout restart deploy/location-ingestion-service -n data`
-2. Scale up: `kubectl scale deploy location-ingestion-service -n data --replicas=5`
-3. Check Kafka connectivity
-
-### P1 - Location Lag High (>30 seconds)
-
-**Diagnosis**:
+### 2. Redis Connection Saturation
+**Symptoms:** Readiness probe fails with Redis error.
+**Diagnosis:**
 ```bash
-# Check lag trend
-kubectl exec -n data deploy/location-ingestion-service -- \
-  curl -s http://localhost:8113/metrics/kafka-consumer-lag | jq '.value'
-
-# Check ingestion rate
-kubectl exec -n data deploy/location-ingestion-service -- \
-  curl -s http://localhost:8113/metrics/ingestion-rate-events-per-sec | jq '.value'
+# Verify Redis ping and connection count
+redis-cli -h redis INFO clients
+redis-cli -h redis INFO memory
 ```
-
-**Resolution**:
-1. Scale up: `kubectl scale deploy location-ingestion-service -n data --replicas=5`
-2. Increase consumer concurrency
-
----
-
-## Monitoring & Alerting
-
-### Key Metrics
-
-```
-# Location ingestion lag
-location_ingestion_lag_seconds
-
-# Ingestion rate
-location_ingestion_rate_events_per_sec
-
-# GEO index freshness
-location_geo_index_age_seconds
-```
-
----
-
-## On-Call Handoff
-
-- [ ] Consumer lag? `kubectl exec -n data deploy/location-ingestion-service -- curl -s http://localhost:8113/metrics/kafka-consumer-lag`
-
----
-
-## Related Documentation
-
-- **Deployment**: `/deploy/helm/location-ingestion-service/`
+**Resolution:**
+1. Check Redis memory pressure. Ensure H3 index keys expire according to configured `REDIS_TTL` (default 30 seconds).
+2. Increase Redis client pool size if required.

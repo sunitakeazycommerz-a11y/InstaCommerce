@@ -450,7 +450,7 @@ All events are written to `outbox_events` with `Propagation.MANDATORY` (requires
 
 ## 6. Database Schema
 
-Eight Flyway migrations (`V1` through `V8`) define the schema. `hibernate.ddl-auto: validate` ensures Hibernate never alters the schema — Flyway is the only authority.
+Fourteen Flyway migrations (`V1` through `V14`) define the schema. `hibernate.ddl-auto: validate` ensures Hibernate never alters the schema — Flyway is the only authority.
 
 ```mermaid
 erDiagram
@@ -460,8 +460,53 @@ erDiagram
         VARCHAR50 store_id "UNIQUE(product_id, store_id)"
         INT on_hand "CHECK >= 0"
         INT reserved "CHECK >= 0, <= on_hand"
+        BOOLEAN is_frozen "default false"
         TIMESTAMPTZ updated_at
         BIGINT version
+    }
+
+    stock_batches {
+        UUID id PK
+        UUID store_id
+        UUID product_id
+        VARCHAR64 batch_number "UNIQUE(store_id, product_id, batch_number)"
+        INT quantity
+        TIMESTAMPTZ expiry_date
+        BOOLEAN is_discounted
+        INT discount_percent
+        TIMESTAMPTZ markdown_triggered_at
+    }
+
+    sku_safety_stock_buffers {
+        UUID id PK
+        UUID store_id "UNIQUE(store_id, product_id)"
+        UUID product_id "UNIQUE(store_id, product_id)"
+        NUMERIC z_score
+        NUMERIC std_dev_demand
+        INT lead_time_days
+        INT calculated_safety_stock
+        INT reorder_threshold
+    }
+
+    inbound_asns {
+        UUID id PK
+        VARCHAR64 asn_number "UNIQUE"
+        VARCHAR64 purchase_order_id
+        VARCHAR64 vendor_id
+        UUID store_id
+        VARCHAR128 pallet_barcode "UNIQUE"
+        VARCHAR32 status
+        TIMESTAMPTZ received_at
+    }
+
+    asn_line_items {
+        UUID id PK
+        UUID asn_id FK
+        UUID product_id
+        INT expected_quantity
+        INT received_quantity
+        VARCHAR64 batch_number
+        TIMESTAMPTZ expiry_date
     }
 
     reservations {
@@ -523,6 +568,7 @@ erDiagram
     }
 
     reservations ||--o{ reservation_line_items : "has"
+    inbound_asns ||--o{ asn_line_items : "has"
 ```
 
 **Key constraints and indexes:**
@@ -531,11 +577,15 @@ erDiagram
 |---|---|---|
 | `stock_items` | `UNIQUE (product_id, store_id)` | One stock record per SKU per store |
 | `stock_items` | `CHECK (on_hand >= 0)`, `CHECK (reserved >= 0)`, `CHECK (reserved <= on_hand)` | Invariant safety net |
+| `stock_batches` | `UNIQUE (store_id, product_id, batch_number)`, index on `(expiry_date, is_discounted)` | Expiration tracking & liquidation markdown |
+| `sku_safety_stock_buffers` | `UNIQUE (store_id, product_id)` | Dynamic safety stock calculation |
+| `inbound_asns` | `UNIQUE (asn_number)`, `UNIQUE (pallet_barcode)` | Inbound pallet receiving |
+| `asn_line_items` | FK → `inbound_asns` `ON DELETE CASCADE` | Line items per ASN |
 | `reservations` | `UNIQUE (idempotency_key)` | Deduplication |
 | `reservations` | Partial index on `status = 'PENDING'` (status, expires_at) | Fast expiry queries |
 | `reservation_line_items` | FK → `reservations` `ON DELETE CASCADE`, `CHECK (quantity > 0)` | Referential integrity |
 | `stock_adjustment_log` | `idx_adj_product_store`, `idx_adj_created_at`, partial index on `reference_id` | Query performance (V8) |
-| `outbox_events` | Partial index on `sent = false` by `created_at` | CDC poll efficiency |
+| `outbox_events` | Partial index on `sent = false` by `created_at` (V6/V14) | CDC poll and cleanup efficiency |
 | `audit_log` | Indexes on `user_id`, `action`, `created_at` | Audit query performance |
 
 ---

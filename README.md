@@ -325,6 +325,7 @@ graph TB
         c8c["stream-processor-service<br/>Go · enrichment/aggregation"]
         c8d["payment-webhook-service<br/>Go · idempotent receiver"]
         c8e["reconciliation-engine<br/>Go · settlement → BigQuery"]
+        c8f["reverse-etl-orchestrator<br/>Go · BigQuery → Redis/PG"]
     end
 
     subgraph C9["Cluster 9 — AI & ML"]
@@ -381,7 +382,8 @@ Status reflects checked-in implementation, not design intent.
 | 27 | dispatch-optimizer-service | Go | `services/dispatch-optimizer-service` | ✅ Active |
 | 28 | stream-processor-service | Go | `services/stream-processor-service` | ✅ Active |
 | 29 | reconciliation-engine | Go | `services/reconciliation-engine` | ✅ Active |
-| 30 | go-shared | Go | `services/go-shared` | Shared library |
+| 30 | reverse-etl-orchestrator | Go | `services/reverse-etl-orchestrator` | ✅ Active |
+| 31 | go-shared | Go | `services/go-shared` | Shared library |
 
 > **Go deploy-name mapping:** Some Go modules have different Helm/deploy keys.
 > Current CI mappings: `cdc-consumer-service` → `cdc-consumer`,

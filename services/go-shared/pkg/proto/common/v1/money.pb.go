@@ -21,10 +21,12 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Money represents a monetary amount with an explicit ISO-4217 currency code.
+// Callers must provide a valid 3-letter ISO-4217 currency code (e.g., "INR", "USD").
 type Money struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AmountMinor   int64                  `protobuf:"varint,1,opt,name=amount_minor,json=amountMinor,proto3" json:"amount_minor,omitempty"`
-	Currency      string                 `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"`
+	Currency      string                 `protobuf:"bytes,2,opt,name=currency,proto3" json:"currency,omitempty"` // Mandatory ISO-4217 currency code (e.g. "INR", "USD")
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

@@ -413,6 +413,24 @@ for later replay.
 
 ---
 
+### Path C — Reverse ETL Pipeline (`reverse-etl-orchestrator`)
+
+While Paths A and B ingest operational events into the analytical lakehouse, **Path C** activates analytical models and aggregates by syncing them back into operational datastores:
+
+```mermaid
+flowchart LR
+    BQ[BigQuery Analytical Marts<br/>mart_customers · mart_product_performance] -->|Scheduled Query / Partition Window| RETL[reverse-etl-orchestrator<br/>Go · Worker Pool Concurrency=10]
+    RETL -->|HSET / Pipeline Batches| REDIS[Redis Operational Cache<br/>Personalization & Dynamic Pricing]
+    RETL -->|Idempotent Upsert| PG[PostgreSQL Domain DBs<br/>Customer Tiers & Store Ratings]
+    RETL -->|Audit Events| KAFKA[reconciliation.events]
+```
+
+- **Runtime:** Go 1.25 microservice listening on Port `8109` (REST API), `8110` (Health), and `9090` (Prometheus metrics).
+- **Execution:** Automated scheduled sync cycles with backpressure handling, BigQuery quota protection, and Redis batch pipelining.
+- **Failures & Observability:** Emits sync summaries and alerts when BigQuery extraction latency or sink failure rate exceeds error budgets.
+
+---
+
 ## 5. ML Data Pipeline
 
 The ML platform spans offline training and online serving, connected by a centralized

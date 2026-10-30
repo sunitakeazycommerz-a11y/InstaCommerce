@@ -5,25 +5,25 @@
 - [ ] Verify pricing-db (PostgreSQL) is accessible
   ```bash
   kubectl exec -n engagement deploy/pricing-service -- \
-    curl -s http://localhost:8112/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8089/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check Redis cache for pricing rules
   ```bash
   kubectl exec -n engagement deploy/pricing-service -- \
-    curl -s http://localhost:8112/actuator/health | jq '.components.redis'
+    curl -s http://localhost:8089/actuator/health | jq '.components.redis'
   ```
 
 - [ ] Verify Kafka connectivity (pricing.events topic)
   ```bash
   kubectl exec -n engagement deploy/pricing-service -- \
-    curl -s http://localhost:8112/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8089/actuator/health | jq '.components.kafka'
   ```
 
 - [ ] Check pricing rules engine loaded
   ```bash
   kubectl exec -n engagement deploy/pricing-service -- \
-    curl -s http://localhost:8112/metrics/pricing-rules-count | jq '.value'
+    curl -s http://localhost:8089/metrics/pricing-rules-count | jq '.value'
   ```
 
 ---
@@ -35,11 +35,11 @@
 ```bash
 # Pricing calculation latency (p99 should be <50ms)
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -s http://localhost:8112/metrics/pricing-calculation-latency-p99 | jq '.value'
+  curl -s http://localhost:8089/metrics/pricing-calculation-latency-p99 | jq '.value'
 
 # Cache hit rate (should be 95%+)
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -s http://localhost:8112/metrics/cache-hit-rate | jq '.value'
+  curl -s http://localhost:8089/metrics/cache-hit-rate | jq '.value'
 ```
 
 ### Blue-Green Deployment
@@ -50,7 +50,7 @@ kubectl rollout status deploy/pricing-service -n engagement --timeout=10m
 
 # Verify pricing accuracy still OK
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -s http://localhost:8112/metrics/pricing-accuracy-rate | jq '.value'
+  curl -s http://localhost:8089/metrics/pricing-accuracy-rate | jq '.value'
 ```
 
 ---
@@ -74,7 +74,7 @@ kubectl exec -n engagement deploy/pricing-service -- \
 kubectl get pods -n engagement -l app=pricing-service
 kubectl logs -n engagement deploy/pricing-service --tail=100
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -s http://localhost:8112/actuator/health | jq '.'
+  curl -s http://localhost:8089/actuator/health | jq '.'
 ```
 
 **Resolution**:
@@ -87,11 +87,11 @@ kubectl exec -n engagement deploy/pricing-service -- \
 ```bash
 # Check if rules loaded correctly
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -s http://localhost:8112/v1/admin/rules-validation | jq '.errors'
+  curl -s http://localhost:8089/v1/admin/rules-validation | jq '.errors'
 
 # Test pricing calculation
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -s http://localhost:8112/v1/calculate \
+  curl -s http://localhost:8089/v1/calculate \
   -H "Content-Type: application/json" \
   -d '{"itemId":"test","quantity":1}'
 ```
@@ -109,11 +109,11 @@ kubectl exec -n engagement deploy/pricing-service -- \
 ```bash
 # Check rule sync lag
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -s http://localhost:8112/metrics/rule-sync-lag | jq '.value'
+  curl -s http://localhost:8089/metrics/rule-sync-lag | jq '.value'
 
 # Force rule refresh
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -X POST http://localhost:8112/v1/admin/refresh-rules \
+  curl -X POST http://localhost:8089/v1/admin/refresh-rules \
   -H "Authorization: Bearer admin-token" | jq '.status'
 ```
 
@@ -122,7 +122,7 @@ kubectl exec -n engagement deploy/pricing-service -- \
 ```bash
 # Verify tax rules
 kubectl exec -n engagement deploy/pricing-service -- \
-  curl -s http://localhost:8112/v1/admin/tax-rules | jq '.rules'
+  curl -s http://localhost:8089/v1/admin/tax-rules | jq '.rules'
 
 # Test calculation
 curl -s http://pricing-service:8112/v1/calculate/tax \
@@ -147,8 +147,8 @@ histogram_quantile(0.99, rate(pricing_calculation_seconds_bucket[5m]))
 
 ## On-Call Handoff
 
-- [ ] Pricing accuracy rate? `kubectl exec -n engagement deploy/pricing-service -- curl -s http://localhost:8112/metrics/pricing-accuracy-rate`
-- [ ] Rule sync lag? `kubectl exec -n engagement deploy/pricing-service -- curl -s http://localhost:8112/metrics/rule-sync-lag`
+- [ ] Pricing accuracy rate? `kubectl exec -n engagement deploy/pricing-service -- curl -s http://localhost:8089/metrics/pricing-accuracy-rate`
+- [ ] Rule sync lag? `kubectl exec -n engagement deploy/pricing-service -- curl -s http://localhost:8089/metrics/rule-sync-lag`
 
 ---
 

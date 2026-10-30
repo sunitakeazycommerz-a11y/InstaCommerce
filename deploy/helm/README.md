@@ -11,7 +11,11 @@ deploy/helm/
 ├── Chart.yaml                   # Chart metadata (instacommerce v0.1.0)
 ├── values.yaml                  # Base values (all services, Istio, PDB, quotas)
 ├── values-dev.yaml              # Dev environment overrides
+├── values-staging.yaml          # Staging environment overrides
 ├── values-prod.yaml             # Production environment overrides
+├── values-canary-sf.yaml        # San Francisco dark-store pilot canary
+├── values-canary-seattle.yaml   # Seattle 10% gated canary
+├── values-canary-austin.yaml    # Austin staged traffic ramp canary
 │
 └── templates/
     ├── _helpers.tpl             # Template helper functions
@@ -19,10 +23,15 @@ deploy/helm/
     ├── service.yaml             # ClusterIP Service per service
     ├── serviceaccount.yaml      # ServiceAccount per service
     ├── hpa.yaml                 # HorizontalPodAutoscaler
-    ├── pdb.yaml                 # PodDisruptionBudget
+    ├── vpa.yaml                 # VerticalPodAutoscaler (recommendation mode)
+    ├── pdb.yaml                 # PodDisruptionBudget (maxUnavailable: 1)
     ├── ingress.yaml             # Ingress (disabled, Istio used instead)
-    ├── network-policy.yaml      # NetworkPolicy rules
+    ├── network-policy.yaml      # NetworkPolicy ingress whitelist rules
     ├── resource-quota.yaml      # Namespace ResourceQuota
+    │
+    ├── observability/           # Cluster-wide observability
+    │   ├── ebpf-network-profiler.yaml # Beyla eBPF network telemetry DaemonSet
+    │   └── otel-collector.yaml        # OpenTelemetry Collector with Tail Sampling
     │
     └── istio/                   # Istio service mesh configuration
         ├── gateway.yaml         # Istio Gateway (TLS termination)
@@ -31,6 +40,8 @@ deploy/helm/
         ├── peer-authentication.yaml # mTLS enforcement
         ├── request-authentication.yaml # JWT validation
         ├── authorization-policy.yaml # Service-to-service AuthZ
+        ├── deny-default.yaml    # Zero-trust default-deny AuthorizationPolicy
+        ├── service-allow-policies.yaml # Explicit principal ALLOW rules
         └── security-headers.yaml # Security header injection
 ```
 
@@ -58,45 +69,53 @@ flowchart TB
 ```
 
 | Layer | File | Purpose |
-|-------|------|---------|
+|---|---|---|
 | **Base** | `values.yaml` | All service definitions, resource requests/limits, HPA configs, Istio rules, network policies |
 | **Dev** | `values-dev.yaml` | Dev image registry (`dev-images`), `tag: dev` for all services |
-| **Prod** | `values-prod.yaml` | Prod image registry (`prod-images`), `tag: prod`, higher replica counts (3), prod Redis hosts |
+| **Staging** | `values-staging.yaml` | Staging cluster overrides (`instacommerce-staging`, single-replica baseline) |
+| **Prod** | `values-prod.yaml` | Prod image registry (`prod-images`), `tag: prod`, higher replica counts, prod Redis/Kafka hosts |
+| **Canary SF** | `values-canary-sf.yaml` | Phase 2 W1 Dark store pilot (100% traffic, us-west-1) |
+| **Canary Seattle** | `values-canary-seattle.yaml` | Phase 2 W2 Gated canary (10% traffic, us-west-2) |
+| **Canary Austin** | `values-canary-austin.yaml` | Phase 2 W3 Multi-step gated rollout (5% → 100%, us-central-1) |
 
 ---
 
 ## Service Port Mapping
 
-| Service | Port | Replicas (Base) | Replicas (Prod) | CPU Request | Memory Request |
-|---------|------|----------------|-----------------|-------------|---------------|
-| `identity-service` | 8080 | 2 | 3 | 500m | 768Mi |
-| `catalog-service` | 8080 | 2 | 3 | 250m | 384Mi |
-| `inventory-service` | 8080 | 2 | 3 | 500m | 512Mi |
-| `order-service` | 8080 | 2 | 3 | 500m | 768Mi |
-| `payment-service` | 8080 | 2 | 3 | 500m | 768Mi |
-| `fulfillment-service` | 8080 | 2 | 3 | 500m | 512Mi |
-| `notification-service` | 8080 | 2 | 2 | 200m | 256Mi |
-| `search-service` | 8086 | 2 | 2 | 500m | 512Mi |
-| `pricing-service` | 8087 | 2 | 2 | 500m | 512Mi |
-| `cart-service` | 8088 | 2 | 2 | 500m | 512Mi |
-| `checkout-orchestrator-service` | 8089 | 2 | 2 | 500m | 768Mi |
-| `ai-orchestrator-service` | 8100 | 2 | 2 | 500m | 768Mi |
-| `ai-inference-service` | 8101 | 2 | 2 | 750m | 1024Mi |
-| `dispatch-optimizer-service` | 8102 | 2 | 2 | 500m | 512Mi |
-| `outbox-relay` | 8103 | 2 | 2 | 500m | 512Mi |
-| `cdc-consumer` | 8104 | 2 | 2 | 500m | 512Mi |
-| `location-ingestion` | 8105 | 2 | 2 | 500m | 512Mi |
-| `payment-webhook` | 8106 | 2 | 2 | 500m | 512Mi |
-| `reconciliation-engine` | 8107 | 2 | 2 | 500m | 512Mi |
-| `warehouse-service` | 8090 | 2 | 2 | 250m | 384Mi |
-| `rider-fleet-service` | 8091 | 2 | 2 | 250m | 384Mi |
-| `routing-eta-service` | 8092 | 2 | 2 | 250m | 384Mi |
-| `wallet-loyalty-service` | 8093 | 2 | 2 | 250m | 384Mi |
-| `audit-trail-service` | 8094 | 2 | 2 | 200m | 256Mi |
-| `fraud-detection-service` | 8095 | 2 | 2 | 250m | 384Mi |
-| `config-feature-flag-service` | 8096 | 2 | 2 | 200m | 256Mi |
-| `mobile-bff-service` | 8097 | 2 | 2 | 250m | 384Mi |
-| `admin-gateway-service` | 8099 | 2 | 2 | 250m | 384Mi |
+| Service Key in Values | Container Port | Canonical Host Port | Replicas (Base) | Replicas (Prod) | CPU Request | Memory Request |
+|---|---|---|---|---|---|---|
+| `mobile-bff-service` | 8080 | 8080 | 2 | 2 | 250m | 384Mi |
+| `identity-service` | 8081 | 8081 | 2 | 3 | 500m | 768Mi |
+| `catalog-service` | 8082 | 8082 | 2 | 3 | 250m | 384Mi |
+| `inventory-service` | 8083 | 8083 | 2 | 3 | 500m | 512Mi |
+| `order-service` | 8084 | 8084 | 2 | 3 | 500m | 768Mi |
+| `payment-service` | 8085 | 8085 | 2 | 3 | 500m | 768Mi |
+| `fulfillment-service` | 8086 | 8086 | 2 | 3 | 500m | 512Mi |
+| `notification-service` | 8087 | 8087 | 2 | 2 | 200m | 256Mi |
+| `search-service` | 8088 | 8088 | 2 | 2 | 500m | 512Mi |
+| `pricing-service` | 8089 | 8089 | 2 | 2 | 500m | 512Mi |
+| `cart-service` | 8090 | 8090 | 2 | 2 | 500m | 512Mi |
+| `checkout-orchestrator-service` | 8091 | 8091 | 2 | 2 | 500m | 768Mi |
+| `warehouse-service` | 8092 | 8092 | 2 | 2 | 250m | 384Mi |
+| `rider-fleet-service` | 8093 | 8093 | 2 | 2 | 250m | 384Mi |
+| `routing-eta-service` | 8094 | 8094 | 2 | 2 | 250m | 384Mi |
+| `wallet-loyalty-service` | 8095 | 8095 | 2 | 2 | 250m | 384Mi |
+| `audit-trail-service` | 8096 | 8096 | 2 | 2 | 200m | 256Mi |
+| `fraud-detection-service` | 8097 | 8097 | 2 | 2 | 250m | 384Mi |
+| `config-feature-flag-service` | 8098 | 8098 | 2 | 2 | 200m | 256Mi |
+| `admin-gateway-service` | 8099 | 8099 | 2 | 2 | 250m | 384Mi |
+| `ai-orchestrator-service` | 8100 | 8100 | 2 | 2 | 500m | 768Mi |
+| `ai-inference-service` | 8101 | 8101 | 2 | 2 | 750m | 1024Mi |
+| `dispatch-optimizer-service` | 8102 | 8102 | 2 | 2 | 500m | 512Mi |
+| `outbox-relay` | 8103 | 8103 | 2 | 2 | 500m | 512Mi |
+| `cdc-consumer` | 8104 | 8104 | 2 | 2 | 500m | 512Mi |
+| `location-ingestion` | 8105 | 8105 | 2 | 2 | 500m | 512Mi |
+| `payment-webhook` | 8106 | 8106 | 2 | 2 | 500m | 512Mi |
+| `reconciliation-engine` | 8107 | 8107 | 2 | 2 | 500m | 512Mi |
+| `stream-processor` | 8108 | 8108 | 1 | 2 | 500m | 512Mi |
+| `reverse-etl-orchestrator` | 8080 | 8109 | 2 | 2 | 500m | 512Mi |
+
+> **Note on Outbox Relays:** In addition to the base `outbox-relay` service, `values.yaml` supports dedicated per-domain relays (`outbox-relay-order`, `outbox-relay-payment`, `outbox-relay-cart`, `outbox-relay-fulfillment`) for high-throughput tenant isolation.
 
 ---
 

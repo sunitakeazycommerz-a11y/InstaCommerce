@@ -31,7 +31,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     slo_window: fast_burn
   annotations:
     summary: "Order service error rate > 10% in 5min (SLO breach - fast burn)"
-    runbook: "docs/runbooks/order-service-errors.md"
+    runbook: "docs/services/order-service/runbook.md"
 
 - alert: OrderServiceMediumBurn
   expr: |
@@ -47,7 +47,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     slo_window: medium_burn
   annotations:
     summary: "Order service error rate > 5% in 30min (SLO breach - medium burn)"
-    runbook: "docs/runbooks/order-service-errors.md"
+    runbook: "docs/services/order-service/runbook.md"
 
 - alert: OrderServiceSlowBurn
   expr: |
@@ -63,7 +63,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     slo_window: slow_burn
   annotations:
     summary: "Order service error rate > 1% in 6h (SLO review - slow burn)"
-    runbook: "docs/runbooks/order-service-errors.md"
+    runbook: "docs/services/order-service/runbook.md"
 ```
 
 #### Payment Service
@@ -82,7 +82,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     slo_window: fast_burn
   annotations:
     summary: "Payment service error rate > 10% in 5min (SLO breach - fast burn)"
-    runbook: "docs/runbooks/payment-service-errors.md"
+    runbook: "docs/services/payment-service/runbook.md"
     pagerduty_severity: critical
 
 - alert: PaymentServiceLatencyBreach
@@ -95,7 +95,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: payment-service
   annotations:
     summary: "Payment service p99 latency > 300ms (SLO breach)"
-    runbook: "docs/runbooks/payment-service-latency.md"
+    runbook: "docs/services/payment-service/runbook.md"
 
 - alert: PaymentWebhookDeliveryFailure
   expr: |
@@ -109,7 +109,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: payment-webhook-service
   annotations:
     summary: "Payment webhook delivery >1% failure rate (SLO breach)"
-    runbook: "docs/runbooks/payment-webhook-delivery.md"
+    runbook: "docs/services/payment-webhook-service/runbook.md"
     pagerduty_severity: critical
 ```
 
@@ -128,7 +128,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: checkout-orchestrator-service
   annotations:
     summary: "Checkout orchestrator error rate > 10% (SLO breach - fast burn)"
-    runbook: "docs/runbooks/checkout-orchestrator-errors.md"
+    runbook: "docs/services/checkout-orchestrator-service/runbook.md"
 
 - alert: CheckoutLatencyBreach
   expr: |
@@ -140,7 +140,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: checkout-orchestrator-service
   annotations:
     summary: "Checkout p99 latency > 2s (SLO breach)"
-    runbook: "docs/runbooks/checkout-orchestrator-latency.md"
+    runbook: "docs/services/checkout-orchestrator-service/runbook.md"
 ```
 
 ### Platform Services
@@ -157,7 +157,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: config-feature-flag-service
   annotations:
     summary: "Feature flag cache invalidation > 500ms p99 (SLO breach)"
-    runbook: "docs/runbooks/feature-flag-cache.md"
+    runbook: "docs/services/config-feature-flag-service/runbook.md"
 
 - alert: FeatureFlagServiceFastBurn
   expr: |
@@ -172,7 +172,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: config-feature-flag-service
   annotations:
     summary: "Feature flag service error rate > 10% (SLO breach)"
-    runbook: "docs/runbooks/feature-flag-service-errors.md"
+    runbook: "docs/services/config-feature-flag-service/runbook.md"
 
 - alert: FeatureFlagCacheMissRate
   expr: |
@@ -187,7 +187,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: config-feature-flag-service
   annotations:
     summary: "Feature flag cache miss rate > 5% (below target >95%)"
-    runbook: "docs/runbooks/feature-flag-cache.md"
+    runbook: "docs/services/config-feature-flag-service/runbook.md"
 ```
 
 #### Identity Service
@@ -205,7 +205,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: identity-service
   annotations:
     summary: "Identity service error rate > 10% (SLO breach - cascading impact)"
-    runbook: "docs/runbooks/identity-service-errors.md"
+    runbook: "docs/services/identity-service/runbook.md"
 
 - alert: JwtValidationLatency
   expr: |
@@ -217,7 +217,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: identity-service
   annotations:
     summary: "JWT validation latency > 100ms p99 (SLO breach)"
-    runbook: "docs/runbooks/jwt-validation-latency.md"
+    runbook: "docs/services/identity-service/runbook.md"
 ```
 
 #### Reconciliation Engine
@@ -230,7 +230,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: reconciliation-engine
   annotations:
     summary: "Reconciliation job failed (financial impact)"
-    runbook: "docs/runbooks/reconciliation-engine-failure.md"
+    runbook: "docs/services/reconciliation-engine/runbook.md"
 
 - alert: ReconciliationMismatchesDetected
   expr: reconciliation_mismatches_count > 0
@@ -240,7 +240,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: reconciliation-engine
   annotations:
     summary: "Reconciliation detected mismatches (requires review)"
-    runbook: "docs/runbooks/reconciliation-mismatches.md"
+    runbook: "docs/services/reconciliation-engine/runbook.md"
 
 - alert: ReconciliationAuditTrailAccuracy
   expr: reconciliation_audit_completeness_ratio < 1.0
@@ -250,7 +250,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: reconciliation-engine
   annotations:
     summary: "Reconciliation audit trail < 100% complete (compliance risk)"
-    runbook: "docs/runbooks/reconciliation-audit-trail.md"
+    runbook: "docs/services/reconciliation-engine/runbook.md"
 ```
 
 ### Read Path Services
@@ -270,7 +270,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: search-service
   annotations:
     summary: "Search service error rate > 10% (SLO breach)"
-    runbook: "docs/runbooks/search-service-errors.md"
+    runbook: "docs/services/search-service/runbook.md"
 
 - alert: SearchIndexStaleness
   expr: (time() - elasticsearch_indices_last_indexed_timestamp{index="products"}) / 60 > 5
@@ -280,7 +280,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: search-service
   annotations:
     summary: "Search index > 5min stale (SLO breach)"
-    runbook: "docs/runbooks/search-index-staleness.md"
+    runbook: "docs/services/search-service/runbook.md"
 ```
 
 #### Catalog Service
@@ -298,7 +298,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: catalog-service
   annotations:
     summary: "Catalog service error rate > 10% (SLO breach)"
-    runbook: "docs/runbooks/catalog-service-errors.md"
+    runbook: "docs/services/catalog-service/runbook.md"
 ```
 
 ### Logistics Services
@@ -318,7 +318,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: fulfillment-service
   annotations:
     summary: "Fulfillment service error rate > 10% (SLO breach)"
-    runbook: "docs/runbooks/fulfillment-service-errors.md"
+    runbook: "docs/services/fulfillment-service/runbook.md"
 
 - alert: FulfillmentAssignmentFailureRate
   expr: |
@@ -332,7 +332,7 @@ Error rate measured as: `rate(http_requests_total{status=~"5.."}[window]) / rate
     service: fulfillment-service
   annotations:
     summary: "Fulfillment assignment failure rate > 5% (SLO breach)"
-    runbook: "docs/runbooks/fulfillment-assignment-failures.md"
+    runbook: "docs/services/fulfillment-service/runbook.md"
 ```
 
 ## Common Alert Annotations
@@ -341,7 +341,7 @@ All alerts should include:
 ```yaml
 annotations:
   summary: "Brief description of SLO breach"
-  runbook: "Link to docs/runbooks/{service}-{issue}.md"
+  runbook: "Link to docs/services/{service-name}/runbook.md"
   pagerduty_severity: "critical|warning|info"
   dashboard: "Link to Grafana dashboard"
   context: "Business impact explanation"

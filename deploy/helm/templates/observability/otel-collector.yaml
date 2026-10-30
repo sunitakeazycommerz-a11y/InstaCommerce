@@ -1,4 +1,4 @@
-{{- if (default true (dig "observability" "otelCollector" "enabled" true .Values)) }}
+{{- if and .Values.observability .Values.observability.otelCollector .Values.observability.otelCollector.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

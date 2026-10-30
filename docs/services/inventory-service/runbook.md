@@ -5,13 +5,13 @@
 - [ ] Verify inventory-db (PostgreSQL) is up and migrations current
   ```bash
   kubectl exec -n inventory deploy/inventory-service -- \
-    curl -s http://localhost:8082/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8083/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Verify Redis cache is available (critical for high-throughput)
   ```bash
   kubectl exec -n inventory deploy/inventory-service -- \
-    curl -s http://localhost:8082/actuator/health | jq '.components.redis'
+    curl -s http://localhost:8083/actuator/health | jq '.components.redis'
   ```
 
 - [ ] Check order-service, checkout-orchestrator connectivity (synchronous dependencies)
@@ -30,7 +30,7 @@
 - [ ] Verify Kafka topic availability (inventory.reserved, inventory.released)
   ```bash
   kubectl exec -n inventory deploy/inventory-service -- \
-    curl -s http://localhost:8082/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8083/actuator/health | jq '.components.kafka'
   ```
 
 ---
@@ -42,11 +42,11 @@
 ```bash
 # Cache hit rate (typically 70-90%)
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/metrics/cache-hit-rate | jq '.value'
+  curl -s http://localhost:8083/metrics/cache-hit-rate | jq '.value'
 
 # Database query latency (p99 should be <50ms)
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/metrics/db-query-latency-p99 | jq '.value'
+  curl -s http://localhost:8083/metrics/db-query-latency-p99 | jq '.value'
 
 # Current replica count
 kubectl get deploy inventory-service -n inventory -o jsonpath='{.spec.replicas}'
@@ -70,7 +70,7 @@ kubectl rollout status deploy/inventory-service -n inventory --timeout=10m
 # 4. Verify cache is being used (should recover quickly to 70%+ hit rate)
 for i in {1..10}; do
   kubectl exec -n inventory deploy/inventory-service -- \
-    curl -s http://localhost:8082/metrics/cache-hit-rate | jq '.value'
+    curl -s http://localhost:8083/metrics/cache-hit-rate | jq '.value'
   sleep 10
 done
 ```
@@ -83,7 +83,7 @@ kubectl rollout status deploy/inventory-service -n inventory --timeout=5m
 
 # Verify cache recovered
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/metrics/cache-hit-rate | jq '.value'
+  curl -s http://localhost:8083/metrics/cache-hit-rate | jq '.value'
 ```
 
 ---
@@ -98,7 +98,7 @@ kubectl logs -n inventory deploy/inventory-service --tail=50 | head -20
 
 # Verify port listening
 kubectl exec -n inventory deploy/inventory-service -- \
-  netstat -tlnp | grep 8082
+  netstat -tlnp | grep 8083
 ```
 
 ### Endpoint Smoke Tests
@@ -108,16 +108,16 @@ POD=$(kubectl get pods -n inventory -l app=inventory-service -o jsonpath='{.item
 
 # 1. Health check
 kubectl exec -n inventory pod/$POD -- \
-  curl -s http://localhost:8082/actuator/health | jq '.status'
+  curl -s http://localhost:8083/actuator/health | jq '.status'
 
 # 2. Get SKU availability
 kubectl exec -n inventory pod/$POD -- \
-  curl -s http://localhost:8082/v1/skus/TEST-SKU-001/availability \
+  curl -s http://localhost:8083/v1/skus/TEST-SKU-001/availability \
   -H "Authorization: Bearer test-token" | jq '.available'
 
 # 3. Reserve inventory (test)
 kubectl exec -n inventory pod/$POD -- \
-  curl -X POST http://localhost:8082/v1/reservations \
+  curl -X POST http://localhost:8083/v1/reservations \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer test-token" \
   -d '{"orderId":"test-001","skuId":"TEST-SKU","quantity":1}' | jq '.reservationId'
@@ -128,11 +128,11 @@ kubectl exec -n inventory pod/$POD -- \
 ```bash
 # Database connectivity
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/actuator/health/db | jq '.components.db'
+  curl -s http://localhost:8083/actuator/health/db | jq '.components.db'
 
 # Redis cache connectivity
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/actuator/health | jq '.components.redis'
+  curl -s http://localhost:8083/actuator/health | jq '.components.redis'
 ```
 
 ---
@@ -145,7 +145,7 @@ Endpoint: `GET /actuator/health/live`
 
 ```bash
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/actuator/health/live | jq .
+  curl -s http://localhost:8083/actuator/health/live | jq .
 ```
 
 **Restart triggers**:
@@ -158,7 +158,7 @@ Endpoint: `GET /actuator/health/ready`
 
 ```bash
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/actuator/health/ready | jq .
+  curl -s http://localhost:8083/actuator/health/ready | jq .
 ```
 
 **Load balancer removal triggers**:
@@ -184,11 +184,11 @@ kubectl logs -n inventory deploy/inventory-service --tail=100 | grep -i "excepti
 
 # Check database connectivity
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/actuator/health/db | jq '.status'
+  curl -s http://localhost:8083/actuator/health/db | jq '.status'
 
 # Check Redis connectivity
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/actuator/health | jq '.components.redis'
+  curl -s http://localhost:8083/actuator/health | jq '.components.redis'
 
 # Check warehouse-service availability
 kubectl exec -n inventory deploy/inventory-service -- \
@@ -209,18 +209,18 @@ kubectl exec -n inventory deploy/inventory-service -- \
 ```bash
 # Check latency
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/metrics/reservation-latency-p99 | jq '.value'
+  curl -s http://localhost:8083/metrics/reservation-latency-p99 | jq '.value'
 
 # Check error rate
 kubectl logs -n inventory deploy/inventory-service --tail=200 | grep -i "error" | wc -l
 
 # Check cache hit rate (if low, database is struggling)
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/metrics/cache-hit-rate | jq '.value'
+  curl -s http://localhost:8083/metrics/cache-hit-rate | jq '.value'
 
 # Check database connection pool
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/actuator/metrics/hikaricp | jq '.measurements[] | select(.tags.pool | contains("idle"))'
+  curl -s http://localhost:8083/actuator/metrics/hikaricp | jq '.measurements[] | select(.tags.pool | contains("idle"))'
 ```
 
 **Resolution**:
@@ -240,7 +240,7 @@ kubectl logs -n inventory deploy/inventory-service | grep -i "cache.*invalidat"
 
 # Manual cache refresh
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -X POST http://localhost:8082/v1/admin/cache/rebuild \
+  curl -X POST http://localhost:8083/v1/admin/cache/rebuild \
   -H "Authorization: Bearer admin-token" | jq '.status'
 ```
 
@@ -278,7 +278,7 @@ kubectl set env deploy/inventory-service -n inventory \
 ```bash
 # Check cache size usage
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/metrics/cache-size | jq '.measurements'
+  curl -s http://localhost:8083/metrics/cache-size | jq '.measurements'
 
 # Increase cache size
 helm upgrade inventory-service deploy/helm/inventory-service \
@@ -295,7 +295,7 @@ kubectl rollout restart deploy/inventory-service -n inventory
 ```bash
 # Check for stuck transactions
 kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8082/v1/admin/locks | jq '.locked_skus'
+  curl -s http://localhost:8083/v1/admin/locks | jq '.locked_skus'
 
 # Generate thread dump if suspected deadlock
 kubectl exec -n inventory deploy/inventory-service -- \
@@ -403,9 +403,9 @@ histogram_quantile(0.95, rate(db_query_seconds_bucket{service="inventory"}[5m]))
 
 ## On-Call Handoff
 
-- [ ] Cache hit rate trending? `kubectl exec -n inventory deploy/inventory-service -- curl -s http://localhost:8082/metrics/cache-hit-rate`
+- [ ] Cache hit rate trending? `kubectl exec -n inventory deploy/inventory-service -- curl -s http://localhost:8083/metrics/cache-hit-rate`
 - [ ] Any warehouse-service issues affecting inventory? `kubectl logs -n warehouse deploy/warehouse-service --tail=20`
-- [ ] Reservation conflicts or deadlocks? `kubectl exec -n inventory deploy/inventory-service -- curl -s http://localhost:8082/v1/admin/locks`
+- [ ] Reservation conflicts or deadlocks? `kubectl exec -n inventory deploy/inventory-service -- curl -s http://localhost:8083/v1/admin/locks`
 - [ ] Memory usage stable? `kubectl top pod -n inventory`
 
 ---

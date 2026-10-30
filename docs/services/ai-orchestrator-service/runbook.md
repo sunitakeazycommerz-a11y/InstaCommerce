@@ -5,7 +5,7 @@
 - [ ] Verify ai-orchestrator-db (PostgreSQL for workflow state)
   ```bash
   kubectl exec -n ai deploy/ai-orchestrator-service -- \
-    curl -s http://localhost:8119/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8100/actuator/health/db | jq '.components.db.status'
   ```
 
 - [ ] Check AI inference service connectivity
@@ -17,13 +17,13 @@
 - [ ] Verify Kafka connectivity (orchestration events)
   ```bash
   kubectl exec -n ai deploy/ai-orchestrator-service -- \
-    curl -s http://localhost:8119/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8100/actuator/health | jq '.components.kafka'
   ```
 
 - [ ] Check external ML services connectivity (if any)
   ```bash
   kubectl exec -n ai deploy/ai-orchestrator-service -- \
-    curl -s http://localhost:8119/v1/admin/external-service-health | jq '.services'
+    curl -s http://localhost:8100/v1/admin/external-service-health | jq '.services'
   ```
 
 ---
@@ -35,11 +35,11 @@
 ```bash
 # Workflow execution latency (p99)
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/workflow-execution-latency-p99 | jq '.value'
+  curl -s http://localhost:8100/metrics/workflow-execution-latency-p99 | jq '.value'
 
 # Active workflows (should be within expected range)
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/active-workflows-count | jq '.value'
+  curl -s http://localhost:8100/metrics/active-workflows-count | jq '.value'
 
 # Current replica count
 kubectl get deploy ai-orchestrator-service -n ai -o jsonpath='{.spec.replicas}'
@@ -53,11 +53,11 @@ kubectl rollout status deploy/ai-orchestrator-service -n ai --timeout=10m
 
 # Verify active workflows resuming
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/active-workflows-count | jq '.value'
+  curl -s http://localhost:8100/metrics/active-workflows-count | jq '.value'
 
 # Verify execution latency maintained
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/workflow-execution-latency-p99 | jq '.value'
+  curl -s http://localhost:8100/metrics/workflow-execution-latency-p99 | jq '.value'
 ```
 
 ---
@@ -75,7 +75,7 @@ kubectl logs -n ai deploy/ai-orchestrator-service --tail=100 | grep -i "error\|e
 
 # Check database
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/actuator/health/db | jq '.status'
+  curl -s http://localhost:8100/actuator/health/db | jq '.status'
 
 # Check AI inference service connectivity
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
@@ -83,7 +83,7 @@ kubectl exec -n ai deploy/ai-orchestrator-service -- \
 
 # Check active workflows
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/active-workflows-count | jq '.value'
+  curl -s http://localhost:8100/metrics/active-workflows-count | jq '.value'
 ```
 
 **Resolution**:
@@ -97,15 +97,15 @@ kubectl exec -n ai deploy/ai-orchestrator-service -- \
 ```bash
 # Check latency
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/workflow-execution-latency-p99 | jq '.value'
+  curl -s http://localhost:8100/metrics/workflow-execution-latency-p99 | jq '.value'
 
 # Check AI inference latency
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/inference-service-latency-p99 | jq '.value'
+  curl -s http://localhost:8100/metrics/inference-service-latency-p99 | jq '.value'
 
 # Check workflow queue depth
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/workflow-queue-depth | jq '.value'
+  curl -s http://localhost:8100/metrics/workflow-queue-depth | jq '.value'
 ```
 
 **Resolution**:
@@ -119,17 +119,17 @@ kubectl exec -n ai deploy/ai-orchestrator-service -- \
 ```bash
 # Check failure rate
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/workflow-failure-rate | jq '.value'
+  curl -s http://localhost:8100/metrics/workflow-failure-rate | jq '.value'
 
 # Check failed workflows
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/v1/admin/failed-workflows?limit=10 | jq '.workflows'
+  curl -s http://localhost:8100/v1/admin/failed-workflows?limit=10 | jq '.workflows'
 ```
 
 **Resolution**:
 1. Analyze failure logs
 2. Check if dependent services are up
-3. Retry failed workflows: `kubectl exec deploy/ai-orchestrator-service -n ai -- curl -X POST http://localhost:8119/v1/admin/retry-failed`
+3. Retry failed workflows: `kubectl exec deploy/ai-orchestrator-service -n ai -- curl -X POST http://localhost:8100/v1/admin/retry-failed`
 
 ---
 
@@ -140,14 +140,14 @@ kubectl exec -n ai deploy/ai-orchestrator-service -- \
 ```bash
 # Check workflow status
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/v1/admin/workflows/WORKFLOW-ID | jq '.status'
+  curl -s http://localhost:8100/v1/admin/workflows/WORKFLOW-ID | jq '.status'
 
 # Check if waiting for AI inference
 kubectl logs -n ai deploy/ai-orchestrator-service | grep "WORKFLOW-ID"
 
 # Force workflow progress or timeout
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -X POST http://localhost:8119/v1/admin/workflows/WORKFLOW-ID/force-complete \
+  curl -X POST http://localhost:8100/v1/admin/workflows/WORKFLOW-ID/force-complete \
   -H "Authorization: Bearer admin-token" | jq '.status'
 ```
 
@@ -163,7 +163,7 @@ kubectl rollout restart deploy/ai-orchestrator-service -n ai
 
 # Or skip step and mark as deferred:
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -X POST http://localhost:8119/v1/admin/defer-inference-steps \
+  curl -X POST http://localhost:8100/v1/admin/defer-inference-steps \
   -H "Authorization: Bearer admin-token" | jq '.deferred_count'
 ```
 
@@ -175,7 +175,7 @@ kubectl top pod -n ai -l app=ai-orchestrator-service
 
 # Check number of in-flight workflows
 kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8119/metrics/active-workflows-count | jq '.value'
+  curl -s http://localhost:8100/metrics/active-workflows-count | jq '.value'
 
 # If > 1000: Increase memory limit
 helm upgrade ai-orchestrator-service deploy/helm/ai-orchestrator-service \
@@ -234,9 +234,9 @@ ai_inference_step_latency_seconds_p99
 
 ## On-Call Handoff
 
-- [ ] Active workflows? `kubectl exec -n ai deploy/ai-orchestrator-service -- curl -s http://localhost:8119/metrics/active-workflows-count`
-- [ ] Workflow failure rate? `kubectl exec -n ai deploy/ai-orchestrator-service -- curl -s http://localhost:8119/metrics/workflow-failure-rate`
-- [ ] Execution latency? `kubectl exec -n ai deploy/ai-orchestrator-service -- curl -s http://localhost:8119/metrics/workflow-execution-latency-p99`
+- [ ] Active workflows? `kubectl exec -n ai deploy/ai-orchestrator-service -- curl -s http://localhost:8100/metrics/active-workflows-count`
+- [ ] Workflow failure rate? `kubectl exec -n ai deploy/ai-orchestrator-service -- curl -s http://localhost:8100/metrics/workflow-failure-rate`
+- [ ] Execution latency? `kubectl exec -n ai deploy/ai-orchestrator-service -- curl -s http://localhost:8100/metrics/workflow-execution-latency-p99`
 
 ---
 

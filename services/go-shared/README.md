@@ -6,11 +6,11 @@
 | | |
 |---|---|
 | **Module** | `github.com/instacommerce/go-shared` |
-| **Go version** | 1.23+ (`go.mod`) |
+| **Go version** | 1.25.0 (`toolchain go1.25.1`) |
 | **Owner** | `@instacommerce/platform-team` |
-| **CI trigger** | Any change under `services/go-shared/**` revalidates **all 8 Go modules** (see [CI / Governance](#ci--governance)) |
-| **Packages** | `auth` · `config` · `health` · `httpclient` · `kafka` · `observability` |
-| **Test files** | None checked in (see [Known Limitations](#known-limitations)) |
+| **CI trigger** | Any change under `services/go-shared/**` revalidates **all 8 Go microservices** (see [CI / Governance](#ci--governance)) |
+| **Packages** | `auth` · `config` · `correlation` · `health` · `httpclient` · `kafka` · `observability` · `proto` |
+| **Test status** | Unit tested (`pkg/auth`, `pkg/correlation`, `pkg/health`, `pkg/httpclient`, `pkg/kafka`) |
 
 ---
 
@@ -42,17 +42,18 @@
 ## Library Role and Boundaries
 
 `go-shared` is a **leaf dependency with no runtime of its own**. It is imported
-by the seven Go services that form InstaCommerce's operational data plane:
+by the eight Go microservices that form InstaCommerce's operational data plane:
 
 | Service | Uses |
 |---|---|
 | `cdc-consumer-service` | config, health, kafka (consumer), observability |
-| `dispatch-optimizer-service` | auth, config, health, httpclient, observability |
-| `location-ingestion-service` | auth, config, health, httpclient, observability |
+| `dispatch-optimizer-service` | auth, config, correlation, health, httpclient, observability, proto |
+| `location-ingestion-service` | auth, config, correlation, health, httpclient, observability |
 | `outbox-relay-service` | config, health, kafka (producer), observability |
-| `payment-webhook-service` | auth, config, health, httpclient, kafka, observability |
-| `reconciliation-engine` | config, health, httpclient, kafka, observability |
-| `stream-processor-service` | config, health, kafka, observability |
+| `payment-webhook-service` | auth, config, correlation, health, httpclient, kafka, observability |
+| `reconciliation-engine` | config, correlation, health, httpclient, kafka, observability |
+| `reverse-etl-orchestrator` | auth, config, correlation, health, httpclient, observability |
+| `stream-processor-service` | config, correlation, health, kafka, observability |
 
 **What it is:**
 

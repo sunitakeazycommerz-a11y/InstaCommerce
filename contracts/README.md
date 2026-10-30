@@ -102,18 +102,25 @@ contracts/
     │
     └── resources/schemas/             # JSON Schema event definitions
         ├── README.md
+        ├── ai-orchestrator/
         ├── cart/
         ├── catalog/
         ├── common/
+        ├── customer-support/
+        ├── delivery/
         ├── fraud/
         ├── fulfillment/
         ├── identity/
         ├── inventory/
+        ├── notification/
         ├── orders/
         ├── payments/
         ├── pricing/
+        ├── reconciliation/
+        ├── returns/
         ├── rider/
         ├── routing/
+        ├── search/
         ├── wallet/
         └── warehouse/
 ```
@@ -243,6 +250,7 @@ contracts/
 | `PromotionCreated` | `pricing/PromotionCreated.v1.json` | v1 | New promotional campaign created |
 | `PromotionUpdated` | `pricing/PromotionUpdated.v1.json` | v1 | Promotion discount rules or limits updated |
 | `PromotionDeactivated` | `pricing/PromotionDeactivated.v1.json` | v1 | Promotion campaign deactivated |
+| `CouponRedeemed` | `pricing/CouponRedeemed.v1.json` | v1 | Coupon applied and redeemed on checkout |
 
 ### Wallet & Loyalty (`wallet.events`)
 
@@ -257,11 +265,57 @@ contracts/
 
 | Event | Schema / Payload | Version | Description |
 |---|---|---|---|
+| `DeliveryStatusUpdated` | `delivery/DeliveryStatusUpdated.v1.json` | v1 | Canonical transition between dispatched, in-transit, arrived |
+| `ETABreachRisk` | `routing/ETABreachRisk.v1.json` | v1 | Alert emitted when delivery is projected to breach SLA |
 | `DELIVERY_CREATED` | Delivery tracking payload | v1 | Delivery leg instantiated for dispatch |
-| `DELIVERY_STATUS_UPDATED` | Status, ETA, rider | v1 | Transition between dispatched, in-transit, arrived |
 | `DELIVERY_COMPLETED` | Proof of delivery | v1 | Order delivered and verified |
 | `RiderGeofenceEntered` | Store ID, rider ID, radius | v1 | Rider entered dark store pickup geofence |
 | `RiderGeofenceExited` | Store ID, rider ID | v1 | Rider departed dark store with package |
+
+### AI Orchestrator (`ai-orchestrator.events`)
+
+| Event | Schema | Version | Description |
+|---|---|---|---|
+| `IntentAnalyzed` | `ai-orchestrator/IntentAnalyzed.v1.json` | v1 | User shopping intent, entities, and copilot plan |
+
+### Customer Support (`customer-support.events`)
+
+| Event | Schema | Version | Description |
+|---|---|---|---|
+| `TicketCreated` | `customer-support/TicketCreated.v1.json` | v1 | Escalated customer support ticket and context |
+
+### Notification (`notification.events`)
+
+| Event | Schema | Version | Description |
+|---|---|---|---|
+| `NotificationDispatched` | `notification/NotificationDispatched.v1.json` | v1 | Multi-channel dispatch (SMS, email, push) notification |
+
+### Reconciliation (`reconciliation.events`)
+
+| Event | Schema | Version | Description |
+|---|---|---|---|
+| `ReconciliationCompleted` | `reconciliation/ReconciliationCompleted.v1.json` | v1 | Financial or inventory reconciliation run summary |
+
+### Returns & Exchanges (`returns.events`)
+
+| Event | Schema | Version | Description |
+|---|---|---|---|
+| `ReturnInitiated` | `returns/ReturnInitiated.v1.json` | v1 | Customer initiated product return or exchange |
+
+### Search & Discovery (`search.events`)
+
+| Event | Schema | Version | Description |
+|---|---|---|---|
+| `SearchIndexed` | `search/SearchIndexed.v1.json` | v1 | Document indexation or search telemetry signal |
+
+---
+
+## Communication Protocol Boundaries
+
+InstaCommerce enforces clear polyglot interface boundaries:
+- **Java Microservices (20 Services):** Communicate synchronously over **REST / HTTP** (JSON payload over HTTP/1.1 or HTTP/2) and asynchronously via Kafka domain events conforming to `EventEnvelope.v1.json`. Java services do **not** run gRPC server stubs.
+- **Go Microservices & Libraries (`go-shared`, `dispatch-optimizer`, `cdc-consumer`):** Implement and consume the generated Protocol Buffer stubs (`src/main/proto/`) for high-throughput, low-latency inter-service RPCs.
+- **Python AI Services (`ai-orchestrator-service`, `ai-inference-service`):** Expose FastAPI HTTP endpoints and consume/publish Kafka events where applicable.
 
 ---
 

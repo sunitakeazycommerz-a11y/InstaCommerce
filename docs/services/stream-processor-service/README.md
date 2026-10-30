@@ -2,123 +2,97 @@
 
 ## Overview
 
-The stream-processor-service is a high-throughput, event-driven processing engine built on Kafka Streams. It processes event streams in real-time, performs stateful windowing aggregations, deduplicates events, and maintains materialized state views for analytics and alerting. This service powers real-time metrics, fraud detection, and inventory updates.
+The stream-processor-service is a high-throughput, event-driven processing service written in Go. It consumes domain events across orders, payments, riders, and inventory, computes real-time sliding-window aggregations, and dual-writes results to Redis (for operational dashboards) and Prometheus (for SLA monitoring and alerting).
 
 **Service Ownership**: Platform Team - Data Streaming
-**Language**: Go 1.22
-**Default Port**: 8085
+**Language**: Go 1.25.0
+**Default Port**: 8108
 **Status**: Tier 2 Critical (Real-time analytics backbone)
 
 ## SLOs & Availability
 
 - **Availability SLO**: 99.9% (43 minutes downtime/month)
-- **P99 Latency**: < 5 seconds per event (end-to-end processing)
-- **Error Rate**: < 0.1% (event drops due to processing failure)
-- **Max Throughput**: 50,000 events/second (across all topics)
+- **P99 Latency**: < 500ms sliding-window update latency
+- **Error Rate**: < 0.1% event processing failure
+- **Max Throughput**: 50,000 events/second (across all partitions)
 
 ## Key Responsibilities
 
-1. **Event Stream Processing**: Consume from multiple Kafka topics (orders, payments, inventory)
-2. **Stateful Aggregation**: Windowed operations (5-min, 1-hour windows) for metrics calculation
-3. **Deduplication**: Detect and filter duplicate events using idempotency keys (Redis cache)
-4. **Materialized Views**: Maintain state store (PostgreSQL) for real-time query access
-5. **Event Publishing**: Emit aggregated events to downstream topics for alerting/dashboards
+1. **Event Stream Processing**: Consume from 7 Kafka topics (`orders.events`, `payments.events`, `rider.events`, `rider.location.updates`, `inventory.events`).
+2. **Stateful Windowed Aggregations**: Maintain sliding windows in memory and write operational counters/gauges.
+3. **Redis Real-Time Aggregates**: Dual-write TTL-bounded metric hashes and sets to Redis.
+4. **Prometheus Metrics**: Expose SLA compliance and delivery performance metrics on `/metrics`.
 
 ## Deployment
 
 ### GKE Deployment
-- **Namespace**: streaming
-- **Replicas**: 2 (HA with Kafka Streams task rebalancing)
-- **CPU Request/Limit**: 600m / 1200m
-- **Memory Request/Limit**: 768Mi / 1536Mi
+- **Namespace**: instacommerce
+- **Replicas**: 2 (HA stateless deployment)
+- **CPU Request/Limit**: 500m / 1000m
+- **Memory Request/Limit**: 512Mi / 1024Mi
 
 ### Cluster Configuration
-- **Ingress**: Internal only (state queries from monitoring/dashboards)
-- **NetworkPolicy**: Allow from Kafka brokers, monitoring stack
+- **Ingress**: Internal only
+- **NetworkPolicy**: Allow egress to Kafka brokers and Redis
 - **Service Account**: stream-processor-service
-- **StatefulSet**: Yes (maintains local state store for Kafka Streams)
 
 ## Stream Processing Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ Kafka Cluster                                                     │
-├────────────┬────────────┬────────────┬────────────┬───────────────┤
-│ orders     │ payments   │ inventory  │ shipments  │ fraud-scores  │
-│ (100/s)    │ (50/s)     │ (20/s)     │ (10/s)     │ (external)    │
-└────────────┼────────────┼────────────┼────────────┴───────────────┘
+│ Kafka Topics                                                     │
+├────────────┬────────────┬────────────┬────────────┬──────────────┤
+│ orders     │ payments   │ riders     │ rider.loc  │ inventory    │
+└────────────┼────────────┼────────────┼────────────┴──────────────┘
              │
-             │ Kafka Streams Topology
-             │
-    ┌────────▼──────────────────────────────────────┐
-    │ Stream-Processor-Service (Go)                 │
-    │ ├─ Deduplication Layer                        │
-    │ │  └─ Redis: idempotency key cache (5 min TTL)│
-    │ ├─ Windowing Engine                          │
-    │ │  ├─ Tumbling windows (1 hour)               │
-    │ │  ├─ Session windows (5 min gap)             │
-    │ │  └─ State Store (PostgreSQL)                │
-    │ ├─ Aggregation Logic                         │
-    │ │  ├─ Order metrics (count, value by hour)    │
-    │ │  ├─ Payment metrics (success rate, latency) │
-    │ │  └─ Inventory delta tracking                │
-    │ └─ Event Publishing                          │
-    │    └─ Output topics (metrics, alerts)         │
-    └────────┬────────────────────────────────────┘
-             │
-    ┌────────▼──────────────────────────┐
-    │ Output Topics                     │
-    ├─ metrics-aggregated (1min window) │
-    ├─ alerts-triggered                 │
-    ├─ inventory-changes                │
-    └──────────────────────────────────┘
+             │ Native Go Kafka Consumer (segmentio/kafka-go)
+             ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ Stream-Processor-Service (Port 8108)                             │
+│ ├─ Event Deserialization                                         │
+│ ├─ Sliding Window Aggregations (Order velocity, Delivery SLA)   │
+│ ├─ Dual-Write Pipeline                                           │
+└────────────┬─────────────────────────────────┬───────────────────┘
+             │                                 │
+             ▼                                 ▼
+┌───────────────────────────┐     ┌────────────────────────────┐
+│ Redis Operational Cache   │     │ Prometheus Metrics Scrape  │
+│ • TTL-bounded counters    │     │ • :8108/metrics            │
+│ • Zone SLA compliance     │     │ • Alertmanager evaluation  │
+└───────────────────────────┘     └────────────────────────────┘
 ```
-
-### Processing Pipeline
-
-1. **Consume**: Read from source topics (orders, payments, inventory)
-2. **Deserialize**: JSON → Go structs using encoding/json
-3. **Deduplicate**: Check Redis for idempotency key; skip if present
-4. **Enrich**: Lookup product/merchant metadata from state store
-5. **Aggregate**: Apply windowing logic (count, sum, avg)
-6. **Store State**: Persist aggregated state to PostgreSQL
-7. **Publish**: Emit results to output topics
-8. **Track Lag**: Publish consumer lag metrics
 
 ## Integrations
 
 ### Kafka Topics
-| Topic | Consumers | Partition | Purpose | Retention |
-|-------|-----------|-----------|---------|-----------|
-| orders | stream-processor | 10 | Order events | 24 hours |
-| payments | stream-processor | 10 | Payment completion | 24 hours |
-| inventory | stream-processor | 5 | Inventory updates | 24 hours |
-| metrics-aggregated | grafana | 3 | 1-min aggregated metrics | 7 days |
-| alerts-triggered | alerting-service | 3 | Alert events | 48 hours |
+| Topic | Purpose |
+|-------|---------|
+| `order.events` / `orders.events` | Order lifecycle velocity |
+| `payment.events` / `payments.events` | Payment completion rate |
+| `rider.events` | Rider status and idle duration |
+| `rider.location.updates` | Real-time GPS stream |
+| `inventory.events` | Stock depletion tracking |
 
-### State Stores
-- **PostgreSQL**: Materialized aggregation state (orders_1h_agg, payments_1h_agg tables)
-- **Redis**: Deduplication cache (5-min TTL per idempotency key)
-- **Local RocksDB**: Kafka Streams internal state store (compacted, replicated to brokers)
+### Downstream Sinks
+- **Redis**: Fast operational key-value and geo aggregations for frontend BFFs.
+- **Prometheus**: Scrapes `/metrics` for SLA alerts.
 
 ## Endpoints
 
-### Public (Unauthenticated)
-- `GET /health` - Liveness probe
-- `GET /metrics` - Prometheus metrics (Prometheus format)
-
-### State Query API (Requires JWT)
-- `GET /v1/stream/state/order-metrics?window=1h&from=2024-01-01T00:00:00Z` - Query aggregated order metrics
-- `GET /v1/stream/state/payment-metrics?window=1h` - Query payment metrics for last hour
-- `GET /v1/stream/state/inventory-delta` - Current inventory deltas by warehouse
-- `GET /v1/stream/lag` - Consumer lag for all topics
+### Health & Metrics (Unauthenticated)
+- `GET /health/live` - Liveness probe
+- `GET /health/ready` - Readiness probe (checks Kafka and Redis connectivity)
+- `GET /metrics` - Prometheus metrics
 
 ### Example Requests
 
 ```bash
-# Get order metrics for past hour
-curl -X GET 'http://stream-processor:8085/v1/stream/state/order-metrics?window=1h' \
-  -H 'Authorization: Bearer <jwt_token>'
+# Check stream processor health
+curl -s http://localhost:8108/health/ready | jq .
+
+# Scrape metrics
+curl -s http://localhost:8108/metrics | grep stream_processor_
+```
 
 # Response:
 # {
