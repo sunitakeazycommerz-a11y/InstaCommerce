@@ -23,7 +23,7 @@ Authoritative documentation for Apache Airflow DAGs, scheduling cadence, sensors
 | `ml_training` | `0 4 * * *` | MLOps | Vertex AI CustomJob trigger + promotion gate eval | Daily automated model retraining & evaluation |
 | `monitoring_alerts` | `*/15 * * * *` | Platform SRE | SLA threshold checks across marts | Proactive alerting on delivery/revenue dips |
 | `historical_backfill` | `None` (Manual) | Data Platform | Partition-aware dbt parameter sweeps | Manual backfills with `conf: {"start_date", "end_date", "model_name"}` |
-| `search_ranking_retraining` | `0 2 * * 0` | Search & ML | Sunday weekly LambdaMART retrain | Weekly retraining on recent search query logs |
+| `search_ranking_weekly_retraining` | `0 2 * * 0` | Search & ML | Sunday weekly LambdaMART retrain | Weekly retraining on recent search query logs |
 
 ---
 

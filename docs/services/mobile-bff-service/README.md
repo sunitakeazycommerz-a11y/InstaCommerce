@@ -6,7 +6,7 @@ The mobile-bff-service is a specialized aggregation layer optimized for mobile c
 
 **Service Ownership**: Platform Team - Mobile Experience
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8081
+**Default Port**: 8080
 **Status**: Tier 2 Critical (Mobile client dependency)
 
 ## SLOs & Availability
@@ -76,10 +76,12 @@ The mobile-bff-service is a specialized aggregation layer optimized for mobile c
 ### Synchronous Dependencies
 | Service | Endpoint | Timeout | Purpose | Fallback |
 |---------|----------|---------|---------|----------|
-| catalog-service | http://catalog-service:8082/products | 2s | Product details, images, pricing | Return cached catalog version |
-| cart-service | http://cart-service:8084/carts/{cartId} | 2s | Cart contents, item counts | Return stale cart from Redis |
-| order-service | http://order-service:8087/orders | 2s | Recent orders, status | Return empty list |
-| payment-service | http://payment-service:8083/payment-methods | 2s | User payment methods | Return empty list |
+| catalog-service | http://catalog-service:8082/products | 2s | Product details, categories | Return cached catalog version |
+| search-service | http://search-service:8088/search | 2s | Product search and indexing | Degraded search response |
+| config-feature-flag-service | http://config-feature-flag-service:8098/flags | 1s | Mobile feature flag evaluation | Default flag configuration |
+| cart-service | http://cart-service:8090/carts | 2s | Cart items, totals | Return cached cart state |
+| order-service | http://order-service:8084/orders | 2s | Recent orders, status | Return empty list |
+| payment-service | http://payment-service:8085/payments | 2s | User payment methods | Return empty list |
 
 ### Cache Dependencies
 - **Redis**: Deduplication cache (5s window), response cache (1m window)
@@ -87,52 +89,46 @@ The mobile-bff-service is a specialized aggregation layer optimized for mobile c
 
 ## Endpoints
 
-### Public (Requires JWT Bearer Token)
-- `GET /actuator/health` - Liveness probe
-- `GET /actuator/metrics` - Prometheus metrics
+### Public & Actuator
+- `GET /actuator/health/liveness` - Liveness probe
+- `GET /actuator/health/readiness` - Readiness probe
+- `GET /actuator/prometheus` - Prometheus metrics
 
 ### Mobile API (Requires JWT)
-- `GET /mobile/v1/home` - Home screen aggregation (products + cart + recommendations)
-- `GET /mobile/v1/products?q=search` - Product search with aggregated inventory
-- `GET /mobile/v1/cart` - User cart with pricing
-- `GET /mobile/v1/orders` - Order history with status
-- `GET /mobile/v1/checkout/summary` - Final checkout summary (all backends aggregated)
+- `GET /bff/mobile/v1/home` (alias `/m/v1/home`) - Composite home screen aggregation
+- `GET /bff/mobile/v1/profile` (alias `/m/v1/profile`) - Authenticated user profile and roles
+- `GET /bff/mobile/v1/cart/stream/{userId}` (alias `/m/v1/cart/stream/{userId}`) - Real-time SSE cart updates
 
 ### Example Requests
 
 ```bash
 # Get home screen (aggregated)
-curl -X GET 'http://mobile-bff-service:8081/mobile/v1/home' \
+curl -X GET 'http://mobile-bff-service:8080/bff/mobile/v1/home' \
   -H 'Authorization: Bearer <jwt_token>' \
   -H 'Accept-Encoding: gzip'
 
-# Response (compressed):
-# {
-#   "featured_products": [{...}],
-#   "cart": {"item_count": 3, "total": 45.99},
-#   "recent_orders": [{...}],
-#   "payment_methods": [{...}]
-# }
-
-# Product search (with inventory aggregation)
-curl -X GET 'http://mobile-bff-service:8081/mobile/v1/products?q=organic' \
+# Get user profile
+curl -X GET 'http://mobile-bff-service:8080/bff/mobile/v1/profile' \
   -H 'Authorization: Bearer <jwt_token>'
 
-# Checkout summary
-curl -X GET 'http://mobile-bff-service:8081/mobile/v1/checkout/summary' \
-  -H 'Authorization: Bearer <jwt_token>'
+# Stream cart updates via SSE
+curl -N -X GET 'http://mobile-bff-service:8080/bff/mobile/v1/cart/stream/usr-12345' \
+  -H 'Authorization: Bearer <jwt_token>' \
+  -H 'Accept: text/event-stream'
 ```
 
 ## Configuration
 
 ### Environment Variables
 ```env
-SERVER_PORT=8081
+SERVER_PORT=8080
 SPRING_REDIS_HOST=redis
 SPRING_REDIS_PORT=6379
 SPRING_REDIS_PASSWORD=<redis_password>
 CATALOG_SERVICE_URL=http://catalog-service:8082
-CART_SERVICE_URL=http://cart-service:8084
+SEARCH_SERVICE_URL=http://search-service:8088
+FLAG_SERVICE_URL=http://config-feature-flag-service:8098
+CART_SERVICE_URL=http://cart-service:8090
 ORDER_SERVICE_URL=http://order-service:8087
 PAYMENT_SERVICE_URL=http://payment-service:8083
 DEDUP_CACHE_TTL_SECONDS=5

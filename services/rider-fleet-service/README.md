@@ -1,6 +1,6 @@
 # Rider Fleet Service
 
-> **Java 21 · Spring Boot 3 · PostgreSQL · Kafka · Port 8093**
+> **Java 21 · Spring Boot 4 · PostgreSQL · Kafka · Port 8093**
 
 Single assignment authority for the InstaCommerce rider lifecycle. Owns rider
 creation, onboarding, activation/suspension, proximity-based assignment,
@@ -9,7 +9,7 @@ accounting. All state mutations publish events via the transactional outbox
 pattern; the service consumes `fulfillment.events` to trigger automatic rider
 assignment on `OrderPacked`.
 
-**Source of truth:** `services/rider-fleet-service/src/main/java`, Flyway migrations V1–V8,
+**Source of truth:** `services/rider-fleet-service/src/main/java`, Flyway migrations V1–V11,
 `application.yml`, `contracts/`, `docs/reviews/rider-fleet-service-review.md`,
 `docs/reviews/iter3/diagrams/lld/fulfillment-dispatch-eta.md`.
 
@@ -47,7 +47,7 @@ assignment on `OrderPacked`.
 | Domain | Tables | Events Published |
 |--------|--------|------------------|
 | Rider entity + lifecycle | `riders` | `RiderCreated`, `RiderActivated`, `RiderSuspended`, `RiderOnboarded` |
-| Assignment authority | `rider_assignments` | `RiderAssigned` |
+| Assignment authority | `rider_assignments` | `RiderAssigned`, `DeliveryCompleted`, `RiderAssignmentCancelled`, `RiderReleased` |
 | Availability + location | `rider_availability` | — (inline with rider events) |
 | Earnings accounting | `rider_earnings` | — |
 | Ratings (schema only) | `rider_ratings` | — |
@@ -59,8 +59,8 @@ assignment on `OrderPacked`.
 
 | Concern | Owning Service |
 |---------|----------------|
-| Order lifecycle, packing | `fulfillment-service` (port 8087) |
-| Delivery tracking, ETA computation | `routing-eta-service` (port 8092) |
+| Order lifecycle, packing | `fulfillment-service` (port 8086) |
+| Delivery tracking, ETA computation | `routing-eta-service` (port 8094) |
 | Real-time GPS ingestion at scale | `location-ingestion-service` (port 8105, Go) |
 | Dispatch optimization (multi-objective solver) | `dispatch-optimizer-service` (port 8102, Go, stateless) |
 | Payment, payout, settlement | `payment-service` |
@@ -68,7 +68,7 @@ assignment on `OrderPacked`.
 
 ### Integration Contracts
 
-- **Inbound Kafka:** `fulfillment.events` — reacts to `OrderPacked` to trigger `assignRider()`.
+- **Inbound Kafka:** `fulfillment.events` and `orders.events` — reacts to `OrderPacked` to trigger `assignRider()`, `OrderDelivered` to complete delivery, and `OrderCancelled` to cancel assignment.
 - **Outbound Kafka (via outbox):** `rider.events` — consumed by `routing-eta-service`, `notification-service`, analytics.
 - **Sync callers:** `checkout-orchestrator-service` (Temporal) and `mobile-bff-service` call `POST /riders/assign` and `GET /riders/available`.
 
@@ -87,7 +87,7 @@ graph TB
         CO[checkout-orchestrator<br/>Temporal saga]
     end
 
-    subgraph "rider-fleet-service :8091"
+    subgraph "rider-fleet-service :8093"
         RC[RiderController<br/>/riders]
         ARC[AdminRiderController<br/>/admin/riders]
         RAC[RiderAssignmentController<br/>/riders/assign]

@@ -32,8 +32,11 @@ kubectl logs -n instacommerce deploy/reconciliation-engine --tail=100 | grep -i 
 **Symptoms:** Discrepancies between PSP payments and internal order ledger records exceed alert thresholds.
 **Diagnosis:**
 ```bash
-# List recent mismatches
-curl -s http://localhost:8107/reconciliation/runs/latest/mismatches
+# Query the latest run ID from /reconciliation/runs
+LATEST_RUN_ID=$(curl -s http://localhost:8107/reconciliation/runs | jq -r '.[0].id // 1')
+
+# List mismatches for the specific run ID
+curl -s http://localhost:8107/reconciliation/runs/${LATEST_RUN_ID}/mismatches
 ```
 **Resolution:**
 1. Classify mismatch types: amount mismatch, missing PSP record, missing internal ledger record, or status mismatch.

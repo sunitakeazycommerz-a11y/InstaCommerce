@@ -20,7 +20,7 @@ kubectl logs -n admin deploy/admin-gateway-service | grep "TOKEN_INVALID\|audien
 kubectl get pods -n admin -l app=admin-gateway-service
 
 # Check identity-service JWKS endpoint
-kubectl exec -n identity deploy/identity-service -- curl -s http://localhost:8099/jwt/jwks | jq .
+kubectl exec -n identity deploy/identity-service -- curl -s http://localhost:8081/jwt/jwks | jq .
 
 # Verify clock sync between services
 kubectl exec -n admin deploy/admin-gateway-service -- date -u
@@ -40,7 +40,7 @@ kubectl exec -n identity deploy/identity-service -- date -u
 
 **Possible Causes:**
 1. config-feature-flag-service unreachable
-2. Database connection pool exhausted
+2. Upstream reconciliation-engine or audit-trail-service unreachable
 3. Out of memory (OOM)
 
 **Diagnosis:**
@@ -57,9 +57,9 @@ kubectl top pod -n admin -l app=admin-gateway-service
 
 # Check config-feature-flag-service reachability
 kubectl exec -n admin deploy/admin-gateway-service -- \
-  curl -v http://config-feature-flag-service:8095/flags
+  curl -v http://config-feature-flag-service:8098/flags
 
-# Check database connections (if applicable)
+# Check admin-gateway health
 kubectl exec -n admin deploy/admin-gateway-service -- \
   curl -s http://localhost:8099/actuator/health | jq .
 ```
@@ -67,7 +67,7 @@ kubectl exec -n admin deploy/admin-gateway-service -- \
 **Resolution:**
 1. If flag service unreachable: Check NetworkPolicy and service DNS
 2. If OOM: Scale up pod memory or reduce replicas temporarily
-3. If database pool exhausted: Restart pod to reset connections
+3. If upstream gateway timeout: Inspect downstream service health and Latency
 
 ---
 
@@ -85,7 +85,7 @@ kubectl logs -n admin deploy/admin-gateway-service | grep "duration"
 
 # Check downstream service latency
 kubectl exec -n admin deploy/admin-gateway-service -- \
-  curl -s http://config-feature-flag-service:8095/flags \
+  curl -s http://config-feature-flag-service:8098/flags \
   -w "Total: %{time_total}s\n" -o /dev/null
 
 # Check CPU usage

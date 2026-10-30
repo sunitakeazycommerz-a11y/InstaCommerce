@@ -366,6 +366,21 @@ flowchart TD
 
 ## Database Schema
 
+Managed by **Flyway** with 10 migrations (`V1`–`V10`) in `src/main/resources/db/migration/`:
+
+| Migration | File | Tables / Objects | Purpose |
+|---|---|---|---|
+| `V1` | `V1__create_price_rules.sql` | `price_rules` | Product price rules with multiplier and time windows |
+| `V2` | `V2__create_promotions.sql` | `promotions` | Promotion campaigns (percentage/fixed) |
+| `V3` | `V3__create_coupons.sql` | `coupons`, `coupon_redemptions` | Coupon codes and redemption tracking |
+| `V4` | `V4__create_outbox_events.sql` | `outbox_events` | Transactional outbox table |
+| `V5` | `V5__create_shedlock.sql` | `shedlock` | Distributed lock table for promotion expiry jobs |
+| `V6` | `V6__add_outbox_envelope_fields.sql` | `outbox_events` | Envelope fields: `event_id`, `correlation_id`, `causation_id`, `schema_version` |
+| `V7` | `V7__create_price_quotes.sql` | `price_quotes` | Immutable price quotes with content hashes and expiration |
+| `V8` | `V8__coupon_version_and_redemption_uniqueness.sql` | `coupons`, `coupon_redemptions` | Optimistic locking `version` and unique redemption constraint |
+| `V9` | `V9__promotion_redemption_and_user_limits.sql` | `promotions`, `promotion_redemptions` | Per-user promotion limits and tracking |
+| `V10` | `V10__add_outbox_events_retention_index.sql` | `outbox_events` | Retention index `idx_outbox_events_retention` on `(processed_at, created_at)` |
+
 ```mermaid
 erDiagram
     promotions {
@@ -381,6 +396,7 @@ erDiagram
         boolean active "default true"
         int max_uses "nullable"
         int current_uses "default 0"
+        int max_redemptions_per_user "V9"
         timestamp created_at
     }
 
@@ -393,6 +409,7 @@ erDiagram
         int total_limit "nullable"
         int total_redeemed "default 0"
         boolean active "default true"
+        bigint version "V8"
     }
 
     coupon_redemptions {
@@ -403,6 +420,20 @@ erDiagram
         bigint discount_cents
         boolean single_use
         timestamp redeemed_at
+    }
+
+    price_quotes {
+        uuid id PK
+        uuid user_id
+        varchar content_hash
+        bigint subtotal_cents
+        bigint discount_cents
+        bigint total_cents
+        varchar currency
+        varchar coupon_code
+        int item_count
+        timestamp expires_at
+        timestamp created_at
     }
 
     price_rules {
@@ -418,6 +449,26 @@ erDiagram
     }
 
     outbox_events {
+        uuid id PK
+        uuid event_id
+        varchar correlation_id
+        varchar causation_id
+        varchar schema_version
+        varchar aggregate_type
+        varchar aggregate_id
+        varchar event_type
+        jsonb payload
+        timestamp created_at
+        boolean sent
+        timestamp processed_at
+    }
+
+    shedlock {
+        varchar name PK
+        timestamp lock_until
+        timestamp locked_at
+        varchar locked_by
+    }
         uuid id PK
         varchar aggregate_type
         varchar aggregate_id
@@ -444,7 +495,7 @@ erDiagram
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SERVER_PORT` | `8087` | HTTP port |
+| `SERVER_PORT` | `8089` | HTTP port |
 | `PRICING_DB_URL` | `jdbc:postgresql://localhost:5432/pricing` | PostgreSQL connection URL |
 | `PRICING_DB_USER` | `pricing` | Database username |
 | `PRICING_DB_PASSWORD` | — | Database password |

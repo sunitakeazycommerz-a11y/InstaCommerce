@@ -5,25 +5,25 @@
 - [ ] Verify rider-fleet-db (PostgreSQL) is accessible
   ```bash
   kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-    curl -s http://localhost:8093/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8093/actuator/health/readiness | jq '.components.db.status'
   ```
 
 - [ ] Check Redis connectivity (rider location tracking)
   ```bash
   kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-    curl -s http://localhost:8093/actuator/health | jq '.components.redis'
+    curl -s http://localhost:8093/actuator/health/readiness | jq '.components.redis'
   ```
 
-- [ ] Verify Kafka connectivity (rider.location, rider.status topics)
+- [ ] Verify Kafka connectivity (rider.events, fulfillment.events, orders.events)
   ```bash
   kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-    curl -s http://localhost:8093/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8093/actuator/health/readiness | jq '.components.kafka'
   ```
 
 - [ ] Check fulfillment-service connectivity (delivery assignment)
   ```bash
   kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-    curl -v http://fulfillment-service:8084/health
+    curl -v http://fulfillment-service:8086/actuator/health/readiness
   ```
 
 - [ ] Validate rider availability (should be >50 active riders in production)

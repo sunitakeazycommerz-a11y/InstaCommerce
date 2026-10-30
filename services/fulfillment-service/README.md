@@ -27,7 +27,7 @@ Wave 30 Track D.
 | Boundary | Upstream | Downstream |
 |----------|----------|------------|
 | Events consumed | `orders.events` (`OrderPlaced`), `identity.events` (`UserErased`) | — |
-| Events published | — | `fulfillment.events` (`OrderPacked`, `OrderDispatched`, `OrderDelivered`, `OrderModified`) |
+| Events published | — | `fulfillment.events` (`OrderPacked`, `OrderDispatched`, `OrderDelivered`, `OrderModified`, `PickTaskCancelled`, `RiderHandoffCompleted`, `ProofOfDeliveryUploaded`) |
 | Sync HTTP calls (outbound) | — | `order-service` (legacy callback), `inventory-service` (stock release), `payment-service` (refund) |
 | Sync HTTP calls (inbound) | `mobile-bff-service`, `admin-gateway-service` | — |
 
@@ -341,6 +341,9 @@ sequenceDiagram
 | `OrderDispatched` | Rider assigned & dispatched | `orderId`, `userId`, `riderId`, `riderName`, `estimatedMinutes`, `dispatchedAt` |
 | `OrderDelivered` | Delivery confirmed | `orderId`, `userId`, `deliveredAt` |
 | `OrderModified` | Item missing / substituted | `orderId`, `productId`, `missingQty`, `refundCents` |
+| `PickTaskCancelled` | Order cancelled before pick completion | `orderId`, `cancelledAt`, `reason` |
+| `RiderHandoffCompleted` | Rider verifies OTP and picks up packed order | `orderId`, `riderId`, `handoffTime` |
+| `ProofOfDeliveryUploaded` | Delivery agent uploads contactless POD photo/signature | `orderId`, `podUrl`, `format`, `sizeBytes` |
 
 **Consumed events:**
 

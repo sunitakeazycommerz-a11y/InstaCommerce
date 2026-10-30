@@ -123,7 +123,7 @@ spec:
         - containerPort: 8091
         env:
         - name: SERVER_PORT
-          value: "8089"
+          value: "8091"
         - name: CHECKOUT_DB_URL
           valueFrom:
             secretKeyRef:
@@ -140,13 +140,13 @@ spec:
             cpu: "1500m"
         livenessProbe:
           httpGet:
-            path: /actuator/health/live
+            path: /actuator/health/liveness
             port: 8091
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
-            path: /actuator/health/ready
+            path: /actuator/health/readiness
             port: 8091
           initialDelaySeconds: 20
           periodSeconds: 5
@@ -169,10 +169,10 @@ argocd app sync checkout-orchestrator
 
 ### Liveness Probe
 
-**Endpoint**: `GET /actuator/health/live`
+**Endpoint**: `GET /actuator/health/liveness`
 
 ```bash
-curl http://localhost:8091/actuator/health/live
+curl http://localhost:8091/actuator/health/liveness
 ```
 
 **Response (healthy)**:
@@ -184,12 +184,12 @@ curl http://localhost:8091/actuator/health/live
 
 ### Readiness Probe
 
-**Endpoint**: `GET /actuator/health/ready`
+**Endpoint**: `GET /actuator/health/readiness`
 
 **Depends On**: Database connectivity, Temporal server connection
 
 ```bash
-curl http://localhost:8091/actuator/health/ready
+curl http://localhost:8091/actuator/health/readiness
 ```
 
 **Response (ready)**:

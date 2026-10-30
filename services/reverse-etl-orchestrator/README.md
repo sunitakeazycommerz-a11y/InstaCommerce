@@ -62,16 +62,16 @@ flowchart LR
 
 ## 4. API Reference
 
-All routes are mounted on the API listener (`:8109`):
+All routes are mounted on the API listener (`:8109`) under `/api/v1`:
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/subscriptions` | List subscriptions (supports `source_domain`, `sink_type`, `state` query filters) |
-| `POST` | `/subscriptions` | Create a new reverse ETL subscription |
-| `GET` | `/subscriptions/{id}` | Retrieve subscription details by ID |
-| `DELETE` | `/subscriptions/{id}` | Archive a subscription |
-| `POST` | `/subscriptions/{id}/activate` | Activate an inactive or paused subscription |
-| `POST` | `/subscriptions/{id}/pause` | Pause an active synchronization pipeline |
+| `GET` | `/api/v1/subscriptions` | List subscriptions (supports `source_domain`, `sink_type`, `state` query filters) |
+| `POST` | `/api/v1/subscriptions` | Create a new reverse ETL subscription |
+| `GET` | `/api/v1/subscriptions/{id}` | Retrieve subscription details by ID |
+| `DELETE` | `/api/v1/subscriptions/{id}` | Archive a subscription |
+| `POST` | `/api/v1/subscriptions/{id}/activate` | Activate an inactive or paused subscription |
+| `POST` | `/api/v1/subscriptions/{id}/pause` | Pause an active synchronization pipeline |
 | `GET` | `/health` | API listener health status |
 
 ---

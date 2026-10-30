@@ -18,7 +18,7 @@ The stream-processor-service is a high-throughput, event-driven processing servi
 
 ## Key Responsibilities
 
-1. **Event Stream Processing**: Consume from 7 Kafka topics (`orders.events`, `payments.events`, `rider.events`, `rider.location.updates`, `inventory.events`).
+1. **Event Stream Processing**: Consume from Kafka topics across 4 business domains (`orders.events`, `payments.events`, `rider.events`, `rider.location.updates`, `inventory.events`).
 2. **Stateful Windowed Aggregations**: Maintain sliding windows in memory and write operational counters/gauges.
 3. **Redis Real-Time Aggregates**: Dual-write TTL-bounded metric hashes and sets to Redis.
 4. **Prometheus Metrics**: Expose SLA compliance and delivery performance metrics on `/metrics`.

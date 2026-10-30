@@ -244,6 +244,22 @@ flowchart TD
 
 ---
 
+## Database Schema
+
+Managed by **Flyway** (V1–V7 migrations in `src/main/resources/db/migration/`).
+
+| Migration | File | Tables / Objects | Purpose |
+|---|---|---|---|
+| `V1` | `V1__create_feature_flags.sql` | `feature_flags` | Feature flag definitions, rollout percentage, status, and targeted user lists |
+| `V2` | `V2__create_flag_overrides.sql` | `flag_overrides` | Per-user flag overrides with optional TTL expiration timestamps |
+| `V3` | `V3__create_flag_audit_log.sql` | `flag_audit_log` | Full audit trail of flag creations, updates, toggles, and override actions |
+| `V4` | `V4__create_shedlock.sql` | `shedlock` | Standard ShedLock distributed locking table for periodic cache warming |
+| `V5` | `V5__add_override_removed_audit_action.sql` | `flag_audit_log` | Extends audit action constraint to include `OVERRIDE_REMOVED` |
+| `V6` | `V6__create_experiments.sql` | `experiments`, `experiment_variants` | Multi-arm A/B experiment lifecycles, variants, weights, and metrics |
+| `V7` | `V7__add_experiment_salt.sql` | `experiments` | Adds `salt` column for uncorrelated Murmur3 hashing across experiments |
+
+---
+
 ## API Reference
 
 ### Flag Evaluation

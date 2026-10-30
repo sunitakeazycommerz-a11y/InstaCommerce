@@ -6,7 +6,7 @@ The payment-service is the critical financial authority in InstaCommerce, respon
 
 **Service Ownership**: Platform Team - Money Path Tier 1 (Finance)
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8080
+**Default Port**: 8085
 **Status**: Tier 1 Critical (payment processing)
 **Database**: PostgreSQL 15+ (financial ledger, PCI DSS compliant)
 
@@ -24,15 +24,15 @@ The payment-service is the critical financial authority in InstaCommerce, respon
 
 ## Key Responsibilities
 
-1. **Payment Authorization**: Authorize payments with external payment gateway (Stripe) with circuit breaker protection
+1. **Payment Authorization**: Authorize payments with external payment gateways (Stripe, Razorpay, PhonePe) with circuit breaker protection
 2. **Fund Capture**: Capture authorized funds after order confirmation (capture-on-demand)
 3. **Payment Refunds**: Process full and partial refunds on demand or automatically on order cancellation
 4. **Ledger Integrity**: Maintain double-entry ledger (debit/credit) with balance validation
 5. **Idempotency**: Prevent double-charging via idempotency keys; tolerate network retries
-6. **Webhook Processing**: Receive payment status updates from Stripe; reconcile with local state
-7. **Recovery Jobs**: Background jobs recover stuck AUTHORIZED and REFUNDING payments
+6. **Webhook Processing**: Consume payment status updates from `payment.webhooks` Kafka topic; reconcile with local state
+7. **Recovery Jobs**: Background jobs recover stuck pending authorizations and refunds via ShedLock
 8. **Audit Trail**: Immutable record of all financial transactions for compliance and forensics
-9. **Encryption**: Sensitive card data never stored; tokenized via Stripe
+9. **Encryption**: Sensitive card data never stored; tokenized via PSPs
 
 ## Deployment
 
@@ -42,12 +42,12 @@ The payment-service is the critical financial authority in InstaCommerce, respon
 - **CPU Request/Limit**: 750m / 2000m (more resources for latency sensitivity)
 - **Memory Request/Limit**: 768Mi / 1.5Gi
 - **Startup Probe**: 20s initial delay, 3 failure threshold (DB schema validation)
-- **Readiness Probe**: `/actuator/health/ready` (checks DB + Stripe API connectivity)
+- **Readiness Probe**: `/actuator/health/readiness` (checks DB + Stripe API connectivity)
 
 ### Database
 - **Name**: `payments` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V10) - auto-applied on startup
-- **Connection Pool**: HikariCP 40 connections (highest of all services; financial workload)
+- **Migrations**: Flyway (V1-V20) - auto-applied on startup
+- **Connection Pool**: HikariCP 50 connections (highest of all services; financial workload)
 - **Replication**: Synchronous streaming replication to standby (RTO <1s)
 - **Backups**: Continuous, immutable (Glacier archival after 30 days)
 

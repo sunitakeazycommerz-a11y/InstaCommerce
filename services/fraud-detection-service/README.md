@@ -361,7 +361,21 @@ outbox_events
   sent           BOOLEAN  DEFAULT FALSE
 ```
 
-Migrations managed by **Flyway** (`db/migration/V*.sql`).
+### Database Migrations
+
+Managed by **Flyway** (`db/migration/V*.sql`):
+
+| Migration | File | Objects | Description |
+|---|---|---|---|
+| `V1` | `V1__create_fraud_rules.sql` | `fraud_rules` | Rule definitions with threshold, weight, action, and active status |
+| `V2` | `V2__create_fraud_signals.sql` | `fraud_signals` | Evaluated signals per order/transaction with score and reasoning |
+| `V3` | `V3__create_velocity_counters.sql` | `velocity_counters` | Sliding window rate counters for IP, device, and card velocity checks |
+| `V4` | `V4__create_blocked_entities.sql` | `blocked_entities` | Hard blocklist for malicious users, cards, and IPs |
+| `V5` | `V5__create_outbox_events.sql` | `outbox_events` | Transactional outbox table for publishing `fraud.events` |
+| `V6` | `V6__create_shedlock.sql` | `shedlock` | Standard distributed lock table for scheduled cleanup jobs |
+| `V7` | `V7__update_fraud_constraints.sql` | `fraud_rules`, `blocked_entities` | Updated action constraints and unique entity indexes |
+| `V8` | `V8__add_outbox_envelope_fields.sql` | `outbox_events` | Envelope fields: `event_id`, `correlation_id`, `causation_id`, `schema_version` |
+| `V9` | `V9__add_outbox_events_retention_index.sql` | `outbox_events` | Retention index `idx_outbox_events_retention` on `(processed_at, created_at)` |
 
 ---
 

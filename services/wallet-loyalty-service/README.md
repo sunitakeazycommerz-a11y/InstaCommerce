@@ -226,7 +226,7 @@ classDiagram
 
 ### Database Schema
 
-Eight Flyway migrations (`V1` through `V8`) manage the schema:
+Twelve Flyway migrations (`V1` through `V12`) manage the schema:
 
 | Migration | Table(s) | Key constraints |
 |---|---|---|
@@ -238,6 +238,10 @@ Eight Flyway migrations (`V1` through `V8`) manage the schema:
 | `V6` | `shedlock` | Standard ShedLock table |
 | `V7` | `wallet_ledger_entries` | `CHECK (amount_cents > 0)`, `CHECK transaction_type IN (...)`, indexes on debit/credit accounts |
 | `V8` | (index only) | `UNIQUE (reference_type, reference_id)` on `loyalty_transactions` for idempotency |
+| `V9` | `outbox_events` | Envelope fields: `event_id`, `correlation_id`, `causation_id`, `schema_version` |
+| `V10` | `loyalty_accounts` | `version` column for optimistic locking (`@Version`) |
+| `V11` | `wallet_transactions` | Aligns `reference_type` check constraints with domain reference types |
+| `V12` | `outbox_events` | Retention index `idx_outbox_events_retention` on `(processed_at, created_at)` |
 
 All balance columns use `BIGINT` (cents) to avoid floating-point rounding. Currency defaults to `INR`.
 
@@ -581,7 +585,7 @@ All errors follow a consistent envelope:
 | Spring Boot 3 | (managed by root `build.gradle.kts`) | Web, JPA, Security, Validation, Actuator, Cache |
 | Spring Kafka | (managed) | Kafka consumer for order/payment events |
 | PostgreSQL | 15+ | Primary datastore; `CHECK` constraints, partial indexes |
-| Flyway | (managed) | Schema migration (8 versioned migrations) |
+| Flyway | (managed) | Schema migration (12 versioned migrations) |
 | Caffeine | (managed) | In-memory cache for wallet balance (10K entries, 60 s TTL) |
 | ShedLock | 5.10.2 | Distributed lock for scheduled jobs (JDBC provider, DB time) |
 | JJWT | 0.12.5 | RSA JWT validation (api + impl + jackson modules) |
@@ -674,7 +678,7 @@ The test suite uses JUnit 5 (`useJUnitPlatform()`), `spring-boot-starter-test` (
 
 ## Rollout and Rollback Notes
 
-- **Schema migrations are forward-only.** All 8 Flyway migrations use additive DDL (CREATE TABLE, CREATE INDEX). None drop columns or tables. Rolling back the service binary to a prior version is safe as long as the new schema is a superset.
+- **Schema migrations are forward-only.** All 12 Flyway migrations use additive DDL (CREATE TABLE, CREATE INDEX). None drop columns or tables. Rolling back the service binary to a prior version is safe as long as the new schema is a superset.
 - **Graceful shutdown** is configured with a 30 s drain period (`server.shutdown: graceful`). In-flight REST requests complete; Kafka consumer offsets are committed for processed messages.
 - **Kafka consumer group** (`wallet-loyalty-service`) — adding or removing pods triggers a Kafka rebalance. Events are reprocessed from the last committed offset; idempotency constraints prevent duplicate mutations.
 - **Cache invalidation on deploy** — Caffeine is in-memory per pod. On deploy, caches start cold. `walletBalance` cache TTL is 60 s, so stale reads self-heal quickly.

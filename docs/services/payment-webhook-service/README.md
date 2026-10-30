@@ -2,42 +2,46 @@
 
 ## Overview
 **Ownership**: Platform Team - Money Path Integration
-**Language**: Go 1.24
-**Default Port**: 8120 (exposed as 8106 internally)
+**Language**: Go 1.25
+**Default Port**: 8106
 **Status**: Tier 1 Critical (Payment Processing)
 **SLO**: 99.95% availability, P99 < 500ms
 
 ---
 
 ## Architecture
-**Go Service** (not Java/Spring Boot) for high-performance webhook processing
+**Go Service** for high-performance webhook ingestion and PSP signature verification
 
 **Key Files**:
-- `main.go` - Server setup
-- `handler/webhook.go` - Webhook endpoint
-- `handler/dedup.go` - Deduplication logic
-- `handler/verify.go` - Webhook signature verification
-- `handler/metrics.go` - Prometheus metrics
+- `main.go` - Server setup, graceful shutdown, Kafka publisher
+- `handler/webhook.go` - Webhook ingestion handler (`POST /payments/webhook`)
+- `handler/dedup.go` - Idempotency store (in-memory TTL map or Redis SET NX EX)
+- `handler/verify.go` - PSP signature verification (Stripe, Razorpay, PhonePe)
+- `handler/metrics.go` - Prometheus metrics per PSP
 
 ---
 
 ## Endpoints
-- `POST /webhook/payment` - Receive Stripe webhooks
-- `POST /webhook/verify` - Verify webhook signature
-- `GET /health` - Health check
+- `POST /payments/webhook` - Multi-PSP webhook callback intake
+- `GET /health` - Overall dependency health probe
+- `GET /health/ready` - Readiness probe (checks Redis and Kafka)
+- `GET /health/live` - Liveness probe
+- `GET /ready` - Legacy readiness alias
 - `GET /metrics` - Prometheus metrics
 
 ---
 
 ## Configuration
-**Dockerfile Port**: Exposes 8120
-**Spring Port Mapping**: 8106 (internal routing)
+**Port**: `8106` (`PORT: 8106`)
 **Environment Variables**:
 ```
-PORT=8120
+PORT=8106
 STRIPE_WEBHOOK_SECRET=<secret>
+RAZORPAY_WEBHOOK_SECRET=<secret>
+PHONEPE_SALT_KEY=<secret>
 KAFKA_BROKERS=kafka:9092
 KAFKA_TOPIC=payment.webhooks
+REDIS_ADDR=redis:6379
 ```
 
 ---
@@ -82,20 +86,20 @@ KAFKA_TOPIC=payment.webhooks
 
 ## Kafka Integration
 **Topic**: `payment.webhooks`
-**Format**: Same EventEnvelope as other services
+**Format**: Canonical `WebhookEvent` JSON envelope
 
 **Events Published**:
-- charge.succeeded
-- charge.failed
-- refund.created
-- refund.updated
+- `payment.captured`
+- `payment.failed`
+- `refund.processed`
+- `charge.dispute.created`
 
 ---
 
 ## Deployment
-- Port: 8120
+- Port: 8106
 - Replicas: 3
-- CPU: 200m request / 800m limit (lighter than Java)
+- CPU: 200m request / 800m limit
 - Memory: 128Mi request / 256Mi limit
 - Namespace: money-path
 

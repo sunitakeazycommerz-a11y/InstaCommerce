@@ -470,19 +470,31 @@ Published to the `reconciliation.events` topic (configurable via `KAFKA_TOPIC`).
 
 ---
 
+## Database Schema
+
+Managed by Flyway migrations (`src/main/resources/db/migration/` V1 through V3):
+
+| Migration | File | Tables | Description |
+|---|---|---|---|
+| `V1` | `V1__create_reconciliation_schema.sql` | `reconciliation_runs`, `reconciliation_mismatches`, `reconciliation_fixes` | Core reconciliation runs, discrepancy details, and remediation actions |
+| `V2` | `V2__create_fix_registry.sql` | `reconciliation_fix_registry` | Registry of approved automated settlement and compensation fix handlers |
+| `V3` | `V3__create_outbox_table.sql` | `reconciliation_outbox` | Transactional outbox table for reliable `reconciliation.events` publishing |
+
+---
+
 ## API Reference
 
 | Endpoint | Method | Response | Notes |
 |---|---|---|---|
-| `/health` | GET, HEAD | `{"status":"ok"}` | Always healthy if process is running |
-| `/health/live` | GET, HEAD | `{"status":"ok"}` | Liveness probe (same as `/health`) |
-| `/ready` | GET, HEAD | `{"status":"ready"}` or 503 `{"status":"not_ready"}` | Ready after scheduler starts |
-| `/health/ready` | GET, HEAD | _(same as `/ready`)_ | Readiness probe |
+| `/health` | GET | `{"status":"ok"}` | Overall health probe via `go-shared/pkg/health` |
+| `/health/live` | GET | `{"status":"alive"}` | Kubernetes liveness probe |
+| `/health/ready` | GET | `{"status":"ready"}` or 503 | Kubernetes readiness probe |
+| `/ready` | GET | `{"status":"ready"}` or 503 | Legacy readiness alias |
 | `/metrics` | GET | Prometheus exposition format | Via `promhttp.Handler()` |
-| `/api/v1/reconciliation/runs` | GET | `ListRunsResponse` | Historical reconciliation runs with mismatch counts |
-| `/api/v1/reconciliation/runs/{id}/mismatches` | GET | `ListMismatchesResponse` | Granular discrepancies for a given reconciliation run |
-| `/api/v1/reconciliation/mismatches/pending` | GET | `ListMismatchesResponse` | Unresolved discrepancies requiring manual review |
-| `/api/v1/reconciliation/mismatches/{id}/fix` | POST | 200 OK | Apply targeted settlement fix for a specific mismatch |
+| `/reconciliation/runs` | GET | `ListRunsResponse` | Historical reconciliation runs with mismatch counts |
+| `/reconciliation/runs/{id}/mismatches` | GET | `ListMismatchesResponse` | Granular discrepancies for a given reconciliation run ID |
+| `/reconciliation/mismatches/{id}/review` | POST | 200 OK | Mark a discrepancy as reviewed by financial auditor |
+| `/reconciliation/mismatches/{id}/fix` | POST | 200 OK | Apply targeted automated fix for a specific mismatch |
 
 All endpoints return `405 Method Not Allowed` with `Allow: GET, HEAD` for other HTTP methods.
 

@@ -5,8 +5,8 @@
 The outbox-relay-service is a CDC (Change Data Capture) alternative that polls the transactional outbox pattern table from services without native Debezium support. It provides exactly-once event delivery semantics to Kafka, ensuring no duplicate or lost events across service boundaries.
 
 **Service Ownership**: Platform Team - Event Infrastructure Tier 2
-**Language**: Go 1.22
-**Default Port**: 8087
+**Language**: Go 1.25
+**Default Port**: 8103
 **Status**: Tier 2 Critical (Event delivery)
 
 ## SLOs & Availability

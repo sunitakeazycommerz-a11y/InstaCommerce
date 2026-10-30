@@ -4,26 +4,20 @@
 
 - [ ] Verify catalog-db (PostgreSQL) migrations current
   ```bash
-  kubectl exec -n engagement deploy/catalog-service -- \
-    curl -s http://localhost:8082/actuator/health/db | jq '.components.db.status'
-  ```
-
-- [ ] Check Elasticsearch connectivity (product search index)
-  ```bash
-  kubectl exec -n engagement deploy/catalog-service -- \
-    curl -s http://localhost:8082/actuator/health | jq '.components.elasticsearch'
+  kubectl exec -n default deploy/catalog-service -- \
+    curl -s http://localhost:8082/actuator/health/readiness | jq '.components.db.status'
   ```
 
 - [ ] Verify Redis cache is available
   ```bash
-  kubectl exec -n engagement deploy/catalog-service -- \
-    curl -s http://localhost:8082/actuator/health | jq '.components.redis'
+  kubectl exec -n default deploy/catalog-service -- \
+    curl -s http://localhost:8082/actuator/health/readiness | jq '.components.redis'
   ```
 
-- [ ] Check Kafka connectivity (product.events topic)
+- [ ] Check Kafka connectivity (catalog.events topic)
   ```bash
-  kubectl exec -n engagement deploy/catalog-service -- \
-    curl -s http://localhost:8082/actuator/health | jq '.components.kafka'
+  kubectl exec -n default deploy/catalog-service -- \
+    curl -s http://localhost:8082/actuator/health/readiness | jq '.components.kafka'
   ```
 
 - [ ] Validate product count in index (should match database)

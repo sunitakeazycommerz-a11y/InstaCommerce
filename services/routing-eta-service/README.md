@@ -1,6 +1,6 @@
 # Routing & ETA Service
 
-> **Java 21 · Spring Boot 3 · PostgreSQL · Kafka · WebSocket · Port 8094**
+> **Java 21 · Spring Boot 4 · PostgreSQL · Kafka · WebSocket · Port 8094**
 >
 > Single owner of delivery lifecycle state, ETA computation, and real-time rider location broadcast.
 
@@ -67,7 +67,7 @@ flowchart TB
         RFS["rider-fleet-service<br/>(assignment)"]
         DOS["dispatch-optimizer-service<br/>(scoring)"]
         LIS["location-ingestion-service<br/>(GPS ingest, Go)"]
-        RES["routing-eta-service<br/>:8092 (Java)"]
+        RES["routing-eta-service<br/>:8094 (Java)"]
     end
 
     subgraph Infrastructure

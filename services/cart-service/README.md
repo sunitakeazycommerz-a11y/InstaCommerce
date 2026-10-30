@@ -350,6 +350,18 @@ sequenceDiagram
 
 ## Database Schema
 
+Managed by **Flyway** with 7 migrations (`V1`–`V7`) in `src/main/resources/db/migration/`:
+
+| Migration | File | Tables / Objects | Purpose |
+|---|---|---|---|
+| `V1` | `V1__create_carts.sql` | `carts` | User cart session with version and expiration timestamp |
+| `V2` | `V2__create_cart_items.sql` | `cart_items` | Items within cart with unique constraint `(cart_id, product_id)` |
+| `V3` | `V3__create_shedlock.sql` | `shedlock` | Distributed lock table for expired cart purging |
+| `V4` | `V4__create_outbox_events.sql` | `outbox_events` | Transactional outbox table |
+| `V5` | `V5__add_outbox_envelope_fields.sql` | `outbox_events` | Envelope fields: `event_id`, `correlation_id`, `causation_id`, `schema_version` |
+| `V6` | `V6__add_carts_updated_at_index.sql` | `carts` | Indexes `idx_carts_updated_at` and `idx_carts_expires_updated` |
+| `V7` | `V7__add_outbox_events_retention_index.sql` | `outbox_events` | Retention index `idx_outbox_events_retention` on `(processed_at, created_at)` |
+
 ```mermaid
 erDiagram
     carts {
@@ -373,12 +385,17 @@ erDiagram
 
     outbox_events {
         uuid id PK
+        uuid event_id
+        varchar correlation_id
+        varchar causation_id
+        varchar schema_version
         varchar aggregate_type
         varchar aggregate_id
         varchar event_type
         jsonb payload
         timestamp created_at
         boolean sent "default false"
+        timestamp processed_at
     }
 
     shedlock {
@@ -391,20 +408,22 @@ erDiagram
     carts ||--o{ cart_items : "contains"
 ```
 
-### Constraints
+### Constraints & Indexes
 
 - **Unique:** `(cart_id, product_id)` on `cart_items` — one entry per product per cart
 - **Unique:** `user_id` on `carts` — one cart per user
+- **Indexes:** `idx_carts_updated_at` on `carts(updated_at)`, `idx_carts_expires_updated` on `carts(expires_at, updated_at)`
 - **Cascade:** Deleting a cart removes all its items (orphan removal)
 - **Optimistic locking:** `version` column prevents lost updates
 
-### Kafka Events (via Outbox)
+### Kafka Events (via Outbox to `cart.events`)
 
 | Event | Trigger | Payload |
 |-------|---------|---------|
 | `ITEM_ADDED` | Item added to cart | `{userId, cartId, productId, quantity, unitPriceCents, productName}` |
 | `ITEM_REMOVED` | Item removed from cart | `{userId, cartId, productId}` |
 | `CART_CLEARED` | Cart cleared | `{userId, cartId}` |
+| `CART_MERGED` | Guest cart merged into user cart | `{userId, cartId, guestUserId, mergedItemCount}` |
 
 ---
 
@@ -414,14 +433,14 @@ erDiagram
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SERVER_PORT` | `8088` | HTTP port |
+| `SERVER_PORT` | `8090` | HTTP port |
 | `CART_DB_URL` | `jdbc:postgresql://localhost:5432/carts` | PostgreSQL connection URL |
-| `CART_DB_USER` | `cart` | Database username |
+| `CART_DB_USER` | `postgres` | Database username |
 | `CART_DB_PASSWORD` | — | Database password |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker addresses |
 | `CART_JWT_ISSUER` | `instacommerce-identity` | Expected JWT issuer |
 | `CART_JWT_PUBLIC_KEY` | — | RSA public key (PEM) |
-| `PRICING_SERVICE_BASE_URL` | `http://pricing-service:8087` | Pricing Service URL |
+| `PRICING_SERVICE_URL` | `http://pricing-service:8089` | Pricing Service URL |
 | `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Inter-service auth token |
 | `TRACING_PROBABILITY` | `1.0` | OpenTelemetry sampling rate |
 
@@ -431,15 +450,13 @@ erDiagram
 |----------|---------|-------------|
 | `cart.max-items-per-cart` | 50 | Maximum distinct products per cart |
 | `cart.max-quantity-per-item` | 10 | Maximum quantity per product |
-| `cart.kafka.cart-events-topic` | `cart-events` | Kafka topic for cart events |
+| `cart.kafka.cart-events-topic` | `cart.events` | Kafka topic for cart events |
 
 ### Cache Configuration
 
-| Cache Name | Max Size | TTL | Purpose |
-|------------|----------|-----|---------|
-| `carts` | 50,000 | 1 hour | Cart lookups by userId |
-
-Cache is **evicted** on all mutations (add, update, remove, clear).
+Two-level cache architecture (`TwoLevelCacheManager` in `CacheConfig.java`):
+- **L1 Near-Cache (Caffeine):** In-memory local pod cache, 50,000 maximum entries, 1-hour TTL.
+- **L2 Distributed Cache (Redis):** Cluster-wide cache with TTL and Redis Pub/Sub cross-pod cache invalidation on channel `cart:cache:invalidate` and cart stream synchronization on `cart:updated:{userId}`.
 
 ### PricingClient Configuration
 

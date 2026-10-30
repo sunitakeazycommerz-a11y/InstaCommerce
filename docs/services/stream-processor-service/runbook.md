@@ -7,7 +7,7 @@
 - **Liveness Probe:** `http://localhost:8108/health/live`
 - **Metrics Endpoint:** `http://localhost:8108/metrics`
 - **Local Startup:** `cd services/stream-processor-service && go run main.go`
-- **State Ownership:** Computes operational business metrics from 7 Kafka topics and writes sliding-window aggregates to Redis and Prometheus.
+- **State Ownership:** Computes operational business metrics from Kafka domain topics and writes sliding-window aggregates to Redis and Prometheus.
 
 ---
 
@@ -21,7 +21,7 @@
 kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group stream-processor --describe
 
 # Check stream processor throughput metrics
-curl -s http://localhost:8108/metrics | grep stream_processor_events_total
+curl -s http://localhost:8108/metrics | grep -E "orders_total|payments_total|riders_by_status|inventory_stock_updates_total"
 
 # Inspect pod logs for processing errors
 kubectl logs -n instacommerce deploy/stream-processor-service --tail=100 | grep -i "error\|lag\|timeout"

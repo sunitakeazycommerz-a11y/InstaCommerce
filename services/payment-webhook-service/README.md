@@ -422,8 +422,8 @@ payment-webhook-service/
 │   ├── dedup.go            # IdempotencyStore — in-memory TTL map with maxSize eviction
 │   ├── metrics.go          # WebhookMetrics — Prometheus counters/histograms per PSP
 │   └── webhook_transport_test.go  # Transport contract tests for Kafka event envelope
-├── Dockerfile              # Multi-stage build: golang:1.22-alpine → alpine:3.20, non-root user
-├── go.mod                  # Go 1.23, module: github.com/instacommerce/payment-webhook-service
+├── Dockerfile              # Multi-stage build: golang:1.25-alpine → alpine:3.20, non-root user
+├── go.mod                  # Go 1.25, module: github.com/instacommerce/payment-webhook-service
 └── go.sum
 ```
 

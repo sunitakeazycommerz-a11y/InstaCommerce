@@ -68,7 +68,7 @@ docker push gcr.io/instacommerce/order-service:v1.0.0
 - Replicas: 3
 - CPU: 500m request, 1500m limit
 - Memory: 512Mi request, 1Gi limit
-- Port: 8085
+- Port: 8084
 
 **Deploy via ArgoCD**:
 ```bash
@@ -87,14 +87,14 @@ argocd app sync order-service
 ### Liveness
 
 ```bash
-curl http://localhost:8084/actuator/health/live
+curl http://localhost:8084/actuator/health/liveness
 # { "status": "UP" }
 ```
 
 ### Readiness
 
 ```bash
-curl http://localhost:8084/actuator/health/ready
+curl http://localhost:8084/actuator/health/readiness
 # { "status": "UP", "components": { "db": { "status": "UP" } } }
 ```
 

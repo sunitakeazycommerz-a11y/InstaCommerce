@@ -285,7 +285,7 @@ graph LR
 ### CDC Consumer Details
 
 The `cdc-consumer-service` (Go, port 8104) reads Debezium messages and micro-batches
-them into BigQuery using the Storage Write API.
+them into BigQuery using the BigQuery streaming insert API (`table.Inserter()`).
 
 | Setting | Value |
 |---------|-------|
@@ -325,19 +325,23 @@ raw (CDC Consumer)
       ├── stg_searches
       ├── stg_cart_events
       ├── stg_products
-      ├── stg_stores
+      ├── stg_inventory_movements
       └── stg_users
       └─▶ intermediate (tables) — 3 models
            ├── int_order_deliveries
            ├── int_product_performance
            └── int_user_order_history
-           └─▶ marts (tables) — 6 models
+           └─▶ marts (tables) — 10 models
                 ├── mart_daily_revenue
+                ├── mart_daily_sales
+                ├── mart_order_fulfillment
                 ├── mart_search_funnel
                 ├── mart_product_analytics
                 ├── mart_rider_performance
                 ├── mart_store_performance
-                └── mart_user_cohort_retention
+                ├── mart_user_cohort_retention
+                ├── mart_sponsored_opportunities
+                └── mart_experiment_conversions
 ```
 
 All mart tables are partitioned by `order_date` and schemas are auto-created per layer.
@@ -397,16 +401,17 @@ aggregations into Redis for consumption by dashboards and API gateways.
 
 ### Path B — Apache Beam / Dataflow Pipelines
 
-Five Beam pipelines run on Google Cloud Dataflow for windowed analytics that land
+Six Beam pipelines run on Google Cloud Dataflow for windowed analytics that land
 directly in BigQuery.
 
 | Pipeline | Source Topic | Window | Output Table(s) | Key Metrics |
 |----------|-------------|--------|------------------|-------------|
-| Order Events | `order.events` | 1-min fixed, 30-min sliding | `analytics.realtime_order_volume`, `analytics.sla_compliance` | Orders/min, GMV, SLA rate |
-| Payment Events | `payment.events` | 1-min fixed | `analytics.payment_metrics` | Success rate, latency P95 |
+| Order Events | `orders.events` | 1-min fixed, 30-min sliding | `analytics.realtime_order_volume`, `analytics.sla_compliance` | Orders/min, GMV, SLA rate |
+| Payment Events | `payments.events` | 1-min fixed | `analytics.payment_metrics` | Success rate, latency P95 |
 | Inventory Events | `inventory.events` | 5-min fixed | `analytics.inventory_velocity`, `analytics.stockout_alerts` | Inventory velocity, stockouts |
 | Cart Events | `cart.events` | 15-min session | `analytics.cart_abandonment` | Abandonment rate |
-| Rider Location | `rider.location` | 1-min fixed | `analytics.rider_utilization` | Rider utilization per zone |
+| Rider Location | `rider.location.updates` | 1-min fixed | `analytics.rider_utilization` | Rider utilization per zone |
+| Order-Payment Join | `orders.events` + `payments.events` | CoGroupByKey (10-min skew) | `analytics.realtime_order_payments` | Real-time settlement & conversion |
 
 Malformed events that fail deserialization are routed to a GCS dead-letter bucket
 for later replay.
@@ -463,8 +468,9 @@ graph LR
     end
 
     subgraph "Serving"
-        AIS[ai-inference-service]
-        ONNX[ONNX Runtime]
+        AIO[ai-orchestrator-service<br/>LangGraph Agent & Guardrails]
+        AIS[ai-inference-service<br/>Model Server]
+        ONNX[ONNX / Regression Weights]
         FB[Rule-Based Fallback]
     end
 
@@ -479,6 +485,7 @@ graph LR
     MLF --> MR
     MR --> GCS
     GCS --> AIS
+    AIO -->|Model Scoring| AIS
     AIS --> ONNX
     AIS --> FB
 ```

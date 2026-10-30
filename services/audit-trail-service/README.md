@@ -376,7 +376,17 @@ shedlock
   locked_by  VARCHAR(255)
 ```
 
-Migrations managed by **Flyway** (`db/migration/V*.sql`).
+### Database Migrations
+
+Managed by **Flyway** (`db/migration/V*.sql`):
+
+| Migration | File | Objects | Description |
+|---|---|---|---|
+| `V1` | `V1__create_audit_events.sql` | `audit_events` | Range-partitioned table by `created_at` with monthly partition strategy |
+| `V2` | `V2__create_audit_retention_policy.sql` | `audit_retention_policies` | Service-level retention configuration and archive destination mappings |
+| `V3` | `V3__create_shedlock.sql` | `shedlock` | Standard distributed lock table for partition maintenance cron |
+| `V4` | `V4__enforce_append_only_and_add_indexes.sql` | `trg_audit_events_immutable` | Append-only immutability trigger preventing UPDATE and DELETE mutations; Gin index on payload |
+| `V5` | `V5__add_tamper_evident_chain.sql` | `prev_event_hash`, `event_hash` | SHA-256 cryptographic chaining columns for tamper-evident verification |
 
 ---
 

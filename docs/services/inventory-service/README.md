@@ -42,7 +42,7 @@ The inventory-service maintains the authoritative stock levels for all products 
 
 ### Database
 - **Name**: `inventory` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V12)
+- **Migrations**: Flyway (V1-V14)
 - **Connection Pool**: HikariCP 60 connections (HIGHEST of all services due to concurrency)
 - **Idle Timeout**: 5 minutes
 - **Max Lifetime**: 30 minutes
@@ -94,56 +94,77 @@ AVAILABLE → RESERVED (checkout reserves)
 ### Synchronous Calls (Critical Locks)
 | Service | Endpoint | Timeout | Purpose | Lock |
 |---------|----------|---------|---------|------|
-| order-service | http://order-service:8085/orders/{id}/validate | 3s | Validate order | Row-level SELECT...FOR UPDATE |
-| fulfillment-service | http://fulfillment-service:8080/pick/{id} | 5s | Query pick status | No lock (read-only) |
+| order-service | http://order-service:8084/orders/{id}/validate | 3s | Validate order | Row-level SELECT...FOR UPDATE |
+| fulfillment-service | http://fulfillment-service:8086/pick/{id} | 5s | Query pick status | No lock (read-only) |
 
 ### Asynchronous Events
 | Topic | Direction | Events |
 |-------|-----------|--------|
 | inventory.events | Publish | StockReserved, StockReleased, StockAdjusted, LowStockAlert, ReservationExpired |
-| orders.events | Consume | OrderCancelled, OrderConfirmed |
-| fulfillment.events | Consume | PickingCompleted (confirms allocation) |
+
+*Note*: The inventory service operates as a synchronous REST authority for stock reservation, confirmation, and release. Reservation lifecycle requests are driven synchronously by `checkout-orchestrator-service` and `order-service`. Domain events are published asynchronously to Kafka via the transactional outbox pattern.
 
 ## Data Model
 
 ### Core Entities
 
 ```
-Stock Table (Per Product, Per Warehouse):
+stock_items (Per Product, Per Store):
 ├─ id (UUID, PK)
-├─ product_id (UUID, FK)
-├─ warehouse_id (UUID, FK)
-├─ quantity_available (INT, >= 0)
-├─ quantity_reserved (INT, >= 0)
-├─ quantity_allocated (INT, >= 0)  # Being picked/packed
-├─ low_stock_threshold (INT, configurable)
-├─ reorder_quantity (INT, for ops)
-├─ updated_at (TIMESTAMP)
-└─ (Unique constraint: (product_id, warehouse_id))
+├─ product_id (UUID, NOT NULL)
+├─ store_id (UUID, NOT NULL)
+├─ on_hand (INT, >= 0)
+├─ reserved (INT, >= 0)
+├─ is_frozen (BOOLEAN, default false)
+├─ version (BIGINT, optimistic locking)
+├─ created_at / updated_at (TIMESTAMPTZ)
+└─ UNIQUE (product_id, store_id)
 
-Reservations Table (Active Holds):
+stock_batches (Perishable Batches):
 ├─ id (UUID, PK)
-├─ order_id (UUID, FK → order-service, indexed)
-├─ product_id (UUID)
-├─ warehouse_id (UUID)
-├─ quantity (INT)
-├─ reserved_at (TIMESTAMP)
-├─ expires_at (TIMESTAMP = reserved_at + 5 minutes, indexed)
-├─ released (BOOLEAN, logical delete)
-├─ released_at (TIMESTAMP)
-├─ release_reason (ENUM: CANCELLED, EXPIRED, ALLOCATED)
-└─ (Unique constraint: (order_id, product_id, warehouse_id))
+├─ store_id (UUID, NOT NULL)
+├─ product_id (UUID, NOT NULL)
+├─ batch_number (VARCHAR64)
+├─ quantity_on_hand / quantity_reserved (INT)
+├─ expiry_date (DATE)
+├─ is_discounted (BOOLEAN)
+└─ UNIQUE (store_id, product_id, batch_number)
 
-Adjustment Log (Admin Actions):
+reservations (Active Holds):
 ├─ id (UUID, PK)
+├─ idempotency_key (VARCHAR64, UNIQUE)
+├─ store_id (UUID)
+├─ status (ENUM: PENDING, CONFIRMED, CANCELLED, EXPIRED)
+├─ version (BIGINT, optimistic locking)
+├─ expires_at (TIMESTAMPTZ)
+└─ created_at / updated_at (TIMESTAMPTZ)
+
+reservation_line_items:
+├─ id (UUID, PK)
+├─ reservation_id (UUID, FK -> reservations)
 ├─ product_id (UUID)
-├─ warehouse_id (UUID)
-├─ adjustment_type (ENUM: DAMAGE, SHRINKAGE, CORRECTION, RETURN)
-├─ quantity_delta (INT, positive or negative)
-├─ reason (TEXT)
-├─ adjusted_by (VARCHAR - admin user)
-├─ adjusted_at (TIMESTAMP)
-└─ (Audit log for compliance)
+└─ quantity (INT, CHECK > 0)
+
+sku_safety_stock_buffers:
+├─ id (UUID, PK)
+├─ store_id (UUID)
+├─ product_id (UUID)
+└─ buffer_quantity (INT)
+
+inbound_asns & asn_line_items (Receiving):
+├─ Advanced Shipping Notices for dock receipts and pallet tracking
+
+stock_adjustment_log (Audit Trail):
+├─ id (BIGSERIAL, PK)
+├─ product_id (UUID), store_id (UUID)
+├─ delta (INT), reason (VARCHAR100), reference_id (VARCHAR255)
+└─ actor_id (UUID), created_at (TIMESTAMPTZ)
+
+outbox_events:
+├─ id (UUID, PK), event_id (UUID, NOT NULL)
+├─ aggregate_type, aggregate_id, event_type
+├─ schema_version, source_service, correlation_id
+└─ payload (JSONB), sent (BOOLEAN), created_at (TIMESTAMPTZ)
 ```
 
 ## API Documentation

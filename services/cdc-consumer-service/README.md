@@ -87,9 +87,12 @@ graph LR
 
 ```
 cdc-consumer-service/
-├── main.go         # All logic: config, consumer, batcher, transform, retry, DLQ, HTTP, metrics, tracing
-├── Dockerfile      # Multi-stage (golang:1.26-alpine → alpine:3.23), non-root, HEALTHCHECK
-└── go.mod          # Module: github.com/instacommerce/cdc-consumer-service
+├── main.go               # Core logic: config, consumer, batcher, retry, DLQ, HTTP, metrics, tracing
+├── schema_evolution.go   # Schema evolution detector and BigQuery table field synchronization
+├── cdc_consumer_test.go  # Unit and table-driven tests for transformations, batching, and DLQ
+├── Dockerfile            # Multi-stage (golang:1.25-alpine → alpine:3.23), non-root, HEALTHCHECK
+├── go.mod                # Module: github.com/instacommerce/cdc-consumer-service
+└── go.sum                # Checksum dependencies
 ```
 
 ### Component / UML Diagram
@@ -476,13 +479,10 @@ docker run -e KAFKA_BROKERS="..." -e KAFKA_TOPICS="..." \
 | Limitation | Impact | Mitigation |
 |---|---|---|
 | **BQ `insertID` dedup window is ~1 minute** | DLQ replays hours later may produce duplicate rows in BigQuery | Use a `DEDUP` view (`SELECT DISTINCT` on `topic + partition + offset`) or BigQuery MERGE for long-delay replays |
-| **Single-binary architecture** | All logic in `main.go`; no unit-testable interfaces for consumer, batcher, or BQ client | Extract interfaces for `Inserter`, `DLQWriter`, and `Reader` to enable table-driven unit tests and mocks |
 | **No DLQ replay tooling** | `cdc.dlq` messages must be manually re-processed | Build a replay consumer or use `kcat`/`kafkacat` to re-produce from DLQ back to source topics |
 | **No circuit breaker on BQ** | Sustained BQ outage causes repeated retry cycles → DLQ → restart loops | Add a circuit breaker that short-circuits to DLQ after N consecutive batch failures |
 | **No backpressure signal to Debezium** | If this consumer is slow, Debezium continues writing to Kafka; lag grows unbounded | Monitor `cdc_consumer_lag` and scale replicas or increase `BQ_BATCH_SIZE` |
 | **`SkipInvalidRows` / `IgnoreUnknownValues` on inserter** | Silently drops rows that do not match BQ schema without surfacing which rows were skipped | These rows are not counted in `cdc_dlq_total`; consider logging or metering skipped-row counts |
-| **`rand.Seed` deprecated pattern** | `rand.Seed(time.Now().UnixNano())` in `main()` — deprecated since Go 1.20; auto-seeded by runtime | Low impact; remove for cleanliness |
-| **Dockerfile EXPOSE port mismatch** | `ENV PORT=8104` but `EXPOSE 8125` — the EXPOSE directive is cosmetically incorrect | Correct `EXPOSE` to `8104` in a future change |
 
 ---
 

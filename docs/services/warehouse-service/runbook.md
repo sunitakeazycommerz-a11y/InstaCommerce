@@ -4,33 +4,33 @@
 
 - [ ] Verify warehouse-db (PostgreSQL) is accessible
   ```bash
-  kubectl exec -n warehouse deploy/warehouse-service -- \
-    curl -s http://localhost:8092/actuator/health/db | jq '.components.db.status'
+  kubectl exec deploy/warehouse-service -- \
+    curl -s http://localhost:8092/actuator/health/readiness | jq '.components.db.status'
   ```
 
-- [ ] Check inventory-service connectivity (synchronous SKU checks)
+- [ ] Check inventory-service connectivity (synchronous dark store / SKU checks)
   ```bash
-  kubectl exec -n warehouse deploy/warehouse-service -- \
-    curl -v http://inventory-service:8082/health
+  kubectl exec deploy/warehouse-service -- \
+    curl -v http://inventory-service:8083/actuator/health/readiness
   ```
 
-- [ ] Verify geospatial queries are working (Redis GEO commands)
+- [ ] Verify JVM Caffeine near-cache metrics
   ```bash
-  kubectl exec -n warehouse deploy/warehouse-service -- \
-    curl -s http://localhost:8092/actuator/health | jq '.components.redis'
+  kubectl exec deploy/warehouse-service -- \
+    curl -s http://localhost:8092/actuator/metrics/jvm.memory.used
   ```
 
-- [ ] Validate capacity data loaded and current
+- [ ] Validate dark store active count and capacity data
   ```bash
-  kubectl exec -n warehouse deploy/warehouse-service -- \
-    curl -s http://localhost:8092/v1/warehouses?limit=5 \
-    -H "Authorization: Bearer admin-token" | jq '.warehouses | length'
+  kubectl exec deploy/warehouse-service -- \
+    curl -s "http://localhost:8092/admin/stores?status=ACTIVE" \
+    -H "Authorization: Bearer admin-token" | jq 'length'
   ```
 
-- [ ] Check all regions have at least one warehouse available
+- [ ] Verify Kafka topic availability (warehouse.events)
   ```bash
-  kubectl exec -n warehouse deploy/warehouse-service -- \
-    curl -s http://localhost:8092/v1/admin/warehouse-coverage | jq '.regions'
+  kubectl exec deploy/warehouse-service -- \
+    curl -s http://localhost:8092/actuator/health/readiness | jq '.components.kafka'
   ```
 
 ---
@@ -41,50 +41,36 @@
 
 ```bash
 # Current replica count
-kubectl get deploy warehouse-service -n warehouse -o jsonpath='{.spec.replicas}'
+kubectl get deploy warehouse-service -o jsonpath='{.spec.replicas}'
 
-# Warehouse availability check latency (should be <100ms)
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/metrics/availability-check-latency-p99 | jq '.value'
-
-# Current load (requests/sec)
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/metrics/requests-per-sec | jq '.value'
+# Nearest store query latency
+kubectl exec deploy/warehouse-service -- \
+  curl -s http://localhost:8092/actuator/metrics/http.server.requests | jq '.measurements'
 ```
 
 ### Blue-Green Deployment
 
 ```bash
 # 1. Version check
-kubectl get deploy -n warehouse warehouse-service -o jsonpath='{.spec.template.spec.containers[0].image}'
+kubectl get deploy warehouse-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Upgrade
 helm upgrade warehouse-service deploy/helm/warehouse-service \
-  -n warehouse \
-  --values deploy/helm/values.yaml \
-  --values deploy/helm/values-prod.yaml
+  --values deploy/helm/values.yaml
 
 # 3. Monitor rollout
-kubectl rollout status deploy/warehouse-service -n warehouse --timeout=10m
+kubectl rollout status deploy/warehouse-service --timeout=10m
 
-# 4. Verify geospatial queries still working (no query plan regression)
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/metrics/geo-query-latency-p99 | jq '.value'
-
-# 5. Verify coverage still 100%
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/v1/admin/warehouse-coverage | jq '.coverage_percent'
+# 4. Verify nearest store query latency
+kubectl exec deploy/warehouse-service -- \
+  curl -s "http://localhost:8092/stores/nearest?lat=12.9716&lng=77.6412&radiusKm=10"
 ```
 
 ### Rollback
 
 ```bash
-helm rollback warehouse-service 1 -n warehouse
-kubectl rollout status deploy/warehouse-service -n warehouse --timeout=5m
-
-# Verify coverage maintained
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/v1/admin/warehouse-coverage | jq '.coverage_percent'
+helm rollback warehouse-service 1
+kubectl rollout status deploy/warehouse-service --timeout=5m
 ```
 
 ---
@@ -95,54 +81,49 @@ kubectl exec -n warehouse deploy/warehouse-service -- \
 
 ```bash
 # Check Spring Boot startup logs
-kubectl logs -n warehouse deploy/warehouse-service --tail=30
+kubectl logs deploy/warehouse-service --tail=30
 
 # Verify port listening
-kubectl exec -n warehouse deploy/warehouse-service -- \
+kubectl exec deploy/warehouse-service -- \
   netstat -tlnp | grep 8092
 ```
 
 ### Smoke Tests
 
 ```bash
-POD=$(kubectl get pods -n warehouse -l app=warehouse-service -o jsonpath='{.items[0].metadata.name}')
+POD=$(kubectl get pods -l app=warehouse-service -o jsonpath='{.items[0].metadata.name}')
 
 # 1. Health check
-kubectl exec -n warehouse pod/$POD -- \
-  curl -s http://localhost:8092/actuator/health | jq '.status'
+kubectl exec pod/$POD -- \
+  curl -s http://localhost:8092/actuator/health/readiness | jq '.status'
 
-# 2. Test nearest warehouse lookup (geospatial)
-kubectl exec -n warehouse pod/$POD -- \
-  curl -s "http://localhost:8092/v1/warehouses/nearest?lat=40.7128&lng=-74.0060" \
-  -H "Authorization: Bearer test-token" | jq '.warehouse.id'
+# 2. Test nearest dark store lookup (Haversine distance)
+kubectl exec pod/$POD -- \
+  curl -s "http://localhost:8092/stores/nearest?lat=12.9716&lng=77.6412&radiusKm=10" | jq '.[0].id'
 
-# 3. Test warehouse capacity check
-kubectl exec -n warehouse pod/$POD -- \
-  curl -s "http://localhost:8092/v1/warehouses/WH-001/capacity" \
-  -H "Authorization: Bearer test-token" | jq '.available'
+# 3. Test dark store current capacity check
+STORE_ID=$(kubectl exec pod/$POD -- curl -s "http://localhost:8092/stores/nearest?lat=12.9716&lng=77.6412&radiusKm=10" | jq -r '.[0].id')
+kubectl exec pod/$POD -- \
+  curl -s "http://localhost:8092/stores/$STORE_ID/capacity" | jq .
 ```
 
 ### Database & Cache Validation
 
 ```bash
 # Database health
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/actuator/health/db | jq '.components.db'
-
-# Redis geo index health
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/actuator/health | jq '.components.redis'
+kubectl exec deploy/warehouse-service -- \
+  curl -s http://localhost:8092/actuator/health/readiness | jq '.components.db'
 ```
 
 ---
 
 ## Health Check Procedures
 
-### Liveness Probe: `/actuator/health/live`
+### Liveness Probe: `/actuator/health/liveness`
 
-### Readiness Probe: `/actuator/health/ready`
+### Readiness Probe: `/actuator/health/readiness`
 
-**Load balancer removal triggers**: Redis unavailable, geospatial index corrupt
+**Load balancer removal triggers**: Database connection lost, Hikari connection pool exhausted
 
 ---
 
@@ -150,33 +131,29 @@ kubectl exec -n warehouse deploy/warehouse-service -- \
 
 ### P0 - Warehouse Lookup Down
 
-**Symptom**: Inventory and fulfillment services unable to find warehouses
+**Symptom**: Mobile BFF and fulfillment services unable to locate nearest dark stores
 
 **Diagnosis**:
 ```bash
 # Check pod status
-kubectl get pods -n warehouse -l app=warehouse-service
+kubectl get pods -l app=warehouse-service
 
 # Check logs
-kubectl logs -n warehouse deploy/warehouse-service --tail=100 | grep -i "error\|exception"
+kubectl logs deploy/warehouse-service --tail=100 | grep -i "error\|exception"
 
-# Test geospatial query
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s "http://localhost:8092/v1/warehouses/nearest?lat=0&lng=0" -w "\n"
+# Test nearest store query
+kubectl exec deploy/warehouse-service -- \
+  curl -s "http://localhost:8092/stores/nearest?lat=12.9716&lng=77.6412&radiusKm=10" -w "\n"
 
-# Check Redis GEO index
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/v1/admin/geo-index-health | jq '.status'
-
-# Check database
-kubectl exec -n warehouse deploy/warehouse-service -- \
-  curl -s http://localhost:8092/actuator/health/db | jq '.status'
+# Check database readiness
+kubectl exec deploy/warehouse-service -- \
+  curl -s http://localhost:8092/actuator/health/readiness | jq '.status'
 ```
 
 **Resolution**:
-1. Scale up: `kubectl scale deploy warehouse-service -n warehouse --replicas=5`
-2. If Redis GEO index corrupt: Rebuild from database
-3. If database down: Check PostgreSQL cluster
+1. Scale up: `kubectl scale deploy warehouse-service --replicas=5`
+2. If database down: Check PostgreSQL cluster and HikariCP connection limits
+3. If queries slow: Ensure composite index on (latitude, longitude) is healthy
 
 ### P1 - High Latency (>500ms for queries)
 

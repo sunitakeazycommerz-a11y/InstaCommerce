@@ -32,9 +32,9 @@ flowchart LR
         MQ["Marquez Lineage Portal (:5000)"]
     end
 
-    PG -->|CDC| KT1
-    PG -->|CDC| KT2
-    PG -->|CDC| KT3
+    PG -->|Outbox Relay| KT1
+    PG -->|Outbox Relay| KT2
+    PG -->|Outbox Relay| KT3
 
     KT1 --> B1
     KT2 --> B2

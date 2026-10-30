@@ -6,7 +6,7 @@ The order-service is the source of truth for all order data in InstaCommerce. It
 
 **Service Ownership**: Platform Team - Money Path Tier 1
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8085
+**Default Port**: 8084
 **Status**: Tier 1 Critical (money path)
 **Database**: PostgreSQL 15+ (primary ordering system, immutable audit trail)
 
@@ -19,17 +19,17 @@ The order-service is the source of truth for all order data in InstaCommerce. It
 - **Error Rate**: < 0.1% (invalid input errors excluded)
 - **Idempotency**: 100% (no double-billing via idempotency keys)
 - **Max Throughput**: 5,000 orders/minute (at 3 replicas, each ~1,700/min capacity)
-- **Order Status Accuracy**: 100% (eventual consistency via event sourcing)
+- **Order Status Accuracy**: 100%
 - **Event Publishing**: 99.99% (transactional outbox guarantees delivery)
 
 ## Key Responsibilities
 
 1. **Order Persistence**: Accept orders from checkout-orchestrator via Temporal activity; persist atomically to PostgreSQL
-2. **Status Lifecycle Management**: Maintain order status transitions (PENDING → CONFIRMED → PICKING → PICKED → IN_TRANSIT → DELIVERED)
+2. **Status Lifecycle Management**: Maintain order status transitions (`PENDING` → `PLACED` → `PACKING` → `PACKED` → `OUT_FOR_DELIVERY` → `DELIVERED`, with `CANCELLED` and `FAILED` as terminal states)
 3. **Status History Tracking**: Immutable audit log of all transitions with timestamps and audit context
 4. **Order Queries**: Expose order details API for customers (filtered by user_id) and admins; support pagination and filtering
-5. **Cancellation Support**: Allow customer-initiated cancellation before fulfillment picks items (soft constraint, coordination with fulfillment-service)
-6. **Event Publishing**: Transactional outbox pattern ensures orders.events Kafka messages are never lost
+5. **Cancellation Support**: Allow customer-initiated cancellation before fulfillment picks items (`POST /orders/{id}/cancel`)
+6. **Event Publishing**: Transactional outbox pattern ensures `orders.events` Kafka messages are never lost
 7. **Reconciliation Integration**: Expose order data to reconciliation-engine for financial audits
 8. **User Isolation**: Enforce user_id from JWT token; prevent cross-user data access
 
@@ -41,13 +41,13 @@ The order-service is the source of truth for all order data in InstaCommerce. It
 - **CPU Request/Limit**: 500m / 1500m
 - **Memory Request/Limit**: 512Mi / 1Gi
 - **Startup Probe**: 10s initial delay, 3 failure threshold (Flyway migrations)
-- **Readiness Probe**: `/actuator/health/ready` (checks DB + Kafka)
-- **Liveness Probe**: `/actuator/health/live` (JVM health)
+- **Readiness Probe**: `/actuator/health/readiness` (checks DB + Kafka)
+- **Liveness Probe**: `/actuator/health/liveness` (JVM health)
 - **Pod Disruption Budget**: minAvailable: 2/3
 
 ### Database
 - **Name**: `orders` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V11) - auto-applied on startup
+- **Migrations**: Flyway (V1-V12) - auto-applied on startup
 - **Connection Pool**: HikariCP 20 connections, 5 min idle timeout
 - **Failover**: Read replicas in standby zones (via cloudsql-proxy)
 - **Backups**: Daily automated backups, Glacier archival after 30 days

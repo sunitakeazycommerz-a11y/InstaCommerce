@@ -580,9 +580,30 @@ Queries the current status of an in-flight checkout workflow via Temporal's `@Qu
 
 **Status values** (from `CheckoutWorkflowImpl.currentStatus`): `STARTED` → `VALIDATING_CART` → `CALCULATING_PRICES` → `RESERVING_INVENTORY` → `AUTHORIZING_PAYMENT` → `CREATING_ORDER` → `CONFIRMING` → `CLEARING_CART` → `COMPLETED` | `COMPENSATING` → `FAILED`
 
+### `GET /checkout/dlq`
+
+Fetches all failed or stalled saga compensation records from the DLQ table (`compensation_dlq`).
+
+**Response** — `200 OK`
+
+```json
+[
+  {
+    "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+    "workflowId": "checkout-u_abc123-key123",
+    "activityName": "cancelPaymentAuthActivity",
+    "targetId": "pay-987",
+    "reason": "Payment service gateway timeout on compensation",
+    "status": "FAILED",
+    "retryCount": 1,
+    "createdAt": "2026-10-31T01:00:00Z"
+  }
+]
+```
+
 ### `POST /checkout/dlq/{id}/retry`
 
-Manually or operationally retries a poisoned or stalled saga compensation record from the DLQ table (`saga_dlq_records`). When compensation fails (e.g., downstream network timeout during payment refund or inventory unreservation), the workflow logs a dead-letter entry. Operators can inspect and trigger targeted retry.
+Manually or operationally retries a poisoned or stalled saga compensation record from the DLQ table (`compensation_dlq`). When compensation fails (e.g., downstream network timeout during payment refund or inventory unreservation), the workflow logs a dead-letter entry. Operators can inspect and trigger targeted retry.
 
 **Path Parameter:** `id` — UUID of the DLQ record.
 
@@ -591,8 +612,24 @@ Manually or operationally retries a poisoned or stalled saga compensation record
 ```json
 {
   "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
-  "status": "RETRIED",
-  "message": "Compensation retry executed successfully"
+  "status": "RESOLVED",
+  "message": "Compensation retried and marked RESOLVED"
+}
+```
+
+### `POST /checkout/dlq/{id}/resolve`
+
+Marks a DLQ entry as manually resolved with an operator note.
+
+**Path Parameter:** `id` — UUID of the DLQ record.
+
+**Response** — `200 OK`
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+  "status": "RESOLVED",
+  "message": "Manually marked resolved by operator"
 }
 ```
 
@@ -653,7 +690,7 @@ docker compose up temporal postgresql -d
 ./gradlew :services:checkout-orchestrator-service:bootRun
 
 # 3. Trigger a checkout
-curl -X POST http://localhost:8089/checkout \
+curl -X POST http://localhost:8091/checkout \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <jwt>" \
   -H "Idempotency-Key: test-key-001" \
@@ -664,7 +701,7 @@ curl -X POST http://localhost:8089/checkout \
   }'
 
 # 4. Check workflow status
-curl http://localhost:8089/checkout/checkout-u_abc123-test-key-001/status
+curl http://localhost:8091/checkout/checkout-u_abc123-test-key-001/status
 ```
 
 ### Docker
@@ -672,7 +709,7 @@ curl http://localhost:8089/checkout/checkout-u_abc123-test-key-001/status
 ```bash
 ./gradlew :services:checkout-orchestrator-service:bootJar
 docker build -t checkout-orchestrator-service services/checkout-orchestrator-service
-docker run -p 8089:8089 \
+docker run -p 8091:8091 \
   -e TEMPORAL_HOST=host.docker.internal \
   -e CHECKOUT_DB_URL=jdbc:postgresql://host.docker.internal:5432/checkout \
   checkout-orchestrator-service

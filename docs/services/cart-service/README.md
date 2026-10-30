@@ -5,11 +5,11 @@
 | Property | Value |
 |----------|-------|
 | **Module** | `:services:cart-service` |
-| **Port** | `8088` |
+| **Port** | `8090` |
 | **Runtime** | Spring Boot 4.0 · Java 21 |
-| **Database** | PostgreSQL 15+ (Flyway-managed) |
-| **Messaging** | Kafka consumer (inventory.events, catalog.events) |
-| **Cache** | Caffeine (cart TTL: 24h) |
+| **Database** | PostgreSQL 15+ (Flyway-managed, V1-V7) |
+| **Messaging** | Transactional Outbox → `cart.events` |
+| **Cache** | Two-Level: Caffeine L1 + Redis L2 with Pub/Sub |
 | **Auth** | JWT RS256 + per-service token isolation |
 | **Owner** | Cart & Checkout Team |
 | **Status** | Tier 1 (Checkout Critical Path) |
@@ -23,7 +23,7 @@
 - **Error Rate**: < 0.05% (strict SLA for critical path)
 - **Cart Consistency**: 100% (ACID transactions)
 - **Max Throughput**: 50K requests/second per pod (10K RPS add/update operations)
-- **Cache Hit Rate**: > 85% (Caffeine local cache)
+- **Cache Hit Rate**: > 85% (Caffeine L1 + Redis L2)
 - **Pricing Sync Latency**: < 200ms p95 (real-time quote generation)
 
 ---
@@ -31,10 +31,10 @@
 ## Key Responsibilities
 
 1. **Cart State Management**: Maintain per-user shopping carts with full ACID semantics; support concurrent add/update/remove operations with optimistic locking
-2. **Real-Time Availability Sync**: Consume inventory.events to invalidate items when stock becomes unavailable; automatically remove from carts and notify users
-3. **Price Snapshot & Quote Generation**: Call pricing-service synchronously to compute current totals; store price snapshots at add-time for historical accuracy
-4. **Concurrency Conflict Resolution**: Detect and resolve cart modification conflicts using version columns; retry logic with exponential backoff (100ms→1s)
-5. **Event-Driven Persistence**: Publish CartCreated, CartUpdated, CartValidated events via transactional outbox pattern; guarantee at-least-once delivery to Kafka
+2. **Guest Cart Merging**: Atomically merge guest session items into authenticated user carts on login (`POST /cart/merge`)
+3. **Price Snapshot & Quote Generation**: Call pricing-service synchronously to compute current totals; store price snapshots at add-time
+4. **Concurrency Conflict Resolution**: Detect and resolve cart modification conflicts using version columns; retry logic with exponential backoff
+5. **Event-Driven Persistence**: Publish `ITEM_ADDED`, `ITEM_REMOVED`, `CART_CLEARED`, `CART_MERGED` events via transactional outbox pattern to `cart.events`
 
 ## Deployment
 
@@ -44,11 +44,11 @@
 - **CPU Request/Limit**: 500m / 1000m
 - **Memory Request/Limit**: 512Mi / 1024Mi
 - **Startup probe**: 10s delay, 30s timeout (for database migrations)
-- **Liveness probe**: `/actuator/health/live` every 10s
-- **Readiness probe**: `/actuator/health/ready` (includes DB + Kafka consumer group status)
+- **Liveness probe**: `/actuator/health/liveness` every 10s
+- **Readiness probe**: `/actuator/health/readiness` (includes DB connectivity)
 
 ### Cluster Configuration
-- **Ingress**: Behind Istio IngressGateway (VirtualService → cart-service:8088)
+- **Ingress**: Behind Istio IngressGateway (VirtualService → cart-service:8090)
 - **NetworkPolicy**: Allow from checkout-orchestrator-service + mobile-bff-service
 - **Service Account**: cart-service
 - **Pod Disruption Budget**: minAvailable: 2 (protect against cluster churn)

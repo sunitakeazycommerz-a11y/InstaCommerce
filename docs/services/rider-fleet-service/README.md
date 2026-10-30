@@ -6,7 +6,7 @@ The rider-fleet-service manages the complete lifecycle of delivery rider availab
 
 **Service Ownership**: Platform Team - Logistics
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8097
+**Default Port**: 8093
 **Status**: Tier 1 Critical (Delivery Path Authority)
 **Database**: PostgreSQL 15+ (rider state, location index, assignment history)
 
@@ -23,14 +23,14 @@ The rider-fleet-service manages the complete lifecycle of delivery rider availab
 
 ## Key Responsibilities
 
-1. **Rider State Management**: Track rider status (AVAILABLE, ASSIGNED, ON_DELIVERY, OFF_DUTY, UNAVAILABLE)
-2. **Availability Tracking**: Real-time rider availability with skill matrix evaluation
-3. **Geographic Service Areas**: Manage service zone assignments and capacity per zone
-4. **Skill Assignment**: Evaluate rider skills (bike, scooter, car, stairs-access, large-items, premium) against order requirements
-5. **Capacity Management**: Enforce max orders per shift and weight limits per vehicle type
-6. **Location Indexing**: Maintain GIS index for proximity queries (within 5km radius)
-7. **WebSocket Support**: Real-time status updates to dispatch systems
-8. **Stuck Rider Recovery**: Detect and remediate riders stuck in ASSIGNED state > 60 minutes
+1. **Rider State Management**: Track rider status (`INACTIVE`, `ACTIVE`, `ON_DELIVERY`, `SUSPENDED`, `BLOCKED`)
+2. **Availability Tracking**: Real-time rider availability and shift schedule enforcement
+3. **Geographic Proximity Matching**: Haversine distance proximity matching within 5.0 km radius
+4. **Vehicle Type Management**: Enforce constraints for vehicle types (`BICYCLE`, `MOTORCYCLE`, `CAR`)
+5. **Dispatch Optimizer Integration**: Resilient client to `dispatch-optimizer-service` with circuit breaker
+6. **Earnings Accounting**: Calculate per-delivery base pay, distance bonus, and surge incentive
+7. **Stuck Rider Recovery**: Scheduled job (`StuckRiderRecoveryJob`) automatically releasing riders stuck in `ON_DELIVERY` > 60 minutes
+8. **Event Publishing**: Outbox domain events emitted to `rider.events` (`RiderCreated`, `RiderAssigned`, `DeliveryCompleted`, `RiderReleased`, etc.)
 
 ## Deployment
 
@@ -43,7 +43,7 @@ The rider-fleet-service manages the complete lifecycle of delivery rider availab
 
 ### Database
 - **Name**: `rider_fleet` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V8)
+- **Migrations**: Flyway (V1-V11)
 - **Connection Pool**: HikariCP 40 connections
 - **Idle Timeout**: 5 minutes
 

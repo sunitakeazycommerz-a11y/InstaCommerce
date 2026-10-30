@@ -76,61 +76,65 @@ The reconciliation-engine is the authoritative source for financial data integri
 
 | Service | Endpoint | Timeout | Purpose |
 |---------|----------|---------|---------|
-| payment-service | PostgreSQL ledger | N/A | Read payment transactions (direct DB) |
-| order-service | PostgreSQL ledger | N/A | Read order transactions (direct DB) |
-| Kafka (reconciliation.cdc) | - | - | Publish reconciliation events |
-| admin-gateway-service | http://reconciliation-engine:8098/pending | 5s | Query pending mismatches |
+| payment-service | CDC topic / PostgreSQL ledger | N/A | Consume payment ledger transactions |
+| Kafka (reconciliation.events) | - | - | Publish reconciliation mismatch and settlement events |
+| admin-gateway-service | http://reconciliation-engine:8107/reconciliation/runs | 5s | Query reconciliation runs and mismatches |
 
 ## Endpoints
 
-### Public (Unauthenticated)
-- `GET /health` - Liveness probe (reconciliation pod status)
-- `GET /metrics` - Prometheus metrics (Go runtime, reconciliation counters)
+### Public & Health
+- `GET /health` - Overall health probe via `go-shared/pkg/health`
+- `GET /health/ready` - Readiness probe (checks DB pool + Kafka producer)
+- `GET /health/live` - Liveness probe
+- `GET /ready` - Legacy readiness alias
+- `GET /metrics` - Prometheus metrics
 
-### Internal API (Requires X-Internal-Token)
-- `GET /api/v1/runs` - List reconciliation runs (last 30 days)
-- `GET /api/v1/runs/{runId}/mismatches` - Get mismatches for a specific run
-- `GET /api/v1/pending` - Current pending items (from admin-gateway)
-- `POST /api/v1/mismatches/{mismatchId}/review` - Mark mismatch as reviewed (admin action)
-- `POST /api/v1/mismatches/{mismatchId}/fix` - Manually apply fix (admin override)
+### Internal API (Admin / Operations)
+- `GET /reconciliation/runs` - List historical reconciliation runs with mismatch counts
+- `GET /reconciliation/runs/{id}/mismatches` - Granular discrepancies for a given run ID
+- `POST /reconciliation/mismatches/{id}/review` - Mark mismatch as reviewed by financial auditor
+- `POST /reconciliation/mismatches/{id}/fix` - Apply targeted automated settlement fix
 
 ### Example Requests
 
 ```bash
 # Get authorization token
-TOKEN=$(curl -X POST http://identity-service:8080/token/internal \
+TOKEN=$(curl -X POST http://identity-service:8081/token/internal \
   -H "Content-Type: application/json" \
   -d '{"service":"admin-gateway-service"}' | jq -r '.token')
 
 # List recent reconciliation runs
-curl -X GET http://reconciliation-engine:8098/api/v1/runs?limit=10 \
+curl -X GET http://reconciliation-engine:8107/reconciliation/runs \
   -H "X-Internal-Token: $TOKEN"
 
-# Get mismatches from latest run
-LATEST_RUN=$(curl -X GET http://reconciliation-engine:8098/api/v1/runs?limit=1 \
-  -H "X-Internal-Token: $TOKEN" | jq -r '.[0].id')
-
-curl -X GET http://reconciliation-engine:8098/api/v1/runs/$LATEST_RUN/mismatches \
+# Get mismatches from run 101
+curl -X GET http://reconciliation-engine:8107/reconciliation/runs/101/mismatches \
   -H "X-Internal-Token: $TOKEN"
 
-# Manually approve and fix a mismatch
-curl -X POST http://reconciliation-engine:8098/api/v1/mismatches/{mismatchId}/fix \
+# Mark mismatch 42 as reviewed
+curl -X POST http://reconciliation-engine:8107/reconciliation/mismatches/42/review \
   -H "X-Internal-Token: $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"fixType":"manual_override","reason":"timing_discrepancy","approvedBy":"admin-team"}'
+  -d '{"notes":"Timing discrepancy verified against PSP statement"}'
+
+# Apply automated fix
+curl -X POST http://reconciliation-engine:8107/reconciliation/mismatches/42/fix \
+  -H "X-Internal-Token: $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"fix_type":"auto_settle","reason":"Ledger sync adjustment"}'
 ```
 
 ## Configuration
 
 ### Environment Variables
 ```env
-PORT=8098
+PORT=8107
 DATABASE_URL=postgresql://recon:password@postgres.database:5432/reconciliation?sslmode=require
 DATABASE_MAX_CONNECTIONS=20
 DATABASE_CONN_LIFETIME_SECONDS=1800
 
 KAFKA_BROKERS=kafka-broker-0.kafka:9092,kafka-broker-1.kafka:9092,kafka-broker-2.kafka:9092
-KAFKA_TOPIC_RECONCILIATION_CDC=reconciliation.cdc
+KAFKA_TOPIC=reconciliation.events
 
 RECONCILIATION_SCHEDULE_UTC=0 2 * * * (daily at 2 AM UTC)
 RECONCILIATION_LEASE_TIMEOUT_SECONDS=3600

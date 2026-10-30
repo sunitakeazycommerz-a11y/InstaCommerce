@@ -6,10 +6,10 @@ The search-service is the denormalized read-projection for product discovery in 
 
 **Service Ownership**: Platform Team - Search & Discovery
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8086
+**Default Port**: 8088
 **Status**: Tier 2 Critical (read-plane; impacts customer experience)
 **Database**: PostgreSQL 15+ (tsvector FTS, denormalized index)
-**Cache**: Caffeine (JVM-local, 300s TTL) + Redis distributed dedup cache
+**Cache**: TwoLevelCacheManager (Caffeine L1 + Redis L2 with Pub/Sub invalidation)
 **Messaging**: Kafka consumer (catalog.events, inventory.events)
 **Load Balancing**: Round-robin across 2 replicas
 
@@ -27,12 +27,12 @@ The search-service is the denormalized read-projection for product discovery in 
 
 1. **Full-Text Search**: PostgreSQL tsvector FTS; fast prefix matching on product names, descriptions, brands
 2. **Autocomplete**: ILIKE prefix queries; returns product suggestions as user types
-3. **Trending Queries**: Record search queries; expose top trending searches (e.g., "milk", "bread")
-4. **Index Synchronization**: Consume ProductCreated, ProductUpdated, ProductDelisted from catalog.events
-5. **Stock Awareness**: Consume ProductStockChanged from inventory.events; update in_stock flag
+3. **Trending Queries**: Record search queries; expose top trending searches
+4. **Index Synchronization**: Consume `ProductCreated`, `ProductUpdated`, `ProductDeactivated` from `catalog.events`
+5. **Stock Awareness**: Consume `StockAdjusted`, `LowStockAlert`, `StockConfirmed`, `StockReleased` from `inventory.events`
 6. **Faceted Search**: Return facets (brand, category, price ranges) for drill-down navigation
 7. **Query Analytics**: Track search query frequencies for trending and recommendations
-8. **Graceful Degradation**: If Kafka unavailable, serve stale index; no write-through cache
+8. **Graceful Degradation**: If Kafka unavailable, serve stale index
 
 ## Deployment
 
@@ -41,11 +41,11 @@ The search-service is the denormalized read-projection for product discovery in 
 - **Replicas**: 2 (Tier 2; non-critical path)
 - **CPU Request/Limit**: 500m / 1000m
 - **Memory Request/Limit**: 512Mi / 1Gi
-- **Readiness Probe**: `/actuator/health/ready` (checks DB + Kafka)
+- **Readiness Probe**: `/actuator/health/readiness` (checks DB + Kafka)
 
 ### Database
 - **Name**: `search` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V3) auto-applied
+- **Migrations**: Flyway (V1-V6) auto-applied
 - **Connection Pool**: HikariCP 15 connections
 - **Replication**: Read-only (read replicas for analytics)
 - **Indexes**: GIN on tsvector, indexes on category, brand, price, in_stock

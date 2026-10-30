@@ -818,7 +818,7 @@ sequenceDiagram
     participant M as Model (ONNX/LightGBM)
     participant PR as Prometheus
 
-    C->>AI: POST /predict (model, features)
+    C->>AI: POST /inference/{model} (features)
     AI->>FS: Fetch enriched features
     FS-->>AI: Feature vector
     AI->>M: Run inference
@@ -1048,6 +1048,37 @@ type AssignResponse struct {
 ```
 
 **Algorithm**: Greedy nearest-rider assignment with zone constraint. For each unassigned order, find the closest available rider in the same zone with remaining capacity. Ties are broken by rider ID for determinism.
+
+### 10.7 CDC Consumer Service
+
+Consumes Debezium CDC topics from Kafka (`*.public.*`), validates payload JSON schemas, and batches streaming inserts into Google BigQuery `cdc_events` with exponential backoff and dead-letter queueing (`cdc.dlq`).
+
+```mermaid
+flowchart LR
+    Kafka["Kafka CDC Topics<br/>orders_db.public.orders<br/>payments_db.public.payments"] --> Reader["kafka-go Batch Reader"]
+    Reader --> Transform["Transform & Schema Normalizer"]
+    Transform --> BQ["BigQuery Streaming Inserter<br/>table.Inserter()"]
+    Transform -. "Malformed JSON<br/>dlq_reason header" .-> DLQ["Kafka cdc.dlq"]
+    BQ -. "Permanent 4xx Error" .-> DLQ
+```
+
+- **Canonical Port**: `8104` (Health & Prometheus metrics)
+- **Key Metrics**: `cdc_consumer_lag`, `cdc_batch_latency_seconds`, `cdc_dlq_total`
+
+### 10.8 Reverse ETL Orchestrator Service
+
+Synchronizes analytical marts from Google BigQuery into operational datastores (Redis feature caches and PostgreSQL operational replicas) with rate-limited worker pools.
+
+```mermaid
+flowchart LR
+    API["REST API (:8109)<br/>/api/v1/subscriptions"] --> SubMgr["Subscription Manager"]
+    SubMgr --> WorkerPool["Worker Pool (:8109)<br/>WORKER_POOL_CONCURRENCY=10"]
+    WorkerPool --> BQ["BigQuery Extraction"]
+    WorkerPool --> Sinks["Operational Sinks<br/>Redis Cache / PostgreSQL"]
+```
+
+- **Canonical Ports**: `8109` (API), `8110` (Health), `9090` (Prometheus Metrics)
+- **Key Metrics**: `reverse_etl_sync_lag_seconds`, `reverse_etl_records_synced_total`
 
 ---
 

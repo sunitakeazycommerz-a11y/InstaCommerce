@@ -162,16 +162,17 @@ jobs:
     strategy:
       matrix:
         service:
-          - api-gateway
-          - user-service
-          - product-catalog-service
+          - mobile-bff-service
+          - admin-gateway-service
+          - identity-service
+          - catalog-service
           - order-service
           - inventory-service
           - payment-service
-          - delivery-service
+          - fulfillment-service
           - notification-service
           - search-service
-          - analytics-service
+          - pricing-service
     steps:
       - name: Build & Push
         run: |
@@ -281,20 +282,20 @@ spec:
   http:
     - match:
         - uri:
-            prefix: /api/v1/users
+            prefix: /api/v1/auth
       route:
         - destination:
-            host: user-service
+            host: identity-service
             port:
-              number: 8080
+              number: 8081
     - match:
         - uri:
             prefix: /api/v1/products
       route:
         - destination:
-            host: product-catalog-service
+            host: catalog-service
             port:
-              number: 8080
+              number: 8082
     - match:
         - uri:
             prefix: /api/v1/orders
@@ -548,38 +549,38 @@ spec:
 
 ### Service List (30 Deployments)
 
-| # | Service | Replicas | CPU Req/Lim | Memory Req/Lim |
-|---|---|---|---|---|
-| 1 | api-gateway | 3 | 500m / 1000m | 512Mi / 1Gi |
-| 2 | user-service | 2 | 250m / 500m | 256Mi / 512Mi |
-| 3 | product-catalog-service | 3 | 500m / 1000m | 512Mi / 1Gi |
-| 4 | order-service | 3 | 500m / 1000m | 512Mi / 1Gi |
-| 5 | inventory-service | 3 | 500m / 1000m | 512Mi / 1Gi |
-| 6 | payment-service | 2 | 500m / 1000m | 512Mi / 1Gi |
-| 7 | delivery-service | 3 | 500m / 1000m | 512Mi / 1Gi |
-| 8 | notification-service | 2 | 250m / 500m | 256Mi / 512Mi |
-| 9 | search-service | 2 | 500m / 1000m | 1Gi / 2Gi |
-| 10 | analytics-service | 2 | 250m / 500m | 512Mi / 1Gi |
-| 11 | pricing-service | 2 | 250m / 500m | 256Mi / 512Mi |
-| 12 | promotion-service | 2 | 250m / 500m | 256Mi / 512Mi |
-| 13 | review-service | 1 | 250m / 500m | 256Mi / 512Mi |
-| 14 | recommendation-service | 2 | 500m / 1000m | 1Gi / 2Gi |
-| 15 | cart-service | 3 | 250m / 500m | 256Mi / 512Mi |
-| 16 | wishlist-service | 1 | 250m / 500m | 256Mi / 512Mi |
-| 17 | address-service | 1 | 250m / 500m | 256Mi / 512Mi |
-| 18 | loyalty-service | 1 | 250m / 500m | 256Mi / 512Mi |
-| 19 | fulfillment-service | 2 | 500m / 1000m | 512Mi / 1Gi |
-| 20 | warehouse-service | 2 | 250m / 500m | 256Mi / 512Mi |
-| 21 | store-service | 1 | 250m / 500m | 256Mi / 512Mi |
-| 22 | rider-service | 2 | 500m / 1000m | 512Mi / 1Gi |
-| 23 | route-optimization-service | 2 | 500m / 1000m | 1Gi / 2Gi |
-| 24 | fraud-detection-service | 2 | 500m / 1000m | 1Gi / 2Gi |
-| 25 | media-service | 1 | 250m / 500m | 512Mi / 1Gi |
-| 26 | audit-service | 1 | 250m / 500m | 256Mi / 512Mi |
-| 27 | config-service | 1 | 250m / 500m | 256Mi / 512Mi |
-| 28 | scheduler-service | 1 | 250m / 500m | 256Mi / 512Mi |
-| 29 | event-processor | 3 | 500m / 1000m | 512Mi / 1Gi |
-| 30 | data-pipeline-service | 2 | 500m / 1000m | 1Gi / 2Gi |
+| # | Service | Replicas | CPU Req/Lim | Memory Req/Lim | Port |
+|---|---|---|---|---|---|
+| 1 | mobile-bff-service | 3 | 500m / 1000m | 512Mi / 1Gi | 8080 |
+| 2 | identity-service | 2 | 250m / 500m | 256Mi / 512Mi | 8081 |
+| 3 | catalog-service | 3 | 500m / 1000m | 512Mi / 1Gi | 8082 |
+| 4 | inventory-service | 3 | 500m / 1000m | 512Mi / 1Gi | 8083 |
+| 5 | order-service | 3 | 500m / 1000m | 512Mi / 1Gi | 8084 |
+| 6 | payment-service | 2 | 500m / 1000m | 512Mi / 1Gi | 8085 |
+| 7 | fulfillment-service | 3 | 500m / 1000m | 512Mi / 1Gi | 8086 |
+| 8 | notification-service | 2 | 250m / 500m | 256Mi / 512Mi | 8087 |
+| 9 | search-service | 2 | 500m / 1000m | 1Gi / 2Gi | 8088 |
+| 10 | pricing-service | 2 | 250m / 500m | 256Mi / 512Mi | 8089 |
+| 11 | cart-service | 3 | 250m / 500m | 256Mi / 512Mi | 8090 |
+| 12 | checkout-orchestrator-service | 2 | 500m / 1000m | 512Mi / 1Gi | 8091 |
+| 13 | warehouse-service | 2 | 250m / 500m | 256Mi / 512Mi | 8092 |
+| 14 | rider-fleet-service | 2 | 500m / 1000m | 512Mi / 1Gi | 8093 |
+| 15 | routing-eta-service | 2 | 500m / 1000m | 512Mi / 1Gi | 8094 |
+| 16 | wallet-loyalty-service | 1 | 250m / 500m | 256Mi / 512Mi | 8095 |
+| 17 | audit-trail-service | 1 | 250m / 500m | 256Mi / 512Mi | 8096 |
+| 18 | fraud-detection-service | 2 | 500m / 1000m | 1Gi / 2Gi | 8097 |
+| 19 | config-feature-flag-service | 2 | 250m / 500m | 256Mi / 512Mi | 8098 |
+| 20 | admin-gateway-service | 2 | 500m / 1000m | 512Mi / 1Gi | 8099 |
+| 21 | ai-orchestrator-service | 2 | 500m / 1000m | 768Mi / 1.5Gi | 8100 |
+| 22 | ai-inference-service | 2 | 1000m / 2000m | 1Gi / 2Gi | 8101 |
+| 23 | dispatch-optimizer-service | 2 | 250m / 500m | 256Mi / 512Mi | 8102 |
+| 24 | outbox-relay-service | 2 | 250m / 500m | 256Mi / 512Mi | 8103 |
+| 25 | cdc-consumer-service | 2 | 500m / 1000m | 512Mi / 1Gi | 8104 |
+| 26 | location-ingestion-service | 3 | 500m / 1000m | 512Mi / 1Gi | 8105 |
+| 27 | payment-webhook-service | 2 | 250m / 500m | 256Mi / 512Mi | 8106 |
+| 28 | reconciliation-engine | 1 | 250m / 500m | 256Mi / 512Mi | 8107 |
+| 29 | stream-processor-service | 2 | 500m / 1000m | 512Mi / 1Gi | 8108 |
+| 30 | reverse-etl-orchestrator | 2 | 500m / 1000m | 512Mi / 1Gi | 8109 |
 
 ---
 
@@ -625,15 +626,15 @@ services:
       maxReplicas: 10
       targetCPU: 70
 
-  user-service:
-    port: 8080
+  identity-service:
+    port: 8081
     replicas: 2
     resources:
       requests: { cpu: 250m, memory: 256Mi }
       limits:   { cpu: 500m, memory: 512Mi }
 
   order-service:
-    port: 8080
+    port: 8084
     replicas: 2
     resources:
       requests: { cpu: 500m, memory: 512Mi }
@@ -857,19 +858,19 @@ graph TD
         DB7[(notification_db)]
     end
     subgraph Cloud SQL Replica
-        DB1R[(user_db - read)]
-        DB2R[(order_db - read)]
-        DB3R[(product_db - read)]
+        DB1R[(identity_db - read)]
+        DB2R[(orders_db - read)]
+        DB3R[(catalog_db - read)]
     end
-    US[user-service] --> DB1
+    US[identity-service] --> DB1
     US -.->|reads| DB1R
     OS[order-service] --> DB2
     OS -.->|reads| DB2R
-    PS[product-catalog-service] --> DB3
+    PS[catalog-service] --> DB3
     PS -.->|reads| DB3R
     IS[inventory-service] --> DB4
     PAY[payment-service] --> DB5
-    DS[delivery-service] --> DB6
+    DS[fulfillment-service] --> DB6
     NS[notification-service] --> DB7
 ```
 
@@ -907,13 +908,13 @@ spring:
 
 | Service | Database | Key Tables |
 |---|---|---|
-| user-service | `user_db` | users, addresses, preferences |
-| order-service | `order_db` | orders, order_items, order_events |
-| product-catalog-service | `product_db` | products, categories, brands |
-| inventory-service | `inventory_db` | inventory, stock_movements, warehouses |
-| payment-service | `payment_db` | payments, refunds, ledger_entries |
-| delivery-service | `delivery_db` | deliveries, routes, rider_assignments |
-| notification-service | `notification_db` | notifications, templates, channels |
+| identity-service | `identity_db` | users, user_credentials, roles, user_profiles |
+| order-service | `orders_db` | orders, order_items, outbox_events |
+| catalog-service | `catalog_db` | products, categories, brands, price_overrides |
+| inventory-service | `inventory_db` | stock_items, stock_batches, reservations |
+| payment-service | `payments_db` | payments, refunds, ledger_entries, webhook_events |
+| fulfillment-service | `fulfillment_db` | pick_tasks, pick_batches, delivery_jobs |
+| notification-service | `notifications_db` | notifications, user_preferences, outbox_events |
 
 ---
 
@@ -998,7 +999,7 @@ Secret Manager → External Secrets Operator → Kubernetes Secret → Pod Env V
 
 | Control | Implementation |
 |---|---|
-| **Authentication** | JWT tokens (access + refresh), issued by user-service |
+| **Authentication** | JWT tokens (access + refresh), issued by identity-service |
 | **mTLS** | Istio PeerAuthentication `STRICT` mode for all mesh traffic |
 | **Authorization** | Istio AuthorizationPolicy + application-level RBAC |
 | **Rate Limiting** | Istio EnvoyFilter, 100 req/min per user for mutations |

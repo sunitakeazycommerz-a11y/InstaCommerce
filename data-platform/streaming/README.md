@@ -11,7 +11,7 @@ Dataflow, and sinks results into BigQuery for analytics and alerting.
   ─────────────               ──────────────               ─────
   orders.events      ──►  order_events_pipeline       ──►  BigQuery (analytics.realtime_order_volume)
   payments.events    ──►  payment_events_pipeline     ──►  BigQuery (analytics.payment_metrics)
-  rider.location     ──►  rider_location_pipeline     ──►  BigQuery (analytics.rider_utilization)
+  rider.location.updates ──►  rider_location_pipeline ──►  BigQuery (analytics.rider_utilization)
   inventory.events   ──►  inventory_events_pipeline   ──►  BigQuery (analytics.inventory_velocity)
   cart.events        ──►  cart_events_pipeline         ──►  BigQuery (analytics.cart_abandonment)
   orders + payments  ──►  order_payment_join_pipeline  ──►  BigQuery (analytics.realtime_order_payments)
@@ -23,7 +23,7 @@ Dataflow, and sinks results into BigQuery for analytics and alerting.
 |---|---|---|---|
 | `order_events_pipeline` | `orders.events` (`order.events`) | 1-min fixed / 30-min sliding | Orders per minute, GMV, SLA compliance |
 | `payment_events_pipeline` | `payments.events` (`payment.events`) | 1-min fixed | Payment success rate, latency P95 |
-| `rider_location_pipeline` | `rider.location` | 1-min fixed | Rider utilization per zone |
+| `rider_location_pipeline` | `rider.location.updates` (`rider.location`) | 1-min fixed | Rider utilization per zone |
 | `inventory_events_pipeline` | `inventory.events` | 5-min fixed | Inventory velocity, stockout detection |
 | `cart_events_pipeline` | `cart.events` | 15-min session | Cart abandonment rate |
 | `order_payment_join_pipeline` | `orders.events` + `payments.events` | CoGroupByKey (10-min skew) | Real-time order-to-payment conversion & settlement |

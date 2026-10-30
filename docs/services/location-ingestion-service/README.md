@@ -5,25 +5,24 @@
 The location-ingestion-service is a high-performance GPS event ingestion and geospatial processing engine. It collects location data from delivery riders, validates events, applies geographic filtering rules, maintains a Redis-based geospatial index, and publishes location updates for real-time tracking, delivery routing, and warehouse fulfillment optimization.
 
 **Service Ownership**: Fulfillment Team - Location Platform
-**Language**: Go 1.22
-**Default Port**: 8086
+**Language**: Go 1.25
+**Default Port**: 8105
 **Status**: Tier 2 Critical (Real-time rider tracking)
 
 ## SLOs & Availability
 
 - **Availability SLO**: 99.5% (216 minutes downtime/month)
-- **P99 Latency**: < 100ms ingestion (event -> Redis/Kafka)
+- **P99 Latency**: < 50ms ingestion (event -> Redis/Kafka)
 - **Error Rate**: < 0.5% (malformed/invalid GPS)
 - **Max Throughput**: 10,000 events/second (1000+ riders * 10 events/sec each)
 
 ## Key Responsibilities
 
-1. **GPS Event Ingestion**: Accept WebSocket + REST location updates from mobile rider apps
-2. **Location Validation**: Validate GPS coordinates (lat/lon range), timestamp freshness, accuracy
-3. **Geospatial Indexing**: Maintain Redis GEO index for fast nearest-warehouse lookups
-4. **Geographic Filtering**: Apply geofence rules; filter out-of-service-area locations
-5. **Event Publishing**: Emit validated events to Kafka for downstream routing/tracking services
-6. **Batching & Throttling**: Batch events to reduce downstream load; rate-limit per rider
+1. **GPS Event Ingestion**: Accept WebSocket (`/ingest/ws`) and REST (`/ingest/location`) location updates from rider mobile apps
+2. **Kalman Filter Smoothing**: Apply 1D Kalman filter to smooth noisy GPS readings and verify speed consistency
+3. **Uber H3 Spatial Indexing**: Map coordinates to H3 resolution 8 cells (`riders:h3:{h3Index}`) for fast hexagonal neighborhood lookups
+4. **Ephemeral Redis Caching**: Cache latest rider ping in Redis key `rider:location:{riderId}` with 60-second TTL
+5. **Event Publishing**: Batch and stream validated locations to Kafka topic `rider.location.updates`
 
 ## Deployment
 
@@ -43,56 +42,37 @@ The location-ingestion-service is a high-performance GPS event ingestion and geo
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Rider Mobile App (GPS every 10-30 seconds)                  │
+│ Rider Mobile App (GPS every 5-10 seconds)                   │
 └────────────────────┬────────────────────────────────────────┘
                      │
-        1. WebSocket or REST: {"lat":37.7749,"lon":-122.4194}
+        1. WebSocket (/ingest/ws) or HTTP POST (/ingest/location)
                      │
     ┌────────────────▼────────────────────────────┐
-    │ Location-Ingestion-Service                  │
+    │ Location-Ingestion-Service (:8105)         │
     │ ├─ Validate GPS (lat/lon range, accuracy)  │
-    │ ├─ GeoHash encoding                        │
-    │ ├─ Geofence check (service area)           │
-    │ ├─ Redis GEO index: GEOADD riders ...      │
-    │ ├─ Batch events (50 events / 100ms)        │
-    │ └─ Publish to Kafka                        │
+    │ ├─ Kalman filter speed/noise smoothing     │
+    │ ├─ Uber H3 resolution 8 cell mapping       │
+    │ ├─ Redis TTL cache (rider:location:{id})   │
+    │ ├─ Redis H3 set (riders:h3:{cell})         │
+    │ └─ Batch publish to Kafka                  │
     └────────────────┬────────────────────────────┘
                      │
     ┌────────────────┴─────────────────────┐
     │                                      │
     ▼                                      ▼
-┌──────────────────┐         ┌─────────────────────┐
-│ Redis GEO Index  │         │ Kafka Topic:        │
-│ Riders (lat,lon) │         │ location-updates    │
-│ Warehouses (geo) │         │ (10k events/sec)    │
-└──────────────────┘         └─────────────────────┘
-    │
-    │ GEORADIUS queries
-    │
-    ▼
-┌──────────────────────────────────────┐
-│ Downstream Services                  │
-├─ Routing-ETA-Service (nearest)      │
-├─ Dispatch-Optimizer (assignment)    │
-├─ Warehouse-Service (fulfillment)    │
-└──────────────────────────────────────┘
+┌───────────────────────────┐ ┌───────────────────────────┐
+│ Redis Ephemeral State     │ │ Kafka Topic:              │
+│ rider:location:{riderId}  │ │ rider.location.updates    │
+│ riders:h3:{h3Index}       │ │                           │
+└───────────────────────────┘ └───────────────────────────┘
 ```
-
-### Event Validation & Filtering
-
-1. **GPS Validation**: Check lat ∈ [-90,90], lon ∈ [-180,180], accuracy ≤ 100m
-2. **Timestamp Check**: Event must be recent (< 5 seconds old); reject stale updates
-3. **Geofence Lookup**: Check if location within service areas using Redis GEO
-4. **Deduplication**: Filter duplicate locations (same rider, same lat/lon within 10m)
-5. **Rate Limiting**: Max 100 events/sec per rider (circuit breaker if exceeded)
 
 ## Integrations
 
 ### Kafka Topics
 | Topic | Producer/Consumer | Partitions | Purpose | Retention |
 |-------|------------------|-----------|---------|-----------|
-| location-updates | Producer | 20 | Raw rider locations | 24 hours |
-| rider-assignments | Consumer | 10 | Assignment events (for context) | 24 hours |
+| `rider.location.updates` | Producer | 12 | Real-time smoothed rider GPS telemetry | 24 hours |
 
 ### Redis Collections
 - **GEO Index**: `riders:{riderId}` (lat, lon, score=timestamp)

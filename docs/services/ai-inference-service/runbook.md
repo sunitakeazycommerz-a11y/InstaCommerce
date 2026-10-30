@@ -2,22 +2,22 @@
 
 ## Pre-Deployment Verification Checklist
 
-- [ ] Verify GPU/accelerator availability (CUDA, TensorRT)
+- [ ] Verify AI inference service readiness probe
   ```bash
-  kubectl exec -n ai deploy/ai-inference-service -- \
-    curl -s http://localhost:8101/v1/admin/gpu-status | jq '.available_gpus'
+  kubectl exec deploy/ai-inference-service -- \
+    curl -s http://localhost:8101/health/ready | jq .
   ```
 
-- [ ] Check ML model cache (models should be pre-loaded)
+- [ ] Check loaded ML models and weights registry
   ```bash
-  kubectl exec -n ai deploy/ai-inference-service -- \
-    curl -s http://localhost:8101/v1/admin/model-cache-status | jq '.loaded_models'
+  kubectl exec deploy/ai-inference-service -- \
+    curl -s http://localhost:8101/models | jq .
   ```
 
-- [ ] Verify connection to model registry / storage
+- [ ] Verify Prometheus metrics endpoint
   ```bash
-  kubectl exec -n ai deploy/ai-inference-service -- \
-    curl -s http://localhost:8101/v1/admin/model-registry-health | jq '.status'
+  kubectl exec deploy/ai-inference-service -- \
+    curl -s http://localhost:8101/metrics | head -20
   ```
 
 ---
@@ -27,37 +27,32 @@
 ### Pre-Deployment Baseline
 
 ```bash
-# Model inference latency (p99 should be <200ms)
-kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8101/metrics/inference-latency-p99 | jq '.value'
-
-# GPU memory utilization (should be 70-90%)
-kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8101/v1/admin/gpu-memory-usage | jq '.percent'
+# Model inference latency metrics
+kubectl exec deploy/ai-inference-service -- \
+  curl -s http://localhost:8101/metrics | grep -E "inference_requests_total|inference_latency_seconds"
 
 # Current replica count
-kubectl get deploy ai-inference-service -n ai -o jsonpath='{.spec.replicas}'
+kubectl get deploy ai-inference-service -o jsonpath='{.spec.replicas}'
 ```
 
-### Blue-Green Deployment
+### Rolling Deployment
 
 ```bash
-# Critical: GPU resources must be available
-kubectl get nodes -L nvidia.com/gpu
-
 # Upgrade
-helm upgrade ai-inference-service deploy/helm/ai-inference-service -n ai
+helm upgrade ai-inference-service deploy/helm/ai-inference-service
 
-# Monitor rollout (slower due to model loading)
-kubectl rollout status deploy/ai-inference-service -n ai --timeout=15m
+# Monitor rollout
+kubectl rollout status deploy/ai-inference-service --timeout=10m
 
 # Verify models loaded and inference working
-kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8101/v1/admin/model-cache-status | jq '.loaded_models | length'
+kubectl exec deploy/ai-inference-service -- \
+  curl -s http://localhost:8101/models | jq '.models | keys'
 
-# Verify inference latency maintained
-kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8101/metrics/inference-latency-p99 | jq '.value'
+# Smoke test ETA inference
+kubectl exec deploy/ai-inference-service -- \
+  curl -s -X POST http://localhost:8101/inference/eta \
+  -H "Content-Type: application/json" \
+  -d '{"distance_km": 3.5, "item_count": 4, "traffic_factor": 1.1}' | jq .
 ```
 
 ---
@@ -66,31 +61,26 @@ kubectl exec -n ai deploy/ai-inference-service -- \
 
 ### P0 - AI Inference Service Down
 
-**Symptom**: Fraud detection, recommendations not working, model inference failing
+**Symptom**: AI Orchestrator reporting model inference timeouts, ETA or ranking unavailable
 
 **Diagnosis**:
 ```bash
-kubectl get pods -n ai -l app=ai-inference-service
-kubectl logs -n ai deploy/ai-inference-service --tail=100 | grep -i "error\|exception\|cuda\|model"
+kubectl get pods -l app=ai-inference-service
+kubectl logs deploy/ai-inference-service --tail=100 | grep -i "error\|exception\|weights"
 
-# Check GPU availability
-kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8101/v1/admin/gpu-status | jq '.'
+# Check readiness probe
+kubectl exec deploy/ai-inference-service -- \
+  curl -s http://localhost:8101/health/ready | jq .
 
-# Check model cache
-kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8101/v1/admin/model-cache-status | jq '.loaded_models'
-
-# Check model registry
-kubectl exec -n ai deploy/ai-inference-service -- \
-  curl -s http://localhost:8101/v1/admin/model-registry-health | jq '.status'
+# Check loaded model registry
+kubectl exec deploy/ai-inference-service -- \
+  curl -s http://localhost:8101/models | jq .
 ```
 
 **Resolution**:
-1. If GPU unavailable: Scale up nodes with GPU or adjust scheduling
-2. If model missing: Restore from model registry
-3. Restart pod: `kubectl rollout restart deploy/ai-inference-service -n ai`
-4. Scale up: `kubectl scale deploy ai-inference-service -n ai --replicas=3` (CPU fallback available)
+1. If weights missing: Check `AI_INFERENCE_WEIGHTS_PATH` and ConfigMap mount
+2. Restart pod: `kubectl rollout restart deploy/ai-inference-service`
+3. Scale up: `kubectl scale deploy ai-inference-service --replicas=5`
 
 ### P1 - Inference Latency High (>500ms)
 

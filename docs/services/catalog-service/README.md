@@ -6,7 +6,7 @@ The catalog-service is the single source of truth for product master data in Ins
 
 **Service Ownership**: Platform Team - Catalog & Taxonomy
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8088
+**Default Port**: 8082
 **Status**: Tier 2 Critical (master data SoT; impacts all read-planes)
 **Database**: PostgreSQL 15+ (products, categories, pricing rules)
 **Messaging**: Kafka producer (catalog.events via outbox/CDC)
@@ -28,7 +28,7 @@ The catalog-service is the single source of truth for product master data in Ins
 4. **Product Images**: CDN URL management; image metadata (order, alt text)
 5. **Reliable Event Publishing**: Transactional outbox pattern ensures no lost events
 6. **Admin Audit Trail**: Log all product changes (who, when, what) for compliance
-7. **Read-Plane Synchronization**: ProductCreated/Updated/Delisted events drive search, pricing, inventory
+7. **Read-Plane Synchronization**: ProductCreated/Updated/Deactivated events drive search, pricing, inventory
 8. **Soft Deletes**: Preserve historical product data; mark inactive instead of hard delete
 
 ## Deployment
@@ -38,11 +38,11 @@ The catalog-service is the single source of truth for product master data in Ins
 - **Replicas**: 2 (Tier 2; write-volume not high)
 - **CPU Request/Limit**: 500m / 1000m
 - **Memory Request/Limit**: 512Mi / 1Gi
-- **Readiness Probe**: `/actuator/health/ready` (checks DB + Kafka producer)
+- **Readiness Probe**: `/actuator/health/readiness` (checks DB + Kafka producer)
 
 ### Database
 - **Name**: `catalog` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V6) auto-applied
+- **Migrations**: Flyway (V1-V14) auto-applied
 - **Connection Pool**: HikariCP 15 connections
 - **Replication**: Async (eventual consistency acceptable for products)
 - **Indexes**: category_id, status, store_id, created_at

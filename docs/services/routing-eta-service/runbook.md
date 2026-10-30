@@ -33,6 +33,6 @@ kubectl logs -n instacommerce deploy/routing-eta-service --tail=100 | grep -i "f
 ```bash
 # Add temporary road barrier or weather alert
 curl -X POST -H "Content-Type: application/json" \
-  -d '{"barrierType": "FLOODING", "latitude": 12.9716, "longitude": 77.5946, "radiusMeters": 500}' \
+  -d '{"name": "Monsoon Flooding", "reason": "Severe waterlogging on bridge", "minLat": 12.9700, "minLng": 77.5900, "maxLat": 12.9800, "maxLng": 77.6000, "detourPenaltyKm": 3.5, "detourPenaltyMinutes": 12}' \
   http://localhost:8094/admin/routing/barriers
 ```

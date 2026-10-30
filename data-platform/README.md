@@ -187,12 +187,15 @@ flowchart TB
 
     subgraph Marts["Marts Layer (mart_*)"]
         mart_revenue["mart_daily_revenue"]
+        mart_sales["mart_daily_sales"]
+        mart_fulfillment["mart_order_fulfillment"]
         mart_store["mart_store_performance"]
         mart_rider["mart_rider_performance"]
         mart_search["mart_search_funnel"]
         mart_product["mart_product_analytics"]
         mart_cohort["mart_user_cohort_retention"]
         mart_sponsored["mart_sponsored_opportunities"]
+        mart_experiment["mart_experiment_conversions"]
     end
 
     orders --> stg_orders
@@ -208,11 +211,12 @@ flowchart TB
     stg_orders & stg_users --> int_user_history
     stg_products & stg_orders --> int_product_perf
 
-    int_order_deliveries --> mart_revenue & mart_store & mart_rider
+    int_order_deliveries --> mart_revenue & mart_store & mart_rider & mart_sales & mart_fulfillment
     int_user_history --> mart_cohort
     int_product_perf --> mart_product
     stg_searches & stg_cart --> mart_search
     stg_searches & stg_cart --> mart_sponsored
+    stg_orders --> mart_experiment
 ```
 
 ### dbt Quick Start
@@ -257,6 +261,8 @@ flowchart TB
 | `ml_feature_refresh` | `0 */4 * * *` | Recompute ML feature tables in BigQuery |
 | `ml_training` | `0 4 * * *` | Trigger daily model retraining / evaluation pipeline |
 | `monitoring_alerts` | `*/15 * * * *` | Check SLA freshness & alert on Slack |
+| `historical_backfill` | `None` (Manual) | Parameterized manual dbt model backfills |
+| `search_ranking_weekly_retraining` | `0 2 * * 0` | Weekly Sunday LambdaMART search ranking model retraining |
 
 ---
 
@@ -278,6 +284,7 @@ flowchart LR
         CP["Cart Events\nPipeline"]
         IP["Inventory Events\nPipeline"]
         RLP["Rider Location\nPipeline"]
+        OPJ["Order-Payment\nJoin Pipeline"]
     end
 
     subgraph Sinks["Sinks"]
@@ -289,6 +296,7 @@ flowchart LR
     CE --> CP --> BQ
     IE --> IP --> BQ
     RL --> RLP --> BQ
+    OE & PE --> OPJ --> BQ
 ```
 
 | Pipeline | Source Topic | Sinks | Window | Purpose |
@@ -298,6 +306,7 @@ flowchart LR
 | `cart_events_pipeline` | `cart.events` | BigQuery | 15 min session | Cart analytics and abandonment modeling |
 | `inventory_events_pipeline` | `inventory.events` | BigQuery | 5 min fixed | Stock velocity and stockout tracking |
 | `rider_location_pipeline` | `rider.location.updates` | BigQuery | 1 min fixed | Rider utilization and zone-level tracking |
+| `order_payment_join_pipeline` | `orders.events` + `payments.events` | BigQuery | CoGroupByKey (10-min skew) | Real-time order-to-payment conversion & settlement |
 
 > The streaming README contains the canonical per-pipeline deployment and
 > monitoring details. Use this top-level table as the architecture summary and

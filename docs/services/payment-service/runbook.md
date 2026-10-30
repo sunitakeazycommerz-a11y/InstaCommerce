@@ -5,7 +5,7 @@
 - [ ] Verify payment-db (PostgreSQL) is accessible and migrations are up-to-date
   ```bash
   kubectl exec -n payment deploy/payment-service -- \
-    curl -s http://localhost:8085/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8085/actuator/health/readiness | jq '.components.db.status'
   ```
 
 - [ ] Check Secret availability (PCI-DSS credentials, payment gateway keys)
@@ -79,7 +79,7 @@ The deployment includes:
 # Liveness probe (pod restart if unhealthy)
 livenessProbe:
   httpGet:
-    path: /actuator/health/live
+    path: /actuator/health/liveness
     port: 8085
   initialDelaySeconds: 30
   periodSeconds: 10
@@ -89,7 +89,7 @@ livenessProbe:
 # Readiness probe (remove from service if failing)
 readinessProbe:
   httpGet:
-    path: /actuator/health/ready
+    path: /actuator/health/readiness
     port: 8085
   initialDelaySeconds: 15
   periodSeconds: 5

@@ -457,7 +457,7 @@ erDiagram
     stock_items {
         UUID id PK
         UUID product_id "UNIQUE(product_id, store_id)"
-        VARCHAR50 store_id "UNIQUE(product_id, store_id)"
+        UUID store_id "UNIQUE(product_id, store_id) - V11"
         INT on_hand "CHECK >= 0"
         INT reserved "CHECK >= 0, <= on_hand"
         BOOLEAN is_frozen "default false"
@@ -512,8 +512,9 @@ erDiagram
     reservations {
         UUID id PK
         VARCHAR64 idempotency_key "UNIQUE"
-        VARCHAR50 store_id
+        UUID store_id
         reservation_status status "ENUM: PENDING, CONFIRMED, CANCELLED, EXPIRED"
+        BIGINT version "optimistic locking"
         TIMESTAMPTZ expires_at
         TIMESTAMPTZ created_at
         TIMESTAMPTZ updated_at
@@ -529,7 +530,7 @@ erDiagram
     stock_adjustment_log {
         BIGSERIAL id PK
         UUID product_id
-        VARCHAR50 store_id
+        UUID store_id
         INT delta
         VARCHAR100 reason
         VARCHAR255 reference_id
@@ -539,9 +540,14 @@ erDiagram
 
     outbox_events {
         UUID id PK
+        UUID event_id
         VARCHAR100 aggregate_type
         VARCHAR100 aggregate_id
         VARCHAR100 event_type
+        VARCHAR20 schema_version
+        VARCHAR100 source_service
+        VARCHAR255 correlation_id
+        TIMESTAMPTZ event_timestamp
         JSONB payload
         TIMESTAMPTZ created_at
         BOOLEAN sent "default false"

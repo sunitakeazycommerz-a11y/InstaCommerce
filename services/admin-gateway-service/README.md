@@ -1,7 +1,7 @@
 # Admin Gateway Service
 
 > **Owner:** Edge & Identity cluster (C1)
-> **Port:** 8099 · **Framework:** Spring Boot 3 (MVC) · **JDK:** 21
+> **Port:** 8099 · **Framework:** Spring Boot 4 (MVC) · **JDK:** 21
 > **Gradle path:** `:services:admin-gateway-service`
 
 Admin-facing API facade for InstaCommerce internal operations. In target state

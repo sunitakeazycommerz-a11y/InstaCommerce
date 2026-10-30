@@ -57,6 +57,7 @@ Feature views compose features from multiple groups for specific ML model use ca
 | [`eta_prediction`](feature_views/eta_prediction_view.yaml) | store, rider | LightGBM three-stage ETA prediction | <30ms | zone_historical_avg |
 | [`demand_forecast`](feature_views/demand_forecast_view.yaml) | product, store | Prophet / TFT demand forecasting | <50ms | 52_week_moving_avg |
 | [`personalization`](feature_views/personalization_view.yaml) | user, product | Two-Tower NCF recommendations | <50ms | zone_popularity |
+| `clv_view` | user | BG/NBD + Gamma-Gamma customer lifetime value | <50ms | cohort_average |
 
 ---
 
@@ -165,7 +166,7 @@ See [`docs/reviews/data-platform-ml-design.md`](../../docs/reviews/data-platform
 
 | Feature Group | Batch Schedule | Streaming Source | Ingestion Config |
 |---------------|---------------|-----------------|-----------------|
-| user_features | Every 4 hours | `order.events` (Kafka) | [`ingestion/user_features_job.yaml`](ingestion/user_features_job.yaml) |
+| user_features | Every 4 hours | `orders.events` (Kafka) | [`ingestion/user_features_job.yaml`](ingestion/user_features_job.yaml) |
 | product_features | Hourly | — | TBD |
 | store_features | Every 5 min | `fulfillment.events` | TBD |
 | rider_features | Every 5 min | `rider.location.updates` | TBD |

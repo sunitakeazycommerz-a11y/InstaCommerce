@@ -6,9 +6,9 @@ The checkout-orchestrator-service is the critical orchestration layer for the co
 
 **Service Ownership**: Platform Team - Money Path Tier 1 (Critical path)
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8089
+**Default Port**: 8091
 **Status**: Tier 1 Critical (blocks revenue; zero-tolerance for silent failures)
-**Database**: PostgreSQL 15+ (idempotency ledger, workflow state, audit trail)
+**Database**: PostgreSQL 15+ (idempotency ledger, DLQ records)
 
 ## SLOs & Availability
 
@@ -24,14 +24,13 @@ The checkout-orchestrator-service is the critical orchestration layer for the co
 
 ## Key Responsibilities
 
-1. **Temporal Saga Orchestration**: Multi-step checkout workflow with automatic retry and compensation (rollback)
-2. **Idempotency Keys**: Client-provided UUID ensures checkout never duplicates; 30-min TTL in PostgreSQL
-3. **Service Coordination**: Sequential calls to cart, inventory, pricing, payment, order services with circuit breakers
-4. **Distributed Compensation**: On failure, automatically reverses completed steps (e.g., release inventory holds, void payments)
+1. **Temporal Saga Orchestration**: Multi-step checkout workflow (`VALIDATING_CART` → `CALCULATING_PRICES` → `RESERVING_INVENTORY` → `AUTHORIZING_PAYMENT` → `CREATING_ORDER` → `REDEEMING_COUPON` → `CONFIRMING` → `CLEARING_CART` → `COMPLETED`)
+2. **Idempotency Keys**: Client-provided UUID ensures checkout never duplicates; persisted in PostgreSQL
+3. **Service Coordination**: Sequential calls to cart, pricing, inventory, payment, order services with circuit breakers
+4. **Distributed Compensation**: On failure, automatically reverses completed steps (release inventory holds, void payments)
 5. **Workflow Status Queries**: Real-time status via REST API (`GET /checkout/{workflowId}/status`)
-6. **Circuit Breaker Resilience**: Resilience4j protection; graceful degradation with fallback error messages
+6. **Compensation DLQ**: Persists failed compensation activities in `compensation_dlq` for operator inspection and retry
 7. **Temporal Server Integration**: Durable execution; survives pod crashes; automatic retry logic built-in
-8. **Audit Trail**: Every step recorded for forensics and reconciliation
 
 ## Deployment
 
@@ -41,14 +40,14 @@ The checkout-orchestrator-service is the critical orchestration layer for the co
 - **CPU Request/Limit**: 750m / 2000m (higher than tier 2; orchestration overhead)
 - **Memory Request/Limit**: 768Mi / 1.5Gi
 - **Startup Probe**: 15s initial delay, 3 failure threshold (Temporal worker registration)
-- **Readiness Probe**: `/actuator/health/ready` (checks DB + Temporal server)
-- **Liveness Probe**: `/actuator/health/live` (JVM health)
+- **Readiness Probe**: `/actuator/health/readiness` (checks DB + Temporal server)
+- **Liveness Probe**: `/actuator/health/liveness` (JVM health)
 - **Pod Disruption Budget**: minAvailable: 2/3 (always maintain 2 replicas)
 
 ### Database
 - **Name**: `checkout` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V5) auto-applied on startup
-- **Connection Pool**: HikariCP 30 connections (higher for concurrent workflows)
+- **Migrations**: Flyway (V1-V3) auto-applied on startup
+- **Connection Pool**: HikariCP 20 connections
 - **Replication**: Synchronous streaming to standby (RTO <1s)
 - **Backups**: Daily, immutable (Glacier archival after 30 days)
 

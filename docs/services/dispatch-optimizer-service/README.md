@@ -5,24 +5,24 @@
 The dispatch-optimizer-service is responsible for optimal rider assignment and route planning in InstaCommerce. It ingests real-time location data from riders and inventory positions, calculates distances using Haversine formula, applies constraint-based optimization algorithms, and assigns delivery tasks to minimize ETA variance and cost.
 
 **Service Ownership**: Fulfillment Platform Team - Route Optimization
-**Language**: Go 1.22
-**Default Port**: 8083
-**Status**: Tier 1 Critical (Delivery routing)
+**Language**: Go 1.25
+**Default Port**: 8102
+**Status**: Tier 1 Critical (Stateless Delivery Routing Advisor)
 
 ## SLOs & Availability
 
 - **Availability SLO**: 99.9% (43 minutes downtime/month)
-- **P99 Latency**: < 2 seconds for optimization requests
+- **P99 Latency**: < 200ms for optimization solver requests
 - **P95 Accuracy**: 95% of assignments within 10% of optimal cost
-- **Error Rate**: < 0.1% (all errors logged for post-hoc analysis)
-- **Throughput**: 5,000 assignments/minute (surge capacity)
+- **Error Rate**: < 0.1%
+- **Throughput**: 5,000 assignments/minute
 
 ## Key Responsibilities
 
-1. **Distance Calculation**: Haversine formula for great-circle distances between rider and warehouse locations
-2. **Assignment Optimization**: Constraint-based solver (rider capacity, time windows, skill requirements) to minimize delivery cost
-3. **Route Aggregation**: Combine multiple delivery tasks into efficient multi-stop routes
-4. **Real-time Rebalancing**: React to location updates and reassign tasks if improvement > 5%
+1. **Stateless Assignment Optimization**: Multi-objective solver optimizing delivery time (weight 0.5), rider idle time (0.2), and SLA breach risk (0.3)
+2. **Hungarian Bipartite Matching**: V2 solver with hard constraint feasibility masking, batching (up to 2 orders per rider), and 2-opt post-optimization swap iterations
+3. **V1 Greedy Heuristic**: Fast nearest-neighbor distance and capacity fallback solver
+4. **Candidate Rider Mutex Locking**: In-memory mutex locking with 30-second TTL to avoid duplicate simultaneous offers
 
 ## Deployment
 
@@ -31,13 +31,13 @@ The dispatch-optimizer-service is responsible for optimal rider assignment and r
 - **Replicas**: 4 (HA, stateless)
 - **CPU Request/Limit**: 1000m / 2000m
 - **Memory Request/Limit**: 768Mi / 1.5Gi
-- **Horizontal Pod Autoscaler**: 4-12 replicas based on request latency (p99 < 2s)
+- **Horizontal Pod Autoscaler**: 4-12 replicas based on request latency (p99 < 200ms)
 
 ### Cluster Configuration
-- **Ingress**: Internal-only (behind Istio IngressGateway, fulfillment team + checkout-orchestrator)
-- **NetworkPolicy**: Deny-default; allow from location-ingestion-service, rider-fleet-service, checkout-orchestrator
+- **Ingress**: Internal-only (behind Istio IngressGateway)
+- **NetworkPolicy**: Deny-default; allow from rider-fleet-service, checkout-orchestrator
 - **Service Account**: dispatch-optimizer-service
-- **Cache**: In-memory LRU cache for recent optimization requests (10K entries, 5-minute TTL)
+- **State**: Stateless computational engine (no database, no external outbound calls, no Kafka producers/consumers)
 
 ## Architecture
 
@@ -45,48 +45,38 @@ The dispatch-optimizer-service is responsible for optimal rider assignment and r
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Checkout Order Placement                                      │
-│ POST /dispatch/v1/assignments                                 │
+│ Caller Service (rider-fleet-service / checkout-orchestrator)  │
+│ POST /v2/optimize/assign                                      │
 └────────────────────────┬─────────────────────────────────────┘
                          │
-         ┌───────────────▼────────────────────┐
-         │ Dispatch Optimizer                 │
-         │ 1. Fetch active riders (Redis)     │
-         │ 2. Fetch rider locations (recent)  │
-         │ 3. Fetch warehouse inventory       │
-         │ 4. Calculate distances (Haversine) │
-         │ 5. Solve assignment problem        │
-         │ 6. Emit optimization events        │
-         └───────────────┬────────────────────┘
+         ┌───────────────▼────────────────────────┐
+         │ Dispatch Optimizer (:8102)             │
+         │ 1. Validate Candidate Riders & Orders  │
+         │ 2. Compute Haversine Cost Matrix       │
+         │ 3. Apply Multi-Objective Weights       │
+         │ 4. Hungarian Bipartite Matching        │
+         │ 5. 2-Opt Order Swap Iteration          │
+         │ 6. Return Optimal Match Plan           │
+         └───────────────┬────────────────────────┘
                          │
-    ┌────────────────────┼────────────────────┐
-    │                    │                    │
-    ▼                    ▼                    ▼
- Rider Fleet      Warehouse           Location Ingestion
-(assignment)      (inventory)         (acknowledgment)
+                         ▼
+ Caller Service receives optimal assignment plan synchronously
 ```
-
-### Integrations
-
-| Service | Endpoint | Timeout | Purpose |
-|---------|----------|---------|---------|
-| location-ingestion-service | http://location-ingestion-service:8087/locations/riders | 2s | Get rider real-time locations |
-| rider-fleet-service | http://rider-fleet-service:8085/riders/active | 3s | Get active riders + constraints |
-| warehouse-service | http://warehouse-service:8088/inventory | 2s | Get inventory availability |
-| checkout-orchestrator | Kafka (dispatch.assignments) | - | Publish assignment results |
 
 ## Endpoints
 
-### Public (Unauthenticated)
-- `GET /health` - Liveness probe (optimization engine status)
-- `GET /metrics` - Prometheus metrics (distance calculations, optimization duration)
+### Health & Metrics
+- `GET /health` - Overall dependency health probe (via `go-shared/pkg/health`)
+- `GET /health/ready` - Readiness probe (checks solver readiness)
+- `GET /health/live` - Liveness probe
+- `GET /ready` - Legacy readiness alias
+- `GET /metrics` - Prometheus metrics (`optimizer_solve_duration_seconds`, `optimizer_assignments_total`)
 
-### Internal API (Requires X-Internal-Token)
-- `POST /api/v1/assignments` - Request optimal assignment for new orders
-- `GET /api/v1/assignments/{assignmentId}` - Get assignment details + rationale
-- `GET /api/v1/riders/capacity` - Get active riders and current capacity
-- `POST /api/v1/rebalance` - Trigger rebalancing of all active routes
-- `GET /api/v1/metrics/optimization` - Optimization quality metrics (cost, distance, time)
+### Solver APIs
+- `POST /optimize/assign` - V1 greedy nearest-neighbor solver
+- `POST /v2/optimize/assign` - V2 multi-objective Hungarian bipartite matching solver
+- `POST /dispatch/assign` - Candidate rider lock and assignment offer
+- `POST /dispatch/response` - Process rider accept / reject response with mutex release
 
 ### Example Requests
 

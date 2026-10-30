@@ -8,7 +8,7 @@ The admin-gateway-service is the entry point for internal administrative operati
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8099
 **Status**: Tier 1 Critical (Admin operations)
-**Database**: PostgreSQL 15+ (admin audit trail, feature flag overrides cache)
+**State**: Stateless API Gateway & Facade (no local database)
 
 ## SLOs & Availability
 
@@ -36,11 +36,10 @@ The admin-gateway-service is the entry point for internal administrative operati
 - **Memory Request/Limit**: 512Mi / 1Gi (higher for caching)
 - **Startup Probe**: 15s initial delay
 
-### Database
-- **Name**: `admin_gateway` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V5)
-- **Connection Pool**: HikariCP 30 connections
-- **Idle Timeout**: 5 minutes
+### Architecture
+- **State**: Pure stateless reverse proxy and aggregation facade
+- **Persistence**: None (delegates persistence and audit logging downstream)
+- **Security**: RS256 JWT validation against identity-service, RBAC role enforcement (`ADMIN`, `SUPER_ADMIN`), anti-spoofing IP audit filters
 
 ### Cluster Configuration
 - **Ingress**: Internal-only (behind Istio IngressGateway with TLS)

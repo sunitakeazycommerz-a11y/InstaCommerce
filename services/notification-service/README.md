@@ -274,13 +274,14 @@ stateDiagram-v2
 
 ## Database Schema
 
-Managed by Flyway. Three migrations:
+Managed by Flyway. Four migrations:
 
 | Migration | Description |
 |---|---|
 | `V1__create_notification_log.sql` | `notification_log` table with `UNIQUE(event_id, channel)` for deduplication |
 | `V2__create_audit_log.sql` | `audit_log` table for GDPR-compliant action tracking |
 | `V3__add_retry_columns.sql` | Adds `retry_count`, `next_retry_at`, `event_type`, `subject`, `body` columns; partial index on `RETRY_PENDING` status |
+| `V4__create_shedlock.sql` | `shedlock` distributed locking table for cleanup and retry scheduled jobs |
 
 ## Observability
 

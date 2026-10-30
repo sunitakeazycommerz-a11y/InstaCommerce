@@ -21,7 +21,7 @@
 kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group cdc-consumer-service --describe
 
 # Check BigQuery insert latency and error metrics
-curl -s http://localhost:8104/metrics | grep -E "cdc_consumed_total|cdc_bigquery_errors_total"
+curl -s http://localhost:8104/metrics | grep -E "cdc_consumer_lag|cdc_batch_latency_seconds|cdc_dlq_total"
 
 # Check logs for BigQuery API rate limits
 kubectl logs -n instacommerce deploy/cdc-consumer --tail=100 | grep -i "bigquery\|quota\|rateLimit"
@@ -39,6 +39,6 @@ kubectl logs -n instacommerce deploy/cdc-consumer --tail=100 | grep -i "bigquery
 kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic cdc.dlq --max-messages 5 --from-beginning
 ```
 **Resolution:**
-1. Inspect the error header `x-cdc-error` on DLQ messages to understand why parsing failed (for example schema evolution in upstream Postgres).
+1. Inspect the error header `dlq_reason` on DLQ messages to understand why parsing failed (for example schema evolution in upstream Postgres).
 2. Update the BigQuery table schema or schema parser if new columns were added upstream.
 3. Replay DLQ messages once the parser or BigQuery schema is updated.

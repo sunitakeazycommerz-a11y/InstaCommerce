@@ -2,13 +2,13 @@
 
 ## Overview
 
-The warehouse-service is the operational authority for store/warehouse management in InstaCommerce. It provides geolocation-based store discovery, store zone (picking zone) management, operating hours tracking, and Caffeine-based caching for sub-300ms zone lookup latency. Enables fulfillment-service to assign picking tasks to optimal warehouse zones and supports real-time store availability status.
+The warehouse-service is the operational authority for dark store registry, delivery zones, operating hours, capacity slots, warehouse bin locations, and staging cold-chain telemetry in InstaCommerce. It provides Haversine-based store discovery, store zone mapping, operating hours validation, and Caffeine-based caching for sub-300ms zone lookup latency. Enables fulfillment-service to optimize picking routes and supports real-time dark store capacity and status tracking.
 
 **Service Ownership**: Platform Team - Store Ops
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8090
+**Default Port**: 8092
 **Status**: Tier 2 (Fulfillment path; operational criticality)
-**Database**: PostgreSQL 15+ with PostGIS (geolocation queries)
+**Database**: PostgreSQL 15+ (decimal coordinates, Haversine nearest-store search)
 **Cache**: Caffeine (JVM-local, 5-minute TTL)
 
 ## SLOs & Availability
@@ -16,81 +16,89 @@ The warehouse-service is the operational authority for store/warehouse managemen
 - **Availability SLO**: 99.9% (43 minutes downtime/month)
 - **P99 Latency**: < 300ms per query (with cache: < 50ms)
 - **Error Rate**: < 0.1%
-- **Store Lookup**: < 200ms uncached (geospatial query)
+- **Store Lookup**: < 200ms uncached (Haversine distance query)
 - **Zone Lookup**: < 50ms (heavily cached)
 - **Max Throughput**: 5,000 queries/minute per pod
 
 ## Key Responsibilities
 
-1. **Store Discovery**: Find nearest store by lat/long within radius (Haversine formula)
-2. **Store Zones Management**: CRUD for warehouse zones (picking zones, shelves, aisles)
+1. **Store Discovery**: Find nearest active dark store by lat/lng within radius using SQL Haversine distance
+2. **Store Zones Management**: Pincode-to-store delivery zone mapping with delivery radius constraints
 3. **Zone Lookup**: Fast cached lookup of zones for a given store
-4. **Operating Hours**: Query store hours (for ETA calculations, delivery windows)
-5. **Store Status**: Track store online/offline status, capacity alerts
-6. **Geospatial Indexing**: PostGIS GIST indexes for sub-second nearest-store queries
-7. **Multi-tenant Support**: Support multiple store chains/brands
+4. **Operating Hours**: Query store hours with timezone-aware open/close status checks
+5. **Store Capacity**: Track hourly order slots with atomic PostgreSQL UPSERT increment
+6. **Bin Location Management**: Track dark store aisle, rack, shelf, and bin assignments per SKU
+7. **Cold-Chain Telemetry**: Ingest staging bay temperature telemetry and validate dispatch packaging constraints
+8. **Outbox Events**: Publish `StoreCreated`, `StoreStatusChanged`, and `StoreDeleted` to `warehouse.events`
 
 ## Deployment
 
 ### GKE Deployment
-- **Namespace**: fulfillment
-- **Replicas**: 2 (Tier 2; not critical path)
+- **Namespace**: default
+- **Replicas**: 2 (Tier 2; operational fulfillment path)
 - **CPU Request/Limit**: 500m / 1000m
 - **Memory Request/Limit**: 512Mi / 1Gi
-- **Readiness Probe**: `/actuator/health/ready` (checks DB + PostGIS)
+- **Readiness Probe**: `/actuator/health/readiness`
+- **Liveness Probe**: `/actuator/health/liveness`
 
 ### Database
-- **Name**: `warehouse` (PostgreSQL 15+ with PostGIS extension)
-- **Migrations**: Flyway (V1-V6) auto-applied
-- **Connection Pool**: HikariCP 15 connections
-- **GIS Extensions**: postgis, postgis_topology enabled
-- **Indexes**: GIST on location column for geospatial queries
+- **Name**: `warehouse` (PostgreSQL 15+)
+- **Migrations**: Flyway (V1-V10) auto-applied
+- **Connection Pool**: HikariCP 20 connections
+- **Indexes**: Composite on (latitude, longitude), status, city, pincode
 
 ### Cache
-- **Caffeine**: 2,000 entries max, 300s TTL (store data is stable)
-- **Cache Key**: "stores:{storeId}", "zones:{storeId}", "hours:{storeId}"
+- **Caffeine**: 2,000 entries max, 300s TTL (store metadata is stable)
+- **Cache Namespaces**: `nearest-stores`, `store-zones`, `store-hours`
 
 ## Architecture
 
-### Geolocation Query Architecture
+### Nearest Store Discovery Architecture
 
 ```
 Client Request: Find nearest store to (12.9352, 77.6245) within 10km
         ↓
-Cache Check: "nearest-stores-12.9352-77.6245"
-   MISS → DB Query
+Cache Check: Caffeine nearest-stores namespace
+   MISS → Native SQL Query
         ↓
-PostgreSQL + PostGIS:
-  SELECT *, distance FROM stores
-  WHERE ST_DWithin(location, ST_Point(77.6245, 12.9352), 10)  -- 10km in meters
-  ORDER BY distance ASC
-  LIMIT 1
+PostgreSQL Haversine Formula:
+  SELECT *, (6371 * acos(cos(radians(:lat)) * cos(radians(latitude)) *
+            cos(radians(longitude) - radians(:lng)) +
+            sin(radians(:lat)) * sin(radians(latitude)))) AS distance_km
+  FROM stores
+  WHERE latitude BETWEEN :lat - (:radiusKm / 111.0) AND :lat + (:radiusKm / 111.0)
+    AND longitude BETWEEN :lng - (:radiusKm / (111.0 * cos(radians(:lat)))) AND :lng + (:radiusKm / (111.0 * cos(radians(:lat))))
+    AND status = 'ACTIVE'
+  ORDER BY distance_km ASC
+  LIMIT 5
         ↓
-GIS Query Results
+Cache Result in Caffeine (300s TTL)
         ↓
-Cache: Store in Caffeine (300s TTL)
-        ↓
-Response: { storeId, name, distance_km, address, hours }
+Response: [{ storeId, name, distanceKm, address, hours }]
 ```
 
 ### Component Architecture
 
 ```mermaid
 graph LR
-    Client["Fulfillment Service<br/>Or Admin"] -->|GET /stores/nearest| Controller["StoreController"]
+    Client["Fulfillment Service<br/>Or Mobile BFF"] -->|GET /stores/nearest| Controller["StoreController"]
 
-    Controller -->|Check cache| Cache["Caffeine<br/>2000 entries<br/>300s TTL"]
+    Controller -->|Check cache| Cache["Caffeine Cache<br/>2000 entries<br/>300s TTL"]
 
     Controller -->|Cache miss| Service["StoreService"]
-    Service -->|Geospatial query| DB[("PostgreSQL + PostGIS<br/>ST_DWithin<br/>ST_Distance")]
+    Service -->|Haversine query| DB[("PostgreSQL<br/>stores & store_zones")]
 
-    Admin["Admin Portal"] -->|POST /stores| AdminController["AdminController"]
+    Admin["Admin Portal"] -->|POST /admin/stores| AdminController["AdminStoreController"]
     AdminController -->|Create/Update| Service
 
-    Service -->|POST /zones| ZoneService["ZoneService"]
-    ZoneService -->|CRUD zones| DB
+    Service -->|Transactional outbox| OB[("outbox_events")]
+    OB -->|Debezium / Relay| KFK{{"Kafka<br/>warehouse.events"}}
 
-    Service -->|Cache invalidate| Cache
+    BinCtrl["BinController"] -->|Bin assignments| BinService["BinService"]
+    BinService --> DB
+
+    StagingCtrl["StagingTelemetryController"] -->|Temperature telemetry| StagingService["StagingTelemetryService"]
+    StagingService --> DB
 ```
 
 ## Integrations
@@ -98,56 +106,75 @@ graph LR
 ### Synchronous Clients
 | Client | Endpoint | Timeout | Purpose |
 |--------|----------|---------|---------|
-| fulfillment-service | GET /stores/nearest | 2s | Find store for order pickup |
-| fulfillment-service | GET /stores/{id}/zones | 1s | Get picking zones for store |
-| admin-gateway-service | POST /stores, PUT /zones | 5s | Admin store management |
-| location-ingestion-service | GET /stores/nearby | 3s | Ingest store location for riders |
+| mobile-bff-service | GET /stores/nearest | 2s | Discover nearest dark store for customer |
+| fulfillment-service | GET /stores/{id}/layout | 2s | Optimize picker route across aisles |
+| fulfillment-service | GET /stores/{storeId}/bins/by-sku | 1s | Look up bin location for SKU during picking |
+| admin-gateway-service | POST /admin/stores | 5s | Dark store administration and capacity configuration |
 
-### Dependencies
-- **PostgreSQL + PostGIS**: Geospatial queries (ST_DWithin, ST_Distance)
-- **No Kafka**: Read-only for most; store data managed via admin APIs
+### Asynchronous Events
+| Topic | Direction | Events |
+|-------|-----------|--------|
+| warehouse.events | Publish | StoreCreated, StoreStatusChanged, StoreDeleted |
 
 ## Data Model
 
-### Stores Table (with Geospatial)
+### Core Tables
 
 ```sql
 stores:
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-  store_id        VARCHAR(255) NOT NULL UNIQUE (business identifier)
-  name            VARCHAR(255) NOT NULL
-  address         TEXT NOT NULL
-  city            VARCHAR(255) NOT NULL
-  state           VARCHAR(255) NOT NULL
-  pincode         VARCHAR(10) NOT NULL
-  location        geometry(Point, 4326) NOT NULL (PostGIS: lat/long)
-  radius_km       DECIMAL(5,2) DEFAULT 10 (delivery radius)
-  max_results     INT DEFAULT 5 (max nearby stores)
-  status          ENUM('ACTIVE', 'INACTIVE', 'CLOSED_TEMPORARILY') DEFAULT 'ACTIVE'
-  store_type      ENUM('MICRO', 'STANDARD', 'PREMIUM') (affects capacity)
-  created_at      TIMESTAMP NOT NULL DEFAULT now()
-  updated_at      TIMESTAMP NOT NULL DEFAULT now()
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid()
+  name                     VARCHAR(255) NOT NULL
+  address                  TEXT NOT NULL
+  city                     VARCHAR(100) NOT NULL
+  state                    VARCHAR(100) NOT NULL
+  pincode                  VARCHAR(10) NOT NULL
+  latitude                 DECIMAL(10, 8) NOT NULL
+  longitude                DECIMAL(11, 8) NOT NULL
+  status                   VARCHAR(30) NOT NULL DEFAULT 'ACTIVE'
+  capacity_orders_per_hour INT NOT NULL DEFAULT 100
+  timezone                 VARCHAR(50) NOT NULL DEFAULT 'Asia/Kolkata'
+  version                  BIGINT NOT NULL DEFAULT 0
+  max_concurrent_orders    INT NOT NULL DEFAULT 100
+  current_pending_orders   INT NOT NULL DEFAULT 0
+  created_at / updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 
-Indexes:
-  - UNIQUE (store_id)
-  - idx_stores_location (GIST on location, enables ST_DWithin)
-  - idx_stores_city (filter by city)
-  - idx_stores_status (query active)
-
-Spatial Index (GIST):
-  CREATE INDEX idx_stores_location ON stores USING GIST (location);
-```
-
-### Store Zones Table
-
-```sql
 store_zones:
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-  store_id        UUID NOT NULL (FK → stores.id)
-  zone_code       VARCHAR(50) NOT NULL (e.g., "A", "B", "REFRIGERATED")
-  zone_name       VARCHAR(255) NOT NULL (e.g., "Zone A - Dry Goods")
-  aisle           VARCHAR(50) (e.g., "Aisle 1")
-  shelf_level     INT (e.g., 1, 2, 3)
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid()
+  store_id            UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE
+  zone_name           VARCHAR(100) NOT NULL
+  pincode             VARCHAR(10) NOT NULL
+  delivery_radius_km  DECIMAL(5, 2) NOT NULL DEFAULT 5.00
+
+warehouse_bins:
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid()
+  store_id            UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE
+  aisle, rack, shelf  VARCHAR(20) NOT NULL
+  bin_number          VARCHAR(20) NOT NULL
+  sku                 VARCHAR(100)
+  max_volume_cm3      INT NOT NULL DEFAULT 50000
+  current_volume_cm3  INT NOT NULL DEFAULT 0
+  occupied            BOOLEAN NOT NULL DEFAULT FALSE
+
+staging_temperature_telemetry:
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid()
+  store_id            UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE
+  sensor_id, bay_id   VARCHAR(50) NOT NULL
+  storage_type        VARCHAR(20) NOT NULL
+  temperature_celsius DECIMAL(5, 2) NOT NULL
+  breached            BOOLEAN NOT NULL DEFAULT FALSE
+
+outbox_events:
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid()
+  event_id            UUID NOT NULL
+  aggregate_type      VARCHAR(100) NOT NULL
+  aggregate_id        VARCHAR(100) NOT NULL
+  event_type          VARCHAR(100) NOT NULL
+  schema_version      VARCHAR(20) NOT NULL DEFAULT 'v1'
+  source_service      VARCHAR(100) NOT NULL DEFAULT 'warehouse-service'
+  correlation_id      VARCHAR(255)
+  payload             JSONB NOT NULL
+  sent                BOOLEAN NOT NULL DEFAULT FALSE
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
   capacity_units  INT DEFAULT 1000 (max items for picking)
   current_load    INT DEFAULT 0 (current items being picked)
   status          ENUM('ACTIVE', 'MAINTENANCE', 'FULL') DEFAULT 'ACTIVE'

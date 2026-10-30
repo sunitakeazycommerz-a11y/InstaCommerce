@@ -2,7 +2,7 @@
 
 > **Owner:** `@instacommerce/mobile-team`
 > ([`docs/reviews/iter3/platform/repo-truth-ownership.md`](../../docs/reviews/iter3/platform/repo-truth-ownership.md))
-> · **Port:** 8080 · **Stack:** Spring Boot 3 / WebFlux (Reactor) / Java 21
+> · **Port:** 8080 · **Stack:** Spring Boot 4 / WebFlux (Reactor) / Java 21
 > · **SLO target:** 99.95 % HTTP availability, 30-day window
 > ([SLO-15](../../docs/reviews/iter3/platform/observability-sre.md))
 
@@ -66,7 +66,7 @@ The mobile-bff-service belongs to the **Edge Layer** (cluster C1) alongside
 
 | Area | Current (checked-in code) | Target (per iter3 reviews) |
 |------|---------------------------|----------------------------|
-| **Endpoints** | `GET /bff/mobile/v1/home`, `GET /bff/mobile/v1/profile` | Aggregated mobile APIs: home, category, search, product detail, cart summary, profile |
+| **Endpoints** | `GET /bff/mobile/v1/home`, `GET /bff/mobile/v1/profile`, `GET /bff/mobile/v1/cart/stream/{userId}` (SSE) | Aggregated mobile APIs: home, category, search, product detail, cart summary, profile, real-time sync |
 | **Backend integration** | Parallel reactive WebClient fan-out via `HomeAggregator` + `UpstreamClientFactory` to catalog, search, and feature-flags | Parallel WebClient calls to catalog, search, pricing, inventory, warehouse, cart, identity, feature-flags |
 | **Security** | WebFlux `SecurityWebFilterChain` (`MobileBffSecurityConfig`), RS256 JWT validation against `identity-service`, `UserContextPropagationFilter` | WebFlux `SecurityWebFilterChain` with `spring-boot-starter-oauth2-resource-server`, JWKS validation against identity-service |
 | **Caching** | `spring.cache.type: caffeine` configured, cache TTL properties defined in `MobileBffProperties` | Screen-aware Caffeine caches with per-upstream TTLs and `@CacheEvict` hooks |
@@ -78,9 +78,9 @@ The mobile-bff-service belongs to the **Edge Layer** (cluster C1) alongside
 
 ## 3. High-Level Design (HLD)
 
-### 3.1 Current Architecture — Scaffold
+### 3.1 Current Architecture
 
-The checked-in codebase has two Java classes and no runtime integrations.
+The service runs a reactive WebFlux gateway with JWT validation, user context propagation, upstream aggregation, and SSE streaming:
 
 ```mermaid
 graph TB
@@ -95,15 +95,30 @@ graph TB
 
     subgraph "mobile-bff-service :8080"
         APP["MobileBffServiceApplication"]
-        CTRL["MobileBffController"]
+        SEC["MobileBffSecurityConfig & UserContextPropagationFilter"]
+        CTRL["MobileBffController & CartSseController"]
+        AGG["HomeAggregator"]
+        SYNC["CartSyncService (SSE)"]
         ACT["Actuator<br/>health · prometheus · metrics"]
+    end
+
+    subgraph Upstream Services
+        CAT["catalog-service :8082"]
+        SEARCH["search-service :8088"]
+        FLAG["config-feature-flag-service :8098"]
+        CART["cart-service :8090"]
     end
 
     IOS --> IG
     ANDROID --> IG
-    IG -->|"/bff/mobile/v1/** <br/> /m/v1/**"| CTRL
-    CTRL -->|"Mono.just: status ok"| IG
-    APP --> CTRL
+    IG -->|"/bff/mobile/v1/** <br/> /m/v1/**"| SEC
+    SEC --> CTRL
+    CTRL --> AGG
+    CTRL --> SYNC
+    AGG -->|WebClient| CAT
+    AGG -->|WebClient| SEARCH
+    AGG -->|WebClient| FLAG
+    SYNC -.->|SSE updates| IG
     APP --> ACT
 ```
 
@@ -313,8 +328,12 @@ Both path prefixes are equivalent — `/m/v1` is a short alias for
 
 | Method | Endpoint | Description | Response |
 |--------|----------|-------------|----------|
-| `GET` | `/bff/mobile/v1/home` | Stub home endpoint | `{"status":"ok"}` |
-| `GET` | `/m/v1/home` | Short alias | `{"status":"ok"}` |
+| `GET` | `/bff/mobile/v1/home` | Composite home screen aggregation (catalog + search + flags) | `200 OK` (HomeScreenResponse) |
+| `GET` | `/m/v1/home` | Short alias for `/bff/mobile/v1/home` | `200 OK` (HomeScreenResponse) |
+| `GET` | `/bff/mobile/v1/profile` | Authenticated user profile and permissions | `200 OK` (UserProfileResponse) |
+| `GET` | `/m/v1/profile` | Short alias for profile endpoint | `200 OK` (UserProfileResponse) |
+| `GET` | `/bff/mobile/v1/cart/stream/{userId}` | Live cart synchronization stream (Server-Sent Events) | `text/event-stream` (Flux<CartUpdate>) |
+| `GET` | `/m/v1/cart/stream/{userId}` | Short alias for SSE cart stream | `text/event-stream` (Flux<CartUpdate>) |
 
 ### 6.2 Actuator / Operational Endpoints
 

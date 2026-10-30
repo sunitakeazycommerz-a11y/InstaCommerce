@@ -487,6 +487,8 @@ Error codes: `VALIDATION_ERROR`, `TOKEN_INVALID`, `AUTHENTICATION_REQUIRED`, `AC
 | V2 | `V2__create_trending_queries.sql` | Create `trending_queries` table, indexes on `hit_count DESC` and `last_searched_at DESC` |
 | V3 | `V3__create_shedlock.sql` | Create `shedlock` table for distributed lock coordination |
 | V4 | `V4__add_autocomplete_index.sql` | Add `text_pattern_ops` index on `search_documents.name` for prefix autocomplete |
+| V5 | `V5__add_store_id_to_search_documents.sql` | Add `store_id UUID` column and index for dark-store localized search |
+| V6 | `V6__add_lower_name_text_pattern_index.sql` | Add `idx_search_documents_lower_name` for case-insensitive autocomplete matching |
 
 ### Entity-Relationship Diagram
 
@@ -495,6 +497,7 @@ erDiagram
     search_documents {
         UUID id PK "gen_random_uuid()"
         UUID product_id UK "NOT NULL"
+        UUID store_id "Dark store identifier (V5)"
         VARCHAR_512 name "NOT NULL"
         TEXT description
         VARCHAR_255 brand

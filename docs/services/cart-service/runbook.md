@@ -14,11 +14,10 @@
     curl -s http://localhost:8090/actuator/health | jq '.components.redis'
   ```
 
-- [ ] Verify inventory-service, pricing-service connectivity
+- [ ] Verify pricing-service connectivity
   ```bash
   kubectl exec -n engagement deploy/cart-service -- \
-    curl -v http://inventory-service:8082/health && \
-    curl -v http://pricing-service:8112/health
+    curl -s http://pricing-service:8089/actuator/health/readiness
   ```
 
 - [ ] Check Kafka connectivity (cart.events topic)
@@ -64,11 +63,11 @@ kubectl exec -n engagement deploy/cart-service -- \
 
 ## Health Check Procedures
 
-### Liveness Probe: `/actuator/health/live`
+### Liveness Probe: `/actuator/health/liveness`
 
-### Readiness Probe: `/actuator/health/ready`
+### Readiness Probe: `/actuator/health/readiness`
 
-**Load balancer removal triggers**: Redis down, inventory/pricing service unreachable
+**Load balancer removal triggers**: Database or Redis unreachable
 
 ---
 

@@ -72,15 +72,15 @@ kubectl logs -f deployment/search-service -n default --tail=100
 # Check health probes
 for i in {1..3}; do
   kubectl port-forward -n default \
-    search-service-$i 8086:8086 &>/dev/null &
-  curl -s http://localhost:8088/actuator/health/ready | jq .status
+    search-service-$i 8088:8088 &>/dev/null &
+  curl -s http://localhost:8088/actuator/health/readiness | jq .status
   kill %1
 done
 
 # Expected: "UP" for all pods
 
 # Verify metrics are being exported
-kubectl port-forward -n default search-service-0 8086:8086 &>/dev/null &
+kubectl port-forward -n default search-service-0 8088:8088 &>/dev/null &
 curl -s http://localhost:8088/actuator/metrics | jq .names | head -10
 kill %1
 ```

@@ -7,23 +7,23 @@
 - **Liveness Probe:** `http://localhost:8106/health/live`
 - **Metrics Endpoint:** `http://localhost:8106/metrics`
 - **Local Startup:** `cd services/payment-webhook-service && go run main.go`
-- **State Ownership:** Ingests external PSP webhooks (Stripe/Adyen), verifies HMAC signatures, deduplicates via Redis, and forwards normalized events to Kafka `payments.events`.
+- **State Ownership:** Ingests external PSP webhooks (Stripe/Razorpay/PhonePe), verifies HMAC/RSA signatures, deduplicates via Redis, and forwards normalized events to Kafka `payment.webhooks`.
 
 ---
 
 ## Pre-Deployment Verification Checklist
 
-- [ ] Verify webhook secret configuration (`WEBHOOK_SECRET`)
+- [ ] Verify webhook secret configuration (`STRIPE_WEBHOOK_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `PHONEPE_SALT_KEY`)
 - [ ] Check Redis connectivity for idempotency deduplication
   ```bash
   kubectl exec -n instacommerce deploy/payment-webhook-service -- \
-    curl -s http://localhost:8106/health/ready | jq '.details.redis'
+    curl -s http://localhost:8106/health | jq '.checks[] | select(.name=="redis")'
   ```
 
-- [ ] Verify Kafka broker reachability (`payments.events` topic)
+- [ ] Verify Kafka broker reachability (`payment.webhooks` topic)
   ```bash
   kubectl exec -n instacommerce deploy/payment-webhook-service -- \
-    curl -s http://localhost:8106/health/ready | jq '.details.kafka'
+    curl -s http://localhost:8106/health | jq '.checks[] | select(.name=="kafka")'
   ```
 
 ---

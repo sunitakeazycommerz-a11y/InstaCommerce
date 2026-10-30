@@ -6,7 +6,7 @@
 - **Readiness Probe:** `http://localhost:8110/health/ready`
 - **Liveness Probe:** `http://localhost:8110/health/live`
 - **Metrics Endpoint:** `http://localhost:9090/metrics`
-- **Local Startup:** `cd services/reverse-etl-orchestrator && go run main.go`
+- **Local Startup:** `cd services/reverse-etl-orchestrator && go run ./cmd/server`
 
 ---
 
@@ -34,4 +34,4 @@ kubectl logs -n instacommerce deploy/reverse-etl-orchestrator --tail=100 | grep 
 **Symptoms:** Worker pool errors: `googleapi: Error 403: Exceeded rate limits`.
 **Resolution:**
 1. Adjust sync interval from continuous to batch window (`--sync-interval=30m`).
-2. Scale down worker concurrency via `REVERSE_ETL_WORKER_CONCURRENCY=5`.
+2. Scale down worker concurrency via `WORKER_POOL_CONCURRENCY=5`.

@@ -6,7 +6,7 @@ The fulfillment-service orchestrates the complete fulfillment lifecycle for orde
 
 **Service Ownership**: Platform Team - Money Path Tier 1
 **Language**: Java 21 / Spring Boot 4.0
-**Default Port**: 8080
+**Default Port**: 8086
 **Status**: Tier 1 Critical (operational fulfillment)
 **Database**: PostgreSQL 15+ (fulfillment tracking)
 
@@ -14,23 +14,20 @@ The fulfillment-service orchestrates the complete fulfillment lifecycle for orde
 
 - **Availability SLO**: 99.5% (43 minutes downtime/month - operational tolerance)
 - **P99 Latency**:
-  - Picking assignment: < 2s (POST /pick/{orderId})
-  - Delivery assignment: < 2s (POST /delivery/{orderId}/assign)
-  - Status queries: < 500ms (GET endpoints)
-- **Error Rate**: < 0.5% (failed assignments, missing rider data)
-- **ETA Accuracy**: 95% within ±15 minutes (when ETA provided)
+  - Picklist generation: < 500ms (GET /fulfillment/picklist/{storeId})
+  - Order packed: < 300ms (POST /fulfillment/orders/{orderId}/packed)
+  - Status queries: < 100ms (GET endpoints)
+- **Error Rate**: < 0.5%
 - **Max Throughput**: 1,000 orders/minute (warehouse & rider capacity)
 
 ## Key Responsibilities
 
-1. **Pick Job Creation**: Consume OrderCreated events; create picking tasks for warehouse staff
-2. **Item Picking Management**: Track individual item picking status; handle out-of-stock scenarios
-3. **Pick Cancellation**: Release picks when orders cancelled (pre-packing)
-4. **Rider Assignment**: Assign picked/packed orders to available riders based on location proximity
-5. **ETA Tracking**: Aggregate rider ETAs from routing-service; communicate to customer
-6. **Status Updates**: Receive delivery status updates from riders in real-time
-7. **Rider Reassignment**: Re-assign orders if rider becomes unavailable (e.g., accident, vehicle breakdown)
-8. **Event Publishing**: Publish fulfillment events (PickingStarted, DeliveryAssigned, DeliveryCompleted) to downstream systems
+1. **Pick Task Creation**: Consumes `OrderPlaced` from `orders.events` to create picking tasks for warehouse staff
+2. **Item Picking Management**: S-shape aisle routing traversal heuristic (`AisleRoutingOptimizer`) ordering items by aisle, shelf, bin, and sequence
+3. **Multi-Order Batch Picking**: Batch allocation (`BatchPickingService`) with tote compartment color and barcode verification
+4. **Handoff & Proof of Delivery**: Rider OTP dispatch verification and contactless photo POD upload
+5. **Out-of-Stock Substitutions**: Handles missing items with customer notification and refund triggers
+6. **Event Publishing**: Emits `fulfillment.events` (`OrderPacked`, `OrderDispatched`, `OrderDelivered`, `OrderModified`, etc.) via transactional outbox
 
 ## Deployment
 
@@ -39,11 +36,11 @@ The fulfillment-service orchestrates the complete fulfillment lifecycle for orde
 - **Replicas**: 3 (HA, active-active across warehouse zones)
 - **CPU Request/Limit**: 500m / 1500m
 - **Memory Request/Limit**: 512Mi / 1Gi
-- **Readiness Probe**: `/actuator/health/ready` (checks DB + Kafka)
+- **Readiness Probe**: `/actuator/health/readiness` (checks DB + Kafka)
 
 ### Database
 - **Name**: `fulfillment` (PostgreSQL 15+)
-- **Migrations**: Flyway (V1-V8)
+- **Migrations**: Flyway (V1-V12)
 - **Connection Pool**: HikariCP 25 connections
 - **Replicas**: Read replicas for analytics queries
 
@@ -142,50 +139,59 @@ DELIVERY PHASE:
 | Service | Endpoint | Timeout | Purpose | Retry |
 |---------|----------|---------|---------|-------|
 | inventory-service | http://inventory-service:8083/inventory/{productId} | 5s | Check item availability | 2 retries |
-| warehouse-service | http://warehouse-service:8090/stores/{id}/zones | 3s | Get picking zone location | 1 retry |
-| dispatch-optimizer | http://dispatch-optimizer:8080/optimize | 10s | Assign to best rider | 3 retries |
-| rider-fleet-service | http://rider-fleet:8092/riders/available | 5s | Query available riders | 2 retries |
-| order-service | http://order-service:8085/orders/{id} | 3s | Update order status | None (async via Kafka) |
+| warehouse-service | http://warehouse-service:8092/stores/{id}/zones | 3s | Get picking zone and dark store coordinates | 1 retry |
+| order-service | http://order-service:8084/orders/{id} | 3s | Status synchronization (legacy fallback) | None (async via Kafka) |
 
 ### Asynchronous Event Channels
 | Topic | Direction | Events | Format |
 |-------|-----------|--------|--------|
-| orders.events | Consume | OrderCreated, OrderCancelled | Kafka |
-| fulfillment.events | Publish | PickingStarted, ItemPicked, PickingCompleted, DeliveryAssigned, DeliveryInProgress, DeliveryCompleted | Kafka (via outbox) |
-| location.events | Consume | RiderLocationUpdated (real-time coordinates) | Kafka |
+| `orders.events` | Consume | `OrderPlaced` | Kafka (group: `fulfillment-service`) |
+| `identity.events` | Consume | `UserErased` | Kafka (group: `fulfillment-service-erasure`) |
+| `fulfillment.events` | Publish | `OrderPacked`, `OrderDispatched`, `OrderDelivered`, `OrderModified`, `PickTaskCancelled`, `RiderHandoffCompleted`, `ProofOfDeliveryUploaded` | Kafka (via transactional outbox) |
 
 ## Data Model
 
 ### Core Entities
 
 ```
-Pick Jobs Table:
+pick_tasks Table:
 ├─ id (UUID, PK)
-├─ order_id (UUID, FK → order-service, indexed)
-├─ status (ENUM: PENDING, IN_PROGRESS, COMPLETED, PARTIAL, CANCELLED)
-├─ warehouse_id (UUID, FK → warehouse-service)
-├─ zone_id (VARCHAR - picking zone, e.g., "Zone A Aisle 1")
-├─ assigned_to_staff_id (UUID, optional - staff member picking)
-├─ started_at (TIMESTAMP)
-├─ completed_at (TIMESTAMP)
+├─ order_id (UUID, FK → order-service, UNIQUE uq_pick_order)
+├─ store_id (UUID, indexed)
+├─ user_id (VARCHAR)
+├─ status (ENUM: PENDING, IN_PROGRESS, PACKED, CANCELLED)
+├─ batch_id (UUID, FK → pick_batches)
+├─ tote_barcode (VARCHAR)
+├─ tote_color (VARCHAR)
+├─ started_at (TIMESTAMPTZ)
+├─ completed_at (TIMESTAMPTZ)
 └─ (Audit fields)
 
-Pick Items Table:
+pick_items Table:
 ├─ id (UUID, PK)
-├─ pick_job_id (UUID, FK → Pick Jobs)
-├─ order_item_id (UUID - reference to order item)
+├─ pick_task_id (UUID, FK → pick_tasks)
 ├─ product_id (UUID)
 ├─ quantity_required (INT)
 ├─ quantity_picked (INT)
-├─ status (ENUM: PENDING, PICKED, NOT_AVAILABLE)
-├─ scanned_at (TIMESTAMP)
-└─ barcode_scan_id (VARCHAR - audit trail)
+├─ aisle, shelf, bin, pick_sequence (V11 Dark Store routing)
+├─ barcode, tare_weight_grams (V11 verification)
+└─ status (ENUM: PENDING, PICKED, MISSING, SUBSTITUTED)
 
-Deliveries Table:
+pick_batches Table (V11):
 ├─ id (UUID, PK)
-├─ order_id (UUID, FK, indexed)
-├─ pick_job_id (UUID, FK)
-├─ rider_id (UUID, FK → rider-fleet-service)
+├─ store_id (UUID)
+├─ picker_id (VARCHAR)
+├─ status (ENUM: CREATED, PICKING, COMPLETED)
+└─ total_orders (INT)
+
+deliveries Table:
+├─ id (UUID, PK)
+├─ order_id (UUID, UNIQUE)
+├─ rider_id (UUID)
+├─ store_id (UUID)
+├─ status (ENUM: PENDING, ASSIGNED, PICKED_UP, DELIVERED, FAILED)
+├─ dispatch_otp (VARCHAR, V11 handoff)
+└─ pod_photo_url, pod_masked (V11 proof of delivery)
 ├─ status (ENUM: ASSIGNED, IN_TRANSIT, DELIVERED, FAILED)
 ├─ assigned_at (TIMESTAMP)
 ├─ picked_up_at (TIMESTAMP)

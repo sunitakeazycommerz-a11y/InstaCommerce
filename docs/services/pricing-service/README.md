@@ -5,10 +5,10 @@
 | Property | Value |
 |----------|-------|
 | **Module** | `:services:pricing-service` |
-| **Port** | `8087` |
+| **Port** | `8089` |
 | **Runtime** | Spring Boot 4.0 · Java 21 |
-| **Database** | PostgreSQL 15+ (Flyway-managed, @Version locking) |
-| **Messaging** | Kafka consumer (catalog.events, promotion.events) |
+| **Database** | PostgreSQL 15+ (Flyway-managed V1–V10, @Version locking) |
+| **Messaging** | Kafka consumer (`catalog.events`), Outbox producer (`pricing.events`) |
 | **Resilience** | Resilience4j rate limiter, circuit breaker |
 | **Auth** | JWT RS256 |
 | **Owner** | Pricing & Promotions Team |
@@ -21,8 +21,10 @@
 **Owns:**
 - `coupons` table — coupon master (code, discount, expiry, @Version locking per Wave 30)
 - `coupon_redemptions` table — per-order redemption tracking (unique constraint: order_id per coupon)
-- `promotions` table — time-based and segment-based promotions
-- `pricing_tiers` table — volume/customer-tier based pricing
+- `promotions` table — time-based promotions with user limits
+- `price_rules` table — product-level base prices and multiplier adjustments
+- `price_quotes` table — immutable quotes with content hashes
+- `outbox_events` and `shedlock` tables
 
 **Does NOT own:**
 - Product master data (→ `catalog-service`, consumed via events)
@@ -30,11 +32,10 @@
 - Effective stock (→ `inventory-service`)
 
 **Consumes:**
-- `catalog.events` — ProductUpdated (price changes)
-- `promotion.events` — PromotionCreated, PromotionEnded
+- `catalog.events` — `ProductCreated`, `ProductUpdated` (group: `pricing-service-catalog`)
 
 **Publishes:**
-- `pricing.events` — PriceQuoteGenerated, CouponRedeemed (via outbox/CDC)
+- `pricing.events` — `PROMOTION_CREATED`, `PROMOTION_UPDATED`, `PROMOTION_DEACTIVATED`, `CouponRedeemed` (via outbox CDC)
 
 ---
 

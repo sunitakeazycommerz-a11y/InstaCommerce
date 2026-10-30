@@ -409,8 +409,9 @@ graph TB
     Istio --> cloudsql
     Istio --> redis
     outbox --> kafka
-    cdc --> kafka
-    stream_proc --> bq
+    kafka --> cdc
+    cdc --> bq
+    stream_proc --> redis
     ai_inf --> vertex
 
     otel --> prom
@@ -552,26 +553,27 @@ graph LR
     end
 
     subgraph event_layer["Event Backbone"]
+        deb["Debezium Connect<br/>(PostgreSQL WAL)"]
         outbox["Outbox Relay<br/>(Go)"]
-        cdc_svc["CDC Consumer<br/>(Go, Debezium)"]
+        cdc_svc["CDC Consumer<br/>(Go)"]
         kafka_cluster["Kafka<br/>(Strimzi, 3 brokers)"]
     end
 
     subgraph stream_layer["Stream Processing"]
         stream_proc["Stream Processor<br/>(Go)"]
-        flink["Event Enrichment<br/>& Aggregation"]
+        beam["Apache Beam<br/>(Cloud Dataflow)"]
     end
 
     subgraph analytical["Analytical Layer (OLAP)"]
-        bq["BigQuery<br/>(Data Warehouse)"]
+        bq["BigQuery<br/>(Data Warehouse & Marts)"]
         feature_store["Vertex AI<br/>Feature Store"]
         looker["Looker<br/>(Dashboards)"]
     end
 
     subgraph ml_layer["ML Layer"]
         training["Model Training<br/>(Vertex AI Pipelines)"]
-        ai_inference["AI Inference<br/>(FastAPI)"]
-        models["Models: Demand,<br/>ETA, Fraud, Search Rank"]
+        ai_orch["AI Orchestrator<br/>(FastAPI / LangGraph)"]
+        ai_inference["AI Inference<br/>(FastAPI / ML Models)"]
     end
 
     svc -->|"Write"| pg
@@ -579,40 +581,51 @@ graph LR
     svc -->|"Insert outbox row<br/>(same transaction)"| pg
 
     pg -->|"Poll outbox table"| outbox
-    pg -->|"WAL stream"| cdc_svc
-    outbox -->|"Publish events"| kafka_cluster
-    cdc_svc -->|"Publish CDC events"| kafka_cluster
+    pg -->|"WAL logical decode"| deb
+    deb -->|"CDC topic stream"| kafka_cluster
+    outbox -->|"Publish domain events"| kafka_cluster
 
-    kafka_cluster -->|"Consume"| stream_proc
-    stream_proc -->|"Enriched events"| bq
-    stream_proc -->|"Real-time features"| feature_store
-    stream_proc -->|"Aggregates"| redis_op
+    kafka_cluster -->|"Consume CDC topics"| cdc_svc
+    cdc_svc -->|"Batch insert"| bq
 
-    bq -->|"Training data"| training
+    kafka_cluster -->|"Consume domain events"| stream_proc
+    kafka_cluster -->|"Consume streams"| beam
+    beam -->|"Windowed metrics"| bq
+    stream_proc -->|"Real-time metrics"| redis_op
+
+    bq -->|"Training datasets"| training
+    training -->|"Deploy weights"| ai_inference
     feature_store -->|"Online features"| ai_inference
-    training -->|"Deploy model"| ai_inference
-    ai_inference -->|"Predictions"| svc
+    ai_orch -->|"Model scoring"| ai_inference
+    ai_orch -->|"Agent workflows"| svc
+    ai_inference -->|"Direct scoring"| svc
 
     bq --> looker
 ```
 
 ### Transactional Outbox Pattern
 
-The Outbox Relay (Go) solves the dual-write problem — it guarantees that a domain event is published
+The Outbox Relay (Go) solves the dual-write problem - it guarantees that a domain event is published
 to Kafka if and only if the corresponding database transaction commits:
 
 1. Service writes business data + outbox row in a **single PostgreSQL transaction**.
-2. Outbox Relay polls the `outbox_events` table every 100ms (configurable).
-3. Publishes each event to the appropriate Kafka topic with the outbox row ID as the idempotency key.
-4. Marks the outbox row as `PUBLISHED` after Kafka acknowledgement.
-5. A background job prunes published rows older than 72 hours.
+2. Outbox Relay polls the `outbox_events` table every 100ms (configurable) using `SELECT ... FOR UPDATE SKIP LOCKED`.
+3. Publishes each event to the appropriate Kafka topic with the outbox `event_id` as the message key.
+4. Marks the outbox row as `sent = true` after Kafka producer acknowledgement.
+5. A background retention policy cleans up sent rows older than 72 hours.
 
 ### CDC Pipeline
 
-Change Data Capture (via Debezium-like logical replication in Go) streams PostgreSQL WAL changes
-for tables that need analytical replication without impacting the application write path. CDC events
-flow through Kafka to the Stream Processor, which enriches them with Redis-cached reference data
-before sinking to BigQuery.
+Change Data Capture via Debezium Connect streams PostgreSQL WAL changes for operational tables
+into Kafka CDC topics (`<db>.public.<table>`). The `cdc-consumer-service` (Go) consumes these
+topics, normalizes schema evolution deltas, and batches streaming inserts into Google BigQuery
+`cdc_events` using exponential backoff and routing unprocessable messages to `cdc.dlq`.
+
+### Stream Processing & Analytics
+
+Real-time streaming is dual-layered:
+- `stream-processor-service` (Go) consumes domain event streams, computes sliding-window SLA compliance and velocity metrics, and dual-writes to Redis (live dashboards) and Prometheus (`/metrics`).
+- Apache Beam on Google Cloud Dataflow (Python) executes continuous windowed event pipelines (`order_events_pipeline`, `payment_events_pipeline`, `cart_events_pipeline`, `inventory_events_pipeline`, `rider_location_pipeline`, `order_payment_join_pipeline`) sinking enriched aggregations into BigQuery analytics tables.
 
 ### Feature Store
 

@@ -432,7 +432,22 @@ Signature: RS256(header.payload, RSA-private-key)
 
 ## 6. Database Schema
 
-Managed by **Flyway** (V1–V10 migrations in `src/main/resources/db/migration/`). Hibernate `ddl-auto: validate` — schema changes must go through migrations.
+Managed by **Flyway** (V1–V12 migrations in `src/main/resources/db/migration/`). Hibernate `ddl-auto: validate` — schema changes must go through migrations.
+
+| Migration | File | Description |
+|---|---|---|
+| `V1` | `V1__create_users.sql` | `users` table with email index |
+| `V2` | `V2__create_refresh_tokens.sql` | `refresh_tokens` table with hash lookup |
+| `V3` | `V3__create_audit_log.sql` | `audit_log` table for compliance tracking |
+| `V4` | `V4__add_user_deletion_fields.sql` | GDPR soft deletion `deleted_at` column |
+| `V5` | `V5__update_audit_log_schema.sql` | `audit_log` schema enhancements and IP indexing |
+| `V6` | `V6__create_outbox.sql` | `outbox_events` transactional outbox table |
+| `V7` | `V7__create_notification_preferences.sql` | `user_notification_preferences` table |
+| `V8` | `V8__add_lockout_and_fix_inet.sql` | Account lockout `failed_attempts` and `locked_until` |
+| `V9` | `V9__drop_duplicate_audit_indexes.sql` | Redundant index cleanup on `audit_log` |
+| `V10` | `V10__create_shedlock.sql` | `shedlock` distributed locking table |
+| `V11` | `V11__add_outbox_envelope_fields.sql` | Event envelope: `event_id`, `correlation_id`, `causation_id`, `schema_version` |
+| `V12` | `V12__add_outbox_events_retention_index.sql` | Retention index `idx_outbox_events_retention` on `(processed_at, created_at)` |
 
 ### `users`
 
@@ -480,17 +495,22 @@ Managed by **Flyway** (V1–V10 migrations in `src/main/resources/db/migration/`
 | `trace_id` | `VARCHAR(32)` | OpenTelemetry trace ID for correlation |
 | `created_at` | `TIMESTAMPTZ` | |
 
-### `outbox_events`
+### `outbox_events` (V6, V11, V12)
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `UUID` | PK |
+| `event_id` | `UUID` | Canonical event identifier (V11) |
+| `correlation_id` | `VARCHAR(255)` | Distributed trace / saga correlation ID (V11) |
+| `causation_id` | `VARCHAR(255)` | Upstream trigger event ID (V11) |
+| `schema_version` | `VARCHAR(50)` | Event schema version (V11) |
 | `aggregate_type` | `VARCHAR(50)` | e.g. `User` |
 | `aggregate_id` | `VARCHAR(255)` | e.g. user UUID |
 | `event_type` | `VARCHAR(50)` | e.g. `UserErased` |
 | `payload` | `JSONB` | Event payload (JSON) |
-| `created_at` | `TIMESTAMPTZ` | |
+| `created_at` | `TIMESTAMPTZ` | Record creation timestamp |
 | `sent` | `BOOLEAN` | Default `false`; set `true` after Kafka delivery by CDC connector |
+| `processed_at` | `TIMESTAMPTZ` | Timestamp when event was relayed to Kafka (V12) |
 
 ### `notification_preferences`
 

@@ -31,7 +31,7 @@ Order-service is the **system of record for order state**. It owns:
 
 - The `orders`, `order_items`, and `order_status_history` tables in its dedicated PostgreSQL database.
 - An `OrderStateMachine` that enforces an 8-status lifecycle (`PENDING` → `PLACED` → `PACKING` → `PACKED` → `OUT_FOR_DELIVERY` → `DELIVERED`, with `CANCELLED` and `FAILED` as terminal states).
-- Transactional outbox event publishing (`OrderCreated`, `OrderPlaced`, `OrderStatusChanged`, `OrderCancelled`) for downstream consumers.
+- Transactional outbox event publishing (`OrderCreated`, `OrderPlaced`, `OrderStatusChanged`, `OrderCancelled`, `OrderFailed`, `OrderDelivered`, `OrderModified`) for downstream consumers.
 - A GDPR user-erasure path (via `IdentityEventConsumer` → `UserErasureService`), replacing `user_id` with a zero-UUID placeholder and setting `user_erased = true`.
 - An audit log capturing every state mutation with actor, IP, user-agent, and OTEL trace ID.
 
@@ -60,7 +60,7 @@ The `checkout-orchestrator-service` drives order creation via Temporal activitie
 ### Legacy Direct Saga (decommissioned)
 
 Direct checkout on `order-service` has been permanently decommissioned (Issue #517). Any request to `POST /checkout` or `POST /api/checkout` returns `410 Gone` with code `CHECKOUT_MOVED`.
-All checkout orchestration is exclusively owned and executed by `checkout-orchestrator-service` (port 8086), which validates prices via `pricing-service`, reserves inventory, and drives the distributed Temporal saga.
+All checkout orchestration is exclusively owned and executed by `checkout-orchestrator-service` (port 8091), which validates prices via `pricing-service`, reserves inventory, and drives the distributed Temporal saga.
 
 
 ### Choreography (inbound events)
@@ -521,7 +521,24 @@ Status update body: `{ "status": "PACKING", "note": "optional reason" }`
 
 ## 7. Database Schema
 
-Managed by **Flyway** with 9 migrations (`V1`–`V9`) in `src/main/resources/db/migration/`. Hibernate DDL mode is `validate` — Flyway is the sole schema authority.
+Managed by **Flyway** with 12 migrations (`V1`–`V12`) in `src/main/resources/db/migration/`. Hibernate DDL mode is `validate` — Flyway is the sole schema authority.
+
+### Migrations Inventory
+
+| Migration | File | Tables / Objects | Purpose |
+|---|---|---|---|
+| `V1` | `V1__create_orders.sql` | `orders` | Core orders table with status enum and financial amounts in cents |
+| `V2` | `V2__create_order_items.sql` | `order_items` | Line items with quantity check constraints |
+| `V3` | `V3__create_order_status_history.sql` | `order_status_history` | State transition audit log |
+| `V4` | `V4__create_outbox.sql` | `outbox_events` | Transactional outbox table |
+| `V5` | `V5__create_audit_log.sql` | `audit_log` | Security and administrative mutation audit log |
+| `V6` | `V6__add_orders_user_erased.sql` | `orders` | GDPR user erasure column and index |
+| `V7` | `V7__add_delivery_address.sql` | `orders` | Delivery address column |
+| `V8` | `V8__create_shedlock.sql` | `shedlock` | Distributed lock table for background cleanup crons |
+| `V9` | `V9__add_orders_user_created_at_index.sql` | `orders` | User order listing composite index `(user_id, created_at DESC)` |
+| `V10` | `V10__add_outbox_envelope_fields.sql` | `outbox_events` | Envelope fields: `event_id`, `correlation_id`, `causation_id`, `schema_version` |
+| `V11` | `V11__add_orders_quote_id.sql` | `orders` | Dynamic pricing quote link `quote_id UUID` and index |
+| `V12` | `V12__add_outbox_events_retention_index.sql` | `outbox_events` | Retention index `idx_outbox_events_retention` on `(processed_at, created_at)` |
 
 ```mermaid
 erDiagram
@@ -540,6 +557,7 @@ erDiagram
         varchar coupon_code
         uuid reservation_id
         uuid payment_id
+        uuid quote_id
         varchar idempotency_key UK
         text cancellation_reason
         text delivery_address
@@ -572,12 +590,17 @@ erDiagram
 
     outbox_events {
         uuid id PK
+        uuid event_id
+        varchar correlation_id
+        varchar causation_id
+        varchar schema_version
         varchar aggregate_type
         varchar aggregate_id
         varchar event_type
         jsonb payload
         timestamptz created_at
         boolean sent
+        timestamptz processed_at
     }
 
     audit_log {
@@ -610,10 +633,13 @@ erDiagram
 | `orders` | `idx_orders_status` | B-tree | Filter by `status` |
 | `orders` | `idx_orders_created` | B-tree DESC | Sort by `created_at` |
 | `orders` | `idx_orders_user_created_at` | Composite | User order listing (V9) |
+| `orders` | `idx_orders_quote_id` | B-tree | Pricing quote lookup (V11) |
 | `order_items` | `idx_order_items_order` | B-tree | FK join to parent order |
 | `order_items` | `chk_qty` | CHECK | `quantity > 0` |
 | `order_status_history` | `idx_osh_order` | B-tree | History lookup by order |
 | `outbox_events` | `idx_outbox_unsent` | Partial (`WHERE sent = false`) | CDC/poll relay scan |
+| `outbox_events` | `idx_outbox_events_correlation` | B-tree | Saga correlation tracing (V10) |
+| `outbox_events` | `idx_outbox_events_retention` | Composite | Outbox retention cleanup (V12) |
 | `audit_log` | `idx_audit_user_id` | B-tree | Lookup by user |
 | `audit_log` | `idx_audit_action` | B-tree | Filter by action type |
 | `audit_log` | `idx_audit_created_at` | B-tree | Time-range queries |

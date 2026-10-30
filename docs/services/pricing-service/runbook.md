@@ -4,20 +4,20 @@
 
 - [ ] Verify pricing-db (PostgreSQL) is accessible
   ```bash
-  kubectl exec -n engagement deploy/pricing-service -- \
-    curl -s http://localhost:8089/actuator/health/db | jq '.components.db.status'
+  kubectl exec -n default deploy/pricing-service -- \
+    curl -s http://localhost:8089/actuator/health/readiness | jq '.components.db.status'
   ```
 
 - [ ] Check Redis cache for pricing rules
   ```bash
-  kubectl exec -n engagement deploy/pricing-service -- \
-    curl -s http://localhost:8089/actuator/health | jq '.components.redis'
+  kubectl exec -n default deploy/pricing-service -- \
+    curl -s http://localhost:8089/actuator/health/readiness | jq '.components.redis'
   ```
 
-- [ ] Verify Kafka connectivity (pricing.events topic)
+- [ ] Verify Kafka connectivity (catalog.events consumer)
   ```bash
-  kubectl exec -n engagement deploy/pricing-service -- \
-    curl -s http://localhost:8089/actuator/health | jq '.components.kafka'
+  kubectl exec -n default deploy/pricing-service -- \
+    curl -s http://localhost:8089/actuator/health/readiness | jq '.components.kafka'
   ```
 
 - [ ] Check pricing rules engine loaded

@@ -90,16 +90,18 @@ Output:
 
 | Service | Endpoint | Timeout | Purpose |
 |---------|----------|---------|---------|
-| ai-inference-service | http://ai-inference-service:8090/infer | 5s | Model inference |
-| config-feature-flag-service | http://config-feature-flag-service:8095/flags | 5s | AI enablement flags |
-| search-service | Kafka (ai.requests) | - | Consume ranking requests |
-| Redis | redis://redis-primary.cache:6379 | 1s | Deduplication cache |
+| ai-inference-service | http://ai-inference-service:8101/inference | 5s | Low-level ML model scoring (ETA, demand, pricing) |
+| config-feature-flag-service | http://config-feature-flag-service:8098/flags | 3s | Feature flag evaluation and AI experiment rollouts |
+| catalog-service | http://catalog-service:8082 | 2.5s | Product and category lookups |
+| pricing-service | http://pricing-service:8089 | 2.5s | Live price calculations |
+| inventory-service | http://inventory-service:8083 | 2.5s | Stock availability and perishable batch status |
+| Redis | redis://redis-primary:6379 | 1s | Semantic RAG cache and rate limit token buckets |
 
 ## Endpoints
 
-### Public (Unauthenticated)
-- `GET /health` - Health check
-- `GET /health/ready` - Readiness probe
+### Public & Monitoring
+- `GET /health` - Basic health check
+- `GET /health/ready` - Readiness probe (checks Redis and downstream HTTP dependencies)
 - `GET /health/live` - Liveness probe
 - `GET /metrics` - Prometheus metrics
 
@@ -111,123 +113,56 @@ Output:
 ### Example Requests
 
 ```bash
-# Get authorization token
-TOKEN=$(curl -X POST http://identity-service:8080/token/internal \
+# Customer support assist
+curl -X POST http://localhost:8100/agent/assist \
   -H "Content-Type: application/json" \
-  -d '{"service":"search-service"}' | jq -r '.token')
-
-# Synchronous inference request (search ranking)
-curl -X POST http://ai-orchestrator-service:8089/api/v1/infer \
-  -H "X-Internal-Token: $TOKEN" \
-  -H "Content-Type: application/json" \
+  -H "X-User-Id: user-12345" \
   -d '{
-    "requestType":"ranking",
-    "context":{
-      "userId":"user-12345",
-      "query":"laptop",
-      "productIds":["prod-001","prod-002","prod-003"]
-    },
-    "latencyRequirement":"strict",
-    "accuracyTarget":"high"
+    "message": "Where is my order #1029?",
+    "session_id": "sess-abc-123"
   }'
 
-# Batch inference (multiple requests)
-curl -X POST http://ai-orchestrator-service:8089/api/v1/infer/batch \
-  -H "X-Internal-Token: $TOKEN" \
+# Item substitution recommendation
+curl -X POST http://localhost:8100/agent/substitute \
   -H "Content-Type: application/json" \
   -d '{
-    "requests":[
-      {"requestType":"ranking","context":{"query":"phone"}},
-      {"requestType":"recommendation","context":{"userId":"user-12345"}},
-      {"requestType":"fraud_score","context":{"orderId":"ord-98765"}}
-    ],
-    "aggregationStrategy":"parallel"
+    "store_id": "00000000-0000-0000-0000-000000000001",
+    "out_of_stock_product_id": "00000000-0000-0000-0000-000000000002"
   }'
-
-# Check model status
-curl -X GET http://ai-orchestrator-service:8089/api/v1/models/status \
-  -H "X-Internal-Token: $TOKEN"
-
-# Check deduplication efficiency
-curl -X GET http://ai-orchestrator-service:8089/api/v1/metrics/deduplication \
-  -H "X-Internal-Token: $TOKEN"
 ```
+
+## Guardrails & Multi-Agent Architecture
+
+The service executes LangGraph state machines protected by a defense-in-depth guardrails pipeline:
+
+1. **Prompt Injection Defense** (`injection.py`): Wraps untrusted user tokens in delimiter tags and blocks jailbreak signatures.
+2. **PII Masking** (`pii.py`): Strips email, phone numbers, and payment details before model execution.
+3. **Token Bucket Rate Limiting** (`rate_limiter.py`): Per-IP (120 req/min) and per-user (30 req/min) sliding limits.
+4. **Semantic RAG Cache** (`semantic_cache.py`): Redis-backed TTL semantic cache (300s TTL) to prevent repeated LLM calls.
+5. **Output Validator** (`output_validator.py`): Validates JSON schema adherence, hallucination thresholds, and toxic content.
+6. **Human Escalation** (`escalation.py`): Detects sentiment triggers for immediate handoff to human support operators.
 
 ## Configuration
 
 ### Environment Variables
 ```env
-SERVER_PORT=8089
+AI_ORCHESTRATOR_SERVER_PORT=8100
+AI_ORCHESTRATOR_LOG_LEVEL=INFO
+AI_ORCHESTRATOR_REQUEST_TIMEOUT_SECONDS=3.0
 
-# AI Inference Service
-AI_INFERENCE_SERVICE_URL=http://ai-inference-service:8090
-AI_INFERENCE_TIMEOUT_SECONDS=5
-AI_INFERENCE_MAX_BATCH_SIZE=32
+# Downstream Services
+AI_ORCHESTRATOR_CATALOG_SERVICE_URL=http://catalog-service:8082
+AI_ORCHESTRATOR_PRICING_SERVICE_URL=http://pricing-service:8089
+AI_ORCHESTRATOR_INVENTORY_SERVICE_URL=http://inventory-service:8083
+AI_ORCHESTRATOR_ORDER_SERVICE_URL=http://order-service:8084
+AI_ORCHESTRATOR_CART_SERVICE_URL=http://cart-service:8090
 
-# Feature Flag Service
-FEATURE_FLAG_SERVICE_URL=http://config-feature-flag-service:8095
-FEATURE_FLAG_CACHE_TTL_SECONDS=300
-
-# Request Deduplication (Redis)
-REDIS_URL=redis://redis-primary.cache:6379
-REDIS_PASSWORD=<from kubernetes secret>
-DEDUPLICATION_CACHE_TTL_SECONDS=300
-DEDUPLICATION_ENABLED=true
-
-# Model Configuration
-AI_MODELS_AVAILABLE=ranking_v2,recommendation_v3,fraud_detection_v1
-AI_RANKING_MODEL_ACCURACY_TARGET=0.95
-AI_RECOMMENDATION_MODEL_ACCURACY_TARGET=0.88
-AI_FRAUD_MODEL_ACCURACY_TARGET=0.99
-
-# Batch Optimization
-BATCH_AGGREGATION_ENABLED=true
-BATCH_AGGREGATION_TIMEOUT_MILLISECONDS=200 (max wait for batch assembly)
-BATCH_MIN_SIZE=5 (minimum requests to trigger batch)
-BATCH_MAX_SIZE=32
-
-# Circuit Breaker
-CIRCUIT_BREAKER_FAILURE_THRESHOLD=5 (failures before opening)
-CIRCUIT_BREAKER_TIMEOUT_SECONDS=30 (duration in open state)
-CIRCUIT_BREAKER_SUCCESS_THRESHOLD=3 (successes before half-open closes)
-
-# Fallback Strategy
-FALLBACK_ENABLED=true
-FALLBACK_DEFAULT_RANKING=random (fallback ranking strategy)
-FALLBACK_DEFAULT_RECOMMENDATION=trending (fallback recommendation strategy)
-FALLBACK_DEFAULT_FRAUD_SCORE=0.0 (default low fraud score)
-
-SPRING_PROFILES_ACTIVE=gcp
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://otel-collector.monitoring:4318/v1/traces
+# Guardrails & Caching
+AI_ORCHESTRATOR_PII_REDACTION_ENABLED=true
+AI_ORCHESTRATOR_RAG_CACHE_TTL_SECONDS=300.0
+AI_ORCHESTRATOR_AGENT_IP_RATE_LIMIT_PER_MINUTE=120
+AI_ORCHESTRATOR_AGENT_USER_RATE_LIMIT_PER_MINUTE=30
 ```
-
-### application.yml
-```yaml
-ai-orchestrator:
-  inference:
-    service-url: ${AI_INFERENCE_SERVICE_URL:http://ai-inference-service:8090}
-    timeout-seconds: ${AI_INFERENCE_TIMEOUT_SECONDS:5}
-    max-batch-size: ${AI_INFERENCE_MAX_BATCH_SIZE:32}
-
-  feature-flag:
-    service-url: ${FEATURE_FLAG_SERVICE_URL:http://config-feature-flag-service:8095}
-    cache-ttl-seconds: ${FEATURE_FLAG_CACHE_TTL_SECONDS:300}
-
-  models:
-    available: ${AI_MODELS_AVAILABLE:ranking_v2,recommendation_v3}
-    ranking:
-      accuracy-target: ${AI_RANKING_MODEL_ACCURACY_TARGET:0.95}
-      latency-requirement: strict
-    recommendation:
-      accuracy-target: ${AI_RECOMMENDATION_MODEL_ACCURACY_TARGET:0.88}
-      latency-requirement: standard
-    fraud-detection:
-      accuracy-target: ${AI_FRAUD_MODEL_ACCURACY_TARGET:0.99}
-      latency-requirement: standard
-
-  batching:
-    enabled: ${BATCH_AGGREGATION_ENABLED:true}
-    timeout-milliseconds: ${BATCH_AGGREGATION_TIMEOUT_MILLISECONDS:200}
     min-size: ${BATCH_MIN_SIZE:5}
     max-size: ${BATCH_MAX_SIZE:32}
 

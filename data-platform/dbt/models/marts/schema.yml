@@ -233,3 +233,31 @@ models:
           - not_null
       - name: on_time_pct
         description: "Percentage of orders meeting 10-minute delivery SLA"
+
+  - name: mart_experiment_conversions
+    description: "A/B testing experiment conversion and statistical significance (z-score) tracking"
+    columns:
+      - name: experiment_id
+        description: "Experiment UUID identifier"
+        tests:
+          - not_null
+      - name: experiment_key
+        description: "Human-readable experiment feature flag key"
+        tests:
+          - not_null
+      - name: variant_name
+        description: "Assigned variant name (control, variant_a, variant_b)"
+        tests:
+          - not_null
+      - name: total_users
+        description: "Distinct users exposed to the experiment variant"
+        tests:
+          - not_null
+      - name: converted_users
+        description: "Distinct users who completed a delivered order after exposure"
+      - name: conversion_rate
+        description: "Conversion rate proportion"
+      - name: lift_pct
+        description: "Percentage lift relative to control variant"
+      - name: z_score
+        description: "Two-proportion pooled z-score test statistic"

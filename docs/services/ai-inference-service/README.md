@@ -5,8 +5,8 @@
 The ai-inference-service provides ML model serving capabilities for InstaCommerce, handling real-time inference requests for ETA predictions, demand forecasting, and dynamic pricing. It supports batching, model versioning, and automatic cache invalidation for sub-500ms latency at p99.
 
 **Service Ownership**: Platform Team - AI/ML Infrastructure Tier 3
-**Language**: Python 3.13 (FastAPI + TensorFlow/XGBoost)
-**Default Port**: 8090
+**Language**: Python 3.13 (FastAPI + Linear/Logistic/Ensemble Models)
+**Default Port**: 8101
 **Status**: Tier 3 Strategic (ML-driven features)
 
 ## SLOs & Availability
@@ -90,43 +90,44 @@ Response to callers (routing-eta, pricing services)
 
 ## Endpoints
 
-### Health & Metrics (Unauthenticated)
-- `GET /health` - Liveness probe (model loaded, inference ready)
-- `GET /metrics` - Prometheus metrics (prediction latency, accuracy, cache hit rate)
-- `GET /models` - List loaded models (active + shadow versions)
+### Health & Metrics
+- `GET /health` - Overall service status and loaded model summary
+- `GET /health/ready` - Readiness probe
+- `GET /health/live` - Liveness probe
+- `GET /metrics` - Prometheus metrics (prediction counts, latency histograms)
+- `GET /models` - List loaded model names, versions, and feature weights
 
-### Inference API (Requires Service-to-Service Token)
-- `POST /predict/eta` - Predict delivery ETA (request batching applied)
-- `POST /predict/demand` - Predict demand score (1-10 scale)
-- `POST /predict/price-multiplier` - Compute dynamic price adjustment factor
-
-### Debug API (Admin Token Required)
-- `POST /models/reload` - Force reload model from GCS (emergency use)
-- `GET /features/cache` - Show cached feature vectors (for troubleshooting)
-- `POST /shadow-model/{action}` - Enable/disable shadow model (A/B testing)
+### Inference API
+- `POST /inference/eta` - Delivery ETA prediction in minutes
+- `POST /inference/ranking` - Search product result ranking
+- `POST /inference/fraud` - Transaction fraud probability scoring
+- `POST /inference/demand` - Hourly store demand volume forecasting
+- `POST /inference/personalization` - User affinity category personalization
+- `POST /inference/clv` - Customer lifetime value scoring
+- `POST /inference/pricing` - Dynamic pricing surge factor calculation
+- `POST /inference/batch` - Multi-model batch scoring
+- `POST /inference/dynamic-batch` - Adaptive concurrency queue scoring
 
 ### Example Requests
 
 ```bash
 # Check inference service health
-curl -s http://ai-inference-service:8090/health | jq .
+curl -s http://localhost:8101/health | jq .
 
 # List loaded models
-curl -s http://ai-inference-service:8090/models | jq '.models[] | {name, version, accuracy}'
+curl -s http://localhost:8101/models | jq .
 
-# Make ETA prediction (batching applied)
-curl -X POST http://ai-inference-service:8090/predict/eta \
-  -H "Authorization: Bearer $SERVICE_TOKEN" \
+# Make ETA prediction
+curl -X POST http://localhost:8101/inference/eta \
   -H "Content-Type: application/json" \
   -d '{
-    "origin": {"lat": 37.7749, "lon": -122.4194},
-    "destination": {"lat": 37.3382, "lon": -121.8863},
-    "time_of_day": 18,
-    "day_of_week": 3
-  }' | jq '.predictions[0]'
+    "distance_km": 4.2,
+    "item_count": 5,
+    "traffic_factor": 1.3
+  }' | jq .
 
-# Check model metrics
-curl -s http://ai-inference-service:8090/metrics | grep ai_inference_prediction_accuracy
+# Check Prometheus metrics
+curl -s http://localhost:8101/metrics
 ```
 
 ## Configuration

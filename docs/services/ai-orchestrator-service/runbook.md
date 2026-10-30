@@ -2,28 +2,30 @@
 
 ## Pre-Deployment Verification Checklist
 
-- [ ] Verify ai-orchestrator-db (PostgreSQL for workflow state)
+- [ ] Verify ai-orchestrator service health and readiness
   ```bash
-  kubectl exec -n ai deploy/ai-orchestrator-service -- \
-    curl -s http://localhost:8100/actuator/health/db | jq '.components.db.status'
+  kubectl exec deploy/ai-orchestrator-service -- \
+    curl -s http://localhost:8100/health/ready | jq .
   ```
 
-- [ ] Check AI inference service connectivity
+- [ ] Check AI inference service connectivity (port 8101)
   ```bash
-  kubectl exec -n ai deploy/ai-orchestrator-service -- \
-    curl -v http://ai-inference-service:8118/health
+  kubectl exec deploy/ai-orchestrator-service -- \
+    curl -v http://ai-inference-service:8101/health
   ```
 
-- [ ] Verify Kafka connectivity (orchestration events)
+- [ ] Verify downstream services connectivity (catalog, pricing, inventory)
   ```bash
-  kubectl exec -n ai deploy/ai-orchestrator-service -- \
-    curl -s http://localhost:8100/actuator/health | jq '.components.kafka'
+  kubectl exec deploy/ai-orchestrator-service -- \
+    curl -v http://catalog-service:8082/actuator/health/readiness && \
+    curl -v http://pricing-service:8089/actuator/health/readiness && \
+    curl -v http://inventory-service:8083/actuator/health/readiness
   ```
 
-- [ ] Check external ML services connectivity (if any)
+- [ ] Verify Redis semantic cache connectivity
   ```bash
-  kubectl exec -n ai deploy/ai-orchestrator-service -- \
-    curl -s http://localhost:8100/v1/admin/external-service-health | jq '.services'
+  kubectl exec deploy/ai-orchestrator-service -- \
+    nc -zv redis-primary 6379
   ```
 
 ---
@@ -33,63 +35,53 @@
 ### Pre-Deployment Baseline
 
 ```bash
-# Workflow execution latency (p99)
-kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8100/metrics/workflow-execution-latency-p99 | jq '.value'
-
-# Active workflows (should be within expected range)
-kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8100/metrics/active-workflows-count | jq '.value'
+# Check HTTP request metrics
+kubectl exec deploy/ai-orchestrator-service -- \
+  curl -s http://localhost:8100/metrics
 
 # Current replica count
-kubectl get deploy ai-orchestrator-service -n ai -o jsonpath='{.spec.replicas}'
+kubectl get deploy ai-orchestrator-service -o jsonpath='{.spec.replicas}'
 ```
 
-### Blue-Green Deployment
+### Rolling Update Deployment
 
 ```bash
-helm upgrade ai-orchestrator-service deploy/helm/ai-orchestrator-service -n ai
-kubectl rollout status deploy/ai-orchestrator-service -n ai --timeout=10m
+helm upgrade ai-orchestrator-service deploy/helm/ai-orchestrator-service
+kubectl rollout status deploy/ai-orchestrator-service --timeout=10m
 
-# Verify active workflows resuming
-kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8100/metrics/active-workflows-count | jq '.value'
-
-# Verify execution latency maintained
-kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8100/metrics/workflow-execution-latency-p99 | jq '.value'
+# Smoke test agent assist endpoint
+kubectl exec deploy/ai-orchestrator-service -- \
+  curl -s -X POST http://localhost:8100/agent/assist \
+  -H "Content-Type: application/json" \
+  -d '{"message":"hello","session_id":"test-session"}' | jq .
 ```
 
 ---
 
 ## Incident Response Procedures
 
-### P0 - Workflow Orchestration Down
+### P0 - AI Orchestration Down
 
-**Symptom**: AI model pipelines not executing, complex AI tasks stuck
+**Symptom**: Customer assist or out-of-stock substitutions failing
 
 **Diagnosis**:
 ```bash
-kubectl get pods -n ai -l app=ai-orchestrator-service
-kubectl logs -n ai deploy/ai-orchestrator-service --tail=100 | grep -i "error\|exception\|workflow.*failed"
+kubectl get pods -l app=ai-orchestrator-service
+kubectl logs deploy/ai-orchestrator-service --tail=100 | grep -i "error\|exception\|rate_limit"
 
-# Check database
-kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8100/actuator/health/db | jq '.status'
+# Check readiness probe
+kubectl exec deploy/ai-orchestrator-service -- \
+  curl -s http://localhost:8100/health/ready | jq .
 
 # Check AI inference service connectivity
-kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -v http://ai-inference-service:8118/health
-
-# Check active workflows
-kubectl exec -n ai deploy/ai-orchestrator-service -- \
-  curl -s http://localhost:8100/metrics/active-workflows-count | jq '.value'
+kubectl exec deploy/ai-orchestrator-service -- \
+  curl -v http://ai-inference-service:8101/health
 ```
 
 **Resolution**:
-1. Restart: `kubectl rollout restart deploy/ai-orchestrator-service -n ai`
-2. Scale up: `kubectl scale deploy ai-orchestrator-service -n ai --replicas=3`
-3. If AI inference down: Notify AI team
+1. Restart: `kubectl rollout restart deploy/ai-orchestrator-service`
+2. Scale up: `kubectl scale deploy ai-orchestrator-service --replicas=5`
+3. If downstream services degraded: Check guardrails rate limiter and circuit breakers
 
 ### P1 - Workflow Execution Slow (>10s latency)
 

@@ -5,27 +5,26 @@
 - [ ] Verify fulfillment-db (PostgreSQL) migrations current
   ```bash
   kubectl exec -n fulfillment deploy/fulfillment-service -- \
-    curl -s http://localhost:8086/actuator/health/db | jq '.components.db.status'
+    curl -s http://localhost:8086/actuator/health/readiness | jq '.components.db.status'
   ```
 
 - [ ] Check order-service, inventory-service, warehouse-service connectivity
   ```bash
-  for svc in order-service inventory-service warehouse-service; do
-    kubectl exec -n fulfillment deploy/fulfillment-service -- \
-      curl -v http://${svc}:8080/health
-  done
+  kubectl exec -n fulfillment deploy/fulfillment-service -- curl -s http://order-service:8084/actuator/health/readiness
+  kubectl exec -n fulfillment deploy/fulfillment-service -- curl -s http://inventory-service:8083/actuator/health/readiness
+  kubectl exec -n fulfillment deploy/fulfillment-service -- curl -s http://warehouse-service:8092/actuator/health/readiness
   ```
 
-- [ ] Verify Kafka connectivity (order.created, fulfillment.events topics)
+- [ ] Verify Kafka connectivity (orders.events, fulfillment.events topics)
   ```bash
   kubectl exec -n fulfillment deploy/fulfillment-service -- \
-    curl -s http://localhost:8086/actuator/health | jq '.components.kafka'
+    curl -s http://localhost:8086/actuator/health/readiness | jq '.components.kafka'
   ```
 
 - [ ] Validate rider-fleet-service connectivity (dispatch assignment)
   ```bash
   kubectl exec -n fulfillment deploy/fulfillment-service -- \
-    curl -v http://rider-fleet-service:8087/health
+    curl -s http://rider-fleet-service:8093/actuator/health/readiness
   ```
 
 - [ ] Check capacity: Available warehouse slots for new orders

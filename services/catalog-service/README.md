@@ -6,10 +6,10 @@ Product management, categories, full-text search, pricing strategies, and coupon
 
 | Layer | Technology |
 |---|---|
-| Runtime | Java 21, Spring Boot 3 |
-| Database | PostgreSQL (Flyway migrations) |
+| Runtime | Java 21, Spring Boot 4 |
+| Database | PostgreSQL (Flyway migrations V1–V14) |
 | Search | PostgreSQL `tsvector` (pluggable via `SearchProvider`) |
-| Caching | Caffeine (products 5 min, categories 10 min, search 30 s) |
+| Caching | TwoLevelCacheManager (Redis L2 + Caffeine L1 near-cache, Pub/Sub invalidation) |
 | Messaging | Kafka (`catalog.events` topic via outbox) |
 | Auth | JWT (RS256, public-key verification) |
 | Resilience | Resilience4j rate limiters (per-IP) |

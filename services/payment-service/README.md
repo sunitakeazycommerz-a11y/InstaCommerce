@@ -442,7 +442,33 @@ Webhooks act as the reconciliation mechanism — if the service's own capture/vo
 
 ## 9. Database Schema
 
-Managed by Flyway migrations (`V1` – `V8`). Schema uses PostgreSQL custom enum types.
+Managed by Flyway migrations (`V1` to `V20`, including `V11_1`). Schema uses PostgreSQL custom enum types and additive DDL.
+
+### Migrations Inventory
+
+| Migration | File | Tables / Objects | Purpose |
+|---|---|---|---|
+| `V1` | `V1__create_payments.sql` | `payments`, `payment_status` enum | Core payments table with financial cents and status |
+| `V2` | `V2__create_refunds.sql` | `refunds` | Refund records linked to payment |
+| `V3` | `V3__create_ledger.sql` | `ledger_entries` | Double-entry accounting ledger entries |
+| `V4` | `V4__create_outbox.sql` | `outbox_events` | Transactional outbox table |
+| `V5` | `V5__create_audit_log.sql` | `audit_log` | Security and administrative audit log |
+| `V6` | `V6__create_processed_webhook_events.sql` | `processed_webhook_events` | Webhook event idempotency deduplication |
+| `V7` | `V7__add_pending_payment_statuses.sql` | `payment_status` enum | Adds `AUTHORIZE_PENDING`, `CAPTURE_PENDING`, `VOID_PENDING` |
+| `V8` | `V8__create_shedlock.sql` | `shedlock` | Distributed locking table for recovery jobs |
+| `V9` | `V9__add_stale_pending_recovery_index.sql` | `payments` | Index `idx_payments_stale_pending` for stuck transition recovery |
+| `V10` | `V10__add_psp_refund_id_unique_index.sql` | `refunds` | Unique index `idx_refunds_psp_refund_id` |
+| `V11` | `V11__add_refund_updated_at.sql` | `refunds` | Adds `updated_at` column |
+| `V11_1` | `V11_1__backfill_refund_updated_at.sql` | `refunds` | Backfills `updated_at = created_at` |
+| `V12` | `V12__add_stale_pending_refund_recovery_index.sql` | `refunds` | Recovery index `idx_refunds_pending_updated` |
+| `V13` | `V13__add_refund_version_column.sql` | `refunds` | Optimistic concurrency control `version BIGINT` |
+| `V14` | `V14__add_ledger_entry_dedup_unique_index.sql` | `ledger_entries` | Unique dedup index `idx_ledger_entries_dedup` |
+| `V15` | `V15__add_webhook_audit_columns.sql` | `processed_webhook_events` | Adds `event_type` and `raw_payload JSONB` |
+| `V16` | `V16__add_disputed_payment_status.sql` | `payment_status` enum | Adds `DISPUTED` status for chargeback handling |
+| `V17` | `V17__add_outbox_envelope_fields.sql` | `outbox_events` | Envelope fields: `event_id`, `correlation_id`, `causation_id`, `schema_version` |
+| `V18` | `V18__fix_outbox_schema_version_to_v1.sql` | `outbox_events` | Standardizes `schema_version` default to `1.0` |
+| `V19` | `V19__add_processed_webhook_events_unique_constraint.sql` | `processed_webhook_events` | External reference constraint `uq_processed_webhook_ref_event` |
+| `V20` | `V20__add_outbox_events_retention_index.sql` | `outbox_events` | Retention index `idx_outbox_events_retention` on `(processed_at, created_at)` |
 
 ### `payments`
 
@@ -454,7 +480,7 @@ CREATE TABLE payments (
     captured_cents  BIGINT          NOT NULL DEFAULT 0,
     refunded_cents  BIGINT          NOT NULL DEFAULT 0,
     currency        VARCHAR(3)      NOT NULL DEFAULT 'INR',
-    status          payment_status  NOT NULL,  -- enum: AUTHORIZE_PENDING, AUTHORIZED, CAPTURE_PENDING, CAPTURED, VOID_PENDING, VOIDED, PARTIALLY_REFUNDED, REFUNDED, FAILED
+    status          payment_status  NOT NULL,  -- enum: AUTHORIZE_PENDING, AUTHORIZED, CAPTURE_PENDING, CAPTURED, VOID_PENDING, VOIDED, PARTIALLY_REFUNDED, REFUNDED, FAILED, DISPUTED
     psp_reference   VARCHAR(255),
     idempotency_key VARCHAR(64)     NOT NULL UNIQUE,
     payment_method  VARCHAR(50),
@@ -463,7 +489,7 @@ CREATE TABLE payments (
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT now(),
     version         BIGINT          NOT NULL DEFAULT 0      -- optimistic locking
 );
--- Indexes: idx_payments_order (order_id), idx_payments_psp (psp_reference)
+-- Indexes: idx_payments_order (order_id), idx_payments_psp (psp_reference), idx_payments_stale_pending
 -- Constraints: chk_amount_positive, chk_refund_le_captured
 ```
 
@@ -478,9 +504,11 @@ CREATE TABLE refunds (
     psp_refund_id   VARCHAR(255),
     idempotency_key VARCHAR(64) NOT NULL UNIQUE,
     status          VARCHAR(20) NOT NULL DEFAULT 'PENDING',  -- PENDING, COMPLETED, FAILED
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    version         BIGINT      NOT NULL DEFAULT 0
 );
--- Index: idx_refunds_payment (payment_id)
+-- Indexes: idx_refunds_payment (payment_id), idx_refunds_psp_refund_id (psp_refund_id), idx_refunds_pending_updated
 ```
 
 ### `ledger_entries`
@@ -497,16 +525,21 @@ CREATE TABLE ledger_entries (
     description     TEXT,
     created_at      TIMESTAMPTZ       NOT NULL DEFAULT now()
 );
--- Index: idx_ledger_payment (payment_id)
+-- Indexes: idx_ledger_payment (payment_id), idx_ledger_entries_dedup UNIQUE (payment_id, reference_type, reference_id, entry_type)
 ```
 
 ### `processed_webhook_events`
 
 ```sql
 CREATE TABLE processed_webhook_events (
-    event_id     VARCHAR(255) PRIMARY KEY,
-    processed_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+    event_id                   VARCHAR(255) PRIMARY KEY,
+    processed_at               TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    event_type                 VARCHAR(255),
+    raw_payload                JSONB,
+    external_payment_reference VARCHAR(255),
+    psp_event_id               VARCHAR(255)
 );
+-- Unique constraint: uq_processed_webhook_ref_event (external_payment_reference, event_type)
 ```
 
 ### `outbox_events`
@@ -514,14 +547,41 @@ CREATE TABLE processed_webhook_events (
 ```sql
 CREATE TABLE outbox_events (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id       UUID,
+    correlation_id VARCHAR(255),
+    causation_id   VARCHAR(255),
+    schema_version VARCHAR(20)  DEFAULT '1.0',
+    source_service VARCHAR(100) DEFAULT 'payment-service',
     aggregate_type VARCHAR(50)  NOT NULL,
     aggregate_id   VARCHAR(255) NOT NULL,
-    event_type     VARCHAR(50)  NOT NULL,   -- PaymentAuthorized | PaymentCaptured | PaymentVoided | PaymentRefunded
+    event_type     VARCHAR(50)  NOT NULL,
     payload        JSONB        NOT NULL,
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    sent           BOOLEAN      NOT NULL DEFAULT false
+    sent           BOOLEAN      NOT NULL DEFAULT false,
+    processed_at   TIMESTAMPTZ
 );
--- Partial index: idx_outbox_unsent WHERE sent = false
+-- Indexes: idx_outbox_unsent WHERE sent = false, idx_outbox_events_correlation, idx_outbox_events_retention
+```
+
+### `audit_log` & `shedlock`
+
+```sql
+CREATE TABLE audit_log (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor       VARCHAR(255) NOT NULL,
+    action      VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(50)  NOT NULL,
+    entity_id   VARCHAR(255) NOT NULL,
+    details     JSONB,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE TABLE shedlock (
+    name       VARCHAR(64) PRIMARY KEY,
+    lock_until TIMESTAMPTZ NOT NULL,
+    locked_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    locked_by  VARCHAR(255) NOT NULL
+);
 ```
 
 ### ER Diagram

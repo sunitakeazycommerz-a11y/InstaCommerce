@@ -50,7 +50,7 @@ graph TB
 | **Demand Forecast** | Time Series | Prophet + TFT | < 50 ms | MAPE ≤ 8% | 92% accuracy | ✅ Production |
 | **Personalization** | Two-Tower NCF | PyTorch → ONNX | < 25 ms | Hit@10, NDCG@10 | +20% homepage CTR | ✅ Production |
 | **CLV Prediction** | Probabilistic | BG/NBD + Gamma-Gamma | < 30 ms | MAE, Calibration | Segment-level accuracy | ✅ Production |
-| **AI Orchestrator** | Routing / Ensemble | Python / FastAPI / LangGraph | < 50 ms | — | Orchestrate multi-model calls | ✅ Production |
+| **AI Orchestrator** | Agent Service (LangGraph) | Python / FastAPI / LangGraph | < 50 ms | Guardrails & Routing | Multi-agent assist, item substitute, recommendations | ✅ Production |
 
 ---
 

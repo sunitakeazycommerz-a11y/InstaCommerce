@@ -1,6 +1,6 @@
 # Warehouse Service
 
-> **Java 21 · Spring Boot 3 · Dark-Store Registry, Capacity Control & Delivery Zones**
+> **Java 21 · Spring Boot 4 · Dark-Store Registry, Capacity Control & Delivery Zones**
 
 | Attribute | Value |
 |---|---|
@@ -32,7 +32,7 @@ warehouse-service is the **authoritative owner of the physical dark-store entity
 | Picking/packing workflows | `fulfillment-service` | Consumes `StoreStatusChanged` events |
 | Rider dispatch and ETA | `rider-fleet-service`, `routing-eta-service` | Downstream of order placement |
 
-> **Key architectural note:** inventory-service's `store_id` (VARCHAR 50) has no referential link to warehouse-service's `stores.id` (UUID). This identity gap means reservations can today be created against non-existent or inactive stores. See `docs/reviews/iter3/services/inventory-dark-store.md` §4 for the planned `dark_stores` local-table fix.
+> **Key architectural note:** inventory-service's `store_id` has been aligned to `UUID` in Flyway migration V11, matching warehouse-service's `stores.id` (UUID). Dark-store validation is performed synchronously before reservation holds.
 
 ---
 
@@ -403,6 +403,8 @@ Default radius is 10.0 km, max results is 5 (configurable via `WarehouseProperti
 | `GET` | `/nearest?lat=&lng=&radiusKm=` | Public | Nearest stores by Haversine (default 10 km, max 5) |
 | `GET` | `/{id}` | Public | Store details with zones and hours |
 | `GET` | `/{id}/capacity` | Authenticated | Current-hour capacity for the store |
+| `POST` | `/{id}/capacity/acquire` | Authenticated | Acquire order capacity slot for store |
+| `POST` | `/{id}/capacity/release` | Authenticated | Release order capacity slot for store |
 | `GET` | `/{id}/open` | Authenticated | Timezone-aware open status check |
 | `GET` | `/by-pincode?pincode=` | Authenticated | Map pincode → list of active store IDs |
 | `GET` | `/by-city?city=` | Authenticated | All stores in a city |
@@ -423,7 +425,29 @@ Default radius is 10.0 km, max results is 5 (configurable via `WarehouseProperti
 | `POST` | `/{id}/capacity/increment` | Atomic increment of current-hour order count |
 | `GET` | `/{id}/can-accept` | Check if store can accept one more order this hour |
 
-### 7.3 Response Shapes
+### 7.3 BinController — `/stores/{storeId}/bins`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/assign` | Assign item SKU to a specific warehouse bin |
+| `GET` | `/` | List all configured bins for store |
+| `GET` | `/by-sku?sku=` | Find bin location for SKU |
+
+### 7.4 StagingTelemetryController — `/stores/{storeId}/staging`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/telemetry` | Ingest cold-chain temperature telemetry for staging bays |
+| `GET` | `/telemetry?bayId=` | Retrieve staging bay temperature readings |
+| `POST` | `/validate-dispatch` | Validate dispatch cold-chain packaging constraints |
+
+### 7.5 StoreLayoutController — `/stores/{storeId}/layout`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/optimize-path` | Generate optimal picking route through dark store aisles |
+
+### 7.6 Response Shapes
 
 **StoreResponse** (from `StoreMapper.toResponse`):
 ```json

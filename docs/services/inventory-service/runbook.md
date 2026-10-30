@@ -4,33 +4,33 @@
 
 - [ ] Verify inventory-db (PostgreSQL) is up and migrations current
   ```bash
-  kubectl exec -n inventory deploy/inventory-service -- \
-    curl -s http://localhost:8083/actuator/health/db | jq '.components.db.status'
+  kubectl exec deploy/inventory-service -- \
+    curl -s http://localhost:8083/actuator/health/readiness | jq '.components.db.status'
   ```
 
-- [ ] Verify Redis cache is available (critical for high-throughput)
+- [ ] Verify Caffeine in-memory near-cache metrics and JVM memory status
   ```bash
-  kubectl exec -n inventory deploy/inventory-service -- \
-    curl -s http://localhost:8083/actuator/health | jq '.components.redis'
+  kubectl exec deploy/inventory-service -- \
+    curl -s http://localhost:8083/actuator/metrics/jvm.memory.used
   ```
 
 - [ ] Check order-service, checkout-orchestrator connectivity (synchronous dependencies)
   ```bash
-  kubectl exec -n inventory deploy/inventory-service -- \
-    curl -v http://order-service:8080/health && \
-    curl -v http://checkout-orchestrator-service:8091/health
+  kubectl exec deploy/inventory-service -- \
+    curl -v http://order-service:8084/actuator/health/readiness && \
+    curl -v http://checkout-orchestrator-service:8091/actuator/health/readiness
   ```
 
-- [ ] Validate warehouse-service connectivity (synchronous for SKU availability checks)
+- [ ] Validate warehouse-service connectivity (synchronous for store layout/bin availability checks)
   ```bash
-  kubectl exec -n inventory deploy/inventory-service -- \
-    curl -v http://warehouse-service:8085/health
+  kubectl exec deploy/inventory-service -- \
+    curl -v http://warehouse-service:8092/actuator/health/readiness
   ```
 
-- [ ] Verify Kafka topic availability (inventory.reserved, inventory.released)
+- [ ] Verify Kafka topic availability (inventory.events)
   ```bash
-  kubectl exec -n inventory deploy/inventory-service -- \
-    curl -s http://localhost:8083/actuator/health | jq '.components.kafka'
+  kubectl exec deploy/inventory-service -- \
+    curl -s http://localhost:8083/actuator/health/readiness | jq '.components.kafka'
   ```
 
 ---
@@ -104,35 +104,35 @@ kubectl exec -n inventory deploy/inventory-service -- \
 ### Endpoint Smoke Tests
 
 ```bash
-POD=$(kubectl get pods -n inventory -l app=inventory-service -o jsonpath='{.items[0].metadata.name}')
+POD=$(kubectl get pods -l app=inventory-service -o jsonpath='{.items[0].metadata.name}')
 
 # 1. Health check
-kubectl exec -n inventory pod/$POD -- \
-  curl -s http://localhost:8083/actuator/health | jq '.status'
+kubectl exec pod/$POD -- \
+  curl -s http://localhost:8083/actuator/health/readiness | jq '.status'
 
-# 2. Get SKU availability
-kubectl exec -n inventory pod/$POD -- \
-  curl -s http://localhost:8083/v1/skus/TEST-SKU-001/availability \
-  -H "Authorization: Bearer test-token" | jq '.available'
+# 2. Check stock availability
+kubectl exec pod/$POD -- \
+  curl -X POST http://localhost:8083/inventory/check \
+  -H "Content-Type: application/json" \
+  -d '{"storeId":"00000000-0000-0000-0000-000000000001","productIds":["00000000-0000-0000-0000-000000000002"]}' | jq .
 
 # 3. Reserve inventory (test)
-kubectl exec -n inventory pod/$POD -- \
-  curl -X POST http://localhost:8083/v1/reservations \
+kubectl exec pod/$POD -- \
+  curl -X POST http://localhost:8083/inventory/reserve \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer test-token" \
-  -d '{"orderId":"test-001","skuId":"TEST-SKU","quantity":1}' | jq '.reservationId'
+  -d '{"idempotencyKey":"test-key-001","storeId":"00000000-0000-0000-0000-000000000001","items":[{"productId":"00000000-0000-0000-0000-000000000002","quantity":1}]}' | jq .
 ```
 
-### Database & Cache Validation
+### Database & Near-Cache Validation
 
 ```bash
 # Database connectivity
-kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8083/actuator/health/db | jq '.components.db'
+kubectl exec deploy/inventory-service -- \
+  curl -s http://localhost:8083/actuator/health/readiness | jq '.components.db'
 
-# Redis cache connectivity
-kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8083/actuator/health | jq '.components.redis'
+# HikariCP connection pool metrics
+kubectl exec deploy/inventory-service -- \
+  curl -s http://localhost:8083/actuator/metrics/hikaricp.connections.active
 ```
 
 ---
@@ -141,11 +141,11 @@ kubectl exec -n inventory deploy/inventory-service -- \
 
 ### Liveness Probe
 
-Endpoint: `GET /actuator/health/live`
+Endpoint: `GET /actuator/health/liveness`
 
 ```bash
-kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8083/actuator/health/live | jq .
+kubectl exec deploy/inventory-service -- \
+  curl -s http://localhost:8083/actuator/health/liveness | jq .
 ```
 
 **Restart triggers**:
@@ -154,16 +154,15 @@ kubectl exec -n inventory deploy/inventory-service -- \
 
 ### Readiness Probe
 
-Endpoint: `GET /actuator/health/ready`
+Endpoint: `GET /actuator/health/readiness`
 
 ```bash
-kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8083/actuator/health/ready | jq .
+kubectl exec deploy/inventory-service -- \
+  curl -s http://localhost:8083/actuator/health/readiness | jq .
 ```
 
 **Load balancer removal triggers**:
-- Cache (Redis) unavailable
-- Warehouse-service unavailable
+- Database connectivity lost
 - Database connection pool exhausted
 
 ---
@@ -177,28 +176,24 @@ kubectl exec -n inventory deploy/inventory-service -- \
 **Diagnosis**:
 ```bash
 # Check if service is responding
-kubectl get pods -n inventory -l app=inventory-service
+kubectl get pods -l app=inventory-service
 
 # Check logs for errors
-kubectl logs -n inventory deploy/inventory-service --tail=100 | grep -i "exception\|error\|fatal"
+kubectl logs deploy/inventory-service --tail=100 | grep -i "exception\|error\|fatal"
 
 # Check database connectivity
-kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8083/actuator/health/db | jq '.status'
-
-# Check Redis connectivity
-kubectl exec -n inventory deploy/inventory-service -- \
-  curl -s http://localhost:8083/actuator/health | jq '.components.redis'
+kubectl exec deploy/inventory-service -- \
+  curl -s http://localhost:8083/actuator/health/readiness | jq '.status'
 
 # Check warehouse-service availability
-kubectl exec -n inventory deploy/inventory-service -- \
-  curl -v http://warehouse-service:8085/health
+kubectl exec deploy/inventory-service -- \
+  curl -v http://warehouse-service:8092/actuator/health/readiness
 ```
 
 **Resolution**:
-1. Scale up pods: `kubectl scale deploy inventory-service -n inventory --replicas=5`
+1. Scale up pods: `kubectl scale deploy inventory-service --replicas=5`
 2. If database down: Failover to replica or check PostgreSQL cluster
-3. If Redis down: Requests will degrade to database (slower but functional)
+3. If Hikari connection pool exhausted: Inspect slow queries locking stock_items rows with SELECT ... FOR UPDATE
 4. If warehouse-service down: Enable circuit breaker, operations degrade but don't fail
 
 ### P1 - Inventory Operations Degraded (>1% error rate, >500ms latency)
@@ -246,8 +241,7 @@ kubectl exec -n inventory deploy/inventory-service -- \
 
 **Resolution**:
 1. Manual invalidation: See above
-2. Check if Redis pub/sub is working (cache invalidation channel)
-3. Force pod restart to clear in-memory cache: `kubectl rollout restart deploy/inventory-service -n inventory`
+2. Force pod restart to clear in-memory Caffeine cache: `kubectl rollout restart deploy/inventory-service`
 
 ---
 
@@ -257,15 +251,15 @@ kubectl exec -n inventory deploy/inventory-service -- \
 
 ```bash
 # Check if warehouse-service is running
-kubectl get pods -n warehouse -l app=warehouse-service
+kubectl get pods -l app=warehouse-service
 
 # Test DNS resolution
-kubectl exec -n inventory deploy/inventory-service -- \
-  nslookup warehouse-service.warehouse.svc.cluster.local
+kubectl exec deploy/inventory-service -- \
+  nslookup warehouse-service.default.svc.cluster.local
 
 # Test connectivity
-kubectl exec -n inventory deploy/inventory-service -- \
-  nc -zv warehouse-service.warehouse.svc.cluster.local 8085
+kubectl exec deploy/inventory-service -- \
+  nc -zv warehouse-service.default.svc.cluster.local 8092
 
 # Enable circuit breaker fallback (degrade gracefully)
 kubectl set env deploy/inventory-service -n inventory \
