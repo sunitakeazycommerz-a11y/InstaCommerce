@@ -18,6 +18,7 @@ linters-settings:
       - (*encoding/json.Encoder).Encode
       - (*os.File).Close
       - net/http.ResponseWriter.Write
+      - (*database/sql.Tx).Rollback
   staticcheck:
     checks: ["all", "-SA1019"]
   unused:

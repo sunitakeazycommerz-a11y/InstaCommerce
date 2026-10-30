@@ -111,7 +111,6 @@ type CDCMetrics struct {
 	eventsFailed     int64
 	snapshotsCreated int64
 	lastProcessedLSN int64
-	consumerLag      int64
 }
 
 // NewCDCConsumer creates a new CDC consumer instance

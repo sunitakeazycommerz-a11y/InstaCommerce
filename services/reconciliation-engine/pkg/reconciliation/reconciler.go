@@ -50,7 +50,7 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Get or create run record
 	runID, err := r.getOrCreateRun(ctx, tx, runDate)
@@ -100,7 +100,9 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 		}
 
 		// Publish event
-		r.pubsub.PublishMismatchEvent(ctx, runID, mismatch)
+		if err := r.pubsub.PublishMismatchEvent(ctx, runID, mismatch); err != nil {
+			r.logger.WarnContext(ctx, "failed to publish mismatch event", "error", err, "run_id", runID)
+		}
 		discrepancyCents := calculateDiscrepancyCents(mismatch.LedgerAmount, mismatch.PSPAmount)
 		if discrepancyCents > 0 {
 			_ = r.pubsub.PublishDiscrepancyAlert(ctx, runID, mismatch, discrepancyCents)
@@ -133,7 +135,9 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 	)
 
 	// Publish completion event
-	r.pubsub.PublishCompletionEvent(ctx, runID, len(mismatches), autoFixedCount, manualReviewCount)
+	if err := r.pubsub.PublishCompletionEvent(ctx, runID, len(mismatches), autoFixedCount, manualReviewCount); err != nil {
+		r.logger.WarnContext(ctx, "failed to publish completion event", "error", err, "run_id", runID)
+	}
 
 	r.logger.Info("reconciliation completed",
 		"run_id", runID,
@@ -444,7 +448,7 @@ func (r *DBReconciler) ApplyFix(ctx context.Context, mismatchID int64, fixAction
 		span.RecordError(err)
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Get mismatch details
 	var runID int64

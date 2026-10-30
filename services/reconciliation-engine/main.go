@@ -178,10 +178,6 @@ type Scheduler struct {
 	stop func(context.Context) error
 }
 
-type errorResponse struct {
-	Error string `json:"error"`
-}
-
 func main() {
 	cfg := loadConfig()
 	logger := newLogger(cfg.LogLevel).With("service", cfg.ServiceName)
@@ -1059,19 +1055,6 @@ func newSummaryEvent(runID string, counts ReconciliationCounts) ReconciliationEv
 		OccurredAt: time.Now().UTC(),
 		Counts:     &counts,
 	}
-}
-
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(payload)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, errorResponse{Error: message})
 }
 
 func loggerWithContext(ctx context.Context, logger *slog.Logger) *slog.Logger {
