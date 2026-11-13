@@ -25,7 +25,9 @@ public class RiderAssignmentController {
     @PostMapping("/assign")
     public ResponseEntity<Map<String, UUID>> assignRider(@Valid @RequestBody AssignRiderRequest request) {
         UUID riderId = assignmentService.assignRider(
-            request.orderId(), request.storeId(), request.pickupLat(), request.pickupLng());
+            request.orderId(), request.storeId(),
+            request.pickupLat(), request.pickupLng(),
+            request.dropoffLat(), request.dropoffLng());
         return ResponseEntity.ok(Map.of("riderId", riderId, "orderId", request.orderId()));
     }
 

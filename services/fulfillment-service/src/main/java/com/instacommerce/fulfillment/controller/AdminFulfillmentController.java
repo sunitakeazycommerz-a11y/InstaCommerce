@@ -54,7 +54,7 @@ public class AdminFulfillmentController {
     }
 
     @GetMapping("/riders")
-    public List<RiderResponse> listRiders(@RequestParam(required = false) String storeId) {
+    public List<RiderResponse> listRiders(@RequestParam(required = false) UUID storeId) {
         List<Rider> riders = storeId == null
             ? riderRepository.findAll()
             : riderRepository.findByStoreId(storeId);

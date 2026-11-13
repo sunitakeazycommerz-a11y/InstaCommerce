@@ -6,7 +6,7 @@ import java.util.UUID;
 public record PickTaskResponse(
     UUID id,
     UUID orderId,
-    String storeId,
+    UUID storeId,
     String status,
     UUID pickerId,
     Instant startedAt,

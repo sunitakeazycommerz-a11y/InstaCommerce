@@ -13,6 +13,8 @@ import com.instacommerce.riderfleet.repository.RiderAssignmentRepository;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -64,6 +66,19 @@ public class RiderAssignmentService {
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public UUID assignRider(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng) {
+        return executeAssignment(orderId, storeId, pickupLat, pickupLng, null, null);
+    }
+
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
+    @Transactional
+    public UUID assignRider(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng,
+                            BigDecimal dropoffLat, BigDecimal dropoffLng) {
+        return executeAssignment(orderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng);
+    }
+
+    private UUID executeAssignment(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng,
+                                   BigDecimal dropoffLat, BigDecimal dropoffLng) {
         if (assignmentRepository.existsByOrderId(orderId)) {
             throw new DuplicateAssignmentException(orderId);
         }
@@ -92,8 +107,29 @@ public class RiderAssignmentService {
             throw new DuplicateAssignmentException(orderId);
         }
 
-        outboxService.publish("Rider", rider.getId().toString(), "RiderAssigned",
-            Map.of("riderId", rider.getId(), "orderId", orderId, "storeId", storeId));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("riderId", rider.getId());
+        payload.put("orderId", orderId);
+        if (storeId != null) {
+            payload.put("storeId", storeId);
+        }
+        if (rider.getName() != null) {
+            payload.put("riderName", rider.getName());
+        }
+        if (pickupLat != null) {
+            payload.put("pickupLat", pickupLat);
+        }
+        if (pickupLng != null) {
+            payload.put("pickupLng", pickupLng);
+        }
+        if (dropoffLat != null) {
+            payload.put("dropoffLat", dropoffLat);
+        }
+        if (dropoffLng != null) {
+            payload.put("dropoffLng", dropoffLng);
+        }
+        payload.put("assignedAt", Instant.now().toString());
+        outboxService.publish("Rider", rider.getId().toString(), "RiderAssigned", payload);
 
         logger.info("Assigned rider id={} to order={} store={}", rider.getId(), orderId, storeId);
         return rider.getId();
@@ -216,7 +252,7 @@ public class RiderAssignmentService {
         });
 
         outboxService.publish("Rider", riderId.toString(), "DeliveryCompleted",
-            Map.of("riderId", riderId, "orderId", orderId, "completedAt", java.time.Instant.now().toString()));
+            Map.of("riderId", riderId, "orderId", orderId, "completedAt", Instant.now().toString()));
         logger.info("Delivery completed for order={}, rider={} released back to ACTIVE", orderId, riderId);
     }
 

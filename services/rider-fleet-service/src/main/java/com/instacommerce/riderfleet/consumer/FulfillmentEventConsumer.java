@@ -34,8 +34,15 @@ public class FulfillmentEventConsumer {
                     payload.orderId());
                 return;
             }
-            riderAssignmentService.assignRider(
-                payload.orderId(), payload.storeId(), payload.pickupLat(), payload.pickupLng());
+            if (payload.dropoffLat() != null || payload.dropoffLng() != null) {
+                riderAssignmentService.assignRider(
+                    payload.orderId(), payload.storeId(),
+                    payload.pickupLat(), payload.pickupLng(),
+                    payload.dropoffLat(), payload.dropoffLng());
+            } else {
+                riderAssignmentService.assignRider(
+                    payload.orderId(), payload.storeId(), payload.pickupLat(), payload.pickupLng());
+            }
             logger.info("Rider assigned for packed order={}", payload.orderId());
         } else if ("OrderDelivered".equals(envelope.eventType()) || "DeliveryCompleted".equals(envelope.eventType())) {
             UUID orderId = resolveOrderId(envelope);

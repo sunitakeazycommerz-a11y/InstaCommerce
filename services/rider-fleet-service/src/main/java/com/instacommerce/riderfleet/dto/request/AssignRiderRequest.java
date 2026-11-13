@@ -13,20 +13,35 @@ public record AssignRiderRequest(
     @NotNull UUID orderId,
     @NotNull UUID storeId,
     @NotNull BigDecimal pickupLat,
-    @NotNull BigDecimal pickupLng
+    @NotNull BigDecimal pickupLng,
+    BigDecimal dropoffLat,
+    BigDecimal dropoffLng
 ) {
+    public AssignRiderRequest(
+        UUID orderId,
+        UUID storeId,
+        BigDecimal pickupLat,
+        BigDecimal pickupLng
+    ) {
+        this(orderId, storeId, pickupLat, pickupLng, null, null);
+    }
+
     @JsonCreator
     public AssignRiderRequest(
         @JsonProperty("orderId") UUID orderId,
         @JsonProperty("storeId") Object storeIdObj,
         @JsonProperty("pickupLat") BigDecimal pickupLat,
-        @JsonProperty("pickupLng") BigDecimal pickupLng
+        @JsonProperty("pickupLng") BigDecimal pickupLng,
+        @JsonProperty("dropoffLat") BigDecimal dropoffLat,
+        @JsonProperty("dropoffLng") BigDecimal dropoffLng
     ) {
         this(
             orderId,
             parseStoreId(storeIdObj),
             pickupLat,
-            pickupLng
+            pickupLng,
+            dropoffLat,
+            dropoffLng
         );
     }
 

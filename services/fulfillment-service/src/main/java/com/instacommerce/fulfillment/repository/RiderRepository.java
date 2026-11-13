@@ -9,7 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RiderRepository extends JpaRepository<Rider, UUID> {
-    List<Rider> findByStoreId(String storeId);
+    List<Rider> findByStoreId(UUID storeId);
 
     @Query(value = """
         SELECT * FROM riders r
@@ -20,5 +20,5 @@ public interface RiderRepository extends JpaRepository<Rider, UUID> {
         LIMIT 1
         FOR UPDATE SKIP LOCKED
         """, nativeQuery = true)
-    Optional<Rider> findNextAvailableForStore(@Param("storeId") String storeId);
+    Optional<Rider> findNextAvailableForStore(@Param("storeId") UUID storeId);
 }

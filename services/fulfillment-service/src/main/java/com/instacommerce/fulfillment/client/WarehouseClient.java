@@ -4,8 +4,10 @@ import com.instacommerce.fulfillment.config.FulfillmentProperties;
 import com.instacommerce.fulfillment.security.InternalServiceAuthInterceptor;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,7 +38,7 @@ public class WarehouseClient {
     @CircuitBreaker(name = "warehouseService", fallbackMethod = "getStoreCoordinatesFallback")
     @Retry(name = "warehouseService")
     @SuppressWarnings("unchecked")
-    public StoreCoordinates getStoreCoordinates(String storeId) {
+    public StoreCoordinates getStoreCoordinates(UUID storeId) {
         Map<String, Object> body = restTemplate.getForObject(
                 baseUrl + "/stores/{storeId}", Map.class, storeId);
         if (body == null) {
@@ -50,12 +52,12 @@ public class WarehouseClient {
             return null;
         }
         return new StoreCoordinates(
-                new java.math.BigDecimal(lat.toString()),
-                new java.math.BigDecimal(lng.toString()));
+                new BigDecimal(lat.toString()),
+                new BigDecimal(lng.toString()));
     }
 
     @SuppressWarnings("unused")
-    private StoreCoordinates getStoreCoordinatesFallback(String storeId, Exception e) {
+    private StoreCoordinates getStoreCoordinatesFallback(UUID storeId, Exception e) {
         logger.warn("Circuit breaker fallback for warehouseService getStoreCoordinates storeId={}: {}",
                 storeId, e.getMessage());
         return null;

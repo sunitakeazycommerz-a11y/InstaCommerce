@@ -37,7 +37,7 @@ public class PickTask {
     private boolean userErased;
 
     @Column(name = "store_id", nullable = false)
-    private String storeId;
+    private UUID storeId;
 
     @Column(name = "payment_id")
     private UUID paymentId;
@@ -118,11 +118,11 @@ public class PickTask {
         this.userErased = userErased;
     }
 
-    public String getStoreId() {
+    public UUID getStoreId() {
         return storeId;
     }
 
-    public void setStoreId(String storeId) {
+    public void setStoreId(UUID storeId) {
         this.storeId = storeId;
     }
 

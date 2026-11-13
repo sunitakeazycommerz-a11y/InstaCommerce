@@ -6,7 +6,7 @@ import java.util.UUID;
 
 public record BatchPickResponse(
     UUID batchId,
-    String storeId,
+    UUID storeId,
     UUID pickerId,
     String status,
     String cartId,

@@ -156,7 +156,7 @@ class PickServiceIntegrationTest {
 
         String eventPayload = packedEvent.get("payload").toString();
         assertThat(eventPayload).contains("orderId");
-        assertThat(eventPayload).contains(payload.storeId());
+        assertThat(eventPayload).contains(payload.storeId().toString());
     }
 
     @Test
@@ -189,7 +189,7 @@ class PickServiceIntegrationTest {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
         UUID paymentId = UUID.randomUUID();
-        String storeId = "store-" + UUID.randomUUID().toString().substring(0, 8);
+        UUID storeId = UUID.randomUUID();
 
         OrderPlacedItem item1 = new OrderPlacedItem(
             UUID.randomUUID(), "Milk 500ml", "MILK-500", 2, 5000L, 10000L);

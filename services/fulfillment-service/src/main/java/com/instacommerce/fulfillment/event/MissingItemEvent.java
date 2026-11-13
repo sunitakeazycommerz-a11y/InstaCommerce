@@ -4,7 +4,7 @@ import java.util.UUID;
 
 public record MissingItemEvent(
     UUID productId,
-    String storeId,
+    UUID storeId,
     int missingQty,
     String referenceId,
     UUID paymentId,

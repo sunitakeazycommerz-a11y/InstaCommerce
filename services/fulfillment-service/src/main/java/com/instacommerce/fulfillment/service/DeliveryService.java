@@ -12,6 +12,10 @@ import com.instacommerce.fulfillment.dto.response.TrackingResponse;
 import com.instacommerce.fulfillment.dto.response.TrackingTimelineEntry;
 import com.instacommerce.fulfillment.event.OrderStatusUpdateEvent;
 import com.instacommerce.fulfillment.exception.DeliveryNotFoundException;
+import com.instacommerce.fulfillment.exception.InvalidDeliveryStateException;
+import com.instacommerce.fulfillment.exception.InvalidPickTaskStateException;
+import com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException;
+import com.instacommerce.fulfillment.exception.InvalidRiderHandoffException;
 import com.instacommerce.fulfillment.exception.NoAvailableRiderException;
 import com.instacommerce.fulfillment.exception.PickTaskNotFoundException;
 import com.instacommerce.fulfillment.exception.RiderNotFoundException;
@@ -25,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -60,14 +65,17 @@ public class DeliveryService {
     public DeliveryResponse assignRider(UUID orderId, UUID riderId, Integer etaMinutes) {
         PickTask task = pickTaskRepository.findByOrderId(orderId)
             .orElseThrow(() -> new PickTaskNotFoundException(orderId));
+        if (task.getStatus() == PickTaskStatus.CANCELLED) {
+            throw new InvalidPickTaskStateException(orderId, task.getStatus(), "assign rider");
+        }
+        Delivery existing = deliveryRepository.findByOrderId(orderId).orElse(null);
+        if (existing != null && existing.getStatus().isTerminal()) {
+            throw new InvalidDeliveryStateException(orderId, existing.getStatus(), "assign rider");
+        }
         Rider rider = riderRepository.findById(riderId)
             .orElseThrow(() -> new RiderNotFoundException(riderId));
         if (!rider.isAvailable()) {
             throw new NoAvailableRiderException(task.getStoreId());
-        }
-        Delivery existing = deliveryRepository.findByOrderId(orderId).orElse(null);
-        if (existing != null && existing.getStatus() == DeliveryStatus.DELIVERED) {
-            return FulfillmentMapper.toDeliveryResponse(existing);
         }
         rider.setAvailable(false);
         riderRepository.save(rider);
@@ -80,8 +88,12 @@ public class DeliveryService {
     public DeliveryResponse markDelivered(UUID orderId) {
         Delivery delivery = deliveryRepository.findByOrderId(orderId)
             .orElseThrow(() -> new DeliveryNotFoundException(orderId));
-        if (delivery.getStatus() == DeliveryStatus.DELIVERED) {
-            return FulfillmentMapper.toDeliveryResponse(delivery);
+        if (delivery.getStatus().isTerminal()) {
+            throw new InvalidDeliveryStateException(orderId, delivery.getStatus(), "mark delivered");
+        }
+        PickTask task = pickTaskRepository.findByOrderId(orderId).orElse(null);
+        if (task != null && task.getStatus() == PickTaskStatus.CANCELLED) {
+            throw new InvalidPickTaskStateException(orderId, task.getStatus(), "mark delivered");
         }
         delivery.setStatus(DeliveryStatus.DELIVERED);
         delivery.setDeliveredAt(Instant.now());
@@ -91,9 +103,7 @@ public class DeliveryService {
         }
         Delivery saved = deliveryRepository.save(delivery);
         eventPublisher.publishEvent(new OrderStatusUpdateEvent(orderId, "DELIVERED", "delivered"));
-        UUID userId = pickTaskRepository.findByOrderId(orderId)
-            .map(PickTask::getUserId)
-            .orElse(null);
+        UUID userId = task != null ? task.getUserId() : null;
         if (userId != null) {
             outboxService.publish("Fulfillment", orderId.toString(), "OrderDelivered",
                 Map.of(
@@ -174,14 +184,15 @@ public class DeliveryService {
     public DeliveryResponse verifyRiderHandoff(UUID orderId, UUID riderId, String dispatchOtp) {
         Delivery delivery = deliveryRepository.findByOrderId(orderId)
             .orElseThrow(() -> new DeliveryNotFoundException(orderId));
-        if (delivery.getRider() == null || !delivery.getRider().getId().equals(riderId)) {
-            throw new com.instacommerce.fulfillment.exception.InvalidRiderHandoffException("Assigned rider mismatch for order " + orderId);
+        if (delivery.getStatus().isTerminal()) {
+            throw new InvalidDeliveryStateException(orderId, delivery.getStatus(), "verify rider handoff");
         }
-        if (delivery.getStatus() == DeliveryStatus.DELIVERED) {
-            return FulfillmentMapper.toDeliveryResponse(delivery);
+        ensurePickTaskNotCancelled(orderId, "verify rider handoff");
+        if (delivery.getRider() == null || !delivery.getRider().getId().equals(riderId)) {
+            throw new InvalidRiderHandoffException("Assigned rider mismatch for order " + orderId);
         }
         if (delivery.getDispatchOtp() == null || !delivery.getDispatchOtp().equals(dispatchOtp != null ? dispatchOtp.trim() : "")) {
-            throw new com.instacommerce.fulfillment.exception.InvalidRiderHandoffException("Cryptographic dispatch OTP verification failed for order " + orderId);
+            throw new InvalidRiderHandoffException("Cryptographic dispatch OTP verification failed for order " + orderId);
         }
         delivery.setStatus(DeliveryStatus.PICKED_UP);
         delivery.setDispatchedAt(Instant.now());
@@ -197,17 +208,21 @@ public class DeliveryService {
     public DeliveryResponse recordProofOfDelivery(UUID orderId, String photoUrl, String format, Integer sizeBytes, Boolean masked) {
         Delivery delivery = deliveryRepository.findByOrderId(orderId)
             .orElseThrow(() -> new DeliveryNotFoundException(orderId));
+        if (delivery.getStatus() == DeliveryStatus.FAILED) {
+            throw new InvalidDeliveryStateException(orderId, delivery.getStatus(), "record proof of delivery");
+        }
+        ensurePickTaskNotCancelled(orderId, "record proof of delivery");
         if (photoUrl == null || photoUrl.isBlank()) {
-            throw new com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException("Proof-of-delivery photo URL cannot be empty");
+            throw new InvalidProofOfDeliveryException("Proof-of-delivery photo URL cannot be empty");
         }
         if (format == null || !"WEBP".equalsIgnoreCase(format.trim())) {
-            throw new com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException("Invalid photo format '" + format + "': only WebP format is allowed");
+            throw new InvalidProofOfDeliveryException("Invalid photo format '" + format + "': only WebP format is allowed");
         }
         if (sizeBytes == null || sizeBytes > 200 * 1024) {
-            throw new com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException("Compressed photo exceeds 200KB limit (actual: " + sizeBytes + " bytes)");
+            throw new InvalidProofOfDeliveryException("Compressed photo exceeds 200KB limit (actual: " + sizeBytes + " bytes)");
         }
         if (masked == null || !masked) {
-            throw new com.instacommerce.fulfillment.exception.InvalidProofOfDeliveryException("Proof-of-delivery photo must have detected faces and PII masked");
+            throw new InvalidProofOfDeliveryException("Proof-of-delivery photo must have detected faces and PII masked");
         }
         delivery.setPodPhotoUrl(photoUrl);
         delivery.setPodPhotoFormat("WEBP");
@@ -220,6 +235,14 @@ public class DeliveryService {
         return FulfillmentMapper.toDeliveryResponse(saved);
     }
 
+    private void ensurePickTaskNotCancelled(UUID orderId, String action) {
+        pickTaskRepository.findByOrderId(orderId)
+            .filter(task -> task.getStatus() == PickTaskStatus.CANCELLED)
+            .ifPresent(task -> {
+                throw new InvalidPickTaskStateException(orderId, task.getStatus(), action);
+            });
+    }
+
     private Delivery assignDelivery(Delivery existing, UUID orderId, Rider rider, int etaMinutes, UUID userId) {
         Delivery delivery = existing == null ? new Delivery() : existing;
         delivery.setOrderId(orderId);
@@ -227,7 +250,7 @@ public class DeliveryService {
         delivery.setStatus(DeliveryStatus.ASSIGNED);
         delivery.setEstimatedMinutes(etaMinutes);
         if (delivery.getDispatchOtp() == null) {
-            String otp = String.format("%06d", java.util.concurrent.ThreadLocalRandom.current().nextInt(100000, 1000000));
+            String otp = String.format("%06d", ThreadLocalRandom.current().nextInt(100000, 1000000));
             delivery.setDispatchOtp(otp);
         }
         delivery.setDispatchedAt(Instant.now());
