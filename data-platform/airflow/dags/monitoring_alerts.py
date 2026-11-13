@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from plugins.sql_validation import validate_bq_identifier
 
 def failure_alert(context):
     try:
@@ -32,10 +33,10 @@ DBT_SLA_THRESHOLD_MINUTES = 120
 FEATURE_STORE_STALENESS_MINUTES = 60
 
 CRITICAL_TOPICS = [
-    "orders.cdc",
-    "payments.cdc",
-    "inventory.updates",
-    "user.events",
+    "orders.events",
+    "payments.events",
+    "inventory.events",
+    "identity.events",
 ]
 
 CRITICAL_TABLES = [
@@ -72,13 +73,14 @@ with DAG(
                         [group.group_id]
                     ).result()
                     for tp, offset_info in offsets.items():
-                        if tp.topic == topic:
+                        if tp.topic == topic and offset_info.offset >= 0:
                             watermarks = admin.get_watermark_offsets(tp)
-                            lag = watermarks[1] - offset_info.offset
-                            if lag > KAFKA_LAG_THRESHOLD:
-                                alerts.append(
-                                    f"{topic} (group={group.group_id}): lag={lag:,}"
-                                )
+                            if watermarks and watermarks[1] >= 0:
+                                lag = max(0, watermarks[1] - offset_info.offset)
+                                if lag > KAFKA_LAG_THRESHOLD:
+                                    alerts.append(
+                                        f"{topic} (group={group.group_id}): lag={lag:,}"
+                                    )
             except Exception as e:
                 alerts.append(f"{topic}: error checking lag - {str(e)}")
 
@@ -96,10 +98,12 @@ with DAG(
         """Check BigQuery table freshness for critical tables."""
         from google.cloud import bigquery
 
-        client = bigquery.Client(project=PROJECT_ID)
+        project_id = validate_bq_identifier(PROJECT_ID, "project")
+        client = bigquery.Client(project=project_id)
         alerts = []
 
         for table_ref in CRITICAL_TABLES:
+            table_ref = validate_bq_identifier(table_ref, "table_ref")
             if "staging" in table_ref:
                 query = f"""
                     SELECT TIMESTAMP_DIFF(
@@ -111,15 +115,17 @@ with DAG(
                 """
             else:
                 parts = table_ref.split(".")
-                dataset_name = parts[-2] if len(parts) >= 2 else "marts"
-                table_name = parts[-1]
+                dataset_name = validate_bq_identifier(
+                    parts[-2] if len(parts) >= 2 else "marts", "dataset"
+                )
+                table_name = validate_bq_identifier(parts[-1], "table")
                 query = f"""
                     SELECT TIMESTAMP_DIFF(
                         CURRENT_TIMESTAMP(),
                         TIMESTAMP_MILLIS(last_modified_time),
                         MINUTE
                     ) AS minutes_since_update
-                    FROM `{PROJECT_ID}.{dataset_name}.__TABLES__`
+                    FROM `{project_id}.{dataset_name}.__TABLES__`
                     WHERE table_id = '{table_name}'
                 """
             try:

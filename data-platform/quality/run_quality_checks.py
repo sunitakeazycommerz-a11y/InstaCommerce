@@ -41,6 +41,14 @@ logger = logging.getLogger(__name__)
 
 SUITES_DIR = Path(__file__).parent / "expectations"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+BQ_IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$")
+
+
+def validate_bq_identifier(value: str, field_name: str = "identifier") -> str:
+    """Validate BigQuery project, dataset, or table identifier before SQL interpolation."""
+    if not isinstance(value, str) or not BQ_IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(f"Invalid BigQuery {field_name}: {value!r}")
+    return value
 
 SUITE_TABLE_MAP = {
     "orders_validation": "analytics.orders",
@@ -262,7 +270,9 @@ def run_suite_on_fixture(
 
 def build_bigquery_context(project: str, dataset: str) -> Any:
     """Build a Great Expectations DataContext with a BigQuery datasource."""
-    if not HAS_GX:
+    project = validate_bq_identifier(project, "project")
+    dataset = validate_bq_identifier(dataset, "dataset")
+    if gx is None or RuntimeBatchRequest is None:
         raise RuntimeError("great_expectations is not installed. Install via pip install great-expectations")
 
     context = gx.get_context()
@@ -302,6 +312,10 @@ def run_suite_bigquery(
     table = SUITE_TABLE_MAP.get(suite_name)
     if not table:
         raise ValueError(f"No table mapping for suite: {suite_name}")
+    project = validate_bq_identifier(project, "project")
+    table = validate_bq_identifier(table, "table")
+    if gx is None or RuntimeBatchRequest is None:
+        raise RuntimeError("great_expectations is not installed. Install via pip install great-expectations")
 
     try:
         suite = context.get_expectation_suite(suite_name)

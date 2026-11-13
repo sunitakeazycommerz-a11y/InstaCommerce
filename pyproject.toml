@@ -14,3 +14,7 @@ ignore = [
     "W291", # trailing whitespace
     "W293", # blank line contains whitespace
 ]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = [".", "data-platform-jobs"]

@@ -1,11 +1,12 @@
 """Data Quality Checks — runs every 2 hours after staging.
 Great Expectations validation suites per domain.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.sensors.external_task import ExternalTaskSensor
+from plugins.sql_validation import validate_bq_identifier
 
 def failure_alert(context):
     try:
@@ -75,6 +76,7 @@ with DAG(
 
     def _validate_domain(domain: str, suite_config: dict, **context):
         """Run Great Expectations validation suite for a domain."""
+        datasource = validate_bq_identifier(suite_config["datasource"], "table_ref")
         import great_expectations as gx
 
         ge_context = gx.get_context(context_root_dir=GE_ROOT_DIR)
@@ -82,9 +84,9 @@ with DAG(
         batch_request = {
             "datasource_name": "bigquery",
             "data_connector_name": "default",
-            "data_asset_name": suite_config["datasource"],
+            "data_asset_name": datasource,
             "batch_spec_passthrough": {
-                "query": f"SELECT * FROM `{suite_config['datasource']}` "
+                "query": f"SELECT * FROM `{datasource}` "
                          f"WHERE DATE(_cdc_updated_at) = '{context['ds']}'"
             },
         }
@@ -187,17 +189,20 @@ with DAG(
         """
         from plugins.slack_alerts import send_slack_alert
 
-        date_str = context.get("ds", datetime.utcnow().strftime("%Y-%m-%d"))
+        project_id = validate_bq_identifier(PROJECT_ID, "project")
+        orders_table = validate_bq_identifier(f"{project_id}.staging.stg_orders", "table_ref")
+        payments_table = validate_bq_identifier(f"{project_id}.staging.stg_payments", "table_ref")
+        date_str = context.get("ds", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         query = f"""
         WITH daily_orders AS (
             SELECT COALESCE(SUM(total_cents), 0) / 100.0 AS orders_revenue
-            FROM `{PROJECT_ID}.staging.stg_orders`
+            FROM `{orders_table}`
             WHERE DATE(placed_at) = '{date_str}'
               AND status IN ('PLACED', 'PACKED', 'OUT_FOR_DELIVERY', 'DELIVERED')
         ),
         daily_payments AS (
             SELECT COALESCE(SUM(amount_cents), 0) / 100.0 AS payments_captured
-            FROM `{PROJECT_ID}.staging.stg_payments`
+            FROM `{payments_table}`
             WHERE DATE(created_at) = '{date_str}'
               AND status = 'SUCCESS'
         )
@@ -209,7 +214,7 @@ with DAG(
 
         try:
             from google.cloud import bigquery
-            client = bigquery.Client(project=PROJECT_ID)
+            client = bigquery.Client(project=project_id)
             query_job = client.query(query)
             rows = list(query_job.result())
             if rows:

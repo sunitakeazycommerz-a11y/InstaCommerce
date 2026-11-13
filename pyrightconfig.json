@@ -1,18 +1,55 @@
 {
   "venvPath": ".",
   "venv": ".venv",
+  "stubPath": "data-platform/typings",
   "reportMissingImports": "none",
   "include": [
     "services/ai-inference-service",
     "services/ai-orchestrator-service",
     "data-platform-jobs",
-    "data-platform/streaming/pipelines",
+    "data-platform",
     "ml",
     "scripts"
   ],
   "exclude": [
     "**/node_modules",
     "**/__pycache__",
-    ".venv"
+    ".venv",
+    "**/.worktrees"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "data-platform/airflow/dags",
+      "extraPaths": [
+        "data-platform/airflow"
+      ],
+      "reportUnusedExpression": "none",
+      "reportMissingModuleSource": "none"
+    },
+    {
+      "root": "data-platform/airflow/plugins",
+      "extraPaths": [
+        "data-platform/airflow"
+      ],
+      "reportMissingModuleSource": "none"
+    },
+    {
+      "root": "data-platform/airflow/tests",
+      "extraPaths": [
+        "data-platform/airflow"
+      ]
+    },
+    {
+      "root": "data-platform/quality",
+      "extraPaths": [
+        "data-platform/quality"
+      ]
+    },
+    {
+      "root": "data-platform/streaming",
+      "extraPaths": [
+        "data-platform/streaming"
+      ]
+    }
   ]
 }

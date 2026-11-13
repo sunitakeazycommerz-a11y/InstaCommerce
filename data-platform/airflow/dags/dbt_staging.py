@@ -82,4 +82,5 @@ with DAG(
         provide_context=True,
     )
 
-    dbt_run_staging >> dbt_test_staging >> alert_on_failure
+    dbt_run_staging >> dbt_test_staging
+    [dbt_run_staging, dbt_test_staging] >> alert_on_failure

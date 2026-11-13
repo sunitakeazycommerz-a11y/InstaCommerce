@@ -20,10 +20,32 @@ import json
 import logging
 import statistics
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
+
+
+def _first_present(mapping, *keys, default=None):
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+    return default
+
+
+def _parse_event_ts(event_time_str):
+    if event_time_str:
+        try:
+            return isoparse(event_time_str).timestamp()
+        except (ValueError, TypeError):
+            return time.time()
+    return time.time()
+
+
+def _window_end_iso(window) -> str:
+    if window is None or window is beam.DoFn.WindowParam:
+        return datetime.now(timezone.utc).isoformat()
+    return window.end.to_utc_datetime().isoformat()
 
 
 class PaymentPipelineOptions(PipelineOptions):
@@ -62,27 +84,25 @@ class PaymentEventParser(beam.DoFn):
         _, value = element
         try:
             event = json.loads(value.decode("utf-8"))
-            payload = event.get("payload", {})
+            payload = event.get("payload") or {}
+            event_time_str = _first_present(
+                event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
+            )
             parsed = {
-                "payment_id": payload.get("paymentId"),
-                "order_id": payload.get("orderId"),
-                "status": payload.get("status"),
-                "method": payload.get("method", "UNKNOWN"),
-                "amount_cents": payload.get("amountCents", 0),
-                "error_code": payload.get("errorCode"),
-                "latency_ms": payload.get("latencyMs"),
-                "event_time": event.get("eventTime"),
+                "payment_id": _first_present(payload, "paymentId", "payment_id")
+                or _first_present(event, "paymentId", "payment_id", "aggregateId", "aggregate_id"),
+                "order_id": _first_present(payload, "orderId", "order_id")
+                or _first_present(event, "orderId", "order_id"),
+                "status": _first_present(payload, "status"),
+                "method": _first_present(payload, "method", "paymentMethod", "payment_method", default="UNKNOWN"),
+                "amount_cents": _first_present(payload, "amountCents", "amount_cents", default=0),
+                "error_code": _first_present(payload, "errorCode", "error_code"),
+                "latency_ms": _first_present(payload, "latencyMs", "latency_ms"),
+                "event_time": event_time_str,
             }
             if not parsed["payment_id"]:
                 raise ValueError("Missing paymentId")
-            event_time_str = event.get("eventTime")
-            if event_time_str:
-                try:
-                    event_ts = isoparse(event_time_str).timestamp()
-                except (ValueError, TypeError):
-                    event_ts = time.time()
-            else:
-                event_ts = time.time()
+            event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue(parsed, event_ts)
         except Exception as e:
             logger.warning("Failed to parse payment event: %s", e)
@@ -131,7 +151,7 @@ class PaymentSuccessRateAggregator(beam.CombineFn):
         }
 
 
-def format_metrics_row(element):
+def format_metrics_row(element, window=beam.DoFn.WindowParam):
     """Format aggregated payment metrics for BigQuery."""
     method, metrics = element
     return {
@@ -143,7 +163,7 @@ def format_metrics_row(element):
         "latency_p50_ms": metrics["latency_p50_ms"],
         "latency_p95_ms": metrics["latency_p95_ms"],
         "latency_p99_ms": metrics["latency_p99_ms"],
-        "window_timestamp": datetime.utcnow().isoformat(),
+        "window_timestamp": _window_end_iso(window),
     }
 
 
@@ -190,7 +210,7 @@ class FormatBigQueryInsertFailureFn(beam.DoFn):
             "destination": destination,
             "payload": json.dumps(row_content) if not isinstance(row_content, str) else row_content,
             "error_message": "Schema mismatch or streaming buffer error during insertion",
-            "failed_at": datetime.utcnow().isoformat(),
+            "failed_at": datetime.now(timezone.utc).isoformat(),
         }
 
 

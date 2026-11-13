@@ -19,10 +19,32 @@ from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, 
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
+
+
+def _first_present(mapping, *keys, default=None):
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+    return default
+
+
+def _parse_event_ts(event_time_str):
+    if event_time_str:
+        try:
+            return isoparse(event_time_str).timestamp()
+        except (ValueError, TypeError):
+            return time.time()
+    return time.time()
+
+
+def _window_end_iso(window) -> str:
+    if window is None or window is beam.DoFn.WindowParam:
+        return datetime.now(timezone.utc).isoformat()
+    return window.end.to_utc_datetime().isoformat()
 
 STOCKOUT_THRESHOLD = 5  # Alert when quantity drops below this
 
@@ -69,26 +91,23 @@ class InventoryEventParser(beam.DoFn):
         _, value = element
         try:
             event = json.loads(value.decode("utf-8"))
-            payload = event.get("payload", {})
+            payload = event.get("payload") or {}
+            event_time_str = _first_present(
+                event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
+            )
             parsed = {
-                "sku_id": payload.get("skuId"),
-                "store_id": payload.get("storeId"),
-                "event_type": event.get("eventType"),
-                "quantity_change": payload.get("quantityChange", 0),
-                "quantity_on_hand": payload.get("quantityOnHand"),
-                "category": payload.get("category", "UNKNOWN"),
-                "event_time": event.get("eventTime"),
+                "sku_id": _first_present(payload, "skuId", "sku_id", "sku"),
+                "store_id": _first_present(payload, "storeId", "store_id")
+                or _first_present(event, "storeId", "store_id"),
+                "event_type": _first_present(event, "eventType", "event_type"),
+                "quantity_change": _first_present(payload, "quantityChange", "quantity_change", default=0),
+                "quantity_on_hand": _first_present(payload, "quantityOnHand", "quantity_on_hand"),
+                "category": _first_present(payload, "category", default="UNKNOWN"),
+                "event_time": event_time_str,
             }
             if not parsed["sku_id"] or not parsed["store_id"]:
                 raise ValueError("Missing skuId or storeId")
-            event_time_str = event.get("eventTime")
-            if event_time_str:
-                try:
-                    event_ts = isoparse(event_time_str).timestamp()
-                except (ValueError, TypeError):
-                    event_ts = time.time()
-            else:
-                event_ts = time.time()
+            event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue(parsed, event_ts)
         except Exception as e:
             logger.warning("Failed to parse inventory event: %s", e)
@@ -139,12 +158,12 @@ class StockoutDetector(beam.DoFn):
                 "store_id": element["store_id"],
                 "quantity_on_hand": qty,
                 "category": element["category"],
-                "alert_time": datetime.utcnow().isoformat(),
+                "alert_time": datetime.now(timezone.utc).isoformat(),
                 "severity": "CRITICAL" if qty == 0 else "WARNING",
             }
 
 
-def format_velocity_row(element):
+def format_velocity_row(element, window=beam.DoFn.WindowParam):
     """Format velocity data for BigQuery."""
     key, metrics = element
     sku_id, store_id = key
@@ -154,7 +173,7 @@ def format_velocity_row(element):
         "units_sold": metrics["units_sold"],
         "units_restocked": metrics["units_restocked"],
         "event_count": metrics["event_count"],
-        "window_timestamp": datetime.utcnow().isoformat(),
+        "window_timestamp": _window_end_iso(window),
     }
 
 

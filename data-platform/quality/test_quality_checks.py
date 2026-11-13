@@ -3,13 +3,18 @@ import json
 import tempfile
 from pathlib import Path
 
+from unittest.mock import MagicMock
+
 import pytest
 import yaml
 
+import run_quality_checks
 from run_quality_checks import (
+    build_bigquery_context,
     discover_suites,
     load_fixture_data,
     load_suite_config,
+    run_suite_bigquery,
     run_suite_on_fixture,
     validate_expectation,
     FIXTURES_DIR,
@@ -115,3 +120,37 @@ def test_validate_expectation_regex():
     assert passed is False
     assert detail is not None
     assert "invalid-email-without-at-sign" in detail["unexpected_values"]
+
+
+@pytest.mark.parametrize(
+    "bad_project,bad_dataset",
+    [
+        ("instacommerce-prod`; DROP TABLE orders--", "analytics"),
+        ("instacommerce-prod", "analytics; DELETE FROM users"),
+        ("", "analytics"),
+        ("..", "analytics"),
+        ("instacommerce-prod", "analytics..orders"),
+        ("bad project", "analytics"),
+    ],
+)
+def test_build_bigquery_context_rejects_invalid_identifiers(bad_project, bad_dataset):
+    """Verify build_bigquery_context rejects unsafe BigQuery project/dataset identifiers."""
+    with pytest.raises(ValueError, match="Invalid BigQuery"):
+        build_bigquery_context(bad_project, bad_dataset)
+
+
+def test_run_suite_bigquery_rejects_invalid_project_and_table(monkeypatch):
+    """Verify run_suite_bigquery validates project and table before SQL interpolation."""
+    suite_config = {"name": "orders_validation", "expectations": []}
+    mock_context = MagicMock()
+
+    with pytest.raises(ValueError, match="Invalid BigQuery"):
+        run_suite_bigquery(mock_context, suite_config, "proj`; DROP TABLE orders--")
+
+    monkeypatch.setitem(
+        run_quality_checks.SUITE_TABLE_MAP,
+        "orders_validation",
+        "analytics.orders`; DROP TABLE users--",
+    )
+    with pytest.raises(ValueError, match="Invalid BigQuery"):
+        run_suite_bigquery(mock_context, suite_config, "instacommerce-prod")
