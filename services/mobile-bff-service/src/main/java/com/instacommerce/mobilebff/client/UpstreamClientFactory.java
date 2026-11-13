@@ -10,6 +10,7 @@ import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
+import reactor.netty.resources.ConnectionProvider;
 
 @Component
 public class UpstreamClientFactory {
@@ -22,7 +23,7 @@ public class UpstreamClientFactory {
         var upstream = properties.getUpstream();
         int timeoutMs = upstream.getTimeoutMs();
 
-        reactor.netty.resources.ConnectionProvider connectionProvider = reactor.netty.resources.ConnectionProvider.builder("mobile-bff-upstream")
+        ConnectionProvider connectionProvider = ConnectionProvider.builder("mobile-bff-upstream")
             .maxIdleTime(Duration.ofSeconds(500))
             .evictInBackground(Duration.ofSeconds(60))
             .build();

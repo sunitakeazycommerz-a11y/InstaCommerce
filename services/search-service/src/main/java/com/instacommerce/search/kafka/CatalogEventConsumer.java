@@ -6,6 +6,9 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.CacheManager;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -14,10 +17,12 @@ public class CatalogEventConsumer {
     private static final Logger log = LoggerFactory.getLogger(CatalogEventConsumer.class);
 
     private final SearchIndexService searchIndexService;
-    private final org.springframework.cache.CacheManager cacheManager;
+    private final CacheManager cacheManager;
 
-    public CatalogEventConsumer(SearchIndexService searchIndexService,
-                                org.springframework.beans.factory.ObjectProvider<org.springframework.cache.CacheManager> cacheManagerProvider) {
+    @Autowired
+    public CatalogEventConsumer(
+            SearchIndexService searchIndexService,
+            ObjectProvider<CacheManager> cacheManagerProvider) {
         this.searchIndexService = searchIndexService;
         this.cacheManager = cacheManagerProvider != null ? cacheManagerProvider.getIfAvailable() : null;
     }

@@ -1,6 +1,7 @@
 package com.instacommerce.catalog.config;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
@@ -10,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.Cache;
@@ -22,8 +24,12 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.cache.RedisCache;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
+import org.springframework.data.redis.connection.Message;
+import org.springframework.data.redis.connection.MessageListener;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
@@ -32,6 +38,7 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 @EnableCaching
 public class CacheConfig {
 
+    public static final String INVALIDATION_CHANNEL = "catalog:cache:invalidate";
     private static final Logger log = LoggerFactory.getLogger(CacheConfig.class);
 
     @Value("${catalog.cache.redis.enabled:true}")
@@ -70,17 +77,85 @@ public class CacheConfig {
             }
         }
 
-        return new TwoLevelCacheManager(redisCacheManager, redisTemplate);
+        return new TwoLevelCacheManager(redisCacheManager, redisTemplate, redisEnabled ? connectionFactory : null);
     }
 
-    public static class TwoLevelCacheManager implements CacheManager {
+    public static class TwoLevelCacheManager implements CacheManager, MessageListener, DisposableBean {
         private final RedisCacheManager redisCacheManager;
         private final StringRedisTemplate redisTemplate;
+        private final RedisMessageListenerContainer listenerContainer;
         private final Map<String, Cache> caches = new ConcurrentHashMap<>();
 
         public TwoLevelCacheManager(RedisCacheManager redisCacheManager, StringRedisTemplate redisTemplate) {
+            this(redisCacheManager, redisTemplate, null);
+        }
+
+        public TwoLevelCacheManager(
+                RedisCacheManager redisCacheManager,
+                StringRedisTemplate redisTemplate,
+                RedisConnectionFactory connectionFactory) {
             this.redisCacheManager = redisCacheManager;
             this.redisTemplate = redisTemplate;
+            this.listenerContainer = initListenerContainer(connectionFactory);
+        }
+
+        private RedisMessageListenerContainer initListenerContainer(RedisConnectionFactory connectionFactory) {
+            if (connectionFactory == null) {
+                return null;
+            }
+            RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+            try {
+                container.setConnectionFactory(connectionFactory);
+                container.addMessageListener(this, ChannelTopic.of(INVALIDATION_CHANNEL));
+                container.afterPropertiesSet();
+                container.start();
+                log.info("Subscribed to Redis cache invalidation channel {}", INVALIDATION_CHANNEL);
+                return container;
+            } catch (Exception e) {
+                log.warn("Failed to start Redis cache invalidation subscriber: {}", e.getMessage());
+                stopAndDestroyContainer(container);
+                return null;
+            }
+        }
+
+        private void stopAndDestroyContainer(RedisMessageListenerContainer container) {
+            if (container == null) {
+                return;
+            }
+            try {
+                container.stop();
+            } catch (Exception e) {
+                log.debug("Error stopping Redis cache invalidation listener container: {}", e.getMessage());
+            } finally {
+                try {
+                    container.destroy();
+                } catch (Exception e) {
+                    log.debug("Error destroying Redis cache invalidation listener container: {}", e.getMessage());
+                }
+            }
+        }
+
+        @Override
+        public void onMessage(Message message, byte[] pattern) {
+            if (message == null || message.getBody() == null) {
+                return;
+            }
+            String payload = new String(message.getBody(), StandardCharsets.UTF_8);
+            int separatorIdx = payload.indexOf(':');
+            if (separatorIdx <= 0 || separatorIdx >= payload.length() - 1) {
+                return;
+            }
+            String cacheName = payload.substring(0, separatorIdx);
+            String keyPattern = payload.substring(separatorIdx + 1);
+            Cache cache = caches.get(cacheName);
+            if (cache instanceof TwoLevelCache twoLevelCache) {
+                twoLevelCache.evictLocal(keyPattern);
+            }
+        }
+
+        @Override
+        public void destroy() {
+            stopAndDestroyContainer(listenerContainer);
         }
 
         @Override
@@ -197,6 +272,16 @@ public class CacheConfig {
                     logger.debug("Redis cache put error for key {}: {}", key, e.getMessage());
                 }
             }
+            publishInvalidation(key != null ? key.toString() : "*");
+        }
+
+        void evictLocal(String keyPattern) {
+            if ("*".equals(keyPattern)) {
+                l1Cache.invalidateAll();
+                return;
+            }
+            l1Cache.invalidate(keyPattern);
+            l1Cache.asMap().keySet().removeIf(k -> keyPattern.equals(String.valueOf(k)));
         }
 
         @Override
@@ -228,7 +313,7 @@ public class CacheConfig {
         private void publishInvalidation(String keyPattern) {
             if (redisTemplate != null) {
                 try {
-                    redisTemplate.convertAndSend("catalog:cache:invalidate", name + ":" + keyPattern);
+                    redisTemplate.convertAndSend(INVALIDATION_CHANNEL, name + ":" + keyPattern);
                 } catch (Exception e) {
                     logger.debug("Failed to publish cache invalidation message: {}", e.getMessage());
                 }

@@ -5,8 +5,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.mobilebff.client.UpstreamClientFactory;
 import com.instacommerce.mobilebff.config.MobileBffProperties;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.net.URI;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -214,5 +221,167 @@ class HomeAggregatorTest {
                 assertThat(homeResponse.metadata()).containsKey("timestamp");
             })
             .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("Should properly encode special characters in userId query param when calling feature flag service")
+    void testFeatureFlagUriEncoding() {
+        AtomicReference<URI> capturedUri = new AtomicReference<>();
+        WebClient catalogClient = createMockWebClient(List.of(), HttpStatus.OK);
+        WebClient searchClient = createMockWebClient(List.of(), HttpStatus.OK);
+        WebClient flagsClient = WebClient.builder()
+            .baseUrl("http://feature-flag-service:8098")
+            .exchangeFunction(clientRequest -> {
+                capturedUri.set(clientRequest.url());
+                ClientResponse response = ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("{}")
+                    .build();
+                return Mono.just(response);
+            })
+            .build();
+
+        UpstreamClientFactory mockFactory = new UpstreamClientFactory(WebClient.builder(), properties) {
+            @Override
+            public WebClient catalogClient() {
+                return catalogClient;
+            }
+
+            @Override
+            public WebClient searchClient() {
+                return searchClient;
+            }
+
+            @Override
+            public WebClient featureFlagClient() {
+                return flagsClient;
+            }
+        };
+
+        HomeAggregator aggregator = new HomeAggregator(mockFactory, properties);
+
+        StepVerifier.create(aggregator.aggregate("usr 1&admin=true?x=2", null))
+            .assertNext(resp -> assertThat(resp.status()).isEqualTo("ok"))
+            .verifyComplete();
+
+        assertThat(capturedUri.get()).isNotNull();
+        assertThat(capturedUri.get().getRawPath()).isEqualTo("/flags");
+        assertThat(capturedUri.get().getRawQuery()).isEqualTo("userId=usr%201%26admin%3Dtrue%3Fx%3D2");
+    }
+
+    @Test
+    @DisplayName("Should open circuit breaker on repeated upstream failures and short-circuit subsequent calls")
+    void testCircuitBreakerOpensAndDegradesGracefully() {
+        AtomicInteger catalogCalls = new AtomicInteger(0);
+        WebClient failingCatalogClient = WebClient.builder()
+            .baseUrl("http://catalog-service:8082")
+            .exchangeFunction(req -> {
+                catalogCalls.incrementAndGet();
+                return Mono.error(new RuntimeException("Catalog unreachable"));
+            })
+            .build();
+        WebClient searchClient = createMockWebClient(List.of("milk", "eggs"), HttpStatus.OK);
+        WebClient flagsClient = createMockWebClient(Map.of("newCheckout", true), HttpStatus.OK);
+
+        UpstreamClientFactory mockFactory = new UpstreamClientFactory(WebClient.builder(), properties) {
+            @Override
+            public WebClient catalogClient() {
+                return failingCatalogClient;
+            }
+
+            @Override
+            public WebClient searchClient() {
+                return searchClient;
+            }
+
+            @Override
+            public WebClient featureFlagClient() {
+                return flagsClient;
+            }
+        };
+
+        CircuitBreakerConfig config = CircuitBreakerConfig.custom()
+            .slidingWindowSize(2)
+            .minimumNumberOfCalls(2)
+            .failureRateThreshold(50.0f)
+            .waitDurationInOpenState(Duration.ofSeconds(30))
+            .build();
+        CircuitBreakerRegistry registry = CircuitBreakerRegistry.of(config);
+        HomeAggregator aggregator = new HomeAggregator(mockFactory, properties, registry);
+
+        for (int i = 0; i < 2; i++) {
+            StepVerifier.create(aggregator.aggregate("usr_cb", null))
+                .assertNext(resp -> {
+                    assertThat(resp.status()).isEqualTo("ok");
+                    assertThat(resp.categories()).isEmpty();
+                    assertThat(resp.trending()).containsExactly("milk", "eggs");
+                })
+                .verifyComplete();
+        }
+
+        assertThat(catalogCalls.get()).isEqualTo(2);
+        assertThat(registry.circuitBreaker("catalogService").getState())
+            .isEqualTo(CircuitBreaker.State.OPEN);
+
+        StepVerifier.create(aggregator.aggregate("usr_cb", null))
+            .assertNext(resp -> {
+                assertThat(resp.status()).isEqualTo("ok");
+                assertThat(resp.categories()).isEmpty();
+                assertThat(resp.trending()).containsExactly("milk", "eggs");
+                assertThat(resp.flags()).containsEntry("newCheckout", true);
+            })
+            .verifyComplete();
+
+        assertThat(catalogCalls.get()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Should skip upstream call immediately when circuit breaker is already OPEN")
+    void testOpenCircuitSkipsUpstreamInvocation() {
+        AtomicInteger searchCalls = new AtomicInteger(0);
+        WebClient catalogClient = createMockWebClient(List.of(Map.of("name", "Snacks")), HttpStatus.OK);
+        WebClient countingSearchClient = WebClient.builder()
+            .baseUrl("http://search-service:8088")
+            .exchangeFunction(req -> {
+                searchCalls.incrementAndGet();
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("[\"bread\"]")
+                    .build());
+            })
+            .build();
+        WebClient flagsClient = createMockWebClient(Map.of("beta", false), HttpStatus.OK);
+
+        UpstreamClientFactory mockFactory = new UpstreamClientFactory(WebClient.builder(), properties) {
+            @Override
+            public WebClient catalogClient() {
+                return catalogClient;
+            }
+
+            @Override
+            public WebClient searchClient() {
+                return countingSearchClient;
+            }
+
+            @Override
+            public WebClient featureFlagClient() {
+                return flagsClient;
+            }
+        };
+
+        CircuitBreakerRegistry registry = CircuitBreakerRegistry.ofDefaults();
+        registry.circuitBreaker("searchService").transitionToOpenState();
+        HomeAggregator aggregator = new HomeAggregator(mockFactory, properties, registry);
+
+        StepVerifier.create(aggregator.aggregate("usr_open", null))
+            .assertNext(resp -> {
+                assertThat(resp.status()).isEqualTo("ok");
+                assertThat(resp.categories()).hasSize(1);
+                assertThat(resp.trending()).isEmpty();
+                assertThat(resp.flags()).containsEntry("beta", false);
+            })
+            .verifyComplete();
+
+        assertThat(searchCalls.get()).isZero();
     }
 }

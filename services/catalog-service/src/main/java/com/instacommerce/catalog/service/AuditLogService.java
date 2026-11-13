@@ -3,9 +3,11 @@ package com.instacommerce.catalog.service;
 import com.instacommerce.catalog.domain.model.AuditLog;
 import com.instacommerce.catalog.exception.TraceIdProvider;
 import com.instacommerce.catalog.repository.AuditLogRepository;
+import com.instacommerce.catalog.security.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -17,10 +19,20 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 public class AuditLogService {
     private final AuditLogRepository auditLogRepository;
     private final TraceIdProvider traceIdProvider;
+    private final ClientIpResolver clientIpResolver;
 
     public AuditLogService(AuditLogRepository auditLogRepository, TraceIdProvider traceIdProvider) {
+        this(auditLogRepository, traceIdProvider, new ClientIpResolver());
+    }
+
+    @Autowired
+    public AuditLogService(
+            AuditLogRepository auditLogRepository,
+            TraceIdProvider traceIdProvider,
+            ClientIpResolver clientIpResolver) {
         this.auditLogRepository = auditLogRepository;
         this.traceIdProvider = traceIdProvider;
+        this.clientIpResolver = clientIpResolver != null ? clientIpResolver : new ClientIpResolver();
     }
 
     @Transactional
@@ -32,7 +44,7 @@ public class AuditLogService {
         log.setEntityType(entityType);
         log.setEntityId(entityId);
         log.setDetails(details);
-        log.setIpAddress(resolveIp(request));
+        log.setIpAddress(clientIpResolver.resolve(request));
         log.setUserAgent(resolveUserAgent(request));
         log.setTraceId(traceIdProvider.resolveTraceId(request));
         auditLogRepository.save(log);
@@ -62,17 +74,6 @@ public class AuditLogService {
             return attributes.getRequest();
         }
         return null;
-    }
-
-    private String resolveIp(HttpServletRequest request) {
-        if (request == null) {
-            return null;
-        }
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 
     private String resolveUserAgent(HttpServletRequest request) {

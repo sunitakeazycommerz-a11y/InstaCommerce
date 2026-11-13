@@ -1,5 +1,6 @@
 package com.instacommerce.catalog.config;
 
+import com.instacommerce.catalog.security.InternalServiceAuthFilter;
 import com.instacommerce.catalog.security.JwtAuthenticationFilter;
 import com.instacommerce.catalog.security.RestAccessDeniedHandler;
 import com.instacommerce.catalog.security.RestAuthenticationEntryPoint;
@@ -29,6 +30,7 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                                   InternalServiceAuthFilter internalServiceAuthFilter,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler) throws Exception {
@@ -42,6 +44,7 @@ public class SecurityConfig {
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)
                 .accessDeniedHandler(accessDeniedHandler))
+            .addFilterBefore(internalServiceAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
