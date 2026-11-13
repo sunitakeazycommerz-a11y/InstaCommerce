@@ -11,6 +11,7 @@ import com.instacommerce.wallet.exception.InsufficientBalanceException;
 import com.instacommerce.wallet.exception.WalletNotFoundException;
 import com.instacommerce.wallet.repository.WalletRepository;
 import com.instacommerce.wallet.repository.WalletTransactionRepository;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -54,6 +55,9 @@ public class WalletService {
     @CacheEvict(value = "walletBalance", key = "#userId")
     public WalletTransactionResponse credit(UUID userId, long amountCents,
                                             ReferenceType refType, String refId, String description) {
+        if (amountCents <= 0) {
+            throw new IllegalArgumentException("amountCents must be positive");
+        }
         Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
             .orElseGet(() -> createWallet(userId));
 
@@ -64,7 +68,7 @@ public class WalletService {
         recordLedgerEntry(wallet.getId(), userId, refType, amountCents, refId, true);
         log.info("Credited {} cents to wallet for user={} ref={}/{}", amountCents, userId, refType, refId);
 
-        Map<String, Object> creditPayload = new java.util.LinkedHashMap<>();
+        Map<String, Object> creditPayload = new LinkedHashMap<>();
         creditPayload.put("transactionId", txn.getId().toString());
         creditPayload.put("walletId", wallet.getId().toString());
         creditPayload.put("userId", userId.toString());
@@ -80,6 +84,9 @@ public class WalletService {
     @CacheEvict(value = "walletBalance", key = "#userId")
     public WalletTransactionResponse debit(UUID userId, long amountCents,
                                            ReferenceType refType, String refId, String description) {
+        if (amountCents <= 0) {
+            throw new IllegalArgumentException("amountCents must be positive");
+        }
         Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new WalletNotFoundException("Wallet not found for user: " + userId));
 
@@ -95,7 +102,7 @@ public class WalletService {
         recordLedgerEntry(wallet.getId(), userId, refType, amountCents, refId, false);
         log.info("Debited {} cents from wallet for user={} ref={}/{}", amountCents, userId, refType, refId);
 
-        Map<String, Object> debitPayload = new java.util.LinkedHashMap<>();
+        Map<String, Object> debitPayload = new LinkedHashMap<>();
         debitPayload.put("transactionId", txn.getId().toString());
         debitPayload.put("walletId", wallet.getId().toString());
         debitPayload.put("userId", userId.toString());
@@ -153,21 +160,6 @@ public class WalletService {
 
     private void recordLedgerEntry(UUID walletId, UUID userId, ReferenceType refType,
                                    long amountCents, String refId, boolean isCredit) {
-        switch (refType) {
-            case TOPUP -> walletLedgerService.recordTopUp(walletId, userId, amountCents, refId);
-            case ORDER -> walletLedgerService.recordPurchase(walletId, userId, amountCents, refId);
-            case REFUND -> walletLedgerService.recordRefund(walletId, userId, amountCents, refId);
-            case CASHBACK, REFERRAL, PROMOTION -> walletLedgerService.recordPromotion(
-                    walletId, userId, amountCents, refType.name(), refId);
-            case ADMIN_ADJUSTMENT -> {
-                if (isCredit) {
-                    walletLedgerService.recordEntry(walletId, "platform_float", "user_wallet:" + userId,
-                            amountCents, "ADMIN_ADJUSTMENT", refId);
-                } else {
-                    walletLedgerService.recordEntry(walletId, "user_wallet:" + userId, "platform_float",
-                            amountCents, "ADMIN_ADJUSTMENT", refId);
-                }
-            }
-        }
+        walletLedgerService.recordDoubleEntry(walletId, userId, refType, amountCents, refId, isCredit);
     }
 }

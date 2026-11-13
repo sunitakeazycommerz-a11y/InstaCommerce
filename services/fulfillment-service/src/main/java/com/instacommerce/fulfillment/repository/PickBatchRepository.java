@@ -6,6 +6,6 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface PickBatchRepository extends JpaRepository<PickBatch, UUID> {
-    List<PickBatch> findByStoreIdAndStatus(String storeId, String status);
-    List<PickBatch> findByStoreId(String storeId);
+    List<PickBatch> findByStoreIdAndStatus(UUID storeId, String status);
+    List<PickBatch> findByStoreId(UUID storeId);
 }

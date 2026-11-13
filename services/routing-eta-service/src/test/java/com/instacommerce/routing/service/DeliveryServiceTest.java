@@ -21,10 +21,13 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -135,5 +138,54 @@ class DeliveryServiceTest {
 
         // Verify breach risk WebSocket broadcast
         verify(messagingTemplate).convertAndSend(eq("/topic/deliveries/" + deliveryId + "/breach-risk"), any(Object.class));
+    }
+
+    @Test
+    @DisplayName("createDelivery returns existing delivery idempotently even if coordinates are null")
+    void createDeliveryReturnsExistingIdempotently() {
+        UUID orderId = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        Delivery existing = new Delivery();
+        existing.setId(deliveryId);
+        existing.setOrderId(orderId);
+        existing.setRiderId(riderId);
+        existing.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+        existing.setPickupLat(new BigDecimal("12.9716"));
+        existing.setPickupLng(new BigDecimal("77.5946"));
+        existing.setDropoffLat(new BigDecimal("12.9352"));
+        existing.setDropoffLng(new BigDecimal("77.6245"));
+
+        when(deliveryRepository.findByOrderId(orderId)).thenReturn(Optional.of(existing));
+
+        var response = deliveryService.createDelivery(orderId, riderId, null, null, null, null, null);
+
+        assertEquals(deliveryId, response.id());
+        assertEquals(orderId, response.orderId());
+        verifyNoInteractions(etaService);
+        verify(deliveryRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("createDelivery rejects null pickup or dropoff coordinates with IllegalArgumentException")
+    void createDeliveryRejectsNullCoordinates() {
+        UUID orderId = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+
+        when(deliveryRepository.findByOrderId(orderId)).thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class, () ->
+            deliveryService.createDelivery(
+                orderId,
+                riderId,
+                storeId,
+                new BigDecimal("12.9716"),
+                new BigDecimal("77.5946"),
+                null,
+                new BigDecimal("77.6245")));
+
+        verifyNoInteractions(etaService);
+        verify(deliveryRepository, never()).save(any());
     }
 }

@@ -19,7 +19,7 @@ public class PickBatch {
     private UUID id;
 
     @Column(name = "store_id", nullable = false)
-    private String storeId;
+    private UUID storeId;
 
     @Column(name = "picker_id")
     private UUID pickerId;
@@ -60,11 +60,11 @@ public class PickBatch {
         this.id = id;
     }
 
-    public String getStoreId() {
+    public UUID getStoreId() {
         return storeId;
     }
 
-    public void setStoreId(String storeId) {
+    public void setStoreId(UUID storeId) {
         this.storeId = storeId;
     }
 

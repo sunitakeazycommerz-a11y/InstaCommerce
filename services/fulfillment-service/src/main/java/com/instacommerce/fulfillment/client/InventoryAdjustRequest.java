@@ -4,7 +4,7 @@ import java.util.UUID;
 
 public record InventoryAdjustRequest(
     UUID productId,
-    String storeId,
+    UUID storeId,
     Integer delta,
     String reason,
     String referenceId

@@ -1,10 +1,12 @@
 package com.instacommerce.riderfleet.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.instacommerce.riderfleet.dto.request.AssignRiderRequest;
 import com.instacommerce.riderfleet.service.RiderAssignmentService;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -33,7 +35,7 @@ class FulfillmentEventConsumerTest {
 
     @BeforeEach
     void setUp() {
-        objectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+        objectMapper.registerModule(new JavaTimeModule());
         consumer = new FulfillmentEventConsumer(riderAssignmentService, objectMapper);
     }
 
@@ -148,5 +150,72 @@ class FulfillmentEventConsumerTest {
         assertThat(request.storeId()).isNotNull();
         assertThat(request.pickupLat()).isEqualTo(new BigDecimal("12.9716"));
         assertThat(request.pickupLng()).isEqualTo(new BigDecimal("77.5946"));
+    }
+
+    @Test
+    @DisplayName("Forwards optional dropoff coordinates from OrderPacked to RiderAssignmentService")
+    void forwardsDropoffCoordinatesWhenPresentInOrderPacked() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", orderId.toString());
+        payload.put("storeId", storeId.toString());
+        payload.put("pickupLat", 12.9716);
+        payload.put("pickupLng", 77.5946);
+        payload.put("dropoffLat", 12.9352);
+        payload.put("dropoffLng", 77.6245);
+
+        Map<String, Object> envelope = Map.of(
+            "id", UUID.randomUUID().toString(),
+            "eventType", "OrderPacked",
+            "aggregateId", orderId.toString(),
+            "aggregateType", "Fulfillment",
+            "eventTime", Instant.now().toString(),
+            "payload", payload
+        );
+
+        ConsumerRecord<String, String> record = new ConsumerRecord<>(
+            "fulfillment.events", 0, 0, orderId.toString(), objectMapper.writeValueAsString(envelope)
+        );
+
+        consumer.onFulfillmentEvent(record);
+
+        verify(riderAssignmentService).assignRider(
+            eq(orderId),
+            eq(storeId),
+            eq(new BigDecimal("12.9716")),
+            eq(new BigDecimal("77.5946")),
+            eq(new BigDecimal("12.9352")),
+            eq(new BigDecimal("77.6245"))
+        );
+    }
+
+    @Test
+    @DisplayName("Skips assignment gracefully when pickup coordinates are blank strings")
+    void skipsAssignmentWhenCoordinatesAreBlankStrings() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        Map<String, Object> payload = Map.of(
+            "orderId", orderId.toString(),
+            "storeId", storeId.toString(),
+            "pickupLat", "",
+            "pickupLng", "   "
+        );
+        Map<String, Object> envelope = Map.of(
+            "id", UUID.randomUUID().toString(),
+            "eventType", "OrderPacked",
+            "aggregateId", orderId.toString(),
+            "aggregateType", "Fulfillment",
+            "eventTime", Instant.now().toString(),
+            "payload", payload
+        );
+
+        ConsumerRecord<String, String> record = new ConsumerRecord<>(
+            "fulfillment.events", 0, 0, orderId.toString(), objectMapper.writeValueAsString(envelope)
+        );
+
+        consumer.onFulfillmentEvent(record);
+
+        verify(riderAssignmentService, never()).assignRider(any(), any(), any(), any());
     }
 }

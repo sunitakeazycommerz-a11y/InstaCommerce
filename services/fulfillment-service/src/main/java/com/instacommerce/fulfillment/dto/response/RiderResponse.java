@@ -7,7 +7,7 @@ public record RiderResponse(
     UUID id,
     String name,
     String phone,
-    String storeId,
+    UUID storeId,
     boolean available,
     Instant createdAt
 ) {

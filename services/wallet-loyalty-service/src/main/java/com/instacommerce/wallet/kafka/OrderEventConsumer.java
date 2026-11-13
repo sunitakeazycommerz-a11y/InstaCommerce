@@ -6,6 +6,7 @@ import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.wallet.client.OrderLookupClient;
 import com.instacommerce.wallet.client.OrderSnapshot;
 import com.instacommerce.wallet.domain.model.WalletTransaction.ReferenceType;
+import com.instacommerce.wallet.exception.DuplicateTransactionException;
 import com.instacommerce.wallet.service.LoyaltyService;
 import com.instacommerce.wallet.service.WalletService;
 import java.util.Optional;
@@ -92,22 +93,31 @@ public class OrderEventConsumer {
             return;
         }
 
-        loyaltyService.earnPoints(
-            userId,
-            orderId.toString(),
-            orderTotalCents
-        );
+        try {
+            loyaltyService.earnPoints(
+                userId,
+                orderId.toString(),
+                orderTotalCents
+            );
+        } catch (DuplicateTransactionException ex) {
+            log.info("Duplicate loyalty points earn treated as idempotent success: orderId={}, userId={}",
+                orderId, userId);
+        }
 
-        // Award 2% cashback on delivered orders
         long cashbackCents = orderTotalCents * 2 / 100;
         if (cashbackCents > 0) {
-            walletService.credit(
-                userId,
-                cashbackCents,
-                ReferenceType.CASHBACK,
-                "cashback-" + orderId,
-                "Cashback on order " + orderId
-            );
+            try {
+                walletService.credit(
+                    userId,
+                    cashbackCents,
+                    ReferenceType.CASHBACK,
+                    "cashback-" + orderId,
+                    "Cashback on order " + orderId
+                );
+            } catch (DuplicateTransactionException ex) {
+                log.info("Duplicate cashback credit treated as idempotent success: orderId={}, userId={}",
+                    orderId, userId);
+            }
         }
 
         log.info("Processed OrderDelivered: orderId={}, userId={}, totalCents={}, cashbackCents={}",

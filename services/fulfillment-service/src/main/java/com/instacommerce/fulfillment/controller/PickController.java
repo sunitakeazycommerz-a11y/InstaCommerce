@@ -36,7 +36,7 @@ public class PickController {
     }
 
     @GetMapping("/picklist/{storeId}")
-    public Page<PickTaskResponse> listPickTasks(@PathVariable String storeId, Pageable pageable) {
+    public Page<PickTaskResponse> listPickTasks(@PathVariable UUID storeId, Pageable pageable) {
         return pickService.listPendingTasks(storeId, pageable);
     }
 

@@ -1,20 +1,31 @@
 package com.instacommerce.checkout.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
-
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.checkout.domain.CheckoutIdempotencyKey;
+import com.instacommerce.checkout.domain.CompensationDlq;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
-
+import com.instacommerce.checkout.exception.GlobalExceptionHandler;
+import com.instacommerce.checkout.exception.TraceIdProvider;
 import com.instacommerce.checkout.repository.CheckoutIdempotencyKeyRepository;
+import com.instacommerce.checkout.repository.CompensationDlqRepository;
+import com.instacommerce.checkout.service.CheckoutIdempotencyService;
+import com.instacommerce.checkout.service.CompensationReplayService;
 import com.instacommerce.checkout.workflow.CheckoutWorkflow;
 import io.temporal.api.common.v1.WorkflowExecution;
 import io.temporal.client.WorkflowClient;
@@ -22,16 +33,24 @@ import io.temporal.client.WorkflowExecutionAlreadyStarted;
 import io.temporal.client.WorkflowOptions;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 @ExtendWith(MockitoExtension.class)
 class CheckoutControllerTest {
@@ -158,9 +177,9 @@ class CheckoutControllerTest {
         CheckoutController rateLimitedController = new CheckoutController(
             workflowClient,
             TASK_QUEUE,
-            new com.instacommerce.checkout.service.CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
             null,
-            0 // 0 permits -> instantly throttled
+            0
         );
 
         CheckoutRequest request = request();
@@ -173,29 +192,173 @@ class CheckoutControllerTest {
     }
 
     @Test
-    void retryFailedCompensationIncrementsRetryAndMarksResolved() {
-        com.instacommerce.checkout.repository.CompensationDlqRepository dlqRepo =
-            mock(com.instacommerce.checkout.repository.CompensationDlqRepository.class);
+    void retryFailedCompensationExecutesRealReplayBeforeMarkingResolved() {
+        CompensationDlqRepository dlqRepo = mock(CompensationDlqRepository.class);
+        CompensationReplayService replayService = mock(CompensationReplayService.class);
         CheckoutController dlqController = new CheckoutController(
             workflowClient,
             TASK_QUEUE,
-            new com.instacommerce.checkout.service.CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
-            dlqRepo
+            new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            dlqRepo,
+            replayService
         );
 
         UUID dlqId = UUID.randomUUID();
-        com.instacommerce.checkout.domain.CompensationDlq dlqEntry =
-            new com.instacommerce.checkout.domain.CompensationDlq("wf-1", "releaseStock", "res-1", "connection timeout", null);
+        CompensationDlq dlqEntry = new CompensationDlq("wf-1", "releaseStock", "res-1", "connection timeout", null);
         when(dlqRepo.findById(dlqId)).thenReturn(Optional.of(dlqEntry));
         when(dlqRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        ResponseEntity<java.util.Map<String, Object>> response = dlqController.retryFailedCompensation(dlqId);
+        ResponseEntity<Map<String, Object>> response = dlqController.retryFailedCompensation(dlqId);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().get("status")).isEqualTo("RESOLVED");
         assertThat(dlqEntry.getRetryCount()).isEqualTo(1);
         assertThat(dlqEntry.getStatus()).isEqualTo("RESOLVED");
+        InOrder inOrder = inOrder(replayService, dlqRepo);
+        inOrder.verify(replayService).replay(dlqEntry);
+        inOrder.verify(dlqRepo).save(dlqEntry);
+    }
+
+    @Test
+    void retryFailedCompensationPreservesFailedStatusAndIncrementsRetryWhenReplayFails() {
+        CompensationDlqRepository dlqRepo = mock(CompensationDlqRepository.class);
+        CompensationReplayService replayService = mock(CompensationReplayService.class);
+        CheckoutController dlqController = new CheckoutController(
+            workflowClient,
+            TASK_QUEUE,
+            new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            dlqRepo,
+            replayService
+        );
+
+        UUID dlqId = UUID.randomUUID();
+        CompensationDlq dlqEntry = new CompensationDlq("wf-2", "refundPayment", "pay-2", "initial timeout", "15000");
+        when(dlqRepo.findById(dlqId)).thenReturn(Optional.of(dlqEntry));
+        when(dlqRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        doThrow(new RuntimeException("downstream PSP still down")).when(replayService).replay(dlqEntry);
+
+        ResponseEntity<Map<String, Object>> response = dlqController.retryFailedCompensation(dlqId);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().get("status")).isEqualTo("FAILED");
+        assertThat(response.getBody().get("retryCount")).isEqualTo(1);
+        assertThat(response.getBody().get("error")).isEqualTo("downstream PSP still down");
+        assertThat(dlqEntry.getStatus()).isEqualTo("FAILED");
+        assertThat(dlqEntry.getRetryCount()).isEqualTo(1);
+        assertThat(dlqEntry.getReason()).contains("initial timeout").contains("downstream PSP still down");
+        verify(dlqRepo).save(dlqEntry);
+    }
+
+    @Test
+    void retryFailedCompensationIsIdempotentWhenAlreadyResolved() {
+        CompensationDlqRepository dlqRepo = mock(CompensationDlqRepository.class);
+        CompensationReplayService replayService = mock(CompensationReplayService.class);
+        CheckoutController dlqController = new CheckoutController(
+            workflowClient,
+            TASK_QUEUE,
+            new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            dlqRepo,
+            replayService
+        );
+
+        UUID dlqId = UUID.randomUUID();
+        CompensationDlq dlqEntry = new CompensationDlq("wf-3", "cancelOrder", "ord-3", "initial failure", null);
+        dlqEntry.markResolved("already replayed");
+        when(dlqRepo.findById(dlqId)).thenReturn(Optional.of(dlqEntry));
+
+        ResponseEntity<Map<String, Object>> response = dlqController.retryFailedCompensation(dlqId);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().get("status")).isEqualTo("RESOLVED");
+        assertThat(dlqEntry.getRetryCount()).isZero();
+        verifyNoInteractions(replayService);
+        verify(dlqRepo, never()).save(any());
+    }
+
+    @Test
+    void retryFailedCompensationFailsWithoutMarkingResolvedWhenReplayServiceUnavailable() {
+        CompensationDlqRepository dlqRepo = mock(CompensationDlqRepository.class);
+        CheckoutController dlqController = new CheckoutController(
+            workflowClient,
+            TASK_QUEUE,
+            new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            dlqRepo
+        );
+
+        UUID dlqId = UUID.randomUUID();
+        CompensationDlq dlqEntry = new CompensationDlq("wf-4", "releaseStock", "res-4", "timeout", null);
+        when(dlqRepo.findById(dlqId)).thenReturn(Optional.of(dlqEntry));
+        when(dlqRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ResponseEntity<Map<String, Object>> response = dlqController.retryFailedCompensation(dlqId);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().get("status")).isEqualTo("FAILED");
+        assertThat(dlqEntry.getStatus()).isEqualTo("FAILED");
+        assertThat(dlqEntry.getRetryCount()).isEqualTo(1);
+        verify(dlqRepo).save(dlqEntry);
+    }
+
+    @Test
+    void supportsBothCheckoutAndApiV1CheckoutRoutes() throws Exception {
+        CompensationDlqRepository dlqRepo = mock(CompensationDlqRepository.class);
+        CompensationReplayService replayService = mock(CompensationReplayService.class);
+        CheckoutController routedController = new CheckoutController(
+            workflowClient,
+            TASK_QUEUE,
+            new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            dlqRepo,
+            replayService
+        );
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(routedController)
+            .setControllerAdvice(new GlobalExceptionHandler(new TraceIdProvider()))
+            .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
+            .build();
+
+        when(idempotencyKeyRepository.findByIdempotencyKey("idem-v1")).thenReturn(Optional.empty());
+        when(workflowClient.newWorkflowStub(eq(CheckoutWorkflow.class), any(WorkflowOptions.class))).thenReturn(workflow);
+        when(workflow.checkout(any(CheckoutRequest.class))).thenReturn(CheckoutResponse.success("ord-v1", 2599, 12));
+        when(workflowClient.newWorkflowStub(CheckoutWorkflow.class, "wf-status")).thenReturn(workflow);
+        when(workflow.getStatus()).thenReturn("COMPLETED");
+
+        SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("user-123", null));
+        try {
+            mockMvc.perform(post("/api/v1/checkout")
+                    .header("Idempotency-Key", "idem-v1")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(request())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderId").value("ord-v1"))
+                .andExpect(jsonPath("$.status").value("COMPLETED"));
+
+            when(idempotencyKeyRepository.findByIdempotencyKey("idem-legacy")).thenReturn(Optional.empty());
+            mockMvc.perform(post("/checkout")
+                    .header("Idempotency-Key", "idem-legacy")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(request())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderId").value("ord-v1"));
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+
+        mockMvc.perform(get("/api/v1/checkout/wf-status/status"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("COMPLETED"));
+
+        UUID dlqId = UUID.randomUUID();
+        CompensationDlq entry = new CompensationDlq("wf-v1", "voidPayment", "pay-v1", "timeout", "2599");
+        when(dlqRepo.findById(dlqId)).thenReturn(Optional.of(entry));
+        when(dlqRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        mockMvc.perform(post("/api/v1/checkout/dlq/{id}/retry", dlqId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("RESOLVED"));
+        verify(replayService).replay(entry);
     }
 
     private CheckoutRequest request() {

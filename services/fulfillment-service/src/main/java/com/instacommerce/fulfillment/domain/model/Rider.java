@@ -23,7 +23,7 @@ public class Rider {
     private String phone;
 
     @Column(name = "store_id", nullable = false)
-    private String storeId;
+    private UUID storeId;
 
     @Column(name = "is_available", nullable = false)
     private boolean available = true;
@@ -62,11 +62,11 @@ public class Rider {
         this.phone = phone;
     }
 
-    public String getStoreId() {
+    public UUID getStoreId() {
         return storeId;
     }
 
-    public void setStoreId(String storeId) {
+    public void setStoreId(UUID storeId) {
         this.storeId = storeId;
     }
 

@@ -12,21 +12,54 @@ public record FulfillmentEventPayload(
     UUID orderId,
     UUID storeId,
     BigDecimal pickupLat,
-    BigDecimal pickupLng
+    BigDecimal pickupLng,
+    BigDecimal dropoffLat,
+    BigDecimal dropoffLng
 ) {
+    public FulfillmentEventPayload(
+        UUID orderId,
+        UUID storeId,
+        BigDecimal pickupLat,
+        BigDecimal pickupLng
+    ) {
+        this(orderId, storeId, pickupLat, pickupLng, null, null);
+    }
+
     @JsonCreator
     public FulfillmentEventPayload(
         @JsonProperty("orderId") UUID orderId,
         @JsonProperty("storeId") Object storeIdObj,
-        @JsonProperty("pickupLat") BigDecimal pickupLat,
-        @JsonProperty("pickupLng") BigDecimal pickupLng
+        @JsonProperty("pickupLat") Object pickupLatObj,
+        @JsonProperty("pickupLng") Object pickupLngObj,
+        @JsonProperty("dropoffLat") Object dropoffLatObj,
+        @JsonProperty("dropoffLng") Object dropoffLngObj
     ) {
         this(
             orderId,
             parseStoreId(storeIdObj),
-            pickupLat,
-            pickupLng
+            parseCoordinate(pickupLatObj),
+            parseCoordinate(pickupLngObj),
+            parseCoordinate(dropoffLatObj),
+            parseCoordinate(dropoffLngObj)
         );
+    }
+
+    private static BigDecimal parseCoordinate(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof BigDecimal bd) {
+            return bd;
+        }
+        String str = obj.toString().trim();
+        if (str.isEmpty() || "null".equalsIgnoreCase(str)) {
+            return null;
+        }
+        try {
+            return new BigDecimal(str);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     private static UUID parseStoreId(Object obj) {

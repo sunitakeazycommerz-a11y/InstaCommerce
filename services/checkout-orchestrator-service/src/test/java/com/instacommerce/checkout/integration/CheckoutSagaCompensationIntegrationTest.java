@@ -112,7 +112,8 @@ class CheckoutSagaCompensationIntegrationTest {
     @Test
     @DisplayName("Happy path: full checkout orchestration executes forward and completes successfully")
     void shouldExecuteHappyPathSaga() {
-        CheckoutWorkflow workflow = createWorkflowStub("test-checkout-happy-" + System.currentTimeMillis());
+        String workflowId = "test-checkout-happy-" + System.currentTimeMillis();
+        CheckoutWorkflow workflow = createWorkflowStub(workflowId);
 
         List<CartItem> cartItems = List.of(
             new CartItem("item-milk-1", 2, 5000L),
@@ -139,9 +140,10 @@ class CheckoutSagaCompensationIntegrationTest {
         assertThat(response.totalCents()).isEqualTo(15000L);
         assertThat(response.estimatedDeliveryMinutes()).isEqualTo(15);
 
-        // Verify confirmStock and capturePayment called
+        // Verify confirmStock, capturePayment, and confirmOrder called
         verify(inventoryActivity).confirmStock(RESERVATION_ID);
         verify(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
+        verify(orderActivity).confirmOrder(ORDER_ID, workflowId + ":order:confirm");
         verify(cartActivity).clearCart(USER_ID);
 
         // Verify no compensations were executed
@@ -318,6 +320,7 @@ class CheckoutSagaCompensationIntegrationTest {
         TestOrderActivity(OrderActivity mock) { this.mock = mock; }
         @Override public OrderCreationResult createOrder(OrderCreateRequest request) { return mock.createOrder(request); }
         @Override public void cancelOrder(String orderId) { mock.cancelOrder(orderId); }
+        @Override public void confirmOrder(String orderId, String idempotencyKey) { mock.confirmOrder(orderId, idempotencyKey); }
     }
 
     static class TestCouponActivity implements CouponActivity {

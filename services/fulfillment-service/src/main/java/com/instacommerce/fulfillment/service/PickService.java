@@ -33,6 +33,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -124,7 +126,7 @@ public class PickService {
     }
 
     @Transactional(readOnly = true)
-    public List<PickTaskResponse> listPendingTasks(String storeId) {
+    public List<PickTaskResponse> listPendingTasks(UUID storeId) {
         return pickTaskRepository.findByStoreIdAndStatusIn(storeId,
                 List.of(PickTaskStatus.PENDING, PickTaskStatus.IN_PROGRESS))
             .stream()
@@ -133,8 +135,7 @@ public class PickService {
     }
 
     @Transactional(readOnly = true)
-    public org.springframework.data.domain.Page<PickTaskResponse> listPendingTasks(String storeId,
-            org.springframework.data.domain.Pageable pageable) {
+    public Page<PickTaskResponse> listPendingTasks(UUID storeId, Pageable pageable) {
         return pickTaskRepository.findByStoreIdAndStatusIn(storeId,
                 List.of(PickTaskStatus.PENDING, PickTaskStatus.IN_PROGRESS), pageable)
             .map(FulfillmentMapper::toPickTaskResponse);
@@ -271,14 +272,19 @@ public class PickService {
     }
 
     private boolean isTaskCompleted(PickTask task) {
-        if (task.getStatus() == PickTaskStatus.COMPLETED) {
+        if (task.getStatus() == PickTaskStatus.COMPLETED || task.getStatus() == PickTaskStatus.CANCELLED) {
             return false;
         }
         return areItemsPicked(task);
     }
 
     private boolean areItemsPicked(PickTask task) {
-        return pickItemRepository.countByPickTask_IdAndStatus(task.getId(), PickItemStatus.PENDING) == 0;
+        if (pickItemRepository.countByPickTask_IdAndStatus(task.getId(), PickItemStatus.PENDING) > 0) {
+            return false;
+        }
+        long picked = pickItemRepository.countByPickTask_IdAndStatus(task.getId(), PickItemStatus.PICKED);
+        long substituted = pickItemRepository.countByPickTask_IdAndStatus(task.getId(), PickItemStatus.SUBSTITUTED);
+        return picked > 0 || substituted > 0;
     }
 
     private int calculateMissingQtyDelta(PickItemStatus previousStatus, int previousPickedQty, PickItem item) {
@@ -315,7 +321,7 @@ public class PickService {
         payload.put("storeId", task.getStoreId());
         payload.put("packedAt", task.getCompletedAt());
         payload.put("note", note == null ? "" : note);
-        StoreCoordinates coords = warehouseClient.getStoreCoordinates(task.getStoreId().toString());
+        StoreCoordinates coords = warehouseClient.getStoreCoordinates(task.getStoreId());
         if (coords != null) {
             payload.put("pickupLat", coords.latitude());
             payload.put("pickupLng", coords.longitude());

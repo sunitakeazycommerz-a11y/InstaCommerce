@@ -11,11 +11,15 @@ import com.instacommerce.routing.repository.DeliveryRepository;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,21 +35,21 @@ public class DeliveryService {
     private final ETAService etaService;
     private final OutboxService outboxService;
     private final RoutingProperties routingProperties;
-    private final org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
+    private final SimpMessagingTemplate messagingTemplate;
 
     public DeliveryService(DeliveryRepository deliveryRepository,
                            ETAService etaService,
                            OutboxService outboxService,
                            RoutingProperties routingProperties) {
-        this(deliveryRepository, etaService, outboxService, routingProperties, (org.springframework.messaging.simp.SimpMessagingTemplate) null);
+        this(deliveryRepository, etaService, outboxService, routingProperties, (SimpMessagingTemplate) null);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public DeliveryService(DeliveryRepository deliveryRepository,
                            ETAService etaService,
                            OutboxService outboxService,
                            RoutingProperties routingProperties,
-                           org.springframework.beans.factory.ObjectProvider<org.springframework.messaging.simp.SimpMessagingTemplate> messagingTemplateProvider) {
+                           ObjectProvider<SimpMessagingTemplate> messagingTemplateProvider) {
         this.deliveryRepository = deliveryRepository;
         this.etaService = etaService;
         this.outboxService = outboxService;
@@ -57,7 +61,7 @@ public class DeliveryService {
                            ETAService etaService,
                            OutboxService outboxService,
                            RoutingProperties routingProperties,
-                           org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate) {
+                           SimpMessagingTemplate messagingTemplate) {
         this.deliveryRepository = deliveryRepository;
         this.etaService = etaService;
         this.outboxService = outboxService;
@@ -81,6 +85,9 @@ public class DeliveryService {
         if (existing.isPresent()) {
             log.info("Delivery already exists for order {}", orderId);
             return toResponse(existing.get());
+        }
+        if (pickupLat == null || pickupLng == null || dropoffLat == null || dropoffLng == null) {
+            throw new IllegalArgumentException("Pickup and dropoff coordinates are required to create a delivery");
         }
         String effectiveVehicle = vehicleType != null ? vehicleType : "MOTORCYCLE";
         var eta = etaService.calculateETAWithConfidence(
@@ -181,7 +188,7 @@ public class DeliveryService {
         }
 
         // 1. Continuous ETA update broadcast and event (Issue #595)
-        Map<String, Object> updatePayload = new java.util.HashMap<>();
+        Map<String, Object> updatePayload = new HashMap<>();
         updatePayload.put("deliveryId", deliveryId.toString());
         updatePayload.put("orderId", delivery.getOrderId().toString());
         updatePayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
@@ -216,7 +223,7 @@ public class DeliveryService {
                 deliveryId, estimate.breachProbability(), estimate.etaMinutes(),
                 routingProperties.getBreach().getSlaThresholdMinutes());
 
-            Map<String, Object> breachPayload = new java.util.HashMap<>();
+            Map<String, Object> breachPayload = new HashMap<>();
             breachPayload.put("deliveryId", deliveryId.toString());
             breachPayload.put("orderId", delivery.getOrderId().toString());
             breachPayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");

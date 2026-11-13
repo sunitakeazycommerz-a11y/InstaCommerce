@@ -17,35 +17,46 @@ import com.instacommerce.order.exception.IllegalOrderStateTransitionException;
 import com.instacommerce.order.exception.InvalidOrderStateException;
 import com.instacommerce.order.exception.OrderAmendmentForbiddenException;
 import com.instacommerce.order.exception.OrderNotFoundException;
-import java.util.Locale;
-import org.springframework.http.HttpStatus;
 import com.instacommerce.order.repository.OrderRepository;
 import com.instacommerce.order.repository.OrderStatusHistoryRepository;
 import com.instacommerce.order.workflow.model.CreateOrderCommand;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import io.micrometer.core.instrument.MeterRegistry;
-import java.util.concurrent.TimeUnit;
-import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpStatus;
 import org.springframework.lang.Nullable;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class OrderService {
     private static final int MAX_PAGE_SIZE = 100;
+    private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 64;
     private static final Logger logger = LoggerFactory.getLogger(OrderService.class);
     private final OrderRepository orderRepository;
     private final OrderStatusHistoryRepository statusHistoryRepository;
@@ -53,6 +64,7 @@ public class OrderService {
     private final AuditLogService auditLogService;
     private final PricingQuoteClient pricingQuoteClient;
     private final MeterRegistry meterRegistry;
+    private TransactionTemplate transactionTemplate;
 
     public OrderService(OrderRepository orderRepository,
                         OrderStatusHistoryRepository statusHistoryRepository,
@@ -62,7 +74,7 @@ public class OrderService {
         this(orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient, null);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public OrderService(OrderRepository orderRepository,
                         OrderStatusHistoryRepository statusHistoryRepository,
                         OutboxService outboxService,
@@ -75,6 +87,11 @@ public class OrderService {
         this.auditLogService = auditLogService;
         this.pricingQuoteClient = pricingQuoteClient;
         this.meterRegistry = meterRegistry;
+    }
+
+    @Autowired(required = false)
+    public void setTransactionManager(@Nullable PlatformTransactionManager transactionManager) {
+        this.transactionTemplate = transactionManager != null ? new TransactionTemplate(transactionManager) : null;
     }
 
     private Order lockOrder(UUID orderId) {
@@ -104,12 +121,32 @@ public class OrderService {
         }
     }
 
-    @Transactional
     public String createOrder(CreateOrderCommand command) {
-        Optional<Order> existing = orderRepository.findByIdempotencyKey(command.getIdempotencyKey());
+        String normalizedKey = normalizeIdempotencyKey(command.getIdempotencyKey());
+        Optional<Order> existing = orderRepository.findByIdempotencyKey(normalizedKey);
         if (existing.isPresent()) {
             return existing.get().getId().toString();
         }
+        validateCreateOrderCommand(command);
+        if (command.getQuoteId() != null && command.getQuoteToken() != null) {
+            boolean quoteValid = pricingQuoteClient.validateQuote(
+                command.getQuoteId(), command.getQuoteToken(),
+                command.getTotalCents(), command.getSubtotalCents(), command.getDiscountCents());
+            if (!quoteValid) {
+                throw new ApiException(HttpStatus.CONFLICT, "QUOTE_VALIDATION_FAILED",
+                    "Price quote validation failed for quoteId=" + command.getQuoteId());
+            }
+        }
+        try {
+            return executeInTransaction(() -> persistOrder(command, normalizedKey));
+        } catch (DataIntegrityViolationException ex) {
+            return orderRepository.findByIdempotencyKey(normalizedKey)
+                .map(order -> order.getId().toString())
+                .orElseThrow(() -> ex);
+        }
+    }
+
+    private void validateCreateOrderCommand(CreateOrderCommand command) {
         if (command.getSubtotalCents() - command.getDiscountCents() != command.getTotalCents()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_TOTAL",
                 "Order total must equal subtotal minus discount: subtotal=" + command.getSubtotalCents()
@@ -121,14 +158,12 @@ public class OrderService {
                     "Orders with discounts or coupons must include a validated quoteId and quoteToken from pricing-service");
             }
         }
-        if (command.getQuoteId() != null && command.getQuoteToken() != null) {
-            boolean quoteValid = pricingQuoteClient.validateQuote(
-                command.getQuoteId(), command.getQuoteToken(),
-                command.getTotalCents(), command.getSubtotalCents(), command.getDiscountCents());
-            if (!quoteValid) {
-                throw new ApiException(HttpStatus.CONFLICT, "QUOTE_VALIDATION_FAILED",
-                    "Price quote validation failed for quoteId=" + command.getQuoteId());
-            }
+    }
+
+    private String persistOrder(CreateOrderCommand command, String normalizedKey) {
+        Optional<Order> existing = orderRepository.findByIdempotencyKey(normalizedKey);
+        if (existing.isPresent()) {
+            return existing.get().getId().toString();
         }
         Order order = new Order();
         order.setUserId(command.getUserId());
@@ -141,7 +176,7 @@ public class OrderService {
         order.setCouponCode(command.getCouponCode());
         order.setReservationId(command.getReservationId());
         order.setPaymentId(command.getPaymentId());
-        order.setIdempotencyKey(command.getIdempotencyKey());
+        order.setIdempotencyKey(normalizedKey);
         order.setDeliveryAddress(command.getDeliveryAddress());
         if (command.getQuoteId() != null) {
             order.setQuoteId(command.getQuoteId());
@@ -165,6 +200,33 @@ public class OrderService {
         outboxService.publish("Order", saved.getId().toString(), "OrderCreated",
             Map.of("orderId", saved.getId(), "userId", saved.getUserId(), "status", saved.getStatus().name()));
         return saved.getId().toString();
+    }
+
+    private String executeInTransaction(Supplier<String> action) {
+        if (transactionTemplate == null) {
+            return action.get();
+        }
+        return transactionTemplate.execute(status -> action.get());
+    }
+
+    static String normalizeIdempotencyKey(String rawKey) {
+        if (rawKey == null || rawKey.isBlank()) {
+            return UUID.randomUUID().toString();
+        }
+        if (rawKey.length() <= MAX_IDEMPOTENCY_KEY_LENGTH) {
+            return rawKey;
+        }
+        return sha256Hex(rawKey);
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                .digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 algorithm not available", ex);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -491,7 +553,15 @@ public class OrderService {
 
     @Transactional
     public void validateOrderAmendmentWindow(UUID orderId) {
+        validateOrderAmendmentWindow(orderId, null, true);
+    }
+
+    @Transactional
+    public void validateOrderAmendmentWindow(UUID orderId, UUID requesterId, boolean bypassOwnershipCheck) {
         Order order = lockOrder(orderId);
+        if (!bypassOwnershipCheck && (requesterId == null || !order.getUserId().equals(requesterId))) {
+            throw new AccessDeniedException("Cannot amend another user's order");
+        }
         if (order.getStatus() != OrderStatus.PENDING && order.getStatus() != OrderStatus.PLACED) {
             throw new OrderAmendmentForbiddenException(
                 "Order amendment rejected: modifications only permitted prior to packing. Current status: " + order.getStatus());

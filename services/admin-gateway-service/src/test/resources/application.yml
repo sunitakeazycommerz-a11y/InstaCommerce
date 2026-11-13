@@ -23,6 +23,13 @@ admin-gateway:
     issuer: instacommerce-identity
     aud: instacommerce-admin
     clock-skew-seconds: 300
+  http:
+    connect-timeout-ms: 300
+    read-timeout-ms: 500
+  dashboard:
+    timeout-ms: 500
+    per-service-timeout-ms: 250
+    services: []
 
 internal:
   service:

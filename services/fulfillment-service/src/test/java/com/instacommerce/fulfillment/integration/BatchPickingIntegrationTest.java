@@ -113,7 +113,7 @@ class BatchPickingIntegrationTest {
     @Test
     @DisplayName("Should create batch pick run for up to 4 orders with color-coded totes and S-curve route")
     void shouldCreateBatchPickRunAndValidateCompartments() {
-        String storeId = "store-blr-01";
+        UUID storeId = UUID.randomUUID();
         UUID order1 = UUID.randomUUID();
         UUID order2 = UUID.randomUUID();
 
@@ -157,7 +157,7 @@ class BatchPickingIntegrationTest {
     void shouldRejectDuplicateBarcodeScansWithinDebounceWindow() {
         UUID orderId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
-        String storeId = "store-blr-01";
+        UUID storeId = UUID.randomUUID();
 
         createOrder(orderId, storeId, List.of(
             new OrderPlacedItem(productId, "Avocado", "AVO-01", 2, 200, 400, "A01", 1, "BIN-01", "BARCODE-AVO-1", 150),
@@ -182,7 +182,7 @@ class BatchPickingIntegrationTest {
     @DisplayName("Should enforce cryptographic rider handoff check with dynamic OTP before out for delivery")
     void shouldEnforceCryptographicRiderHandoffCheck() {
         UUID orderId = UUID.randomUUID();
-        String storeId = "store-blr-01";
+        UUID storeId = UUID.randomUUID();
         createOrder(orderId, storeId, List.of(
             new OrderPlacedItem(UUID.randomUUID(), "Chips", "CHIPS-01", 1, 100, 100)
         ));
@@ -211,7 +211,7 @@ class BatchPickingIntegrationTest {
     @DisplayName("Should validate Proof of Delivery WebP compression and face/PII masking")
     void shouldValidateProofOfDeliveryRequirements() {
         UUID orderId = UUID.randomUUID();
-        String storeId = "store-blr-01";
+        UUID storeId = UUID.randomUUID();
         createOrder(orderId, storeId, List.of(
             new OrderPlacedItem(UUID.randomUUID(), "Coffee Beans", "COFFEE-01", 1, 500, 500)
         ));
@@ -248,7 +248,7 @@ class BatchPickingIntegrationTest {
         assertThat(saved.getPodPhotoFormat()).isEqualTo("WEBP");
     }
 
-    private void createOrder(UUID orderId, String storeId, List<OrderPlacedItem> items) {
+    private void createOrder(UUID orderId, UUID storeId, List<OrderPlacedItem> items) {
         OrderPlacedPayload payload = new OrderPlacedPayload(
             orderId,
             UUID.randomUUID(),

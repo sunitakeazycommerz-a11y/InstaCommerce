@@ -115,4 +115,30 @@ class HashChainServiceTest {
         String tamperedHash = hashChainService.computeEventHash(tamperedSeq);
         assertThat(tamperedHash).isNotEqualTo(hash1);
     }
+
+    @Test
+    @DisplayName("partitionBucket formats UTC monthly partition name")
+    void partitionBucket_formatsUtcYearMonth() {
+        assertThat(hashChainService.partitionBucket(Instant.parse("2026-11-30T23:59:59Z")))
+                .isEqualTo("audit_events_2026_11");
+        assertThat(hashChainService.partitionBucket(Instant.parse("2026-12-01T00:00:00Z")))
+                .isEqualTo("audit_events_2026_12");
+    }
+
+    @Test
+    @DisplayName("acquirePartitionLock acquires PostgreSQL transaction-scoped advisory lock keyed to partition")
+    void acquirePartitionLock_executesPgAdvisoryXactLock() {
+        String bucketA = "audit_events_2026_11";
+        String bucketB = "audit_events_2026_12";
+
+        long keyA1 = hashChainService.advisoryLockKey(bucketA);
+        long keyA2 = hashChainService.advisoryLockKey(bucketA);
+        long keyB = hashChainService.advisoryLockKey(bucketB);
+
+        assertThat(keyA1).isEqualTo(keyA2).isNotEqualTo(keyB);
+
+        hashChainService.acquirePartitionLock(bucketA);
+
+        verify(jdbcTemplate).queryForObject("SELECT pg_advisory_xact_lock(?)", Object.class, keyA1);
+    }
 }

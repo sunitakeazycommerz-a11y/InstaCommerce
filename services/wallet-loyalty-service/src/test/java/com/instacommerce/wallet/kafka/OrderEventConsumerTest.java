@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.wallet.client.OrderLookupClient;
 import com.instacommerce.wallet.client.OrderSnapshot;
 import com.instacommerce.wallet.domain.model.WalletTransaction.ReferenceType;
+import com.instacommerce.wallet.exception.DuplicateTransactionException;
 import com.instacommerce.wallet.service.LoyaltyService;
 import com.instacommerce.wallet.service.WalletService;
 import java.time.Instant;
@@ -129,5 +130,78 @@ class OrderEventConsumerTest {
 
         verify(loyaltyService, never()).earnPoints(any(), any(), anyLong());
         verify(walletService, never()).credit(any(), anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Still awards cashback when earnPoints throws DuplicateTransactionException")
+    void awardsCashbackEvenWhenLoyaltyPointsAlreadyEarned() {
+        UUID userId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        long totalCents = 10000L;
+
+        when(loyaltyService.earnPoints(userId, orderId.toString(), totalCents))
+            .thenThrow(new DuplicateTransactionException("Transaction already exists for ref=ORDER/" + orderId));
+
+        String message = """
+            {
+              "eventType": "OrderDelivered",
+              "payload": {
+                "orderId": "%s",
+                "userId": "%s",
+                "totalCents": %d
+              }
+            }
+            """.formatted(orderId, userId, totalCents);
+
+        consumer.consume(message);
+
+        verify(loyaltyService).earnPoints(userId, orderId.toString(), totalCents);
+        verify(walletService).credit(
+            eq(userId),
+            eq(200L),
+            eq(ReferenceType.CASHBACK),
+            eq("cashback-" + orderId),
+            anyString()
+        );
+    }
+
+    @Test
+    @DisplayName("Treats duplicate points and duplicate cashback as idempotent on full replay")
+    void handlesDuplicateCashbackGracefullyOnFullReplay() {
+        UUID userId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        long totalCents = 10000L;
+
+        when(loyaltyService.earnPoints(userId, orderId.toString(), totalCents))
+            .thenThrow(new DuplicateTransactionException("Points already awarded"));
+        when(walletService.credit(
+                eq(userId),
+                eq(200L),
+                eq(ReferenceType.CASHBACK),
+                eq("cashback-" + orderId),
+                anyString()))
+            .thenThrow(new DuplicateTransactionException("Cashback already credited"));
+
+        String message = """
+            {
+              "eventType": "OrderDelivered",
+              "payload": {
+                "orderId": "%s",
+                "userId": "%s",
+                "totalCents": %d
+              }
+            }
+            """.formatted(orderId, userId, totalCents);
+
+        consumer.consume(message);
+
+        verify(loyaltyService).earnPoints(userId, orderId.toString(), totalCents);
+        verify(walletService).credit(
+            eq(userId),
+            eq(200L),
+            eq(ReferenceType.CASHBACK),
+            eq("cashback-" + orderId),
+            anyString()
+        );
     }
 }

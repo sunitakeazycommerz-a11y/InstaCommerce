@@ -1,5 +1,7 @@
 package com.instacommerce.admingateway.audit;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -19,14 +21,25 @@ public class AdminAuditClient {
     private final RestTemplate restTemplate;
     private final String baseUrl;
     private final boolean enabled;
+    private final String internalServiceName;
+    private final String internalServiceToken;
+    private final Counter auditFailuresCounter;
 
     public AdminAuditClient(
             RestTemplate restTemplate,
             @Value("${audit-trail.base-url:http://localhost:8096}") String auditTrailBaseUrl,
-            @Value("${audit-trail.enabled:true}") boolean enabled) {
+            @Value("${audit-trail.enabled:true}") boolean enabled,
+            @Value("${internal.service.name:${spring.application.name:admin-gateway-service}}") String internalServiceName,
+            @Value("${internal.service.token:}") String internalServiceToken,
+            MeterRegistry meterRegistry) {
         this.restTemplate = restTemplate;
         this.baseUrl = auditTrailBaseUrl;
         this.enabled = enabled;
+        this.internalServiceName = internalServiceName;
+        this.internalServiceToken = internalServiceToken;
+        this.auditFailuresCounter = Counter.builder("admin.audit.failures")
+            .description("Total failures publishing admin audit events to audit-trail-service")
+            .register(meterRegistry);
     }
 
     public void publishAuditEvent(
@@ -62,6 +75,12 @@ public class AdminAuditClient {
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
+            if (internalServiceName != null && !internalServiceName.isBlank()) {
+                headers.set("X-Internal-Service", internalServiceName);
+            }
+            if (internalServiceToken != null && !internalServiceToken.isBlank()) {
+                headers.set("X-Internal-Token", internalServiceToken);
+            }
             if (correlationId != null && !correlationId.isBlank()) {
                 headers.set("X-Correlation-ID", correlationId);
             }
@@ -71,6 +90,7 @@ public class AdminAuditClient {
             log.debug("Successfully published audit event to audit-trail-service: action={} resourceType={}",
                     action, resourceType);
         } catch (Exception ex) {
+            auditFailuresCounter.increment();
             log.warn("Failed to publish audit event to audit-trail-service: {}", ex.getMessage());
         }
     }

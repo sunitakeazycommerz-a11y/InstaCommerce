@@ -13,4 +13,7 @@ public interface OrderActivity {
 
     @ActivityMethod
     void cancelOrder(String orderId);
+
+    @ActivityMethod
+    void confirmOrder(String orderId, String idempotencyKey);
 }

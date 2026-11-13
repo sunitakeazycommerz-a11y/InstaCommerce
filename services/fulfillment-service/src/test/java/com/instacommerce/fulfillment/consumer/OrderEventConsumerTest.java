@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,7 +56,40 @@ class OrderEventConsumerTest {
         OrderPlacedPayload payload = captor.getValue();
         assertThat(payload.orderId()).isEqualTo(orderId);
         assertThat(payload.userId()).isEqualTo(userId);
+        assertThat(payload.storeId()).isEqualTo(UUID.nameUUIDFromBytes("store-1".getBytes(StandardCharsets.UTF_8)));
         assertThat(payload.paymentId()).isNull();
+    }
+
+    @Test
+    void handlesOrderPlacedWithUuidStoreId() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        String json = String.format("""
+            {
+              "eventType": "OrderPlaced",
+              "payload": {
+                "orderId": "%s",
+                "userId": "%s",
+                "storeId": "%s",
+                "paymentId": "%s",
+                "items": []
+              }
+            }
+            """, orderId, userId, storeId, paymentId);
+
+        ConsumerRecord<String, String> record = new ConsumerRecord<>("orders.events", 0, 0, orderId.toString(), json);
+        consumer.onOrderEvent(record);
+
+        ArgumentCaptor<OrderPlacedPayload> captor = ArgumentCaptor.forClass(OrderPlacedPayload.class);
+        verify(pickService).createPickTask(captor.capture());
+
+        OrderPlacedPayload payload = captor.getValue();
+        assertThat(payload.orderId()).isEqualTo(orderId);
+        assertThat(payload.userId()).isEqualTo(userId);
+        assertThat(payload.storeId()).isEqualTo(storeId);
+        assertThat(payload.paymentId()).isEqualTo(paymentId);
     }
 
     @Test

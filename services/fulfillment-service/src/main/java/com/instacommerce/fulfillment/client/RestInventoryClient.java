@@ -35,13 +35,13 @@ public class RestInventoryClient implements InventoryClient {
     @Override
     @CircuitBreaker(name = "inventoryService", fallbackMethod = "releaseStockFallback")
     @Retry(name = "inventoryService")
-    public void releaseStock(UUID productId, String storeId, int quantity, String reason, String referenceId) {
+    public void releaseStock(UUID productId, UUID storeId, int quantity, String reason, String referenceId) {
         InventoryAdjustRequest request = new InventoryAdjustRequest(productId, storeId, quantity, reason, referenceId);
         restTemplate.postForObject(baseUrl + "/inventory/adjust", request, Object.class);
     }
 
     @SuppressWarnings("unused")
-    private void releaseStockFallback(UUID productId, String storeId, int quantity, String reason,
+    private void releaseStockFallback(UUID productId, UUID storeId, int quantity, String reason,
                                       String referenceId, Exception e) {
         logger.warn("Circuit breaker fallback for inventoryService releaseStock product={} store={} qty={}: {}",
                 productId, storeId, quantity, e.getMessage());

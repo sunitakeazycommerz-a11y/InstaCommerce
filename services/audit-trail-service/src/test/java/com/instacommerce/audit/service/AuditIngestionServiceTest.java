@@ -2,14 +2,19 @@ package com.instacommerce.audit.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.dto.AuditEventRequest;
 import com.instacommerce.audit.dto.AuditEventResponse;
 import com.instacommerce.audit.repository.AuditEventRepository;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -18,6 +23,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -55,6 +61,7 @@ class AuditIngestionServiceTest {
             "corr-abc-123"
         );
 
+        when(hashChainService.partitionBucket(any(Instant.class))).thenReturn("audit_events_2026_11");
         when(hashChainService.getLatestHash()).thenReturn("prev-hash-111");
         when(hashChainService.nextSequenceNumber()).thenReturn(10L);
         when(hashChainService.computeEventHash(any(AuditEvent.class))).thenReturn("computed-hash-222");
@@ -69,8 +76,14 @@ class AuditIngestionServiceTest {
         assertThat(response.eventType()).isEqualTo("ORDER_COMPLETED");
         assertThat(response.action()).isEqualTo("COMPLETE");
 
+        InOrder order = inOrder(hashChainService, repository);
+        order.verify(hashChainService).acquirePartitionLock("audit_events_2026_11");
+        order.verify(hashChainService).getLatestHash();
+        order.verify(hashChainService).nextSequenceNumber();
+        order.verify(hashChainService).computeEventHash(any(AuditEvent.class));
+
         ArgumentCaptor<AuditEvent> captor = ArgumentCaptor.forClass(AuditEvent.class);
-        verify(repository).save(captor.capture());
+        order.verify(repository).save(captor.capture());
         AuditEvent saved = captor.getValue();
         assertThat(saved.getEventHash()).isEqualTo("computed-hash-222");
         assertThat(saved.getPreviousHash()).isEqualTo("prev-hash-111");
@@ -108,6 +121,7 @@ class AuditIngestionServiceTest {
             "corr-2"
         );
 
+        when(hashChainService.partitionBucket(any(Instant.class))).thenReturn("audit_events_2026_11");
         when(hashChainService.getLatestHash()).thenReturn("genesis-hash");
         when(hashChainService.nextSequenceNumber()).thenReturn(1L, 2L);
         when(hashChainService.computeEventHash(any(AuditEvent.class)))
@@ -117,9 +131,14 @@ class AuditIngestionServiceTest {
 
         ingestionService.ingestBatch(List.of(req1, req2));
 
+        InOrder order = inOrder(hashChainService, repository);
+        order.verify(hashChainService).acquirePartitionLock("audit_events_2026_11");
+        order.verify(hashChainService).getLatestHash();
+        order.verify(hashChainService).nextSequenceNumber();
+
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AuditEvent>> captor = ArgumentCaptor.forClass(List.class);
-        verify(repository, times(1)).saveAll(captor.capture());
+        order.verify(repository, times(1)).saveAll(captor.capture());
         List<AuditEvent> savedEvents = captor.getValue();
 
         assertThat(savedEvents).hasSize(2);
@@ -127,5 +146,14 @@ class AuditIngestionServiceTest {
         assertThat(savedEvents.get(0).getEventHash()).isEqualTo("hash-1");
         assertThat(savedEvents.get(1).getPreviousHash()).isEqualTo("hash-1");
         assertThat(savedEvents.get(1).getEventHash()).isEqualTo("hash-2");
+    }
+
+    @Test
+    @DisplayName("ingestBatch skips lock and repository writes when request list is empty")
+    void ingestBatch_emptyList_skipsLockAndWrites() {
+        ingestionService.ingestBatch(List.of());
+
+        verifyNoInteractions(hashChainService, repository);
+        verify(hashChainService, never()).acquirePartitionLock(anyString());
     }
 }

@@ -21,13 +21,13 @@ public interface PickTaskRepository extends JpaRepository<PickTask, UUID> {
     @Query("SELECT p FROM PickTask p WHERE p.orderId = :orderId")
     Optional<PickTask> findByOrderIdForUpdate(@Param("orderId") UUID orderId);
 
-    List<PickTask> findByStoreIdAndStatusIn(String storeId, List<PickTaskStatus> statuses);
+    List<PickTask> findByStoreIdAndStatusIn(UUID storeId, List<PickTaskStatus> statuses);
 
-    Page<PickTask> findByStoreIdAndStatusIn(String storeId, List<PickTaskStatus> statuses, Pageable pageable);
+    Page<PickTask> findByStoreIdAndStatusIn(UUID storeId, List<PickTaskStatus> statuses, Pageable pageable);
 
     List<PickTask> findByBatchId(UUID batchId);
 
-    List<PickTask> findByStoreIdAndStatusAndBatchIdIsNullOrderByCreatedAtAsc(String storeId, PickTaskStatus status, Pageable pageable);
+    List<PickTask> findByStoreIdAndStatusAndBatchIdIsNullOrderByCreatedAtAsc(UUID storeId, PickTaskStatus status, Pageable pageable);
 
     @Modifying
     @Query("update PickTask p set p.userId = :placeholder, p.userErased = true where p.userId = :userId")

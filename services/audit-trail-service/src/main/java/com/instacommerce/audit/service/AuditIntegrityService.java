@@ -28,28 +28,53 @@ public class AuditIntegrityService {
         long eventsVerified = 0;
         long chainBreaks = 0;
         String firstBreakSequence = null;
+        String expectedPreviousHash = null;
 
         int page = 0;
         while (true) {
             var pageRequest = PageRequest.of(page, batchSize, Sort.by("sequenceNumber"));
             var events = repository.findChainedEvents(from, to, pageRequest);
-            if (events.isEmpty()) break;
+            if (events.isEmpty()) {
+                break;
+            }
+
+            if (eventsVerified == 0) {
+                expectedPreviousHash = resolveInitialExpectedPreviousHash(from, events.get(0));
+            }
 
             for (AuditEvent event : events) {
                 String recomputed = hashChainService.computeEventHash(event);
-                if (!recomputed.equals(event.getEventHash())) {
+                boolean hashValid = recomputed.equals(event.getEventHash());
+                boolean linkValid = expectedPreviousHash != null
+                        ? expectedPreviousHash.equals(event.getPreviousHash())
+                        : event.getPreviousHash() != null && !event.getPreviousHash().isBlank();
+                if (!hashValid || !linkValid) {
                     chainBreaks++;
                     if (firstBreakSequence == null) {
                         firstBreakSequence = String.valueOf(event.getSequenceNumber());
                     }
-                    log.warn("integrity.chain_break seq={} expected={} actual={}",
-                            event.getSequenceNumber(), recomputed, event.getEventHash());
+                    log.warn("integrity.chain_break seq={} expectedPreviousHash={} actualPreviousHash={} " +
+                                    "expectedEventHash={} actualEventHash={}",
+                            event.getSequenceNumber(), expectedPreviousHash, event.getPreviousHash(),
+                            recomputed, event.getEventHash());
                 }
+                expectedPreviousHash = event.getEventHash();
                 eventsVerified++;
             }
             page++;
         }
 
         return new IntegrityReport(eventsVerified, chainBreaks, chainBreaks == 0, firstBreakSequence, Instant.now());
+    }
+
+    private String resolveInitialExpectedPreviousHash(Instant from, AuditEvent firstEvent) {
+        if (from == null) {
+            return hashChainService.genesisHash();
+        }
+        return repository.findFirstBySequenceNumberLessThanOrderBySequenceNumberDesc(firstEvent.getSequenceNumber())
+                .map(AuditEvent::getEventHash)
+                .orElseGet(() -> Long.valueOf(1L).equals(firstEvent.getSequenceNumber())
+                        ? hashChainService.genesisHash()
+                        : null);
     }
 }

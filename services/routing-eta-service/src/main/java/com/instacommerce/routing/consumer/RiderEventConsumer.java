@@ -27,11 +27,15 @@ public class RiderEventConsumer {
     @KafkaListener(topics = TopicNames.RIDER_EVENTS, groupId = "routing-eta-service")
     public void handleRiderEvent(String message) {
         try {
-            JsonNode event = objectMapper.readTree(message);
-            String eventType = event.path("eventType").asText();
+            JsonNode root = objectMapper.readTree(message);
+            JsonNode payload = root.path("payload").isObject() ? root.path("payload") : root;
+            String eventType = readText(root, "eventType", "event_type");
+            if (eventType == null && payload != root) {
+                eventType = readText(payload, "eventType", "event_type");
+            }
 
             if ("RiderAssigned".equals(eventType)) {
-                handleRiderAssigned(event);
+                handleRiderAssigned(payload);
             } else {
                 log.debug("Ignoring rider event type: {}", eventType);
             }
@@ -41,18 +45,83 @@ public class RiderEventConsumer {
         }
     }
 
-    private void handleRiderAssigned(JsonNode event) {
-        UUID orderId = UUID.fromString(event.path("orderId").asText());
-        UUID riderId = UUID.fromString(event.path("riderId").asText());
-        UUID storeId = UUID.fromString(event.path("storeId").asText());
-        BigDecimal pickupLat = new BigDecimal(event.path("pickupLat").asText());
-        BigDecimal pickupLng = new BigDecimal(event.path("pickupLng").asText());
-        BigDecimal dropoffLat = new BigDecimal(event.path("dropoffLat").asText());
-        BigDecimal dropoffLng = new BigDecimal(event.path("dropoffLng").asText());
+    private void handleRiderAssigned(JsonNode payload) {
+        UUID orderId = parseUuid(payload, "orderId", "order_id");
+        UUID riderId = parseUuid(payload, "riderId", "rider_id");
+        if (orderId == null || riderId == null) {
+            log.warn("Skipping RiderAssigned event with missing or invalid orderId/riderId: {}", payload);
+            return;
+        }
 
-        deliveryService.createDelivery(orderId, riderId, storeId,
-            pickupLat, pickupLng, dropoffLat, dropoffLng);
+        UUID storeId = parseUuid(payload, "storeId", "store_id");
+        BigDecimal pickupLat = parseCoordinate(payload, "pickupLat", "pickup_lat");
+        BigDecimal pickupLng = parseCoordinate(payload, "pickupLng", "pickup_lng");
+        BigDecimal dropoffLat = parseCoordinate(payload, "dropoffLat", "dropoff_lat");
+        BigDecimal dropoffLng = parseCoordinate(payload, "dropoffLng", "dropoff_lng");
 
+        if (pickupLat == null || pickupLng == null || dropoffLat == null || dropoffLng == null) {
+            log.warn(
+                "Skipping RiderAssigned event for order {} with incomplete coordinates (pickupLat={}, pickupLng={}, dropoffLat={}, dropoffLng={})",
+                orderId, pickupLat, pickupLng, dropoffLat, dropoffLng);
+            return;
+        }
+
+        deliveryService.createDelivery(orderId, riderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng);
         log.info("Created delivery for order {} with rider {}", orderId, riderId);
+    }
+
+    private static JsonNode findNode(JsonNode container, String... fieldNames) {
+        for (String fieldName : fieldNames) {
+            JsonNode candidate = container.path(fieldName);
+            if (!candidate.isMissingNode() && !candidate.isNull()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static String readText(JsonNode container, String... fieldNames) {
+        JsonNode node = findNode(container, fieldNames);
+        if (node == null || !node.isValueNode()) {
+            return null;
+        }
+        String value = node.asText().trim();
+        if (value.isEmpty() || "null".equalsIgnoreCase(value)) {
+            return null;
+        }
+        return value;
+    }
+
+    private static UUID parseUuid(JsonNode container, String... fieldNames) {
+        String raw = readText(container, fieldNames);
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ex) {
+            log.warn("Invalid UUID for fields {}: {}", String.join("/", fieldNames), raw);
+            return null;
+        }
+    }
+
+    private static BigDecimal parseCoordinate(JsonNode container, String... fieldNames) {
+        JsonNode node = findNode(container, fieldNames);
+        if (node == null || !node.isValueNode()) {
+            return null;
+        }
+        if (node.isNumber()) {
+            return node.decimalValue();
+        }
+        String raw = node.asText().trim();
+        if (raw.isEmpty() || "null".equalsIgnoreCase(raw)) {
+            return null;
+        }
+        try {
+            return new BigDecimal(raw);
+        } catch (NumberFormatException ex) {
+            log.warn("Invalid numeric coordinate for fields {}: {}", String.join("/", fieldNames), raw);
+            return null;
+        }
     }
 }
