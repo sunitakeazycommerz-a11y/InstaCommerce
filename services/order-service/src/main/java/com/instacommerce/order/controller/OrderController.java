@@ -13,8 +13,11 @@ import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,7 +27,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping({"/orders", "/api/orders"})
+@RequestMapping({"/orders", "/api/orders", "/api/v1/orders"})
 public class OrderController {
     private final OrderService orderService;
 
@@ -34,7 +37,18 @@ public class OrderController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public OrderCreationResult createOrder(@Valid @RequestBody OrderCreateRequest request) {
+    public OrderCreationResult createOrder(@Valid @RequestBody OrderCreateRequest request,
+                                           Authentication authentication) {
+        Authentication resolvedAuth = resolveAuthentication(authentication);
+        if (resolvedAuth != null && !isPrivileged(resolvedAuth)) {
+            String callerId = resolvedAuth.getName();
+            if (callerId == null || !callerId.equals(request.userId())) {
+                throw new AccessDeniedException("Cannot create order for another user");
+            }
+        }
+        String idempotencyKey = request.idempotencyKey() != null && !request.idempotencyKey().isBlank()
+            ? request.idempotencyKey()
+            : UUID.randomUUID().toString();
         CreateOrderCommand command = CreateOrderCommand.builder()
             .userId(UUID.fromString(request.userId()))
             .storeId(request.storeId())
@@ -44,11 +58,11 @@ public class OrderController {
             .totalCents(request.totalCents())
             .currency(request.currency())
             .couponCode(request.couponCode())
-            .reservationId(request.reservationId() != null && !request.reservationId().isBlank() ? UUID.fromString(request.reservationId()) : null)
-            .paymentId(request.paymentId() != null && !request.paymentId().isBlank() ? UUID.fromString(request.paymentId()) : null)
-            .idempotencyKey(request.idempotencyKey() != null ? request.idempotencyKey() : UUID.randomUUID().toString())
+            .reservationId(parseOptionalUuid(request.reservationId()))
+            .paymentId(parseOptionalUuid(request.paymentId()))
+            .idempotencyKey(idempotencyKey)
             .deliveryAddress(request.effectiveDeliveryAddress())
-            .quoteId(request.quoteId() != null && !request.quoteId().isBlank() ? UUID.fromString(request.quoteId()) : null)
+            .quoteId(parseOptionalUuid(request.quoteId()))
             .quoteToken(request.quoteToken())
             .build();
 
@@ -56,23 +70,38 @@ public class OrderController {
         return new OrderCreationResult(orderId, 15);
     }
 
+    public OrderCreationResult createOrder(OrderCreateRequest request) {
+        return createOrder(request, null);
+    }
+
     @GetMapping
-    public Page<OrderSummaryResponse> listOrders(@AuthenticationPrincipal String principal, Pageable pageable) {
-        return orderService.listOrders(UUID.fromString(principal), pageable);
+    public Page<OrderSummaryResponse> listOrders(@AuthenticationPrincipal String principal,
+                                                 Authentication authentication,
+                                                 Pageable pageable) {
+        Authentication resolvedAuth = resolveAuthentication(authentication);
+        UUID userId = toUserId(resolvePrincipal(principal, resolvedAuth));
+        if (userId == null) {
+            throw new AccessDeniedException("User principal required to list orders");
+        }
+        return orderService.listOrders(userId, pageable);
     }
 
     @GetMapping("/{id}")
     public OrderResponse getOrder(@PathVariable UUID id,
                                   @AuthenticationPrincipal String principal,
                                   Authentication authentication) {
-        return orderService.getOrder(id, toUserId(principal), isAdmin(authentication));
+        Authentication resolvedAuth = resolveAuthentication(authentication);
+        String resolvedPrincipal = resolvePrincipal(principal, resolvedAuth);
+        return orderService.getOrder(id, toUserId(resolvedPrincipal), isPrivileged(resolvedAuth));
     }
 
     @GetMapping("/{id}/status")
     public OrderStatusResponse getOrderStatus(@PathVariable UUID id,
                                               @AuthenticationPrincipal String principal,
                                               Authentication authentication) {
-        return orderService.getOrderStatus(id, toUserId(principal), isAdmin(authentication));
+        Authentication resolvedAuth = resolveAuthentication(authentication);
+        String resolvedPrincipal = resolvePrincipal(principal, resolvedAuth);
+        return orderService.getOrderStatus(id, toUserId(resolvedPrincipal), isPrivileged(resolvedAuth));
     }
 
     @PostMapping("/{id}/cancel")
@@ -81,12 +110,17 @@ public class OrderController {
                             @Valid @RequestBody CancelOrderRequest request,
                             @AuthenticationPrincipal String principal,
                             Authentication authentication) {
-        if (isAdmin(authentication) || isInternalService(authentication)) {
-            String changedBy = principal != null ? principal : "internal-service";
+        Authentication resolvedAuth = resolveAuthentication(authentication);
+        String resolvedPrincipal = resolvePrincipal(principal, resolvedAuth);
+        if (isPrivileged(resolvedAuth)) {
+            String changedBy = resolvedPrincipal != null ? resolvedPrincipal : "internal-service";
             orderService.cancelOrder(id, request.reason(), changedBy, null);
             return;
         }
-        UUID userId = UUID.fromString(principal);
+        UUID userId = toUserId(resolvedPrincipal);
+        if (userId == null) {
+            throw new AccessDeniedException("User principal required to cancel order");
+        }
         orderService.cancelOrderByUser(id, userId, request.reason());
     }
 
@@ -95,11 +129,37 @@ public class OrderController {
     public void validateAmendment(@PathVariable UUID id,
                                   @AuthenticationPrincipal String principal,
                                   Authentication authentication) {
-        orderService.validateOrderAmendmentWindow(id);
+        Authentication resolvedAuth = resolveAuthentication(authentication);
+        String resolvedPrincipal = resolvePrincipal(principal, resolvedAuth);
+        orderService.validateOrderAmendmentWindow(id, toUserId(resolvedPrincipal), isPrivileged(resolvedAuth));
+    }
+
+    private UUID parseOptionalUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return UUID.fromString(value);
+    }
+
+    private Authentication resolveAuthentication(Authentication authentication) {
+        Authentication resolved = authentication != null
+            ? authentication
+            : SecurityContextHolder.getContext().getAuthentication();
+        if (resolved == null || !resolved.isAuthenticated() || resolved instanceof AnonymousAuthenticationToken) {
+            return null;
+        }
+        return resolved;
+    }
+
+    private String resolvePrincipal(String principal, Authentication authentication) {
+        if (principal != null && !principal.isBlank()) {
+            return principal;
+        }
+        return authentication != null ? authentication.getName() : null;
     }
 
     private UUID toUserId(String principal) {
-        if (principal == null) {
+        if (principal == null || principal.isBlank()) {
             return null;
         }
         try {
@@ -109,19 +169,23 @@ public class OrderController {
         }
     }
 
+    private boolean isPrivileged(Authentication authentication) {
+        return isAdmin(authentication) || isInternalService(authentication);
+    }
+
     private boolean isAdmin(Authentication authentication) {
-        if (authentication == null || authentication.getAuthorities() == null) {
-            return false;
-        }
-        return authentication.getAuthorities().stream()
-            .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+        return hasAuthority(authentication, "ROLE_ADMIN");
     }
 
     private boolean isInternalService(Authentication authentication) {
+        return hasAuthority(authentication, "ROLE_INTERNAL_SERVICE");
+    }
+
+    private boolean hasAuthority(Authentication authentication, String expected) {
         if (authentication == null || authentication.getAuthorities() == null) {
             return false;
         }
         return authentication.getAuthorities().stream()
-            .anyMatch(authority -> "ROLE_INTERNAL_SERVICE".equals(authority.getAuthority()));
+            .anyMatch(authority -> expected.equals(authority.getAuthority()));
     }
 }

@@ -4,13 +4,16 @@ import com.instacommerce.checkout.dto.OrderCreateRequest;
 import com.instacommerce.checkout.dto.OrderCreationResult;
 import com.instacommerce.checkout.exception.ServiceUnavailableException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.temporal.activity.Activity;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
-
-import java.util.Map;
 
 @Component
 public class OrderActivityImpl implements OrderActivity {
@@ -24,8 +27,10 @@ public class OrderActivityImpl implements OrderActivity {
     @Override
     @CircuitBreaker(name = "orderService", fallbackMethod = "createOrderFallback")
     public OrderCreationResult createOrder(OrderCreateRequest request) {
-        log.info("Creating order for user={}", request.userId());
-        return restTemplate.postForObject("/api/orders", request, OrderCreationResult.class);
+        OrderCreateRequest effectiveRequest = withDeterministicIdempotencyKey(request);
+        log.info("Creating order for user={} idempotencyKey={}",
+            effectiveRequest.userId(), effectiveRequest.idempotencyKey());
+        return restTemplate.postForObject("/api/orders", effectiveRequest, OrderCreationResult.class);
     }
 
     @Override
@@ -34,6 +39,39 @@ public class OrderActivityImpl implements OrderActivity {
         log.info("Cancelling order={}", orderId);
         restTemplate.postForObject("/api/orders/{orderId}/cancel",
             Map.of("reason", "CHECKOUT_SAGA_ROLLBACK"), Void.class, orderId);
+    }
+
+    @Override
+    @CircuitBreaker(name = "orderService", fallbackMethod = "confirmOrderFallback")
+    public void confirmOrder(String orderId, String idempotencyKey) {
+        String effectiveKey = resolveConfirmIdempotencyKey(idempotencyKey);
+        log.info("Confirming order={} status=PLACED idempotencyKey={}", orderId, effectiveKey);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        if (effectiveKey != null && !effectiveKey.isBlank()) {
+            headers.set("Idempotency-Key", effectiveKey);
+        }
+        Map<String, String> body = Map.of(
+            "status", "PLACED",
+            "note", "Payment captured"
+        );
+        restTemplate.postForObject("/admin/orders/{orderId}/status",
+            new HttpEntity<>(body, headers), Void.class, orderId);
+    }
+
+    private OrderCreateRequest withDeterministicIdempotencyKey(OrderCreateRequest request) {
+        if (request.idempotencyKey() != null && !request.idempotencyKey().isBlank()) {
+            return request;
+        }
+        String workflowId = Activity.getExecutionContext().getInfo().getWorkflowId();
+        return request.withIdempotencyKey(workflowId + ":order:create");
+    }
+
+    private String resolveConfirmIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            return idempotencyKey;
+        }
+        return Activity.getExecutionContext().getInfo().getWorkflowId() + ":order:confirm";
     }
 
     @SuppressWarnings("unused")
@@ -50,5 +88,13 @@ public class OrderActivityImpl implements OrderActivity {
                 orderId, e.getMessage());
         throw new ServiceUnavailableException("orderService",
                 "Order service unavailable for cancelOrder orderId=" + orderId, e);
+    }
+
+    @SuppressWarnings("unused")
+    private void confirmOrderFallback(String orderId, String idempotencyKey, Exception e) {
+        log.warn("Circuit breaker fallback for orderService confirmOrder orderId={}: {}",
+                orderId, e.getMessage());
+        throw new ServiceUnavailableException("orderService",
+                "Order service unavailable for confirmOrder orderId=" + orderId, e);
     }
 }

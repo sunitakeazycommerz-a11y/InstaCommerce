@@ -79,4 +79,12 @@ public class CompensationDlq {
         this.retryCount++;
         this.updatedAt = Instant.now();
     }
+
+    public void recordRetryFailure(String failureReason) {
+        this.status = "FAILED";
+        if (failureReason != null && !failureReason.isBlank()) {
+            this.reason = this.reason + " [Retry #" + this.retryCount + " failed: " + failureReason + "]";
+        }
+        this.updatedAt = Instant.now();
+    }
 }

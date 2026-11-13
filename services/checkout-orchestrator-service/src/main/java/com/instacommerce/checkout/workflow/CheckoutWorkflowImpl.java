@@ -28,9 +28,10 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
 
     private String currentStatus = "STARTED";
 
+    private final String workflowId = Workflow.getInfo().getWorkflowId();
+
     /** Workflow-stable payment idempotency keys — never derived from activityId. */
-    private final PaymentOperationKeys paymentKeys =
-        new PaymentOperationKeys(Workflow.getInfo().getWorkflowId());
+    private final PaymentOperationKeys paymentKeys = new PaymentOperationKeys(workflowId);
 
     private final CartActivity cartActivity = Workflow.newActivityStub(
         CartActivity.class,
@@ -252,7 +253,8 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 request.deliveryAddressId(),
                 request.paymentMethodId(),
                 pricingResult.quoteId(),
-                pricingResult.quoteToken()
+                pricingResult.quoteToken(),
+                workflowId + ":order:create"
             );
             OrderCreationResult orderResult = orderActivity.createOrder(orderRequest);
             saga.addCompensation(() -> safeCancelOrder(orderResult.orderId()));
@@ -277,6 +279,7 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 paymentResult.paymentId(),
                 paymentKeys.capture(paymentResult.paymentId()));
             paymentCaptured = true;
+            orderActivity.confirmOrder(orderResult.orderId(), workflowId + ":order:confirm");
 
             // Step 7: Clear cart (best effort — don't fail checkout if this fails)
             currentStatus = "CLEARING_CART";

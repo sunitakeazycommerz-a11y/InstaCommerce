@@ -6,12 +6,15 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity
 @Table(name = "checkout_idempotency_keys")
 public class CheckoutIdempotencyKey {
+
+    public static final Duration RETENTION_TTL = Duration.ofDays(7);
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -30,6 +33,10 @@ public class CheckoutIdempotencyKey {
     private Instant expiresAt;
 
     protected CheckoutIdempotencyKey() {}
+
+    public CheckoutIdempotencyKey(String idempotencyKey, String checkoutResponse) {
+        this(idempotencyKey, checkoutResponse, Instant.now().plus(RETENTION_TTL));
+    }
 
     public CheckoutIdempotencyKey(String idempotencyKey, String checkoutResponse, Instant expiresAt) {
         this.idempotencyKey = idempotencyKey;

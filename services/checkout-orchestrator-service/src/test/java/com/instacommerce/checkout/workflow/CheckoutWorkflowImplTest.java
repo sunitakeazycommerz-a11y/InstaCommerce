@@ -18,6 +18,7 @@ import com.instacommerce.checkout.dto.CartValidationResult;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
 import com.instacommerce.checkout.dto.InventoryReservationResult;
+import com.instacommerce.checkout.dto.OrderCreateRequest;
 import com.instacommerce.checkout.dto.OrderCreationResult;
 import com.instacommerce.checkout.dto.PaymentAuthResult;
 import com.instacommerce.checkout.dto.PricingResult;
@@ -35,6 +36,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -181,6 +183,7 @@ class CheckoutWorkflowImplTest {
         inOrder.verify(orderActivity).createOrder(any());
         inOrder.verify(inventoryActivity).confirmStock(RESERVATION_ID);
         inOrder.verify(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
+        inOrder.verify(orderActivity).confirmOrder(ORDER_ID, WORKFLOW_ID + ":order:confirm");
 
         // Cart clear is best-effort but should be called
         verify(cartActivity).clearCart(USER_ID);
@@ -549,5 +552,79 @@ class CheckoutWorkflowImplTest {
         assertThat(response.status()).contains("Pricing calculation failed");
         verify(inventoryActivity, never()).reserveStock(any());
         verify(paymentActivity, never()).authorizePayment(anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void shouldPopulateDeterministicOrderCreateIdempotencyKey() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(10000L, 0L, 0L, 10000L, "INR", "quote-1", "token-1"));
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(eq(10000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 15));
+
+        workflow.checkout(request);
+
+        ArgumentCaptor<OrderCreateRequest> captor = ArgumentCaptor.forClass(OrderCreateRequest.class);
+        verify(orderActivity).createOrder(captor.capture());
+        assertThat(captor.getValue().idempotencyKey()).isEqualTo(WORKFLOW_ID + ":order:create");
+    }
+
+    @Test
+    void shouldCompensateCapturedPaymentAndOrderWhenConfirmOrderFails() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 15000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(15000L, 0L, 0L, 15000L, "INR", "quote-1", "token-1"));
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(eq(15000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 15));
+        doThrow(new RuntimeException("Order service rejected status update"))
+            .when(orderActivity).confirmOrder(ORDER_ID, WORKFLOW_ID + ":order:confirm");
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED");
+        assertThat(response.status()).contains("Order service rejected status update");
+        verify(paymentActivity).refundPayment(eq(PAYMENT_ID), eq(15000L), eq(WORKFLOW_ID + ":pay:" + PAYMENT_ID + ":refund"));
+        verify(orderActivity).cancelOrder(ORDER_ID);
+        verify(inventoryActivity).releaseStock(RESERVATION_ID);
+    }
+
+    @Test
+    void shouldNeverCallConfirmOrderWhenPaymentCaptureFails() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 15000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(15000L, 0L, 0L, 15000L, "INR", "quote-1", "token-1"));
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(eq(15000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 15));
+        doThrow(new RuntimeException("PSP capture timeout"))
+            .when(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED");
+        verify(orderActivity, never()).confirmOrder(anyString(), anyString());
     }
 }

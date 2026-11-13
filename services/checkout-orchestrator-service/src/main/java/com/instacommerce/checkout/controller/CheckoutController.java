@@ -1,11 +1,15 @@
 package com.instacommerce.checkout.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.checkout.domain.CompensationDlq;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
 import com.instacommerce.checkout.exception.CheckoutException;
+import com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor;
 import com.instacommerce.checkout.repository.CheckoutIdempotencyKeyRepository;
+import com.instacommerce.checkout.repository.CompensationDlqRepository;
 import com.instacommerce.checkout.service.CheckoutIdempotencyService;
+import com.instacommerce.checkout.service.CompensationReplayService;
 import com.instacommerce.checkout.workflow.CheckoutWorkflow;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowException;
@@ -13,14 +17,19 @@ import io.temporal.client.WorkflowExecutionAlreadyStarted;
 import io.temporal.client.WorkflowOptions;
 import jakarta.validation.Valid;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.lang.Nullable;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -36,14 +45,8 @@ import org.springframework.web.bind.annotation.RestController;
  * short, self-contained transactions that commit before the long-running Temporal workflow call
  * is made. This prevents HikariCP connection exhaustion during 5-minute workflow executions.
  */
-import com.instacommerce.checkout.domain.CompensationDlq;
-import com.instacommerce.checkout.repository.CompensationDlqRepository;
-import java.util.List;
-
-import java.util.concurrent.Semaphore;
-
 @RestController
-@RequestMapping("/checkout")
+@RequestMapping({"/checkout", "/api/v1/checkout"})
 public class CheckoutController {
     private static final Logger log = LoggerFactory.getLogger(CheckoutController.class);
 
@@ -51,38 +54,58 @@ public class CheckoutController {
     private final String taskQueue;
     private final CheckoutIdempotencyService idempotencyService;
     private final CompensationDlqRepository dlqRepository;
+    private final CompensationReplayService compensationReplayService;
     private final Semaphore checkoutRateLimiter;
 
+    @Autowired
     public CheckoutController(WorkflowClient workflowClient,
-                               @Value("${temporal.task-queue}") String taskQueue,
-                               CheckoutIdempotencyService idempotencyService,
-                               CompensationDlqRepository dlqRepository) {
-        this(workflowClient, taskQueue, idempotencyService, dlqRepository, 1500);
+                              @Value("${temporal.task-queue}") String taskQueue,
+                              CheckoutIdempotencyService idempotencyService,
+                              CompensationDlqRepository dlqRepository,
+                              @Nullable CompensationReplayService compensationReplayService) {
+        this(workflowClient, taskQueue, idempotencyService, dlqRepository, compensationReplayService, 1500);
     }
 
     public CheckoutController(WorkflowClient workflowClient,
-                               String taskQueue,
-                               CheckoutIdempotencyService idempotencyService,
-                               CompensationDlqRepository dlqRepository,
-                               int maxConcurrentCheckouts) {
+                              String taskQueue,
+                              CheckoutIdempotencyService idempotencyService,
+                              CompensationDlqRepository dlqRepository,
+                              @Nullable CompensationReplayService compensationReplayService,
+                              int maxConcurrentCheckouts) {
         this.workflowClient = workflowClient;
         this.taskQueue = taskQueue;
         this.idempotencyService = idempotencyService;
         this.dlqRepository = dlqRepository;
+        this.compensationReplayService = compensationReplayService;
         this.checkoutRateLimiter = new Semaphore(maxConcurrentCheckouts >= 0 ? maxConcurrentCheckouts : 1500);
     }
 
     public CheckoutController(WorkflowClient workflowClient,
-                               String taskQueue,
-                               CheckoutIdempotencyService idempotencyService) {
-        this(workflowClient, taskQueue, idempotencyService, null);
+                              String taskQueue,
+                              CheckoutIdempotencyService idempotencyService,
+                              CompensationDlqRepository dlqRepository) {
+        this(workflowClient, taskQueue, idempotencyService, dlqRepository, null, 1500);
+    }
+
+    public CheckoutController(WorkflowClient workflowClient,
+                              String taskQueue,
+                              CheckoutIdempotencyService idempotencyService,
+                              CompensationDlqRepository dlqRepository,
+                              int maxConcurrentCheckouts) {
+        this(workflowClient, taskQueue, idempotencyService, dlqRepository, null, maxConcurrentCheckouts);
+    }
+
+    public CheckoutController(WorkflowClient workflowClient,
+                              String taskQueue,
+                              CheckoutIdempotencyService idempotencyService) {
+        this(workflowClient, taskQueue, idempotencyService, null, null, 1500);
     }
 
     public CheckoutController(WorkflowClient workflowClient,
                               String taskQueue,
                               CheckoutIdempotencyKeyRepository idempotencyKeyRepository,
                               ObjectMapper objectMapper) {
-        this(workflowClient, taskQueue, new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper), null);
+        this(workflowClient, taskQueue, new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper), null, null, 1500);
     }
 
     @PostMapping
@@ -99,7 +122,7 @@ public class CheckoutController {
                 .header("Retry-After", "5")
                 .body(new CheckoutResponse(null, "RATE_LIMIT_EXCEEDED: Flash sale checkout spike backpressure active", 0, 0));
         }
-        com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor.setTenantContext(tenantId, storeId);
+        TemporalHeaderInterceptor.setTenantContext(tenantId, storeId);
         try {
             if (principal == null || !principal.equals(request.userId())) {
                 throw new CheckoutException("FORBIDDEN", "Cannot checkout for another user", HttpStatus.FORBIDDEN);
@@ -146,7 +169,7 @@ public class CheckoutController {
 
             return ResponseEntity.ok(result);
         } finally {
-            com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor.clear();
+            TemporalHeaderInterceptor.clear();
             checkoutRateLimiter.release();
         }
     }
@@ -209,23 +232,39 @@ public class CheckoutController {
         }
         return dlqRepository.findById(id)
             .map(entry -> {
-                entry.incrementRetry();
-                Map<String, Object> result = new java.util.LinkedHashMap<>();
+                Map<String, Object> result = new LinkedHashMap<>();
                 result.put("id", entry.getId() != null ? entry.getId().toString() : id.toString());
                 result.put("workflowId", entry.getWorkflowId());
                 result.put("activityName", entry.getActivityName());
                 result.put("targetId", entry.getTargetId());
+                if ("RESOLVED".equalsIgnoreCase(entry.getStatus())) {
+                    result.put("retryCount", entry.getRetryCount());
+                    result.put("status", "RESOLVED");
+                    result.put("message", "Compensation already resolved");
+                    return ResponseEntity.ok(result);
+                }
+                entry.incrementRetry();
                 result.put("retryCount", entry.getRetryCount());
+                if (compensationReplayService == null) {
+                    String unavailableMessage = "CompensationReplayService unavailable for replay";
+                    entry.recordRetryFailure(unavailableMessage);
+                    dlqRepository.save(entry);
+                    result.put("status", entry.getStatus());
+                    result.put("error", unavailableMessage);
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+                }
                 try {
+                    compensationReplayService.replay(entry);
                     entry.markResolved("Retried compensation successfully on attempt " + entry.getRetryCount());
                     dlqRepository.save(entry);
-                    result.put("status", "RESOLVED");
+                    result.put("status", entry.getStatus());
                     result.put("message", "Compensation retried and marked RESOLVED");
                     return ResponseEntity.ok(result);
                 } catch (Exception ex) {
                     log.error("Failed to retry compensation DLQ entry id={}: {}", id, ex.getMessage(), ex);
+                    entry.recordRetryFailure(ex.getMessage());
                     dlqRepository.save(entry);
-                    result.put("status", "FAILED");
+                    result.put("status", entry.getStatus());
                     result.put("error", ex.getMessage());
                     return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
                 }
