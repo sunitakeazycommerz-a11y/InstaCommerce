@@ -95,3 +95,8 @@ management:
       enabled: true
     readinessstate:
       enabled: true
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:}

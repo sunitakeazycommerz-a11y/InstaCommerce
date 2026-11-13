@@ -1,5 +1,8 @@
 package com.instacommerce.audit.service;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.storage.Blob;
 import com.google.cloud.storage.BlobId;
@@ -10,327 +13,344 @@ import com.instacommerce.audit.domain.model.AuditArchiveManifest;
 import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.repository.AuditArchiveManifestRepository;
 import com.instacommerce.audit.repository.AuditEventRepository;
+import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.List;
-import org.apache.parquet.schema.MessageType;
-import org.apache.parquet.schema.PrimitiveType;
-import org.apache.parquet.schema.Types;
+import java.util.Map;
+import java.util.zip.GZIPOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Archive Pipeline Service for Wave 40 Phase 6: 7-Year PCI DSS Immutable Audit Trail
- *
- * Responsibilities:
- * - Nightly batch export of audit events (past 24h) to GCS Glacier
- * - Parquet compression and encryption with customer-managed KMS keys
- * - Immutability enforcement (WORM: Write-Once-Read-Many)
- * - Archive manifest tracking and integrity verification
- * - Compliance reporting for auditors
+ * Exports audit event windows and expiring partitions to GCS with SHA-256 verification and
+ * persisted {@link AuditArchiveManifest} records before partitions are detached.
  */
 @Service
 public class ArchiveExportPipelineService {
 
   private static final Logger log = LoggerFactory.getLogger(ArchiveExportPipelineService.class);
+  private static final int UPLOAD_MAX_RETRIES = 3;
 
   @Value("${audit.archive.bucket-name:instacommerce-audit-archive-dev}")
-  private String archiveBucketName;
+  private String archiveBucketName = "instacommerce-audit-archive-dev";
 
   @Value("${audit.archive.gcs-project-id:instacommerce-dev}")
-  private String gcsProjectId;
+  private String gcsProjectId = "instacommerce-dev";
 
   @Value("${audit.archive.kms-key-id:}")
-  private String kmsKeyId;
+  private String kmsKeyId = "";
 
   @Value("${audit.archive.enable-encryption:true}")
-  private boolean enableEncryption;
+  private boolean enableEncryption = true;
 
-  @Value("${audit.archive.retention-days:2557}") // 7 years
-  private int retentionDays;
+  @Value("${audit.archive.retention-days:2557}")
+  private int retentionDays = 2557;
 
   private final AuditEventRepository auditEventRepository;
   private final AuditArchiveManifestRepository manifestRepository;
+  private final Storage injectedStorage;
+  private final ObjectMapper objectMapper;
+  private final long retryBackoffMs;
 
   public ArchiveExportPipelineService(
       AuditEventRepository auditEventRepository,
       AuditArchiveManifestRepository manifestRepository) {
-    this.auditEventRepository = auditEventRepository;
-    this.manifestRepository = manifestRepository;
+    this(auditEventRepository, manifestRepository, null, createDefaultObjectMapper(), 1000L);
   }
 
-  /**
-   * Nightly scheduled job: Export past 24h audit events to GCS Glacier (2 AM UTC)
-   * Executes with ShedLock to prevent concurrent executions
-   */
-  @Scheduled(cron = "0 0 2 * * *", zone = "UTC") // 2 AM UTC daily
+  @Autowired
+  public ArchiveExportPipelineService(
+      AuditEventRepository auditEventRepository,
+      AuditArchiveManifestRepository manifestRepository,
+      ObjectProvider<Storage> storageProvider,
+      ObjectProvider<ObjectMapper> objectMapperProvider) {
+    this(
+        auditEventRepository,
+        manifestRepository,
+        storageProvider.getIfAvailable(),
+        objectMapperProvider.getIfAvailable(ArchiveExportPipelineService::createDefaultObjectMapper),
+        1000L);
+  }
+
+  ArchiveExportPipelineService(
+      AuditEventRepository auditEventRepository,
+      AuditArchiveManifestRepository manifestRepository,
+      Storage storage,
+      ObjectMapper objectMapper,
+      long retryBackoffMs) {
+    this.auditEventRepository = auditEventRepository;
+    this.manifestRepository = manifestRepository;
+    this.injectedStorage = storage;
+    this.objectMapper = objectMapper;
+    this.retryBackoffMs = retryBackoffMs;
+  }
+
+  @Scheduled(cron = "0 0 2 * * *", zone = "UTC")
   @Transactional
   public void exportAuditEventsToArchive() {
     log.info("Starting nightly audit archive export pipeline");
-    Instant startTime = Instant.now();
+    Instant today = Instant.now();
+    Instant yesterday = today.minus(1, ChronoUnit.DAYS);
 
+    List<AuditEvent> events =
+        auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(yesterday, today);
+    if (events.isEmpty()) {
+      log.warn("No audit events found for archive export (yesterday={}, today={})", yesterday, today);
+      return;
+    }
+
+    OffsetDateTime utcStart = yesterday.atOffset(ZoneOffset.UTC);
+    String gcsObjectPath =
+        String.format(
+            "audit/%04d/%02d/%02d/audit_events.ndjson.gz",
+            utcStart.getYear(), utcStart.getMonthValue(), utcStart.getDayOfMonth());
+
+    exportRange(events, gcsObjectPath, yesterday, today, "AUTOMATED");
+  }
+
+  @Transactional
+  public AuditArchiveManifest exportPartition(
+      String partitionName, Instant dateRangeStart, Instant dateRangeEnd) {
+    List<AuditEvent> events =
+        auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(dateRangeStart, dateRangeEnd);
+    OffsetDateTime utcStart = dateRangeStart.atOffset(ZoneOffset.UTC);
+    String gcsObjectPath =
+        String.format(
+            "audit/partitions/%04d/%02d/%s.ndjson.gz",
+            utcStart.getYear(), utcStart.getMonthValue(), partitionName);
+
+    if (events.isEmpty()) {
+      Instant now = Instant.now();
+      AuditArchiveManifest emptyManifest =
+          AuditArchiveManifest.builder()
+              .archiveYear(utcStart.getYear())
+              .archiveMonth(utcStart.getMonthValue())
+              .s3GlacierPath("gs://" + archiveBucketName + "/" + gcsObjectPath)
+              .rowCount(0L)
+              .compressedSizeBytes(0L)
+              .checksumSha256(sha256Hex(new byte[0]))
+              .dateRangeStart(dateRangeStart)
+              .dateRangeEnd(dateRangeEnd)
+              .archivedAt(now)
+              .retrievableUntil(now.plus(retentionDays, ChronoUnit.DAYS))
+              .verificationStatus("VERIFIED")
+              .creationMethod("PARTITION_MAINTENANCE")
+              .build();
+      emptyManifest.setLastVerificationAt(now);
+      emptyManifest.setVerificationAttemptCount(1);
+      return manifestRepository.save(emptyManifest);
+    }
+
+    return exportRange(events, gcsObjectPath, dateRangeStart, dateRangeEnd, "PARTITION_MAINTENANCE");
+  }
+
+  private AuditArchiveManifest exportRange(
+      List<AuditEvent> events,
+      String gcsObjectPath,
+      Instant dateRangeStart,
+      Instant dateRangeEnd,
+      String creationMethod) {
     try {
-      Instant yesterday = startTime.minus(1, ChronoUnit.DAYS);
-      Instant today = startTime;
+      ArchiveFile archiveFile = serializeCompressedNdjson(events, gcsObjectPath, dateRangeStart);
+      uploadToGcsGlacier(archiveFile);
 
-      // Query events from past 24 hours (hot data: PostgreSQL)
-      List<AuditEvent> events =
-          auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(yesterday, today);
+      AuditArchiveManifest manifest =
+          createManifest(events.size(), archiveFile, dateRangeStart, dateRangeEnd, creationMethod);
+      manifest = manifestRepository.save(manifest);
 
-      if (events.isEmpty()) {
-        log.warn("No audit events found for archive export (yesterday={}, today={})", yesterday, today);
-        return;
-      }
-
-      log.info("Exporting {} audit events to archive", events.size());
-
-      // Export to Parquet files (1GB chunks)
-      List<ArchiveFile> archiveFiles = exportToParquetFiles(events, yesterday, today);
-
-      // Upload to GCS with WORM protection
-      for (ArchiveFile archiveFile : archiveFiles) {
-        uploadToGcsGlacier(archiveFile);
-      }
-
-      // Create archive manifest for compliance tracking
-      AuditArchiveManifest manifest = createManifest(events, yesterday, today, archiveFiles);
-      manifestRepository.save(manifest);
-
-      // Verify archive integrity
-      verifyArchiveIntegrity(manifest);
-
-      log.info(
-          "Archive export completed: {} events exported in {} files, manifest_id={}",
-          events.size(),
-          archiveFiles.size(),
-          manifest.getId());
-
+      return verifyArchiveIntegrity(manifest, gcsObjectPath);
     } catch (Exception ex) {
-      log.error("Archive export pipeline failed", ex);
-      // Send alert to monitoring
-      sendArchiveFailureAlert(ex);
-      throw new RuntimeException("Archive export failed", ex);
+      log.error("Archive export pipeline failed for path={}", gcsObjectPath, ex);
+      if (ex instanceof RuntimeException runtimeException) {
+        throw runtimeException;
+      }
+      throw new IllegalStateException("Archive export failed for " + gcsObjectPath, ex);
     }
   }
 
-  /**
-   * Export audit events to Parquet files (compressed, queryable format)
-   * Parquet format allows future querying without decompression
-   */
-  private List<ArchiveFile> exportToParquetFiles(
-      List<AuditEvent> events, Instant dateRangeStart, Instant dateRangeEnd) {
-    log.debug("Converting {} audit events to Parquet format", events.size());
-
-    // Schema: audit_id, event_type, source_service, actor_id, resource_type, resource_id,
-    // action, created_at, actor_type, ip_address, data_classification, encryption_status
-    MessageType schema =
-        Types.buildMessage()
-            .required(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("audit_id")
-            .required(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("event_type")
-            .required(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("source_service")
-            .optional(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("actor_id")
-            .optional(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("resource_type")
-            .optional(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("resource_id")
-            .required(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("action")
-            .required(PrimitiveType.PrimitiveTypeName.INT64)
-            .named("created_at_millis")
-            .optional(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("actor_type")
-            .optional(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("ip_address")
-            .required(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("data_classification")
-            .required(PrimitiveType.PrimitiveTypeName.BINARY)
-            .named("encryption_status")
-            .named("AuditEventParquetSchema");
-
-    // For now, return empty list (implementation would use parquet-avro writer)
-    // In production, this would serialize events to Parquet binary format
-    log.info("Parquet schema: {}", schema.toString());
-    return List.of(); // Placeholder
+  private ArchiveFile serializeCompressedNdjson(
+      List<AuditEvent> events, String gcsObjectPath, Instant dateRangeStart) throws IOException {
+    OffsetDateTime utcStart = dateRangeStart.atOffset(ZoneOffset.UTC);
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    try (GZIPOutputStream gzipOut = new GZIPOutputStream(baos);
+        BufferedWriter writer =
+            new BufferedWriter(new OutputStreamWriter(gzipOut, StandardCharsets.UTF_8))) {
+      for (AuditEvent event : events) {
+        writer.write(objectMapper.writeValueAsString(event));
+        writer.newLine();
+      }
+    }
+    byte[] compressed = baos.toByteArray();
+    return new ArchiveFile(
+        utcStart.getYear(),
+        utcStart.getMonthValue(),
+        gcsObjectPath,
+        compressed,
+        compressed.length,
+        sha256Hex(compressed),
+        events.size());
   }
 
-  /**
-   * Upload archive file to GCS with WORM (Write-Once-Read-Many) protection
-   * - Encryption: Customer-managed KMS key
-   * - Immutability: Object retention enforced
-   * - Metadata: Archive manifest, checksum, signatures
-   */
   private void uploadToGcsGlacier(ArchiveFile archiveFile) throws IOException {
-    log.info("Uploading archive file to GCS: {}", archiveFile.getGcsPath());
+    Storage storage = resolveStorageClient();
+    BlobId blobId = BlobId.of(archiveBucketName, archiveFile.gcsPath());
 
-    Storage storage = createStorageClient();
-    BlobId blobId = BlobId.of(archiveBucketName, archiveFile.getGcsPath());
-
-    BlobInfo.Builder blobInfoBuilder =
+    BlobInfo blobInfo =
         BlobInfo.newBuilder(blobId)
-            .setContentType("application/parquet")
+            .setContentType("application/x-ndjson")
+            .setContentEncoding("gzip")
             .setMetadata(
-                java.util.Map.of(
-                    "archive_year", String.valueOf(archiveFile.getArchiveYear()),
-                    "archive_month", String.valueOf(archiveFile.getArchiveMonth()),
-                    "checksum_sha256", archiveFile.getChecksumSha256(),
-                    "row_count", String.valueOf(archiveFile.getRowCount()),
-                    "compressed_size_bytes", String.valueOf(archiveFile.getCompressedSizeBytes()),
-                    "archived_at", Instant.now().toString(),
-                    "phase", "6-pci-dss",
-                    "compliance", "true"))
-            .setCacheControl("no-cache, no-store, must-revalidate");
+                Map.of(
+                    "archive_year", String.valueOf(archiveFile.archiveYear()),
+                    "archive_month", String.valueOf(archiveFile.archiveMonth()),
+                    "checksum_sha256", archiveFile.checksumSha256(),
+                    "row_count", String.valueOf(archiveFile.rowCount()),
+                    "compressed_size_bytes", String.valueOf(archiveFile.compressedSizeBytes()),
+                    "archived_at", Instant.now().toString()))
+            .setCacheControl("no-cache, no-store, must-revalidate")
+            .build();
 
-    BlobInfo blobInfo = blobInfoBuilder.build();
-
-    // Upload with retry logic
-    int maxRetries = 3;
     int retryCount = 0;
-    while (retryCount < maxRetries) {
+    while (true) {
       try {
         Blob blob;
         if (enableEncryption && kmsKeyId != null && !kmsKeyId.isEmpty()) {
-          blob = storage.create(blobInfo, archiveFile.getContent(), Storage.BlobTargetOption.kmsKeyName(kmsKeyId));
+          blob =
+              storage.create(
+                  blobInfo, archiveFile.content(), Storage.BlobTargetOption.kmsKeyName(kmsKeyId));
         } else {
-          blob = storage.create(blobInfo, archiveFile.getContent());
+          blob = storage.create(blobInfo, archiveFile.content());
+        }
+        if (blob == null) {
+          throw new IOException("GCS upload returned null blob for " + archiveFile.gcsPath());
         }
         log.info(
-            "Archive file uploaded successfully: gs://{}/{}, size={}",
+            "Archive file uploaded: gs://{}/{}, size={}",
             archiveBucketName,
-            archiveFile.getGcsPath(),
+            archiveFile.gcsPath(),
             blob.getSize());
         return;
       } catch (Exception ex) {
         retryCount++;
-        if (retryCount >= maxRetries) {
-          log.error("Failed to upload archive file after {} retries", maxRetries, ex);
+        if (retryCount >= UPLOAD_MAX_RETRIES) {
           if (ex instanceof IOException ioException) {
             throw ioException;
           }
-          throw new IOException("Failed to upload archive file", ex);
+          throw new IOException("Failed to upload archive file after " + UPLOAD_MAX_RETRIES + " attempts", ex);
         }
-        log.warn("Upload attempt {} failed, retrying...", retryCount, ex);
-        try {
-          Thread.sleep(Math.min(1000 * (long) Math.pow(2, retryCount), 30000)); // Exponential backoff
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          throw new IOException("Upload interrupted", e);
-        }
+        sleepBeforeRetry(retryCount);
       }
     }
   }
 
-  /**
-   * Create archive manifest for compliance tracking
-   * Manifest includes: checksum, row count, date range, verification status
-   */
+  private void sleepBeforeRetry(int retryCount) throws IOException {
+    if (retryBackoffMs <= 0) {
+      return;
+    }
+    try {
+      Thread.sleep(Math.min(retryBackoffMs * (1L << retryCount), 30000L));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IOException("Upload interrupted", e);
+    }
+  }
+
   private AuditArchiveManifest createManifest(
-      List<AuditEvent> events,
+      long rowCount,
+      ArchiveFile archiveFile,
       Instant dateRangeStart,
       Instant dateRangeEnd,
-      List<ArchiveFile> archiveFiles) {
-    long totalSize = archiveFiles.stream().mapToLong(ArchiveFile::getCompressedSizeBytes).sum();
-    String checksumSha256 = computeManifestChecksum(archiveFiles);
-
-    // Calculate retrievable_until: current date + retention days (7 years = 2557 days)
-    Instant retrievableUntil = Instant.now().plus(retentionDays, ChronoUnit.DAYS);
-
+      String creationMethod) {
+    Instant now = Instant.now();
     return AuditArchiveManifest.builder()
-        .archiveYear(dateRangeStart.atZone(java.time.ZoneId.of("UTC")).getYear())
-        .archiveMonth(dateRangeStart.atZone(java.time.ZoneId.of("UTC")).getMonthValue())
-        .s3GlacierPath(
-            "gs://"
-                + archiveBucketName
-                + "/audit/"
-                + String.format(
-                    "%04d/%02d/%02d",
-                    dateRangeStart.atZone(java.time.ZoneId.of("UTC")).getYear(),
-                    dateRangeStart.atZone(java.time.ZoneId.of("UTC")).getMonthValue(),
-                    dateRangeStart.atZone(java.time.ZoneId.of("UTC")).getDayOfMonth()))
-        .rowCount((long) events.size())
-        .compressedSizeBytes(totalSize)
-        .checksumSha256(checksumSha256)
+        .archiveYear(archiveFile.archiveYear())
+        .archiveMonth(archiveFile.archiveMonth())
+        .s3GlacierPath("gs://" + archiveBucketName + "/" + archiveFile.gcsPath())
+        .rowCount(rowCount)
+        .compressedSizeBytes(archiveFile.compressedSizeBytes())
+        .checksumSha256(archiveFile.checksumSha256())
         .dateRangeStart(dateRangeStart)
         .dateRangeEnd(dateRangeEnd)
-        .archivedAt(Instant.now())
-        .retrievableUntil(retrievableUntil)
+        .archivedAt(now)
+        .retrievableUntil(now.plus(retentionDays, ChronoUnit.DAYS))
         .verificationStatus("PENDING")
-        .creationMethod("AUTOMATED")
+        .creationMethod(creationMethod)
         .build();
   }
 
-  /**
-   * Compute manifest checksum (SHA-256 of all archive file checksums)
-   * Enables detection of tampering with entire manifest
-   */
-  private String computeManifestChecksum(List<ArchiveFile> archiveFiles) {
+  private AuditArchiveManifest verifyArchiveIntegrity(
+      AuditArchiveManifest manifest, String gcsObjectPath) {
+    try {
+      Storage storage = resolveStorageClient();
+      Blob blob = storage.get(BlobId.of(archiveBucketName, gcsObjectPath));
+      if (blob == null || blob.getSize() <= 0) {
+        throw new IllegalStateException(
+            "Archive blob missing or empty after upload: " + manifest.getS3GlacierPath());
+      }
+
+      manifest.setVerificationStatus("VERIFIED");
+      manifest.setLastVerificationAt(Instant.now());
+      manifest.setVerificationAttemptCount(
+          (manifest.getVerificationAttemptCount() != null
+                  ? manifest.getVerificationAttemptCount()
+                  : 0)
+              + 1);
+      return manifestRepository.save(manifest);
+    } catch (Exception ex) {
+      manifest.setVerificationStatus("FAILED");
+      manifestRepository.save(manifest);
+      if (ex instanceof RuntimeException runtimeException) {
+        throw runtimeException;
+      }
+      throw new IllegalStateException("Archive verification failed", ex);
+    }
+  }
+
+  private Storage resolveStorageClient() throws IOException {
+    if (injectedStorage != null) {
+      return injectedStorage;
+    }
+    GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
+    return StorageOptions.newBuilder()
+        .setProjectId(gcsProjectId)
+        .setCredentials(credentials)
+        .build()
+        .getService();
+  }
+
+  private static String sha256Hex(byte[] input) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
-      for (ArchiveFile file : archiveFiles) {
-        digest.update(file.getChecksumSha256().getBytes());
-      }
-      return HexFormat.of().formatHex(digest.digest());
+      return HexFormat.of().formatHex(digest.digest(input));
     } catch (NoSuchAlgorithmException ex) {
       throw new IllegalStateException("SHA-256 not available", ex);
     }
   }
 
-  /**
-   * Verify archive integrity immediately after upload
-   * Reads back object metadata and verifies checksums
-   */
-  private void verifyArchiveIntegrity(AuditArchiveManifest manifest) {
-    log.info("Verifying archive integrity: manifest_id={}", manifest.getId());
-    try {
-      Storage storage = createStorageClient();
-      BlobId blobId = BlobId.of(archiveBucketName, manifest.getS3GlacierPath().substring(5));
-      Blob blob = storage.get(blobId);
-
-      if (blob == null) {
-        manifest.setVerificationStatus("FAILED");
-        log.error("Archive blob not found after upload: {}", manifest.getS3GlacierPath());
-      } else if (blob.getSize() > 0) {
-        manifest.setVerificationStatus("VERIFIED");
-        manifest.setLastVerificationAt(Instant.now());
-        manifest.setVerificationAttemptCount(
-            (manifest.getVerificationAttemptCount() != null
-                ? manifest.getVerificationAttemptCount()
-                : 0) + 1);
-        log.info("Archive verification successful: blob_size={}", blob.getSize());
-      }
-
-      manifestRepository.save(manifest);
-    } catch (Exception ex) {
-      log.error("Archive verification failed", ex);
-      manifest.setVerificationStatus("FAILED");
-      manifestRepository.save(manifest);
-    }
+  private static ObjectMapper createDefaultObjectMapper() {
+    ObjectMapper mapper = new ObjectMapper();
+    mapper.findAndRegisterModules();
+    mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    return mapper;
   }
 
-  private Storage createStorageClient() throws IOException {
-    GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
-    return StorageOptions.newBuilder().setProjectId(gcsProjectId).setCredentials(credentials).build().getService();
-  }
-
-  private void sendArchiveFailureAlert(Exception ex) {
-    // In production: send to monitoring system (e.g., Cloud Monitoring, PagerDuty)
-    log.error("Archive failure alert would be sent: {}", ex.getMessage());
-  }
-
-  /**
-   * Internal record to represent a Parquet archive file
-   */
   private record ArchiveFile(
       int archiveYear,
       int archiveMonth,
@@ -338,13 +358,5 @@ public class ArchiveExportPipelineService {
       byte[] content,
       long compressedSizeBytes,
       String checksumSha256,
-      long rowCount) {
-    public int getArchiveYear() { return archiveYear; }
-    public int getArchiveMonth() { return archiveMonth; }
-    public String getGcsPath() { return gcsPath; }
-    public byte[] getContent() { return content; }
-    public long getCompressedSizeBytes() { return compressedSizeBytes; }
-    public String getChecksumSha256() { return checksumSha256; }
-    public long getRowCount() { return rowCount; }
-  }
+      long rowCount) {}
 }
