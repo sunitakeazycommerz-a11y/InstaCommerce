@@ -5,10 +5,12 @@ import com.instacommerce.inventory.dto.request.StockAdjustRequest;
 import com.instacommerce.inventory.dto.request.StockCheckRequest;
 import com.instacommerce.inventory.dto.response.StockCheckItemResponse;
 import com.instacommerce.inventory.dto.response.StockCheckResponse;
+import com.instacommerce.inventory.security.ClientIpResolver;
 import com.instacommerce.inventory.service.InventoryService;
 import com.instacommerce.inventory.service.RateLimitService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,10 +24,19 @@ import org.springframework.web.server.ResponseStatusException;
 public class StockController {
     private final InventoryService inventoryService;
     private final RateLimitService rateLimitService;
+    private final ClientIpResolver clientIpResolver;
 
     public StockController(InventoryService inventoryService, RateLimitService rateLimitService) {
+        this(inventoryService, rateLimitService, new ClientIpResolver());
+    }
+
+    @Autowired
+    public StockController(InventoryService inventoryService,
+                           RateLimitService rateLimitService,
+                           ClientIpResolver clientIpResolver) {
         this.inventoryService = inventoryService;
         this.rateLimitService = rateLimitService;
+        this.clientIpResolver = clientIpResolver != null ? clientIpResolver : new ClientIpResolver();
     }
 
     @PostMapping("/check")
@@ -38,8 +49,7 @@ public class StockController {
     }
 
     private String extractClientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        return xff != null ? xff.split(",")[0].trim() : request.getRemoteAddr();
+        return clientIpResolver.resolve(request);
     }
 
     @PostMapping("/adjust")

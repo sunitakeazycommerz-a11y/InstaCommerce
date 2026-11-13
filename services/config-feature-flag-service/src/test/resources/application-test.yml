@@ -50,3 +50,9 @@ management:
   endpoint:
     health:
       show-details: always
+
+internal:
+  service:
+    name: config-feature-flag-service
+    token: test-internal-service-token
+

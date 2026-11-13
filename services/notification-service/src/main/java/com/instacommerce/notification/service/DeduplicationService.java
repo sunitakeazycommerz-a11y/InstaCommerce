@@ -25,7 +25,10 @@ public class DeduplicationService {
         log.setEventId(request.eventId());
         log.setChannel(request.channel());
         log.setTemplateId(request.templateId());
-        log.setRecipient(request.recipient());
+        String sanitizedRecipient = (maskedRecipient != null && !maskedRecipient.isBlank())
+            ? maskedRecipient
+            : MaskingUtil.maskRecipient(request.recipient());
+        log.setRecipient(sanitizedRecipient);
         log.setStatus(NotificationStatus.PENDING);
         try {
             return logRepository.save(log);

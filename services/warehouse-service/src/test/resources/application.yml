@@ -34,3 +34,8 @@ warehouse:
   nearest-store:
     default-radius-km: 10.0
     max-results: 5
+
+internal:
+  service:
+    name: warehouse-service
+    token: test-internal-service-token

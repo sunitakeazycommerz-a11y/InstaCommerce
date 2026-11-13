@@ -1,5 +1,6 @@
 package com.instacommerce.inventory.client;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.instacommerce.inventory.exception.StoreInactiveException;
@@ -12,8 +13,10 @@ import java.time.Duration;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -28,18 +31,26 @@ public class RestWarehouseClient implements WarehouseClient {
     private final String baseUrl;
     private final Cache<UUID, String> storeStatusCache;
 
+    @Autowired
     public RestWarehouseClient(
-            @org.springframework.beans.factory.annotation.Autowired(required = false) RestClient.Builder builder,
+            @Autowired(required = false) RestClient.Builder builder,
             @Value("${warehouse.service.url:http://localhost:8092}") String baseUrl,
             @Value("${internal.service.name:${spring.application.name}}") String serviceName,
             @Value("${internal.service.token}") String serviceToken) {
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofMillis(2000));
-        requestFactory.setReadTimeout(Duration.ofMillis(5000));
+        this(builder, baseUrl, serviceName, serviceToken, defaultRequestFactory());
+    }
 
+    RestWarehouseClient(
+            RestClient.Builder builder,
+            String baseUrl,
+            String serviceName,
+            String serviceToken,
+            ClientHttpRequestFactory requestFactory) {
         RestClient.Builder clientBuilder = builder != null ? builder : RestClient.builder();
+        if (requestFactory != null) {
+            clientBuilder = clientBuilder.requestFactory(requestFactory);
+        }
         this.restClient = clientBuilder
-                .requestFactory(requestFactory)
                 .requestInterceptor(new InternalServiceAuthInterceptor(serviceName, serviceToken))
                 .build();
         this.baseUrl = baseUrl;
@@ -47,6 +58,13 @@ public class RestWarehouseClient implements WarehouseClient {
                 .expireAfterWrite(Duration.ofMinutes(10))
                 .maximumSize(1000)
                 .build();
+    }
+
+    private static SimpleClientHttpRequestFactory defaultRequestFactory() {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(2000));
+        requestFactory.setReadTimeout(Duration.ofMillis(5000));
+        return requestFactory;
     }
 
     @Override
@@ -80,6 +98,48 @@ public class RestWarehouseClient implements WarehouseClient {
             throw illegal;
         }
         log.error("Warehouse service unavailable for storeId={}", storeId, e);
+        throw new RestClientException("Warehouse service unavailable via resilience bulkhead/circuit breaker: " + e.getMessage(), e);
+    }
+
+    @Override
+    @CircuitBreaker(name = "warehouseService", fallbackMethod = "isStoreOpenFallback")
+    @Retry(name = "warehouseService")
+    @Bulkhead(name = "warehouseService", fallbackMethod = "isStoreOpenFallback")
+    public boolean isStoreOpen(UUID storeId) {
+        if (storeId == null) {
+            throw new IllegalArgumentException("storeId cannot be null");
+        }
+        try {
+            Boolean open = restClient.get()
+                    .uri(baseUrl + "/stores/{id}/open", storeId)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {
+                        if (resp.getStatusCode().value() == 404) {
+                            throw new StoreNotFoundException(storeId);
+                        }
+                    })
+                    .body(Boolean.class);
+            return Boolean.TRUE.equals(open);
+        } catch (StoreNotFoundException ex) {
+            throw ex;
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode().value() == 404) {
+                throw new StoreNotFoundException(storeId);
+            }
+            log.error("Failed to check dark store open status for {}: {}", storeId, ex.getMessage());
+            throw ex;
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private boolean isStoreOpenFallback(UUID storeId, Throwable e) {
+        log.warn("Resilience fallback for warehouseService isStoreOpen storeId={}: {}", storeId, e.getMessage());
+        if (e instanceof StoreNotFoundException notFound) {
+            throw notFound;
+        }
+        if (e instanceof IllegalArgumentException illegal) {
+            throw illegal;
+        }
         throw new RestClientException("Warehouse service unavailable via resilience bulkhead/circuit breaker: " + e.getMessage(), e);
     }
 
@@ -122,5 +182,6 @@ public class RestWarehouseClient implements WarehouseClient {
         }
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     record StoreDto(UUID id, String status) {}
 }

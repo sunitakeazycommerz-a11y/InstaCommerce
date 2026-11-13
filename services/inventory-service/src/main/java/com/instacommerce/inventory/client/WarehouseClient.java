@@ -11,6 +11,11 @@ public interface WarehouseClient {
     void validateStoreActive(UUID storeId);
 
     /**
+     * Checks whether the dark store is currently within operating hours.
+     */
+    boolean isStoreOpen(UUID storeId);
+
+    /**
      * Evicts the cached store status for immediate real-time invalidation.
      */
     void evictStore(UUID storeId);

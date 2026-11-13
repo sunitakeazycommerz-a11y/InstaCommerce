@@ -2,6 +2,8 @@ package com.instacommerce.inventory.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import com.instacommerce.inventory.InventoryServiceApplication;
 import com.instacommerce.inventory.client.WarehouseClient;
@@ -89,6 +91,7 @@ class StockReconciliationIntegrationTest {
                 shedlock
             RESTART IDENTITY CASCADE
             """);
+        when(warehouseClient.isStoreOpen(any())).thenReturn(true);
     }
 
     @Test

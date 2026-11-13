@@ -5,12 +5,17 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "notification")
 public class NotificationProperties {
+    private final Jwt jwt = new Jwt();
     private final Providers providers = new Providers();
     private final Identity identity = new Identity();
     private final Order order = new Order();
     private final Delivery delivery = new Delivery();
     private final Retry retry = new Retry();
     private String dltTopic = "notifications.DLT";
+
+    public Jwt getJwt() {
+        return jwt;
+    }
 
     public Providers getProviders() {
         return providers;
@@ -167,6 +172,27 @@ public class NotificationProperties {
 
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
+        }
+    }
+
+    public static class Jwt {
+        private String issuer = "instacommerce-identity";
+        private String publicKey;
+
+        public String getIssuer() {
+            return issuer;
+        }
+
+        public void setIssuer(String issuer) {
+            this.issuer = issuer;
+        }
+
+        public String getPublicKey() {
+            return publicKey;
+        }
+
+        public void setPublicKey(String publicKey) {
+            this.publicKey = publicKey;
         }
     }
 }

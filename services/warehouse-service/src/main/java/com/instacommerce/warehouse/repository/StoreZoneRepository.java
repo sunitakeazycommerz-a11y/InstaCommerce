@@ -2,6 +2,7 @@ package com.instacommerce.warehouse.repository;
 
 import com.instacommerce.warehouse.domain.model.StoreZone;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -12,6 +13,10 @@ public interface StoreZoneRepository extends JpaRepository<StoreZone, UUID> {
     List<StoreZone> findByPincode(String pincode);
 
     List<StoreZone> findByStoreId(UUID storeId);
+
+    Optional<StoreZone> findByIdAndStoreId(UUID id, UUID storeId);
+
+    Optional<StoreZone> findByStoreIdAndPincode(UUID storeId, String pincode);
 
     @Query("SELECT sz FROM StoreZone sz JOIN FETCH sz.store WHERE sz.pincode = :pincode AND sz.store.status = 'ACTIVE'")
     List<StoreZone> findActiveZonesByPincode(@Param("pincode") String pincode);

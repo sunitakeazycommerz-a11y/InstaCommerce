@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -142,7 +143,10 @@ public class StoreService {
     }
 
     @Transactional
-    @CacheEvict(value = "stores", key = "#id")
+    @Caching(evict = {
+        @CacheEvict(value = "stores", key = "#id"),
+        @CacheEvict(value = "store-zones", allEntries = true)
+    })
     public StoreResponse updateStoreStatus(UUID id, StoreStatus status) {
         Store store = storeRepository.findById(id)
                 .orElseThrow(() -> new StoreNotFoundException(id));
@@ -157,7 +161,10 @@ public class StoreService {
     }
 
     @Transactional
-    @CacheEvict(value = "stores", key = "#id")
+    @Caching(evict = {
+        @CacheEvict(value = "stores", key = "#id"),
+        @CacheEvict(value = "store-zones", allEntries = true)
+    })
     public void deleteStore(UUID id) {
         Store store = storeRepository.findById(id)
                 .orElseThrow(() -> new StoreNotFoundException(id));
