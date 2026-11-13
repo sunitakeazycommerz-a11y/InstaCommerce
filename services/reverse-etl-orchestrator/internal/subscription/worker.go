@@ -249,6 +249,8 @@ func (wp *WorkerPool) SyncUserFeatures(ctx context.Context, jobID, subscriptionI
 		Status:   "COMPLETED",
 	}
 
+	const userFeaturesTTL = 36 * time.Hour
+
 	if len(records) == 0 {
 		res.Duration = time.Since(start)
 		return res, nil
@@ -296,6 +298,14 @@ func (wp *WorkerPool) SyncUserFeatures(ctx context.Context, jobID, subscriptionI
 			wp.metrics.SyncErrorsTotal.WithLabelValues("user_features", "redis_rename").Inc()
 			res.Status = "FAILED"
 			res.Error = fmt.Errorf("failed to atomically rename user features for user %s: %w", rec.UserID, err)
+			wp.recordAudit(ctx, jobID, subscriptionID, "user_features", syncedCount, "FAILED", time.Since(start), res.Error.Error())
+			return res, res.Error
+		}
+
+		if err := wp.redisClient.Expire(ctx, targetKey, userFeaturesTTL).Err(); err != nil {
+			wp.metrics.SyncErrorsTotal.WithLabelValues("user_features", "redis_expire").Inc()
+			res.Status = "FAILED"
+			res.Error = fmt.Errorf("failed to set TTL on user features for user %s: %w", rec.UserID, err)
 			wp.recordAudit(ctx, jobID, subscriptionID, "user_features", syncedCount, "FAILED", time.Since(start), res.Error.Error())
 			return res, res.Error
 		}
@@ -510,11 +520,15 @@ func (wp *WorkerPool) SyncDarkStoreInventoryParallel(
 	return res, nil
 }
 
-// recordAudit persists sync audit entries to the metadata audit table (Issue #649).
-func (wp *WorkerPool) recordAudit(ctx context.Context, jobID, subscriptionID, syncType string, rows int64, status string, duration time.Duration, errMsg string) {
+// recordAudit persists sync audit entries to the metadata audit table using a
+// detached context so CANCELLED and post-timeout rows are still committed.
+func (wp *WorkerPool) recordAudit(_ context.Context, jobID, subscriptionID, syncType string, rows int64, status string, duration time.Duration, errMsg string) {
 	if wp.db == nil {
 		return
 	}
+
+	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	const query = `
 		INSERT INTO reverse_etl_sync_audit (
@@ -528,7 +542,7 @@ func (wp *WorkerPool) recordAudit(ctx context.Context, jobID, subscriptionID, sy
 			error_message = EXCLUDED.error_message
 	`
 
-	_, err := wp.db.ExecContext(ctx, query,
+	_, err := wp.db.ExecContext(auditCtx, query,
 		jobID, subscriptionID, syncType, rows,
 		status, duration.Milliseconds(), errMsg, time.Now(),
 	)
