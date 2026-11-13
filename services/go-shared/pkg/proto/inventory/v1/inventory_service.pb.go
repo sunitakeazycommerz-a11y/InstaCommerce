@@ -7,7 +7,6 @@
 package inventoryv1
 
 import (
-	_ "github.com/instacommerce/go-shared/pkg/proto/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -598,7 +597,7 @@ var File_inventory_v1_inventory_service_proto protoreflect.FileDescriptor
 
 const file_inventory_v1_inventory_service_proto_rawDesc = "" +
 	"\n" +
-	"$inventory/v1/inventory_service.proto\x12\finventory.v1\x1a\x15common/v1/money.proto\"\x8c\x01\n" +
+	"$inventory/v1/inventory_service.proto\x12\finventory.v1\"\x8c\x01\n" +
 	"\x13ReserveStockRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x19\n" +
 	"\border_id\x18\x02 \x01(\tR\aorderId\x121\n" +

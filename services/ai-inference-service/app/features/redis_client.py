@@ -11,9 +11,78 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-from typing import Any, Dict, List, Optional, cast
+import math
+import re
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
+
+_INT_RE = re.compile(r"[+-]?\d+")
+_FLOAT_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+_STRING_METADATA_FIELDS = frozenset(
+    {
+        "user_id",
+        "segment",
+        "updated_at",
+        "job_id",
+        "clv_segment",
+        "preferred_payment_method",
+        "preferred_delivery_slot",
+    }
+)
+
+
+def _decode_redis_text(value: Any) -> Optional[str]:
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _parse_hash_value(field: str, raw_value: Any) -> Tuple[bool, Any]:
+    if raw_value is None:
+        return False, None
+    if isinstance(raw_value, bool):
+        return True, raw_value
+    if isinstance(raw_value, int):
+        return True, raw_value
+    if isinstance(raw_value, float):
+        return (True, raw_value) if math.isfinite(raw_value) else (False, None)
+
+    text = _decode_redis_text(raw_value)
+    if text is None:
+        return False, None
+
+    if field in _STRING_METADATA_FIELDS:
+        return True, text
+
+    stripped = text.strip()
+    if not stripped:
+        return True, text
+
+    if (stripped.startswith("{") and stripped.endswith("}")) or (
+        stripped.startswith("[") and stripped.endswith("]")
+    ):
+        try:
+            parsed_json = json.loads(stripped)
+            if isinstance(parsed_json, (dict, list)):
+                return True, parsed_json
+        except json.JSONDecodeError:
+            return True, text
+
+    if _INT_RE.fullmatch(stripped):
+        return True, int(stripped)
+
+    if _FLOAT_RE.fullmatch(stripped):
+        parsed_float = float(stripped)
+        if math.isfinite(parsed_float):
+            return True, parsed_float
+
+    return True, text
 
 
 class RedisFeatureStoreClient:
@@ -68,15 +137,51 @@ class RedisFeatureStoreClient:
                 logger.warning("Redis set error for %s: %s", key, e)
         self._in_memory_store[key] = val
 
-    def get_user_features(self, user_id: str) -> Dict[str, Any]:
-        """Fetch user online feature vector."""
-        key = f"user_features:{user_id}"
-        raw = self._get_raw(key)
-        if raw:
+    def _hgetall_raw(self, key: str) -> Optional[Dict[Any, Any]]:
+        if self._client is not None:
             try:
-                return json.loads(raw)
-            except Exception:
-                pass
+                res = self._client.hgetall(key)
+                if isinstance(res, dict):
+                    return cast(Dict[Any, Any], res)
+            except Exception as e:
+                logger.warning("Redis hgetall error for %s: %s", key, e)
+        return None
+
+    @staticmethod
+    def _parse_user_hash(raw_hash: Dict[Any, Any]) -> Dict[str, Any]:
+        parsed: Dict[str, Any] = {}
+        for raw_key, raw_val in raw_hash.items():
+            field = _decode_redis_text(raw_key)
+            if not field:
+                continue
+            valid, value = _parse_hash_value(field, raw_val)
+            if valid:
+                parsed[field] = value
+        return parsed
+
+    @staticmethod
+    def _parse_json_dict(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return None
+        if isinstance(parsed, dict):
+            return cast(Dict[str, Any], parsed)
+        return None
+
+    def get_user_features(self, user_id: str) -> Dict[str, Any]:
+        """Fetch user online feature vector, preferring Go ETL Redis hashes."""
+        raw_hash = self._hgetall_raw(f"user:features:{user_id}")
+        if raw_hash:
+            parsed_hash = self._parse_user_hash(raw_hash)
+            if parsed_hash:
+                return parsed_hash
+
+        parsed_json = self._parse_json_dict(self._get_raw(f"user_features:{user_id}"))
+        if parsed_json is not None:
+            return parsed_json
         return {
             "user_id": user_id,
             "order_count_30d": 0,
@@ -92,13 +197,9 @@ class RedisFeatureStoreClient:
 
     def get_product_features(self, product_id: str) -> Dict[str, Any]:
         """Fetch product online feature vector."""
-        key = f"product_features:{product_id}"
-        raw = self._get_raw(key)
-        if raw:
-            try:
-                return json.loads(raw)
-            except Exception:
-                pass
+        parsed_json = self._parse_json_dict(self._get_raw(f"product_features:{product_id}"))
+        if parsed_json is not None:
+            return parsed_json
         return {
             "product_id": product_id,
             "conversion_rate_30d": 0.0,
@@ -171,7 +272,14 @@ class RedisFeatureStoreClient:
             for feat_name, off_val in off_feats.items():
                 if feat_name in on_feats:
                     total += 1
-                    on_val = float(on_feats[feat_name])
+                    try:
+                        on_val = float(on_feats[feat_name])
+                    except (TypeError, ValueError):
+                        drifted += 1
+                        continue
+                    if not math.isfinite(on_val):
+                        drifted += 1
+                        continue
                     delta = abs(off_val - on_val)
                     deltas.append(delta)
                     if off_val != 0:

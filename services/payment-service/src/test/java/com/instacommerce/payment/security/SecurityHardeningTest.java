@@ -14,6 +14,8 @@ import com.instacommerce.payment.service.PaymentService;
 import com.instacommerce.payment.webhook.WebhookEventHandler;
 import com.instacommerce.payment.webhook.WebhookSignatureVerifier;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -23,13 +25,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.web.context.WebApplicationContext;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -77,10 +80,10 @@ class SecurityHardeningTest {
         registry.add("internal.service.token", () -> TEST_TOKEN);
     }
 
-    @org.junit.jupiter.api.BeforeAll
+    @BeforeAll
     static void runMigrations() {
         POSTGRES.start();
-        org.flywaydb.core.Flyway.configure()
+        Flyway.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration")
             .load()
@@ -178,8 +181,7 @@ class SecurityHardeningTest {
 
             // Regular authenticated user without ADMIN or INTERNAL_SERVICE → 403
             mockMvc.perform(get("/payments/{id}", paymentId)
-                    .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors
-                        .user("regular-user").roles("USER")))
+                    .with(SecurityMockMvcRequestPostProcessors.user("regular-user").roles("USER")))
                 .andExpect(status().isForbidden());
         }
 

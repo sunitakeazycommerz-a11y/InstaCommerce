@@ -468,10 +468,15 @@ jobs:
       - name: Docker build
         if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         run: |
+          if [ "${{ matrix.service }}" = "ai-inference-service" ]; then
+            build_context="."
+          else
+            build_context="services/${{ matrix.service }}"
+          fi
           docker build \
             -t ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
             -f services/${{ matrix.service }}/Dockerfile \
-            services/${{ matrix.service }}
+            "$build_context"
       - name: Trivy scan
         if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         uses: aquasecurity/trivy-action@0.35.0
