@@ -9,7 +9,9 @@ import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -22,7 +24,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping({"/cart", "/api/carts"})
+@RequestMapping({"/cart", "/api/carts", "/api/v1/cart"})
 public class CartController {
     private final CartService cartService;
 
@@ -40,7 +42,9 @@ public class CartController {
     }
 
     @GetMapping("/{userId}")
-    public ResponseEntity<CartResponse> getCartByUserId(@PathVariable UUID userId) {
+    public ResponseEntity<CartResponse> getCartByUserId(@PathVariable UUID userId,
+                                                        Authentication authentication) {
+        authorizeUserAccess(userId, authentication);
         CartResponse response = cartService.getCart(userId);
         return ResponseEntity.ok()
             .eTag("\"" + response.version() + "\"")
@@ -120,7 +124,9 @@ public class CartController {
     }
 
     @DeleteMapping("/{userId}")
-    public ResponseEntity<Void> clearCartByUserId(@PathVariable UUID userId) {
+    public ResponseEntity<Void> clearCartByUserId(@PathVariable UUID userId,
+                                                  Authentication authentication) {
+        authorizeUserAccess(userId, authentication);
         cartService.clearCart(userId);
         return ResponseEntity.noContent().build();
     }
@@ -132,8 +138,43 @@ public class CartController {
     }
 
     @GetMapping({"/{userId}/validate", "/validate/{userId}"})
-    public ResponseEntity<CartResponse> validateCartByUserId(@PathVariable UUID userId) {
+    public ResponseEntity<CartResponse> validateCartByUserId(@PathVariable UUID userId,
+                                                             Authentication authentication) {
+        authorizeUserAccess(userId, authentication);
         return ResponseEntity.ok(cartService.validateCart(userId));
+    }
+
+    private void authorizeUserAccess(UUID targetUserId, Authentication authentication) {
+        if (authentication == null) {
+            throw new AccessDeniedException("Access denied");
+        }
+        if (hasPrivilegedRole(authentication)) {
+            return;
+        }
+        UUID principalId = parseUuidOrNull(authentication.getName());
+        if (principalId == null || !principalId.equals(targetUserId)) {
+            throw new AccessDeniedException("Access denied");
+        }
+    }
+
+    private boolean hasPrivilegedRole(Authentication authentication) {
+        if (authentication.getAuthorities() == null) {
+            return false;
+        }
+        return authentication.getAuthorities().stream()
+            .map(GrantedAuthority::getAuthority)
+            .anyMatch(role -> "ROLE_ADMIN".equals(role) || "ROLE_INTERNAL_SERVICE".equals(role));
+    }
+
+    private UUID parseUuidOrNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     private UUID extractUserId(Authentication authentication) {

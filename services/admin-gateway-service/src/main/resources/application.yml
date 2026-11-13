@@ -52,6 +52,40 @@ admin-gateway:
     issuer: ${JWT_ISSUER:instacommerce-identity}
     aud: ${JWT_AUD:instacommerce-admin}
     clock-skew-seconds: ${JWT_CLOCK_SKEW_SECONDS:300}
+  http:
+    connect-timeout-ms: ${ADMIN_HTTP_CONNECT_TIMEOUT_MS:1500}
+    read-timeout-ms: ${ADMIN_HTTP_READ_TIMEOUT_MS:2000}
+  upstream:
+    feature-flag-url: ${FEATURE_FLAG_SERVICE_URL:http://config-feature-flag-service:8098}
+    reconciliation-url: ${RECONCILIATION_ENGINE_URL:http://reconciliation-engine:8107}
+  dashboard:
+    timeout-ms: ${DASHBOARD_TIMEOUT_MS:2000}
+    per-service-timeout-ms: ${DASHBOARD_PER_SERVICE_TIMEOUT_MS:1000}
+    services:
+      - name: config-feature-flag-service
+        base-url: ${FEATURE_FLAG_SERVICE_URL:http://config-feature-flag-service:8098}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+      - name: reconciliation-engine
+        base-url: ${RECONCILIATION_ENGINE_URL:http://reconciliation-engine:8107}
+        health-path: /ready
+        metrics-path: /metrics
+      - name: audit-trail-service
+        base-url: ${AUDIT_TRAIL_SERVICE_URL:http://audit-trail-service:8096}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+      - name: order-service
+        base-url: ${ORDER_SERVICE_URL:http://order-service:8085}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+      - name: payment-service
+        base-url: ${PAYMENT_SERVICE_URL:http://payment-service:8086}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+      - name: fulfillment-service
+        base-url: ${FULFILLMENT_SERVICE_URL:http://fulfillment-service:8087}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
 
 internal:
   service:
