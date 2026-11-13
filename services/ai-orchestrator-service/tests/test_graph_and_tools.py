@@ -380,3 +380,42 @@ async def test_graph_escalates_when_latency_budget_exceeded_from_created_at() ->
     assert result.needs_escalation is True
     assert "Latency budget exceeded" in (result.escalation_reason or "")
     assert result.completed_nodes == ["classify_intent", "check_policy", "escalate"]
+
+
+@pytest.mark.asyncio
+async def test_tool_registry_sends_internal_headers_without_bearer_authorization() -> None:
+    captured: List[httpx.Request] = []
+    registry = _make_mock_registry(
+        responses={("GET", "/search"): (200, {"results": []})},
+        captured_requests=captured,
+        settings=Settings(internal_service_token="shared-internal-secret"),
+    )
+    try:
+        res = await registry.call("catalog.search", params={"q": "milk"})
+    finally:
+        await registry.close()
+
+    assert res.success is True
+    assert len(captured) == 1
+    headers = captured[0].headers
+    assert headers.get("x-internal-service") == "ai-orchestrator-service"
+    assert headers.get("x-internal-token") == "shared-internal-secret"
+    assert "authorization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_substitute_intent_skips_inventory_check_without_store_and_items() -> None:
+    from app.graph.nodes import _plan_tools
+
+    without_ctx = AgentState(query="oat milk substitute", intent=IntentType.SUBSTITUTE)
+    assert _plan_tools(without_ctx) == [{"tool": "catalog.search", "params": {"q": "oat milk substitute"}}]
+
+    with_ctx = AgentState(
+        query="oat milk substitute",
+        intent=IntentType.SUBSTITUTE,
+        context={"store_id": "store-1", "items": [{"productId": "prod-1", "quantity": 1}]},
+    )
+    assert _plan_tools(with_ctx) == [
+        {"tool": "catalog.search", "params": {"q": "oat milk substitute"}},
+        {"tool": "inventory.check", "body": {"storeId": "store-1", "items": [{"productId": "prod-1", "quantity": 1}]}},
+    ]

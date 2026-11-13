@@ -18,33 +18,15 @@ from apache_beam.transforms.window import FixedWindows, TimestampedValue, Durati
 from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, AccumulationMode, AfterCount
 import json
 import logging
-import time
 from datetime import datetime, timezone
-from dateutil.parser import isoparse
+
+from pipelines.common import (
+    first_present as _first_present,
+    parse_event_ts as _parse_event_ts,
+    window_end_iso as _window_end_iso,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _first_present(mapping, *keys, default=None):
-    for key in keys:
-        if key in mapping and mapping[key] is not None:
-            return mapping[key]
-    return default
-
-
-def _parse_event_ts(event_time_str):
-    if event_time_str:
-        try:
-            return isoparse(event_time_str).timestamp()
-        except (ValueError, TypeError):
-            return time.time()
-    return time.time()
-
-
-def _window_end_iso(window) -> str:
-    if window is None or window is beam.DoFn.WindowParam:
-        return datetime.now(timezone.utc).isoformat()
-    return window.end.to_utc_datetime().isoformat()
 
 STOCKOUT_THRESHOLD = 5  # Alert when quantity drops below this
 

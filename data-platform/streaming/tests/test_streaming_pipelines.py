@@ -190,7 +190,6 @@ from pipelines.rider_location_pipeline import (  # noqa: E402
     format_utilization_row,
 )
 from pipelines.order_payment_join_pipeline import (  # noqa: E402
-    CorrelateOrderPaymentFn,
     ParseOrderFn,
     ParsePaymentFn,
     StatefulOrderPaymentJoinFn,
@@ -432,45 +431,6 @@ def test_rider_location_spatial_preaggregation_and_summary():
     assert z_out["active_rider_count"] == 1
     assert z_out["idle_rider_count"] == 1
     assert z_out["total_pings"] == 3
-
-
-def test_order_payment_join_correlation():
-    """Verify CorrelateOrderPaymentFn joins orders and payments on order_id (#663)."""
-    join_fn = CorrelateOrderPaymentFn()
-    grouped_element = (
-        "ord-555",
-        {
-            "orders": [
-                {
-                    "user_id": "usr-42",
-                    "store_id": "str-9",
-                    "zone_id": "zone-south",
-                    "total_cents": 4500,
-                    "event_type": "ORDER_PLACED",
-                    "placed_at": "2026-10-18T10:00:00Z",
-                }
-            ],
-            "payments": [
-                {
-                    "payment_id": "pay-777",
-                    "method": "UPI",
-                    "status": "SUCCESS",
-                    "amount_cents": 4500,
-                    "latency_ms": 120,
-                }
-            ],
-        },
-    )
-
-    results = list(join_fn.process(grouped_element))
-    assert len(results) == 1
-    unified = results[0]
-    assert unified["order_id"] == "ord-555"
-    assert unified["user_id"] == "usr-42"
-    assert unified["payment_method"] == "UPI"
-    assert unified["payment_status"] == "SUCCESS"
-    assert unified["order_total_cents"] == 4500
-    assert unified["payment_latency_ms"] == 120
 
 
 def test_stateful_order_payment_join_across_epoch_boundary():

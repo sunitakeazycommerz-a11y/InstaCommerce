@@ -15,27 +15,14 @@ from apache_beam.transforms.userstate import ReadModifyWriteStateSpec, TimerSpec
 from apache_beam.transforms.window import GlobalWindows, TimestampedValue
 import json
 import logging
-import time
 from datetime import datetime, timezone
-from dateutil.parser import isoparse
+
+from pipelines.common import (
+    first_present as _first_present,
+    parse_event_ts as _parse_event_ts,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _first_present(mapping, *keys, default=None):
-    for key in keys:
-        if key in mapping and mapping[key] is not None:
-            return mapping[key]
-    return default
-
-
-def _parse_event_ts(event_time_str):
-    if event_time_str:
-        try:
-            return isoparse(event_time_str).timestamp()
-        except (ValueError, TypeError):
-            return time.time()
-    return time.time()
 
 
 class OrderPaymentJoinPipelineOptions(PipelineOptions):
@@ -170,23 +157,6 @@ def _build_joined_row(order_id: str, order_data: dict, payment_data: dict) -> di
         "payment_latency_ms": payment_data.get("latency_ms"),
         "joined_at": datetime.now(timezone.utc).isoformat(),
     }
-
-
-class CorrelateOrderPaymentFn(beam.DoFn):
-    """Correlate order and payment streams from CoGroupByKey on order_id."""
-
-    def process(self, element):
-        order_id, grouped = element
-        orders = list(grouped.get("orders", []))
-        payments = list(grouped.get("payments", []))
-
-        if not orders and not payments:
-            return
-
-        order_data = orders[0] if orders else {}
-        payment_data = payments[0] if payments else {}
-
-        yield _build_joined_row(order_id, order_data, payment_data)
 
 
 class StatefulOrderPaymentJoinFn(beam.DoFn):
