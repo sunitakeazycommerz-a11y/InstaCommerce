@@ -361,22 +361,62 @@ func ShouldAutoFix(ledgerAmountStr, pspAmountStr string) bool {
 	return diff.Cmp(threshold) <= 0
 }
 
-func calculateDiscrepancyCents(ledgerStr, pspStr string) int64 {
-	parseCents := func(s string) int64 {
-		s = strings.TrimSpace(s)
-		if s == "" || s == "0.00" || s == "0" {
-			return 0
-		}
+func parseAmountCents(raw string) int64 {
+	s := strings.TrimSpace(raw)
+	if s == "" || s == "0.00" || s == "0" {
+		return 0
+	}
+	if !strings.Contains(s, ".") {
 		if val, err := strconv.ParseInt(s, 10, 64); err == nil {
 			return val
 		}
-		if f, err := strconv.ParseFloat(s, 64); err == nil {
-			return int64(f * 100)
-		}
-		return 0
 	}
-	l := parseCents(ledgerStr)
-	p := parseCents(pspStr)
+	if rat, ok := new(big.Rat).SetString(s); ok {
+		scaled := new(big.Rat).Mul(rat, big.NewRat(100, 1))
+		if scaled.IsInt() {
+			num := scaled.Num()
+			if num.IsInt64() {
+				return num.Int64()
+			}
+		}
+		f, _ := scaled.Float64()
+		return int64(f)
+	}
+	return 0
+}
+
+func formatCentsAsDecimal(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "0.00"
+	}
+	if strings.Contains(trimmed, ".") {
+		if rat, ok := new(big.Rat).SetString(trimmed); ok {
+			return rat.FloatString(2)
+		}
+		return trimmed
+	}
+	cents, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		if rat, ok := new(big.Rat).SetString(trimmed); ok {
+			return new(big.Rat).Quo(rat, big.NewRat(100, 1)).FloatString(2)
+		}
+		return trimmed
+	}
+	sign := ""
+	var abs uint64
+	if cents < 0 {
+		sign = "-"
+		abs = uint64(-(cents+1)) + 1
+	} else {
+		abs = uint64(cents)
+	}
+	return fmt.Sprintf("%s%d.%02d", sign, abs/100, abs%100)
+}
+
+func calculateDiscrepancyCents(ledgerStr, pspStr string) int64 {
+	l := parseAmountCents(ledgerStr)
+	p := parseAmountCents(pspStr)
 	diff := l - p
 	if diff < 0 {
 		return -diff
@@ -387,14 +427,8 @@ func calculateDiscrepancyCents(ledgerStr, pspStr string) int64 {
 func (r *DBReconciler) processMismatch(ctx context.Context, tx *sql.Tx, runID int64, mismatch MismatchDetail) error {
 	reason := mismatch.Reason
 	manualReview := !mismatch.AutoFixed
-	ledgerAmt := mismatch.LedgerAmount
-	if ledgerAmt == "" {
-		ledgerAmt = "0.00"
-	}
-	pspAmt := mismatch.PSPAmount
-	if pspAmt == "" {
-		pspAmt = "0.00"
-	}
+	ledgerAmt := formatCentsAsDecimal(mismatch.LedgerAmount)
+	pspAmt := formatCentsAsDecimal(mismatch.PSPAmount)
 
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO reconciliation_mismatches

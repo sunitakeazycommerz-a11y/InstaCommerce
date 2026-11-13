@@ -44,6 +44,54 @@ func (m *mockRedisClient) SetNX(ctx context.Context, key string, value interface
 	return cmd
 }
 
+func (m *mockRedisClient) Exists(ctx context.Context, keys ...string) *redis.IntCmd {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cmd := redis.NewIntCmd(ctx, nil)
+	if m.err != nil {
+		cmd.SetErr(m.err)
+		return cmd
+	}
+
+	var count int64
+	for _, key := range keys {
+		if _, exists := m.data[key]; exists {
+			count++
+		}
+	}
+	cmd.SetVal(count)
+	return cmd
+}
+
+func TestCheckerCheckDuplicateAndMarkProcessed(t *testing.T) {
+	ctx := context.Background()
+	mockRedis := newMockRedisClient()
+	checker := NewChecker(mockRedis, nil).WithBloomFilter(NewBloomFilter(100, 0.01))
+
+	dup, err := checker.CheckDuplicate(ctx, "orders.events", 0, 42)
+	require.NoError(t, err)
+	assert.False(t, dup)
+
+	dup, err = checker.CheckDuplicate(ctx, "orders.events", 0, 42)
+	require.NoError(t, err)
+	assert.False(t, dup, "CheckDuplicate must remain read-only until MarkProcessed")
+
+	require.NoError(t, checker.MarkProcessed(ctx, "orders.events", 0, 42))
+
+	dup, err = checker.CheckDuplicate(ctx, "orders.events", 0, 42)
+	require.NoError(t, err)
+	assert.True(t, dup, "MarkProcessed should cause subsequent CheckDuplicate to skip")
+
+	mockRedis.err = assert.AnError
+	dup, err = checker.CheckDuplicate(ctx, "orders.events", 0, 43)
+	assert.Error(t, err)
+	assert.False(t, dup, "Redis lookup errors should fail open")
+
+	err = checker.MarkProcessed(ctx, "orders.events", 0, 43)
+	assert.Error(t, err)
+}
+
 func TestCheckerIsDuplicate(t *testing.T) {
 	ctx := context.Background()
 	mockRedis := newMockRedisClient()

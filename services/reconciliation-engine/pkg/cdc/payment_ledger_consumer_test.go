@@ -10,10 +10,10 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/instacommerce/reconciliation-engine/internal/testdb"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -444,11 +444,6 @@ func TestIdempotentProcessing_ShouldHandleDuplicateEvents(t *testing.T) {
 	}
 }
 
-type recordedSQL struct {
-	Query string
-	Args  []driver.NamedValue
-}
-
 type paymentLedgerRow struct {
 	TransactionID string
 	PaymentID     string
@@ -464,111 +459,65 @@ type paymentLedgerRow struct {
 }
 
 type cdcStubState struct {
-	mu       sync.Mutex
-	queries  []recordedSQL
-	rows     map[string]paymentLedgerRow
-	execErr  error
-	nextConn atomic.Int64
+	mu      sync.Mutex
+	rows    map[string]paymentLedgerRow
+	execErr error
 }
 
 func newCDCStubDB() (*sql.DB, *cdcStubState) {
 	state := &cdcStubState{
 		rows: make(map[string]paymentLedgerRow),
 	}
-	return sql.OpenDB(&cdcStubConnector{state: state}), state
-}
+	db, _ := testdb.New(nil, func(_ int64, query string, args []driver.NamedValue) (driver.Result, error) {
+		state.mu.Lock()
+		defer state.mu.Unlock()
 
-type cdcStubConnector struct{ state *cdcStubState }
-
-func (c *cdcStubConnector) Connect(context.Context) (driver.Conn, error) {
-	c.state.nextConn.Add(1)
-	return &cdcStubConn{state: c.state}, nil
-}
-
-func (c *cdcStubConnector) Driver() driver.Driver { return &cdcStubDriver{state: c.state} }
-
-type cdcStubDriver struct{ state *cdcStubState }
-
-func (d *cdcStubDriver) Open(string) (driver.Conn, error) {
-	return &cdcStubConn{state: d.state}, nil
-}
-
-type cdcStubTx struct{}
-
-func (t *cdcStubTx) Commit() error   { return nil }
-func (t *cdcStubTx) Rollback() error { return nil }
-
-type cdcEmptyRows struct{}
-
-func (r *cdcEmptyRows) Columns() []string              { return nil }
-func (r *cdcEmptyRows) Close() error                   { return nil }
-func (r *cdcEmptyRows) Next([]driver.Value) error      { return io.EOF }
-
-type cdcStubConn struct{ state *cdcStubState }
-
-func (c *cdcStubConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
-func (c *cdcStubConn) Close() error                        { return nil }
-func (c *cdcStubConn) Begin() (driver.Tx, error)           { return &cdcStubTx{}, nil }
-func (c *cdcStubConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return &cdcStubTx{}, nil
-}
-
-func (c *cdcStubConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
-	return &cdcEmptyRows{}, nil
-}
-
-func (c *cdcStubConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	copied := make([]driver.NamedValue, len(args))
-	copy(copied, args)
-
-	c.state.mu.Lock()
-	defer c.state.mu.Unlock()
-	c.state.queries = append(c.state.queries, recordedSQL{Query: query, Args: copied})
-
-	if c.state.execErr != nil {
-		return nil, c.state.execErr
-	}
-
-	switch {
-	case strings.Contains(query, "DELETE FROM payment_ledger"):
-		paymentID, _ := args[0].Value.(string)
-		if existing, ok := c.state.rows[paymentID]; ok && existing.PSPReference == "" {
-			delete(c.state.rows, paymentID)
+		if state.execErr != nil {
+			return nil, state.execErr
 		}
-		return driver.RowsAffected(1), nil
-	case strings.Contains(query, "INSERT INTO payment_ledger"):
-		row := paymentLedgerRow{
-			TransactionID: args[0].Value.(string),
-			PaymentID:     args[1].Value.(string),
-			OrderID:       args[2].Value.(string),
-			PSPReference:  args[3].Value.(string),
-			AmountCents:   args[4].Value.(int64),
-			CapturedCents: args[5].Value.(int64),
-			RefundedCents: args[6].Value.(int64),
-			Currency:      args[7].Value.(string),
-			Status:        args[8].Value.(string),
-			PaymentMethod: args[9].Value.(string),
-			SourceLSN:     args[10].Value.(int64),
+
+		switch {
+		case strings.Contains(query, "DELETE FROM payment_ledger"):
+			paymentID, _ := args[0].Value.(string)
+			if existing, ok := state.rows[paymentID]; ok && existing.PSPReference == "" {
+				delete(state.rows, paymentID)
+			}
+			return driver.RowsAffected(1), nil
+		case strings.Contains(query, "INSERT INTO payment_ledger"):
+			row := paymentLedgerRow{
+				TransactionID: args[0].Value.(string),
+				PaymentID:     args[1].Value.(string),
+				OrderID:       args[2].Value.(string),
+				PSPReference:  args[3].Value.(string),
+				AmountCents:   args[4].Value.(int64),
+				CapturedCents: args[5].Value.(int64),
+				RefundedCents: args[6].Value.(int64),
+				Currency:      args[7].Value.(string),
+				Status:        args[8].Value.(string),
+				PaymentMethod: args[9].Value.(string),
+				SourceLSN:     args[10].Value.(int64),
+			}
+			if existing, exists := state.rows[row.TransactionID]; exists {
+				if row.SourceLSN < existing.SourceLSN {
+					return driver.RowsAffected(0), nil
+				}
+				if row.OrderID == "" {
+					row.OrderID = existing.OrderID
+				}
+				if row.PSPReference == "" {
+					row.PSPReference = existing.PSPReference
+				}
+				if row.PaymentMethod == "" {
+					row.PaymentMethod = existing.PaymentMethod
+				}
+			}
+			state.rows[row.TransactionID] = row
+			return driver.RowsAffected(1), nil
+		default:
+			return driver.RowsAffected(1), nil
 		}
-		if existing, exists := c.state.rows[row.TransactionID]; exists {
-			if row.SourceLSN < existing.SourceLSN {
-				return driver.RowsAffected(0), nil
-			}
-			if row.OrderID == "" {
-				row.OrderID = existing.OrderID
-			}
-			if row.PSPReference == "" {
-				row.PSPReference = existing.PSPReference
-			}
-			if row.PaymentMethod == "" {
-				row.PaymentMethod = existing.PaymentMethod
-			}
-		}
-		c.state.rows[row.TransactionID] = row
-		return driver.RowsAffected(1), nil
-	default:
-		return driver.RowsAffected(1), nil
-	}
+	})
+	return db, state
 }
 
 func newTestPaymentCDCConsumer(t *testing.T, db *sql.DB) *CDCConsumer {

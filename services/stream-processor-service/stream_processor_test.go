@@ -35,6 +35,18 @@ func (m *MockRedisClient) SetNX(ctx context.Context, key string, value interface
 	return cmd
 }
 
+func (m *MockRedisClient) Exists(ctx context.Context, keys ...string) *redis.IntCmd {
+	cmd := redis.NewIntCmd(ctx, nil)
+	var count int64
+	for _, key := range keys {
+		if _, exists := m.data[key]; exists {
+			count++
+		}
+	}
+	cmd.SetVal(count)
+	return cmd
+}
+
 func TestEventDeduplicationDetectsRepeatedEvents(t *testing.T) {
 	// Test that deduplication detects duplicate events
 	ctx := context.Background()

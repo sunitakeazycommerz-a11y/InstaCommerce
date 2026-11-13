@@ -465,26 +465,17 @@ func (c *CDCConsumer) processPaymentRecord(ctx context.Context, after map[string
 	c.metrics.eventsReceived++
 	c.mu.Unlock()
 
-	recordFailed := func() {
-		c.mu.Lock()
-		c.metrics.eventsFailed++
-		c.mu.Unlock()
-	}
-
 	entry, err := parsePaymentLedgerRecord(after, tsMs, lsn)
 	if err != nil {
-		recordFailed()
 		return err
 	}
 
 	db := c.db
 	if db == nil {
-		recordFailed()
 		return errors.New("payment ledger database is not configured")
 	}
 
 	if err := upsertPaymentLedger(ctx, db, entry); err != nil {
-		recordFailed()
 		return err
 	}
 
@@ -644,7 +635,9 @@ func extractInt64(m map[string]interface{}, keys ...string) (int64, bool) {
 		}
 		switch v := raw.(type) {
 		case float64:
-			return int64(v), true
+			if v >= -9223372036854775808.0 && v < 9223372036854775808.0 && v == float64(int64(v)) {
+				return int64(v), true
+			}
 		case int64:
 			return v, true
 		case int:

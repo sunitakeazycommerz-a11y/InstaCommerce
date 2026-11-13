@@ -177,6 +177,17 @@ func TestCalculateDiscrepancyCents(t *testing.T) {
 	assert.Equal(t, int64(1000), calculateDiscrepancyCents("1000", "0.00"))
 	assert.Equal(t, int64(2500), calculateDiscrepancyCents("0.00", "2500"))
 	assert.Equal(t, int64(1000), calculateDiscrepancyCents("1000", ""))
+	assert.Equal(t, int64(2599), calculateDiscrepancyCents("25.99", "0.00"))
+}
+
+func TestFormatCentsAsDecimal(t *testing.T) {
+	assert.Equal(t, "0.00", formatCentsAsDecimal(""))
+	assert.Equal(t, "0.00", formatCentsAsDecimal("0"))
+	assert.Equal(t, "0.05", formatCentsAsDecimal("5"))
+	assert.Equal(t, "45.00", formatCentsAsDecimal("4500"))
+	assert.Equal(t, "-1.25", formatCentsAsDecimal("-125"))
+	assert.Equal(t, "25.99", formatCentsAsDecimal("25.99"))
+	assert.Equal(t, "0.00", formatCentsAsDecimal("0.00"))
 }
 
 func TestProcessMismatch_OmitsDiscrepancyAmount(t *testing.T) {
@@ -200,10 +211,11 @@ func TestProcessMismatch_OmitsDiscrepancyAmount(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	recorded := state.recorded()
 	var insertStmt *recordedStatement
-	for i := range state.statements {
-		if strings.Contains(state.statements[i].Query, "INSERT INTO reconciliation_mismatches") {
-			insertStmt = &state.statements[i]
+	for i := range recorded {
+		if strings.Contains(recorded[i].Query, "INSERT INTO reconciliation_mismatches") {
+			insertStmt = &recorded[i]
 			break
 		}
 	}
@@ -213,7 +225,7 @@ func TestProcessMismatch_OmitsDiscrepancyAmount(t *testing.T) {
 	assert.Equal(t, int64(42), insertStmt.Args[0].Value)
 	assert.Equal(t, "txn-002", insertStmt.Args[1].Value)
 	assert.Equal(t, "0.00", insertStmt.Args[2].Value)
-	assert.Equal(t, "4500", insertStmt.Args[3].Value)
+	assert.Equal(t, "45.00", insertStmt.Args[3].Value)
 	assert.Equal(t, "missing_ledger_entry", insertStmt.Args[4].Value)
 	assert.Equal(t, false, insertStmt.Args[5].Value)
 	assert.Equal(t, true, insertStmt.Args[6].Value)
