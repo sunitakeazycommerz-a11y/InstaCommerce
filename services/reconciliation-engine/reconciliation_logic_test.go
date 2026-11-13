@@ -47,8 +47,10 @@ func TestAutoFixEdgeCasesWithPrecision(t *testing.T) {
 		{"Max threshold", "1000", "1050", true},              // Exactly at 5% threshold
 		{"Just over threshold", "1000", "1051", false},       // 5.1% difference (over threshold)
 		{"Large amounts penny diff", "100000", "100001", true}, // 0.001% difference
-		{"Negative amounts equal", "-1000", "-1000", true},   // Equal negative amounts
-		{"Opposite sign amounts", "1000", "-1000", false},    // Opposite signs (full difference)
+		{"Absolute cap boundary", "100000", "100100", true},     // 100 cents diff within cap
+		{"Exceeds 100 cent cap", "100000", "100101", false},     // 101 cents exceeds cap despite <5%
+		{"Negative amounts equal", "-1000", "-1000", true},      // Equal negative amounts
+		{"Opposite sign amounts", "1000", "-1000", false},       // Opposite signs (full difference)
 	}
 
 	for _, tt := range tests {
@@ -345,15 +347,48 @@ func setupTestDB(t *testing.T) *TestDB {
 			mismatch_id BIGSERIAL PRIMARY KEY,
 			run_id BIGINT NOT NULL,
 			transaction_id VARCHAR(255) NOT NULL,
-			ledger_amount NUMERIC(19, 2),
-			psp_amount NUMERIC(19, 2),
-			discrepancy_amount NUMERIC(19, 2),
+			ledger_amount NUMERIC(19, 2) NOT NULL,
+			psp_amount NUMERIC(19, 2) NOT NULL,
+			discrepancy_amount NUMERIC(19, 2) NOT NULL GENERATED ALWAYS AS (ledger_amount - psp_amount) STORED,
 			discrepancy_reason VARCHAR(500),
 			auto_fixed BOOLEAN DEFAULT FALSE,
 			manual_review_required BOOLEAN DEFAULT FALSE,
 			fix_applied_at TIMESTAMP,
 			created_at TIMESTAMP DEFAULT NOW(),
 			FOREIGN KEY (run_id) REFERENCES reconciliation_runs(run_id) ON DELETE CASCADE
+		)
+	`)
+
+	_, _ = db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS payment_ledger (
+			transaction_id VARCHAR(255) PRIMARY KEY,
+			payment_id VARCHAR(255) NOT NULL,
+			order_id VARCHAR(255),
+			psp_reference VARCHAR(255),
+			amount_cents BIGINT NOT NULL,
+			captured_cents BIGINT NOT NULL DEFAULT 0,
+			refunded_cents BIGINT NOT NULL DEFAULT 0,
+			currency VARCHAR(3) NOT NULL DEFAULT 'INR',
+			status VARCHAR(50) NOT NULL DEFAULT 'UNKNOWN',
+			payment_method VARCHAR(50),
+			source_lsn BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)
+	`)
+
+	_, _ = db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS psp_export_snapshot (
+			id BIGSERIAL PRIMARY KEY,
+			transaction_id VARCHAR(255) NOT NULL,
+			export_date DATE NOT NULL,
+			amount_cents BIGINT NOT NULL,
+			currency VARCHAR(3) NOT NULL DEFAULT 'INR',
+			status VARCHAR(50) NOT NULL DEFAULT 'SETTLED',
+			psp_name VARCHAR(64),
+			raw_payload JSONB,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			CONSTRAINT uq_psp_export_snapshot_txn_date UNIQUE (transaction_id, export_date)
 		)
 	`)
 
@@ -379,6 +414,8 @@ func (tdb *TestDB) cleanup(t *testing.T) {
 
 	_, _ = tdb.db.ExecContext(ctx, "DELETE FROM reconciliation_fixes")
 	_, _ = tdb.db.ExecContext(ctx, "DELETE FROM reconciliation_mismatches")
+	_, _ = tdb.db.ExecContext(ctx, "DELETE FROM psp_export_snapshot")
+	_, _ = tdb.db.ExecContext(ctx, "DELETE FROM payment_ledger")
 	_, _ = tdb.db.ExecContext(ctx, "DELETE FROM reconciliation_runs")
 
 	tdb.db.Close()

@@ -3,11 +3,51 @@ package main
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/lib/pq"
 )
+
+func TestMigrationSQLContracts(t *testing.T) {
+	v1Bytes, err := os.ReadFile(filepath.Join("src", "main", "resources", "db", "migration", "V1__create_reconciliation_schema.sql"))
+	if err != nil {
+		t.Fatalf("read V1 migration: %v", err)
+	}
+	v1SQL := string(v1Bytes)
+	if !strings.Contains(v1SQL, "discrepancy_amount NUMERIC(19, 2) NOT NULL GENERATED ALWAYS AS (ledger_amount - psp_amount) STORED") {
+		t.Fatalf("expected V1 discrepancy_amount generated column definition")
+	}
+
+	v4Bytes, err := os.ReadFile(filepath.Join("src", "main", "resources", "db", "migration", "V4__create_payment_ledger_and_psp_snapshot.sql"))
+	if err != nil {
+		t.Fatalf("read V4 migration: %v", err)
+	}
+	v4SQL := string(v4Bytes)
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS payment_ledger",
+		"transaction_id VARCHAR(255) PRIMARY KEY",
+		"payment_id VARCHAR(255) NOT NULL",
+		"order_id VARCHAR(255)",
+		"psp_reference VARCHAR(255)",
+		"amount_cents BIGINT NOT NULL",
+		"captured_cents BIGINT NOT NULL DEFAULT 0",
+		"refunded_cents BIGINT NOT NULL DEFAULT 0",
+		"currency VARCHAR(3)",
+		"status VARCHAR(50)",
+		"source_lsn BIGINT",
+		"CREATE TABLE IF NOT EXISTS psp_export_snapshot",
+		"export_date DATE NOT NULL",
+		"UNIQUE (transaction_id, export_date)",
+	} {
+		if !strings.Contains(v4SQL, required) {
+			t.Errorf("V4 migration missing required DDL fragment %q", required)
+		}
+	}
+}
 
 // TestReconciliationSchema verifies the database schema is correctly created.
 // This test requires a PostgreSQL database to be running.
@@ -48,6 +88,14 @@ func TestReconciliationSchema(t *testing.T) {
 		testTableExists(t, db, "reconciliation_outbox")
 	})
 
+	t.Run("payment_ledger table exists", func(t *testing.T) {
+		testTableExists(t, db, "payment_ledger")
+	})
+
+	t.Run("psp_export_snapshot table exists", func(t *testing.T) {
+		testTableExists(t, db, "psp_export_snapshot")
+	})
+
 	t.Run("indexes created", func(t *testing.T) {
 		testIndexExists(t, db, "idx_reconciliation_runs_date")
 		testIndexExists(t, db, "idx_reconciliation_runs_status")
@@ -60,6 +108,11 @@ func TestReconciliationSchema(t *testing.T) {
 		testIndexExists(t, db, "idx_outbox_published")
 		testIndexExists(t, db, "idx_outbox_run_id")
 		testIndexExists(t, db, "idx_outbox_created_at")
+		testIndexExists(t, db, "idx_payment_ledger_created_at")
+		testIndexExists(t, db, "idx_payment_ledger_payment_id")
+		testIndexExists(t, db, "idx_payment_ledger_order_id")
+		testIndexExists(t, db, "idx_payment_ledger_psp_reference")
+		testIndexExists(t, db, "idx_psp_export_snapshot_export_date")
 	})
 
 	t.Run("insert into reconciliation_runs", func(t *testing.T) {
@@ -308,6 +361,8 @@ func dropAndCreateSchema(db *sql.DB) error {
 		"reconciliation_fix_registry",
 		"reconciliation_mismatches",
 		"reconciliation_outbox",
+		"payment_ledger",
+		"psp_export_snapshot",
 		"reconciliation_runs",
 	}
 
@@ -395,6 +450,42 @@ func dropAndCreateSchema(db *sql.DB) error {
 	CREATE INDEX idx_outbox_published ON reconciliation_outbox(published);
 	CREATE INDEX idx_outbox_run_id ON reconciliation_outbox(run_id);
 	CREATE INDEX idx_outbox_created_at ON reconciliation_outbox(created_at);
+
+	CREATE TABLE payment_ledger (
+		transaction_id VARCHAR(255) PRIMARY KEY,
+		payment_id VARCHAR(255) NOT NULL,
+		order_id VARCHAR(255),
+		psp_reference VARCHAR(255),
+		amount_cents BIGINT NOT NULL,
+		captured_cents BIGINT NOT NULL DEFAULT 0,
+		refunded_cents BIGINT NOT NULL DEFAULT 0,
+		currency VARCHAR(3) NOT NULL DEFAULT 'INR',
+		status VARCHAR(50) NOT NULL DEFAULT 'UNKNOWN',
+		payment_method VARCHAR(50),
+		source_lsn BIGINT NOT NULL DEFAULT 0,
+		created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+	);
+
+	CREATE INDEX idx_payment_ledger_created_at ON payment_ledger(created_at DESC);
+	CREATE INDEX idx_payment_ledger_payment_id ON payment_ledger(payment_id);
+	CREATE INDEX idx_payment_ledger_order_id ON payment_ledger(order_id);
+	CREATE INDEX idx_payment_ledger_psp_reference ON payment_ledger(psp_reference);
+
+	CREATE TABLE psp_export_snapshot (
+		id BIGSERIAL PRIMARY KEY,
+		transaction_id VARCHAR(255) NOT NULL,
+		export_date DATE NOT NULL,
+		amount_cents BIGINT NOT NULL,
+		currency VARCHAR(3) NOT NULL DEFAULT 'INR',
+		status VARCHAR(50) NOT NULL DEFAULT 'SETTLED',
+		psp_name VARCHAR(64),
+		raw_payload JSONB,
+		created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+		CONSTRAINT uq_psp_export_snapshot_txn_date UNIQUE (transaction_id, export_date)
+	);
+
+	CREATE INDEX idx_psp_export_snapshot_export_date ON psp_export_snapshot(export_date);
 	`
 
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {

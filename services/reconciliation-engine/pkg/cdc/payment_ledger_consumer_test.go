@@ -2,10 +2,21 @@ package cdc
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/segmentio/kafka-go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParsing_DebeziumChangeEvent(t *testing.T) {
@@ -431,4 +442,341 @@ func TestIdempotentProcessing_ShouldHandleDuplicateEvents(t *testing.T) {
 	if snapshot.TotalMismatches != 10 {
 		t.Errorf("expected 10 total mismatches from 2 identical events, got %d", snapshot.TotalMismatches)
 	}
+}
+
+type recordedSQL struct {
+	Query string
+	Args  []driver.NamedValue
+}
+
+type paymentLedgerRow struct {
+	TransactionID string
+	PaymentID     string
+	OrderID       string
+	PSPReference  string
+	AmountCents   int64
+	CapturedCents int64
+	RefundedCents int64
+	Currency      string
+	Status        string
+	PaymentMethod string
+	SourceLSN     int64
+}
+
+type cdcStubState struct {
+	mu       sync.Mutex
+	queries  []recordedSQL
+	rows     map[string]paymentLedgerRow
+	execErr  error
+	nextConn atomic.Int64
+}
+
+func newCDCStubDB() (*sql.DB, *cdcStubState) {
+	state := &cdcStubState{
+		rows: make(map[string]paymentLedgerRow),
+	}
+	return sql.OpenDB(&cdcStubConnector{state: state}), state
+}
+
+type cdcStubConnector struct{ state *cdcStubState }
+
+func (c *cdcStubConnector) Connect(context.Context) (driver.Conn, error) {
+	c.state.nextConn.Add(1)
+	return &cdcStubConn{state: c.state}, nil
+}
+
+func (c *cdcStubConnector) Driver() driver.Driver { return &cdcStubDriver{state: c.state} }
+
+type cdcStubDriver struct{ state *cdcStubState }
+
+func (d *cdcStubDriver) Open(string) (driver.Conn, error) {
+	return &cdcStubConn{state: d.state}, nil
+}
+
+type cdcStubTx struct{}
+
+func (t *cdcStubTx) Commit() error   { return nil }
+func (t *cdcStubTx) Rollback() error { return nil }
+
+type cdcEmptyRows struct{}
+
+func (r *cdcEmptyRows) Columns() []string              { return nil }
+func (r *cdcEmptyRows) Close() error                   { return nil }
+func (r *cdcEmptyRows) Next([]driver.Value) error      { return io.EOF }
+
+type cdcStubConn struct{ state *cdcStubState }
+
+func (c *cdcStubConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (c *cdcStubConn) Close() error                        { return nil }
+func (c *cdcStubConn) Begin() (driver.Tx, error)           { return &cdcStubTx{}, nil }
+func (c *cdcStubConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return &cdcStubTx{}, nil
+}
+
+func (c *cdcStubConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	return &cdcEmptyRows{}, nil
+}
+
+func (c *cdcStubConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	copied := make([]driver.NamedValue, len(args))
+	copy(copied, args)
+
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+	c.state.queries = append(c.state.queries, recordedSQL{Query: query, Args: copied})
+
+	if c.state.execErr != nil {
+		return nil, c.state.execErr
+	}
+
+	switch {
+	case strings.Contains(query, "DELETE FROM payment_ledger"):
+		paymentID, _ := args[0].Value.(string)
+		if existing, ok := c.state.rows[paymentID]; ok && existing.PSPReference == "" {
+			delete(c.state.rows, paymentID)
+		}
+		return driver.RowsAffected(1), nil
+	case strings.Contains(query, "INSERT INTO payment_ledger"):
+		row := paymentLedgerRow{
+			TransactionID: args[0].Value.(string),
+			PaymentID:     args[1].Value.(string),
+			OrderID:       args[2].Value.(string),
+			PSPReference:  args[3].Value.(string),
+			AmountCents:   args[4].Value.(int64),
+			CapturedCents: args[5].Value.(int64),
+			RefundedCents: args[6].Value.(int64),
+			Currency:      args[7].Value.(string),
+			Status:        args[8].Value.(string),
+			PaymentMethod: args[9].Value.(string),
+			SourceLSN:     args[10].Value.(int64),
+		}
+		if existing, exists := c.state.rows[row.TransactionID]; exists {
+			if row.SourceLSN < existing.SourceLSN {
+				return driver.RowsAffected(0), nil
+			}
+			if row.OrderID == "" {
+				row.OrderID = existing.OrderID
+			}
+			if row.PSPReference == "" {
+				row.PSPReference = existing.PSPReference
+			}
+			if row.PaymentMethod == "" {
+				row.PaymentMethod = existing.PaymentMethod
+			}
+		}
+		c.state.rows[row.TransactionID] = row
+		return driver.RowsAffected(1), nil
+	default:
+		return driver.RowsAffected(1), nil
+	}
+}
+
+func newTestPaymentCDCConsumer(t *testing.T, db *sql.DB) *CDCConsumer {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	consumer, err := NewCDCConsumer(context.Background(), CDCConsumerConfig{
+		KafkaBrokers: []string{"localhost:9092"},
+		CDCTopics:    []string{"payments.cdc", "reconciliation.cdc"},
+		DB:           db,
+	}, logger)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = consumer.Stop() })
+	return consumer
+}
+
+func TestPaymentLedgerCDC_SnakeCaseCreateAndIdempotentReplay(t *testing.T) {
+	db, state := newCDCStubDB()
+	defer db.Close()
+	consumer := newTestPaymentCDCConsumer(t, db)
+
+	eventJSON := []byte(`{
+		"payload": {
+			"op": "c",
+			"ts_ms": 1731474000000,
+			"lsn": 1001,
+			"source": {
+				"table": "payments",
+				"ts_ms": 1731474000000,
+				"lsn": 1001
+			},
+			"after": {
+				"id": "pay-001",
+				"order_id": "ord-001",
+				"psp_reference": "pi_stripe_001",
+				"amount_cents": 2599,
+				"captured_cents": 2599,
+				"refunded_cents": 0,
+				"currency": "INR",
+				"status": "CAPTURED",
+				"payment_method": "CARD",
+				"created_at": "2026-11-13T05:00:00Z",
+				"updated_at": "2026-11-13T05:01:00Z"
+			}
+		}
+	}`)
+
+	require.NoError(t, consumer.processMessage(kafka.Message{Offset: 10, Value: eventJSON}))
+	require.NoError(t, consumer.processMessage(kafka.Message{Offset: 10, Value: eventJSON}))
+
+	state.mu.Lock()
+	row, ok := state.rows["pi_stripe_001"]
+	state.mu.Unlock()
+	require.True(t, ok, "expected payment_ledger row keyed by psp_reference")
+	assert.Equal(t, "pay-001", row.PaymentID)
+	assert.Equal(t, "ord-001", row.OrderID)
+	assert.Equal(t, "pi_stripe_001", row.PSPReference)
+	assert.Equal(t, int64(2599), row.AmountCents)
+	assert.Equal(t, int64(2599), row.CapturedCents)
+	assert.Equal(t, int64(0), row.RefundedCents)
+	assert.Equal(t, "INR", row.Currency)
+	assert.Equal(t, "CAPTURED", row.Status)
+	assert.Equal(t, "CARD", row.PaymentMethod)
+	assert.Equal(t, int64(1001), row.SourceLSN)
+
+	metrics := consumer.GetMetrics()
+	assert.Equal(t, int64(2), metrics.eventsReceived)
+	assert.Equal(t, int64(2), metrics.eventsProcessed)
+	assert.Equal(t, int64(0), metrics.eventsFailed)
+}
+
+func TestPaymentLedgerCDC_CamelCasePreAuthUpgradeAndStaleLSN(t *testing.T) {
+	db, state := newCDCStubDB()
+	defer db.Close()
+	consumer := newTestPaymentCDCConsumer(t, db)
+
+	preAuth := []byte(`{
+		"op": "r",
+		"ts_ms": 1731474000000,
+		"source": {"table": "payments", "lsn": 500},
+		"after": {
+			"paymentId": "pay-002",
+			"orderId": "ord-002",
+			"amountCents": 4200,
+			"capturedCents": 0,
+			"refundedCents": 0,
+			"currency": "INR",
+			"status": "AUTHORIZED",
+			"paymentMethod": "UPI",
+			"createdAt": 1731474000000000
+		}
+	}`)
+	require.NoError(t, consumer.processMessage(kafka.Message{Offset: 1, Value: preAuth}))
+
+	state.mu.Lock()
+	_, hasPlaceholder := state.rows["pay-002"]
+	state.mu.Unlock()
+	require.True(t, hasPlaceholder, "pre-auth event without pspReference should stage under paymentId")
+
+	captured := []byte(`{
+		"payload": {
+			"op": "u",
+			"ts_ms": 1731474060000,
+			"source": {"table": "payments", "lsn": 600},
+			"after": {
+				"paymentId": "pay-002",
+				"orderId": "ord-002",
+				"pspReference": "rzp_pay_002",
+				"amountCents": 4200,
+				"capturedCents": 4200,
+				"refundedCents": 0,
+				"currency": "INR",
+				"status": "CAPTURED",
+				"paymentMethod": "UPI",
+				"updatedAt": 1731474060000000
+			}
+		}
+	}`)
+	require.NoError(t, consumer.processMessage(kafka.Message{Offset: 2, Value: captured}))
+
+	staleUpdate := []byte(`{
+		"payload": {
+			"op": "u",
+			"ts_ms": 1731474030000,
+			"source": {"table": "payments", "lsn": 550},
+			"after": {
+				"paymentId": "pay-002",
+				"pspReference": "rzp_pay_002",
+				"amountCents": 4200,
+				"capturedCents": 0,
+				"status": "AUTHORIZED"
+			}
+		}
+	}`)
+	require.NoError(t, consumer.processMessage(kafka.Message{Offset: 3, Value: staleUpdate}))
+
+	state.mu.Lock()
+	_, stillHasPlaceholder := state.rows["pay-002"]
+	finalRow, hasCanonical := state.rows["rzp_pay_002"]
+	state.mu.Unlock()
+
+	assert.False(t, stillHasPlaceholder, "placeholder row must be removed once psp_reference arrives")
+	require.True(t, hasCanonical)
+	assert.Equal(t, "CAPTURED", finalRow.Status)
+	assert.Equal(t, int64(4200), finalRow.CapturedCents)
+	assert.Equal(t, int64(600), finalRow.SourceLSN)
+}
+
+func TestPaymentLedgerCDC_IgnoresDeletesAndPropagatesErrors(t *testing.T) {
+	db, state := newCDCStubDB()
+	defer db.Close()
+	consumer := newTestPaymentCDCConsumer(t, db)
+
+	deleteEvent := []byte(`{
+		"payload": {
+			"op": "d",
+			"source": {"table": "payments", "lsn": 700},
+			"before": {"id": "pay-del"}
+		}
+	}`)
+	require.NoError(t, consumer.processMessage(kafka.Message{Value: deleteEvent}))
+
+	missingAmount := []byte(`{
+		"payload": {
+			"op": "c",
+			"source": {"table": "payments", "lsn": 701},
+			"after": {"id": "pay-bad"}
+		}
+	}`)
+	assert.Error(t, consumer.processMessage(kafka.Message{Value: missingAmount}))
+
+	state.mu.Lock()
+	state.execErr = errors.New("postgres unavailable")
+	state.mu.Unlock()
+
+	valid := []byte(`{
+		"payload": {
+			"op": "c",
+			"source": {"table": "payments", "lsn": 702},
+			"after": {"id": "pay-db-err", "psp_reference": "pi_err", "amount_cents": 1500, "status": "CAPTURED"}
+		}
+	}`)
+	err := consumer.processMessage(kafka.Message{Value: valid})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "postgres unavailable")
+}
+
+func TestNewCDCConsumer_TopicsAndDBConfig(t *testing.T) {
+	db, _ := newCDCStubDB()
+	defer db.Close()
+
+	multi, err := NewCDCConsumer(context.Background(), CDCConsumerConfig{
+		KafkaBrokers: []string{"localhost:9092"},
+		CDCTopics:    []string{" payments.cdc ", "reconciliation.cdc", "payments.cdc"},
+		DB:           db,
+	}, nil)
+	require.NoError(t, err)
+	defer func() { _ = multi.Stop() }()
+	assert.Equal(t, []string{"payments.cdc", "reconciliation.cdc"}, multi.config.CDCTopics)
+	assert.Equal(t, []string{"payments.cdc", "reconciliation.cdc"}, multi.kafkaReader.Config().GroupTopics)
+	assert.Empty(t, multi.kafkaReader.Config().Topic)
+	assert.NotNil(t, multi.db)
+
+	single, err := NewCDCConsumer(context.Background(), CDCConsumerConfig{
+		KafkaBrokers: []string{"localhost:9092"},
+		CDCTopic:     "payments.cdc",
+	}, nil)
+	require.NoError(t, err)
+	defer func() { _ = single.Stop() }()
+	assert.Equal(t, "payments.cdc", single.kafkaReader.Config().Topic)
+	assert.Empty(t, single.kafkaReader.Config().GroupTopics)
 }
