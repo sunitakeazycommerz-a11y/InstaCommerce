@@ -62,3 +62,22 @@ mobile-bff:
     search-url: ${SEARCH_SERVICE_URL:http://search-service:8088}
     feature-flag-url: ${FEATURE_FLAG_SERVICE_URL:http://config-feature-flag-service:8098}
     timeout-ms: ${UPSTREAM_TIMEOUT_MS:2000}
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 15s
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+    instances:
+      catalogService:
+        baseConfig: default
+      searchService:
+        baseConfig: default
+      featureFlagService:
+        baseConfig: default

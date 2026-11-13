@@ -1,5 +1,6 @@
 package com.instacommerce.warehouse.config;
 
+import com.instacommerce.warehouse.security.InternalServiceAuthFilter;
 import com.instacommerce.warehouse.security.JwtAuthenticationFilter;
 import com.instacommerce.warehouse.security.RestAccessDeniedHandler;
 import com.instacommerce.warehouse.security.RestAuthenticationEntryPoint;
@@ -30,6 +31,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
+                                                   InternalServiceAuthFilter internalServiceAuthFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler) throws Exception {
         http.cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -39,11 +41,12 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/**", "/error").permitAll()
                 .requestMatchers(HttpMethod.GET, "/stores/nearest", "/stores/{id}", "/stores/{id}/open", "/stores/{id}/zones", "/stores/{id}/delivery-radius", "/stores/by-city", "/stores/by-pincode").permitAll()
                 .requestMatchers("/stores/{id}/capacity").authenticated()
-                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .requestMatchers("/admin/**").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)
                 .accessDeniedHandler(accessDeniedHandler))
+            .addFilterBefore(internalServiceAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

@@ -3,6 +3,7 @@ package com.instacommerce.payment.service;
 import com.instacommerce.payment.domain.model.AuditLog;
 import com.instacommerce.payment.exception.TraceIdProvider;
 import com.instacommerce.payment.repository.AuditLogRepository;
+import com.instacommerce.payment.util.RequestContextUtil;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
@@ -58,8 +59,8 @@ public class AuditLogService {
         log.setEntityType(entityType);
         log.setEntityId(entityId);
         log.setDetails(details);
-        log.setIpAddress(resolveIp(request));
-        log.setUserAgent(resolveUserAgent(request));
+        log.setIpAddress(RequestContextUtil.resolveIp(request));
+        log.setUserAgent(RequestContextUtil.resolveUserAgent(request));
         log.setTraceId(traceIdProvider.resolveTraceId(request));
         auditLogRepository.save(log);
     }
@@ -88,20 +89,5 @@ public class AuditLogService {
             return attributes.getRequest();
         }
         return null;
-    }
-
-    private String resolveIp(HttpServletRequest request) {
-        if (request == null) {
-            return null;
-        }
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
-    }
-
-    private String resolveUserAgent(HttpServletRequest request) {
-        return request == null ? null : request.getHeader("User-Agent");
     }
 }

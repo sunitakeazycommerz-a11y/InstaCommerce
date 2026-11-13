@@ -35,6 +35,9 @@ spring:
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 notification:
+  jwt:
+    issuer: ${NOTIFICATION_JWT_ISSUER:instacommerce-identity}
+    public-key: ${sm://jwt-rsa-public-key:${NOTIFICATION_JWT_PUBLIC_KEY:}}
   providers:
     sendgrid:
       api-key: ${sm://sendgrid-api-key:${SENDGRID_API_KEY}}
@@ -159,4 +162,4 @@ resilience4j:
 internal:
   service:
     name: ${spring.application.name}
-    token: ${INTERNAL_SERVICE_TOKEN}
+    token: ${INTERNAL_SERVICE_TOKEN:}

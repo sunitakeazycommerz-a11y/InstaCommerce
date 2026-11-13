@@ -43,3 +43,9 @@ feature-flag:
     ttl-seconds: 30
     max-entries: 5000
     refresh-interval-seconds: 30
+
+internal:
+  service:
+    name: config-feature-flag-service
+    token: test-internal-service-token
+

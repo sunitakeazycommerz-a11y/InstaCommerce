@@ -4,10 +4,12 @@ import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
 import com.instacommerce.pricing.dto.request.QuoteValidationRequest;
 import com.instacommerce.pricing.dto.request.RedeemCouponRequest;
 import com.instacommerce.pricing.dto.request.RollbackCouponUsageRequest;
+import com.instacommerce.pricing.dto.request.TaxCalculationRequest;
 import com.instacommerce.pricing.dto.request.UnredeemCouponRequest;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
 import com.instacommerce.pricing.dto.response.QuoteValidationResponse;
+import com.instacommerce.pricing.dto.response.TaxCalculationResponse;
 import com.instacommerce.pricing.service.CouponService;
 import com.instacommerce.pricing.service.PricingService;
 import com.instacommerce.pricing.service.QuoteTokenService;
@@ -44,6 +46,13 @@ public class PricingController {
             @Valid @RequestBody PriceCalculationRequest request) {
         PriceCalculationResponse response = pricingService.calculateCartPrice(request);
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/tax")
+    @RateLimiter(name = "pricingLimiter")
+    public ResponseEntity<TaxCalculationResponse> calculateTax(
+            @Valid @RequestBody TaxCalculationRequest request) {
+        return ResponseEntity.ok(pricingService.calculateTax(request));
     }
 
     @GetMapping({"/products/{id}", "/api/v1/prices/{id}"})

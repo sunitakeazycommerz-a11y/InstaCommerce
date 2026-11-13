@@ -39,6 +39,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.POST, "/pricing/calculate", "/api/pricing/calculate").permitAll()
+                .requestMatchers(HttpMethod.POST, "/pricing/tax", "/api/pricing/tax").permitAll()
                 .requestMatchers(HttpMethod.GET, "/pricing/products/**", "/api/pricing/products/**").permitAll()
                 .requestMatchers("/actuator/**", "/error").permitAll()
                 .requestMatchers("/admin/**").hasRole("ADMIN")

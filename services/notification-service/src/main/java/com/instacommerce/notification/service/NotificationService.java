@@ -3,6 +3,7 @@ package com.instacommerce.notification.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.contracts.events.EventEnvelope;
+import com.instacommerce.notification.domain.model.DeviceToken;
 import com.instacommerce.notification.domain.model.NotificationChannel;
 import com.instacommerce.notification.domain.model.NotificationLog;
 import com.instacommerce.notification.domain.model.NotificationStatus;
@@ -10,6 +11,7 @@ import com.instacommerce.notification.dto.NotificationRequest;
 import com.instacommerce.notification.infrastructure.metrics.NotificationMetrics;
 import com.instacommerce.notification.infrastructure.retry.NotificationDlqPublisher;
 import com.instacommerce.notification.infrastructure.retry.RetryableNotificationSender;
+import com.instacommerce.notification.repository.DeviceTokenRepository;
 import com.instacommerce.notification.repository.NotificationLogRepository;
 import com.instacommerce.notification.template.TemplateDefinition;
 import com.instacommerce.notification.template.TemplateRegistry;
@@ -40,6 +42,7 @@ public class NotificationService {
     private final OrderLookupClient orderLookupClient;
     private final NotificationMetrics metrics;
     private final NotificationProperties notificationProperties;
+    private final DeviceTokenRepository deviceTokenRepository;
 
     public NotificationService(TemplateRegistry templateRegistry,
                                TemplateService templateService,
@@ -51,7 +54,8 @@ public class NotificationService {
                                UserDirectoryClient userDirectoryClient,
                                OrderLookupClient orderLookupClient,
                                NotificationMetrics metrics,
-                               NotificationProperties notificationProperties) {
+                               NotificationProperties notificationProperties,
+                               DeviceTokenRepository deviceTokenRepository) {
         this.templateRegistry = templateRegistry;
         this.templateService = templateService;
         this.deduplicationService = deduplicationService;
@@ -63,6 +67,7 @@ public class NotificationService {
         this.orderLookupClient = orderLookupClient;
         this.metrics = metrics;
         this.notificationProperties = notificationProperties;
+        this.deviceTokenRepository = deviceTokenRepository;
     }
 
     public void handleEvent(ConsumerRecord<String, String> record, EventEnvelope envelope) {
@@ -91,25 +96,14 @@ public class NotificationService {
         Optional<UserContact> cachedUserContact = userDirectoryClient.findUser(userId);
         Map<String, Object> variables = buildVariables(envelope.eventType(), payload, userId,
             orderSnapshot.orElse(null), cachedUserContact.orElse(null));
-        UserPreferenceService.Preferences preferences;
-        try {
-            preferences = userPreferenceService.getPreferences(userId);
-        } catch (PreferenceLookupException ex) {
-            logger.warn("Failed to resolve notification preferences for user {} on {}", userId,
-                envelope.eventType(), ex);
-            for (NotificationChannel channel : template.channels()) {
-                persistSkipped(eventId, envelope.eventType(), userId, channel, template.templateId(),
-                    "Preference lookup failed");
-            }
-            return;
-        }
+        UserPreferenceService.Preferences preferences = userPreferenceService.getPreferences(userId);
         for (NotificationChannel channel : template.channels()) {
             if (!userPreferenceService.allowNotification(preferences, channel, false)) {
                 persistSkipped(eventId, envelope.eventType(), userId, channel, template.templateId(),
                     "Opted out");
                 continue;
             }
-            String recipient = resolveRecipient(channel, payload, cachedUserContact.orElse(null));
+            String recipient = resolveRecipient(channel, payload, cachedUserContact.orElse(null), userId);
             if (recipient == null || recipient.isBlank()) {
                 if (channel == NotificationChannel.SMS) {
                     logger.warn("SMS notification for event {} skipped — phone number is null for user {}",
@@ -118,9 +112,8 @@ public class NotificationService {
                         eventId, envelope.eventType(), userId, channel, template.templateId(), "n/a", variables);
                     dlqPublisher.publish(dlqRequest, "Phone number is null for SMS channel");
                 } else if (channel == NotificationChannel.PUSH) {
-                    // TODO: Implement device token management API and storage for PUSH notifications
-                    logger.warn("PUSH notification skipped for event {} — no device token available. "
-                        + "Device token store not yet implemented.", envelope.eventType());
+                    logger.warn("PUSH notification skipped for event {} — no active device token for user {}",
+                        envelope.eventType(), userId);
                 }
                 persistSkipped(eventId, envelope.eventType(), userId, channel, template.templateId(),
                     "Missing recipient");
@@ -159,7 +152,7 @@ public class NotificationService {
         metrics.incrementSkipped();
     }
 
-    private String resolveRecipient(NotificationChannel channel, JsonNode payload, UserContact userContact) {
+    private String resolveRecipient(NotificationChannel channel, JsonNode payload, UserContact userContact, UUID userId) {
         if (payload != null) {
             if (channel == NotificationChannel.EMAIL) {
                 String email = textValue(payload, "email");
@@ -178,10 +171,18 @@ public class NotificationService {
                 if (token == null) {
                     token = textValue(payload, "pushToken");
                 }
+                if (token == null) {
+                    token = textValue(payload, "recipient");
+                }
                 if (token != null) {
                     return token;
                 }
             }
+        }
+        if (channel == NotificationChannel.PUSH && userId != null) {
+            return deviceTokenRepository.findFirstByUserIdAndActiveTrueOrderByUpdatedAtDesc(userId)
+                .map(DeviceToken::getToken)
+                .orElse(null);
         }
         if (userContact == null) {
             return null;

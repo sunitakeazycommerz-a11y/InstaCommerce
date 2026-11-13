@@ -1,5 +1,6 @@
 package com.instacommerce.inventory.service;
 
+import com.instacommerce.inventory.client.WarehouseClient;
 import com.instacommerce.inventory.config.InventoryProperties;
 import com.instacommerce.inventory.config.ReservationProperties;
 import com.instacommerce.inventory.domain.model.Reservation;
@@ -15,6 +16,7 @@ import com.instacommerce.inventory.exception.ProductNotFoundException;
 import com.instacommerce.inventory.exception.ReservationExpiredException;
 import com.instacommerce.inventory.exception.ReservationNotFoundException;
 import com.instacommerce.inventory.exception.ReservationStateException;
+import com.instacommerce.inventory.exception.StoreInactiveException;
 import com.instacommerce.inventory.repository.ReservationRepository;
 import com.instacommerce.inventory.repository.StockItemRepository;
 import jakarta.persistence.EntityManager;
@@ -31,9 +33,12 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class ReservationService {
@@ -45,7 +50,8 @@ public class ReservationService {
     private final EntityManager entityManager;
     private final OutboxService outboxService;
     private final InventoryProperties inventoryProperties;
-    private final org.springframework.beans.factory.ObjectProvider<com.instacommerce.inventory.client.WarehouseClient> warehouseClientProvider;
+    private final ObjectProvider<WarehouseClient> warehouseClientProvider;
+    private final TransactionTemplate reserveTransactionTemplate;
 
     public ReservationService(ReservationRepository reservationRepository,
                               StockItemRepository stockItemRepository,
@@ -53,7 +59,8 @@ public class ReservationService {
                               EntityManager entityManager,
                               OutboxService outboxService,
                               InventoryProperties inventoryProperties,
-                              org.springframework.beans.factory.ObjectProvider<com.instacommerce.inventory.client.WarehouseClient> warehouseClientProvider) {
+                              ObjectProvider<WarehouseClient> warehouseClientProvider,
+                              PlatformTransactionManager transactionManager) {
         this.reservationRepository = reservationRepository;
         this.stockItemRepository = stockItemRepository;
         this.reservationProperties = reservationProperties;
@@ -61,17 +68,30 @@ public class ReservationService {
         this.outboxService = outboxService;
         this.inventoryProperties = inventoryProperties;
         this.warehouseClientProvider = warehouseClientProvider;
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        this.reserveTransactionTemplate = template;
     }
 
-    @Transactional(isolation = Isolation.READ_COMMITTED)
     public ReserveResponse reserve(ReserveRequest request) {
+        validateStoreOperational(request.storeId());
+        return reserveTransactionTemplate.execute(status -> reserveInTransaction(request));
+    }
+
+    private void validateStoreOperational(UUID storeId) {
+        warehouseClientProvider.ifAvailable(client -> {
+            client.validateStoreActive(storeId);
+            if (!client.isStoreOpen(storeId)) {
+                throw new StoreInactiveException(storeId, "CLOSED");
+            }
+        });
+    }
+
+    private ReserveResponse reserveInTransaction(ReserveRequest request) {
         Optional<Reservation> existing = reservationRepository.findByIdempotencyKey(request.idempotencyKey());
         if (existing.isPresent()) {
             return InventoryMapper.toReserveResponse(existing.get());
         }
-
-        // Validate dark store existence and active operational status (Issue #570 & #574)
-        warehouseClientProvider.ifAvailable(client -> client.validateStoreActive(request.storeId()));
 
         List<InventoryItemRequest> sortedItems = request.items().stream()
             .sorted(Comparator.comparing(InventoryItemRequest::productId))

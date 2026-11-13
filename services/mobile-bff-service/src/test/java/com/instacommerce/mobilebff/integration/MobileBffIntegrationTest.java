@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -164,5 +165,49 @@ class MobileBffIntegrationTest {
         .exchange()
         .expectStatus()
         .isNotFound();
+  }
+
+  @Test
+  @DisplayName("GET /bff/mobile/v1/cart/stream/{userId} without token returns 401 Unauthorized")
+  void testCartStreamWithoutTokenReturnsUnauthorized() {
+    webTestClient
+        .get()
+        .uri("/bff/mobile/v1/cart/stream/usr_12345")
+        .exchange()
+        .expectStatus()
+        .isUnauthorized();
+  }
+
+  @Test
+  @DisplayName("GET /bff/mobile/v1/cart/stream/{userId} for another user returns 403 ACCESS_DENIED")
+  void testCartStreamForOtherUserReturnsForbidden() {
+    String token = createTestToken("usr_12345", List.of("CUSTOMER"), Instant.now().plus(1, ChronoUnit.HOURS));
+
+    webTestClient
+        .get()
+        .uri("/bff/mobile/v1/cart/stream/usr_other")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+        .accept(MediaType.TEXT_EVENT_STREAM)
+        .exchange()
+        .expectStatus()
+        .isForbidden()
+        .expectBody()
+        .jsonPath("$.code").isEqualTo("ACCESS_DENIED");
+  }
+
+  @Test
+  @DisplayName("GET /m/v1/cart/stream/{userId} for another user returns 403 ACCESS_DENIED")
+  void testCartStreamAltPathForOtherUserReturnsForbidden() {
+    String token = createTestToken("usr_12345", List.of("CUSTOMER"), Instant.now().plus(1, ChronoUnit.HOURS));
+
+    webTestClient
+        .get()
+        .uri("/m/v1/cart/stream/usr_other")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+        .exchange()
+        .expectStatus()
+        .isForbidden()
+        .expectBody()
+        .jsonPath("$.code").isEqualTo("ACCESS_DENIED");
   }
 }

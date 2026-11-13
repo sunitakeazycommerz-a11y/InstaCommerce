@@ -3,9 +3,11 @@ package com.instacommerce.inventory.service;
 import com.instacommerce.inventory.domain.model.AuditLog;
 import com.instacommerce.inventory.exception.TraceIdProvider;
 import com.instacommerce.inventory.repository.AuditLogRepository;
+import com.instacommerce.inventory.security.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -17,10 +19,19 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 public class AuditLogService {
     private final AuditLogRepository auditLogRepository;
     private final TraceIdProvider traceIdProvider;
+    private final ClientIpResolver clientIpResolver;
 
     public AuditLogService(AuditLogRepository auditLogRepository, TraceIdProvider traceIdProvider) {
+        this(auditLogRepository, traceIdProvider, new ClientIpResolver());
+    }
+
+    @Autowired
+    public AuditLogService(AuditLogRepository auditLogRepository,
+                           TraceIdProvider traceIdProvider,
+                           ClientIpResolver clientIpResolver) {
         this.auditLogRepository = auditLogRepository;
         this.traceIdProvider = traceIdProvider;
+        this.clientIpResolver = clientIpResolver != null ? clientIpResolver : new ClientIpResolver();
     }
 
     @Transactional
@@ -65,14 +76,7 @@ public class AuditLogService {
     }
 
     private String resolveIp(HttpServletRequest request) {
-        if (request == null) {
-            return null;
-        }
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return clientIpResolver.resolve(request);
     }
 
     private String resolveUserAgent(HttpServletRequest request) {

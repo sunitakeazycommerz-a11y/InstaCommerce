@@ -2,9 +2,12 @@ package com.instacommerce.warehouse.controller;
 
 import com.instacommerce.warehouse.domain.model.StoreStatus;
 import com.instacommerce.warehouse.dto.request.CreateStoreRequest;
+import com.instacommerce.warehouse.dto.request.CreateZoneRequest;
+import com.instacommerce.warehouse.dto.request.UpdateZoneRequest;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.service.CapacityService;
 import com.instacommerce.warehouse.service.StoreService;
+import com.instacommerce.warehouse.service.ZoneService;
 import jakarta.validation.Valid;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -16,6 +19,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -27,10 +31,14 @@ public class AdminStoreController {
 
     private final StoreService storeService;
     private final CapacityService capacityService;
+    private final ZoneService zoneService;
 
-    public AdminStoreController(StoreService storeService, CapacityService capacityService) {
+    public AdminStoreController(StoreService storeService,
+                                CapacityService capacityService,
+                                ZoneService zoneService) {
         this.storeService = storeService;
         this.capacityService = capacityService;
+        this.zoneService = zoneService;
     }
 
     @PostMapping
@@ -76,5 +84,40 @@ public class AdminStoreController {
     public ResponseEntity<Boolean> canAcceptOrder(@PathVariable UUID id) {
         boolean canAccept = capacityService.canAcceptOrder(id, LocalDateTime.now());
         return ResponseEntity.ok(canAccept);
+    }
+
+    @GetMapping("/{id}/zones")
+    public ResponseEntity<List<StoreResponse.ZoneResponse>> listZones(@PathVariable UUID id) {
+        return ResponseEntity.ok(zoneService.getStoreZones(id));
+    }
+
+    @GetMapping("/{id}/zones/{zoneId}")
+    public ResponseEntity<StoreResponse.ZoneResponse> getZone(
+            @PathVariable UUID id,
+            @PathVariable UUID zoneId) {
+        return ResponseEntity.ok(zoneService.getZone(id, zoneId));
+    }
+
+    @PostMapping("/{id}/zones")
+    public ResponseEntity<StoreResponse.ZoneResponse> createZone(
+            @PathVariable UUID id,
+            @RequestBody @Valid CreateZoneRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(zoneService.createZone(id, request));
+    }
+
+    @PutMapping("/{id}/zones/{zoneId}")
+    public ResponseEntity<StoreResponse.ZoneResponse> updateZone(
+            @PathVariable UUID id,
+            @PathVariable UUID zoneId,
+            @RequestBody @Valid UpdateZoneRequest request) {
+        return ResponseEntity.ok(zoneService.updateZone(id, zoneId, request));
+    }
+
+    @DeleteMapping("/{id}/zones/{zoneId}")
+    public ResponseEntity<Void> deleteZone(
+            @PathVariable UUID id,
+            @PathVariable UUID zoneId) {
+        zoneService.deleteZone(id, zoneId);
+        return ResponseEntity.noContent().build();
     }
 }

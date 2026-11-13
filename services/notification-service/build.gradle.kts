@@ -24,6 +24,9 @@ dependencies {
     implementation("net.javacrumbs.shedlock:shedlock-spring")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template")
+    implementation("io.jsonwebtoken:jjwt-api")
+    runtimeOnly("io.jsonwebtoken:jjwt-impl")
+    runtimeOnly("io.jsonwebtoken:jjwt-jackson")
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

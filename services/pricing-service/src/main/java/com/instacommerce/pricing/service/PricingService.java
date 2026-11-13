@@ -4,8 +4,10 @@ import com.instacommerce.pricing.domain.PriceRule;
 import com.instacommerce.pricing.domain.Promotion;
 import com.instacommerce.pricing.dto.request.CartItem;
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
+import com.instacommerce.pricing.dto.request.TaxCalculationRequest;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
+import com.instacommerce.pricing.dto.response.TaxCalculationResponse;
 import com.instacommerce.pricing.exception.PriceRuleNotFoundException;
 import com.instacommerce.pricing.repository.PriceRuleRepository;
 import java.math.BigDecimal;
@@ -16,6 +18,7 @@ import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,24 +32,38 @@ public class PricingService {
     private final CouponService couponService;
     private final QuoteTokenService quoteTokenService;
     private final DiscountCalculator discountCalculator;
+    private final TaxCalculationService taxCalculationService;
+
+    @Autowired
+    public PricingService(PriceRuleRepository priceRuleRepository,
+                          PromotionService promotionService,
+                          CouponService couponService,
+                          QuoteTokenService quoteTokenService,
+                          DiscountCalculator discountCalculator,
+                          TaxCalculationService taxCalculationService) {
+        this.priceRuleRepository = priceRuleRepository;
+        this.promotionService = promotionService;
+        this.couponService = couponService;
+        this.quoteTokenService = quoteTokenService;
+        this.discountCalculator = discountCalculator != null ? discountCalculator : new DiscountCalculator();
+        this.taxCalculationService = taxCalculationService != null ? taxCalculationService : new TaxCalculationService();
+    }
 
     public PricingService(PriceRuleRepository priceRuleRepository,
                           PromotionService promotionService,
                           CouponService couponService,
                           QuoteTokenService quoteTokenService,
                           DiscountCalculator discountCalculator) {
-        this.priceRuleRepository = priceRuleRepository;
-        this.promotionService = promotionService;
-        this.couponService = couponService;
-        this.quoteTokenService = quoteTokenService;
-        this.discountCalculator = discountCalculator;
+        this(priceRuleRepository, promotionService, couponService, quoteTokenService,
+                discountCalculator, new TaxCalculationService());
     }
 
     public PricingService(PriceRuleRepository priceRuleRepository,
                           PromotionService promotionService,
                           CouponService couponService,
                           QuoteTokenService quoteTokenService) {
-        this(priceRuleRepository, promotionService, couponService, quoteTokenService, new DiscountCalculator());
+        this(priceRuleRepository, promotionService, couponService, quoteTokenService,
+                new DiscountCalculator(), new TaxCalculationService());
     }
 
     @Cacheable(value = "productPrices", key = "#productId")
@@ -112,8 +129,12 @@ public class PricingService {
         long totalDiscount = calcResult.totalDiscountCents();
         long totalCents = calcResult.netTotalCents();
         List<String> appliedPromotions = calcResult.appliedPromotionNames();
+        long estimatedTaxCents = taxCalculationService.calculateTaxForSubtotal(
+                totalCents, TaxCalculationService.DEFAULT_TAX_RATE);
+        BigDecimal taxRate = TaxCalculationService.DEFAULT_TAX_RATE;
 
-        log.info("Cart pricing calculated: subtotal={}, discount={}, total={}", subtotalCents, totalDiscount, totalCents);
+        log.info("Cart pricing calculated: subtotal={}, discount={}, total={}, estimatedTax={}",
+                subtotalCents, totalDiscount, totalCents, estimatedTaxCents);
 
         PriceCalculationResponse intermediateResponse = new PriceCalculationResponse(
                 pricedItems,
@@ -123,7 +144,9 @@ public class PricingService {
                 appliedPromotions,
                 appliedCoupon,
                 null,
-                null);
+                null,
+                estimatedTaxCents,
+                taxRate);
 
         QuoteTokenService.QuoteResult quoteResult = quoteTokenService.issueQuote(
                 request.userId(), intermediateResponse, appliedCoupon);
@@ -136,7 +159,36 @@ public class PricingService {
                 appliedPromotions,
                 appliedCoupon,
                 quoteResult.quoteId(),
-                quoteResult.quoteToken());
+                quoteResult.quoteToken(),
+                estimatedTaxCents,
+                taxRate);
+    }
+
+    public TaxCalculationResponse calculateTax(TaxCalculationRequest request) {
+        List<TaxCalculationService.TaxableLineItem> lineItems = request.items().stream()
+                .map(item -> new TaxCalculationService.TaxableLineItem(
+                        item.itemId(),
+                        item.itemName(),
+                        item.netAmountCents(),
+                        item.taxRate()))
+                .toList();
+        TaxCalculationService.TaxCalculationResult result = taxCalculationService.calculateTaxes(
+                lineItems, request.fallbackTaxRate());
+        List<TaxCalculationResponse.LineItemTaxResponse> responseItems = result.lineItems().stream()
+                .map(line -> new TaxCalculationResponse.LineItemTaxResponse(
+                        line.itemId(),
+                        line.itemName(),
+                        line.netAmountCents(),
+                        line.taxCents(),
+                        line.grossAmountCents(),
+                        line.effectiveTaxRate()))
+                .toList();
+        return new TaxCalculationResponse(
+                responseItems,
+                result.totalNetCents(),
+                result.totalTaxCents(),
+                result.totalGrossCents(),
+                result.fractionalRemainderCents());
     }
 
     private long applyMultiplier(long basePriceCents, BigDecimal multiplier) {
