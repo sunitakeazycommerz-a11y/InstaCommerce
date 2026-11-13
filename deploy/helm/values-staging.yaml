@@ -2,6 +2,7 @@ global:
   gcpProject: "instacommerce-staging"
   image:
     registry: asia-south1-docker.pkg.dev/instacommerce/images
+    pullPolicy: Always
 
 services:
   identity-service:

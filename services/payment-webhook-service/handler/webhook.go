@@ -6,12 +6,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"time"
 )
+
+// ErrMissingEventID indicates the PSP payload does not contain an event identifier.
+var ErrMissingEventID = errors.New("handler: event ID is required")
 
 // SchemaVersion is the current version of the Kafka transport envelope.
 // Bump when fields are added so consumers can branch on capability.
@@ -229,8 +233,8 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 	})
 }
 
-// parseEvent converts a raw PSP payload into a canonical WebhookEvent.
-func (h *WebhookHandler) parseEvent(psp PSPType, payload []byte) (WebhookEvent, error) {
+// ParseEvent converts a raw PSP payload into a canonical WebhookEvent.
+func ParseEvent(psp PSPType, payload []byte) (WebhookEvent, error) {
 	// Each PSP sends a different JSON schema. We normalise into WebhookEvent.
 	var raw map[string]interface{}
 	if err := json.Unmarshal(payload, &raw); err != nil {
@@ -285,10 +289,15 @@ func (h *WebhookHandler) parseEvent(psp PSPType, payload []byte) (WebhookEvent, 
 	}
 
 	if event.ID == "" {
-		return WebhookEvent{}, fmt.Errorf("handler: event ID is required")
+		return WebhookEvent{}, ErrMissingEventID
 	}
 
 	return event, nil
+}
+
+// parseEvent converts a raw PSP payload into a canonical WebhookEvent.
+func (h *WebhookHandler) parseEvent(psp PSPType, payload []byte) (WebhookEvent, error) {
+	return ParseEvent(psp, payload)
 }
 
 // jsonString extracts a nested string value from a map by walking keys.

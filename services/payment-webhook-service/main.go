@@ -20,6 +20,7 @@ import (
 
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
+	"github.com/instacommerce/payment-webhook-service/handler"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
@@ -108,12 +109,17 @@ type redisDedupe struct {
 	timeout time.Duration
 }
 
+type messageWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
+}
+
 type webhookHandler struct {
 	cfg            Config
 	logger         *slog.Logger
 	metrics        *metrics
 	dedupe         DedupeStore
-	writer         *kafka.Writer
+	writer         messageWriter
 	publishTimeout time.Duration
 	tracer         trace.Tracer
 }
@@ -123,11 +129,6 @@ type readiness struct {
 	kafkaConfigured bool
 	redisClient    *redis.Client
 	redisTimeout   time.Duration
-}
-
-type stripeEvent struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
 }
 
 type errorResponse struct {
@@ -177,7 +178,7 @@ func main() {
 		}
 	}()
 
-	var writer *kafka.Writer
+	var writer messageWriter
 	if len(cfg.KafkaBrokers) > 0 {
 		writer = kafka.NewWriter(kafka.WriterConfig{
 			Brokers:      cfg.KafkaBrokers,
@@ -196,7 +197,7 @@ func main() {
 		redisTimeout:   cfg.RedisTimeout,
 	}
 
-	handler := &webhookHandler{
+	whHandler := &webhookHandler{
 		cfg:            cfg,
 		logger:         logger,
 		metrics:        metrics,
@@ -235,7 +236,7 @@ func main() {
 	healthHandler.SetReady(ready.secretSet && ready.kafkaConfigured)
 
 	mux := http.NewServeMux()
-	mux.Handle("/payments/webhook", handler)
+	mux.Handle("/payments/webhook", whHandler)
 	mux.Handle("/metrics", promhttp.Handler())
 	healthHandler.RegisterRoutes(mux)
 	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
@@ -343,6 +344,10 @@ func newLogger() *slog.Logger {
 }
 
 func newMetrics() *metrics {
+	return newMetricsWithRegisterer(prometheus.DefaultRegisterer)
+}
+
+func newMetricsWithRegisterer(reg prometheus.Registerer) *metrics {
 	requestsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "payment_webhook_requests_total",
 		Help: "Total webhook requests",
@@ -388,7 +393,7 @@ func newMetrics() *metrics {
 		Name: "payment_webhook_publish_queue_depth",
 		Help: "Publish queue depth",
 	})
-	prometheus.MustRegister(
+	reg.MustRegister(
 		requestsTotal,
 		requestDuration,
 		signatureFailures,
@@ -628,22 +633,27 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var event stripeEvent
-	if err := json.Unmarshal(payload, &event); err != nil {
+	event, err := handler.ParseEvent(handler.Stripe, payload)
+	if err != nil {
 		status = http.StatusBadRequest
 		h.metrics.payloadFailures.Inc()
+		if errors.Is(err, handler.ErrMissingEventID) {
+			writeError(w, status, "missing event id")
+			return
+		}
 		writeError(w, status, "invalid event payload")
 		return
 	}
-	if event.ID == "" {
-		status = http.StatusBadRequest
-		h.metrics.payloadFailures.Inc()
-		writeError(w, status, "missing event id")
-		return
+	if event.EventType == "" {
+		event.EventType = "unknown"
 	}
-	eventType := event.Type
-	if eventType == "" {
-		eventType = "unknown"
+
+	envelopeBytes, err := json.Marshal(event)
+	if err != nil {
+		status = http.StatusInternalServerError
+		h.metrics.payloadFailures.Inc()
+		writeError(w, status, "failed to encode event")
+		return
 	}
 
 	ctx := r.Context()
@@ -663,14 +673,14 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	headers := []kafka.Header{
 		{Key: "event_id", Value: []byte(event.ID)},
-		{Key: "event_type", Value: []byte(eventType)},
+		{Key: "event_type", Value: []byte(event.EventType)},
 	}
 	otel.GetTextMapPropagator().Inject(ctx, kafkaHeaderCarrier{headers: &headers})
 
 	msg := kafka.Message{
 		Key:     []byte(event.ID),
-		Value:   payload,
-		Time:    time.Now().UTC(),
+		Value:   envelopeBytes,
+		Time:    event.ReceivedAt,
 		Headers: headers,
 	}
 
@@ -678,10 +688,10 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer publishCancel()
 	_, span := h.tracer.Start(publishCtx, "kafka.publish", trace.WithAttributes(
 		attribute.String("messaging.system", "kafka"),
-		attribute.String("messaging.destination", h.writer.Topic),
+		attribute.String("messaging.destination", h.cfg.KafkaTopic),
 		attribute.String("messaging.operation", "publish"),
 		attribute.String("event.id", event.ID),
-		attribute.String("event.type", eventType),
+		attribute.String("event.type", event.EventType),
 	))
 	publishErr := h.writer.WriteMessages(publishCtx, msg)
 	span.End()
@@ -698,7 +708,7 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	status = http.StatusAccepted
 	writeJSON(w, status, statusResponse{Status: "accepted", EventID: event.ID})
-	loggerWithTrace(ctx, h.logger).Info("webhook accepted", "event_id", event.ID, "event_type", eventType)
+	loggerWithTrace(ctx, h.logger).Info("webhook accepted", "event_id", event.ID, "event_type", event.EventType)
 }
 
 

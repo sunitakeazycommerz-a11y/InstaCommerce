@@ -29,7 +29,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest(classes = RoutingEtaServiceApplication.class)
 @AutoConfigureMockMvc
-@Testcontainers
+@Testcontainers(disabledWithoutDocker = true)
 @WithMockUser(username = "routing-test-user", roles = {"USER"})
 @TestPropertySource(
     properties = {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -655,26 +656,147 @@ func (s *relayService) fail(ctx context.Context, err error) error {
 	return err
 }
 
+type contextProxyDialer struct {
+	ctx    context.Context
+	dialer interface {
+		Dial(network, addr string) (net.Conn, error)
+	}
+}
+
+func (d *contextProxyDialer) Dial(network, addr string) (net.Conn, error) {
+	if err := d.ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var conn net.Conn
+	var err error
+	if ctxDialer, ok := d.dialer.(interface {
+		DialContext(context.Context, string, string) (net.Conn, error)
+	}); ok {
+		conn, err = ctxDialer.DialContext(d.ctx, network, addr)
+	} else {
+		conn, err = d.dialer.Dial(network, addr)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	stop := context.AfterFunc(d.ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
+	return &deadlineConn{Conn: conn, stop: stop}, nil
+}
+
+type deadlineConn struct {
+	net.Conn
+	stop func() bool
+}
+
+func (c *deadlineConn) Close() error {
+	if c.stop != nil {
+		c.stop()
+	}
+	return c.Conn.Close()
+}
+
+func (s *relayService) probeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Duration, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, func() {}, 0, err
+	}
+	readyTimeout := s.cfg.ReadyTimeout
+	if readyTimeout <= 0 {
+		readyTimeout = defaultReadyTimeout
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, func() {}, 0, context.DeadlineExceeded
+		}
+		if remaining <= readyTimeout {
+			return ctx, func() {}, remaining, nil
+		}
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, readyTimeout)
+	return probeCtx, cancel, readyTimeout, nil
+}
+
+func (s *relayService) healthKafkaConfig(ctx context.Context, timeout time.Duration) *sarama.Config {
+	fresh := sarama.NewConfig()
+	var cfg sarama.Config
+	if s.kafkaConfig != nil {
+		cfg = *s.kafkaConfig
+		cfg.MetricRegistry = fresh.MetricRegistry
+	} else {
+		cfg = *fresh
+	}
+
+	// Keep Sarama socket deadlines slightly behind ctx so AfterFunc closes on ctx expiration first.
+	socketTimeout := timeout + 50*time.Millisecond
+
+	baseDialer := cfg.Net.Proxy.Dialer
+	if !cfg.Net.Proxy.Enable || baseDialer == nil {
+		baseDialer = &net.Dialer{
+			Timeout:   socketTimeout,
+			KeepAlive: cfg.Net.KeepAlive,
+			LocalAddr: cfg.Net.LocalAddr,
+		}
+	}
+
+	cfg.Net.DialTimeout = socketTimeout
+	cfg.Net.ReadTimeout = socketTimeout
+	cfg.Net.WriteTimeout = socketTimeout
+	cfg.Metadata.Timeout = socketTimeout
+	cfg.Metadata.Retry.Max = 0
+	cfg.Metadata.RefreshFrequency = 0
+	cfg.ApiVersionsRequest = false
+	cfg.Net.Proxy.Enable = true
+	cfg.Net.Proxy.Dialer = &contextProxyDialer{
+		ctx:    ctx,
+		dialer: baseDialer,
+	}
+	return &cfg
+}
+
+func probeError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return err
+}
 
 func (s *relayService) checkKafka(ctx context.Context) error {
-	result := make(chan error, 1)
-	go func() {
-		client, err := sarama.NewClient(s.cfg.KafkaBrokers, s.kafkaConfig)
-		if err != nil {
-			result <- err
-			return
-		}
-		defer client.Close()
-		_, err = client.Controller()
-		result <- err
-	}()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-result:
+	probeCtx, cancel, timeout, err := s.probeContext(ctx)
+	if err != nil {
 		return err
 	}
+	defer cancel()
+
+	client, err := sarama.NewClient(s.cfg.KafkaBrokers, s.healthKafkaConfig(probeCtx, timeout))
+	if err != nil {
+		return probeError(probeCtx, err)
+	}
+	defer client.Close()
+
+	if err := probeCtx.Err(); err != nil {
+		return err
+	}
+
+	controller, err := client.Controller()
+	if err != nil {
+		return probeError(probeCtx, err)
+	}
+
+	connected, err := controller.Connected()
+	if err != nil {
+		return probeError(probeCtx, err)
+	}
+	if !connected {
+		return probeError(probeCtx, sarama.ErrNotConnected)
+	}
+	return nil
 }
 
 func newKafkaProducer(cfg Config) (sarama.SyncProducer, *sarama.Config, error) {

@@ -13,20 +13,22 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * High-precision, deterministic discount calculator enforcing strict precedence:
- *   1. Item SKU discounts (e.g., markdowns, base price rule multipliers)
- *   2. Category bundle / volume promotions (e.g., Buy 2 Get 10% Off)
- *   3. Global promo / coupon codes applied strictly against net subtotal post-bundle deductions
- *
- * Guarantees:
- *   - Total discount never exceeds gross subtotal (net payable >= 0).
- *   - Evaluation order is deterministic and independent of item array ordering in requests.
- *   - Percent-off coupons compound exclusively against post-bundle net subtotal.
+ * Deterministic discount calculator enforcing strict precedence:
+ *   1. Item SKU discounts (incorporated in unit prices)
+ *   2. Category bundle / volume promotions
+ *   3. Global promo / coupon codes applied against post-bundle net subtotal
  */
 @Component
 public class DiscountCalculator {
 
     private static final Logger log = LoggerFactory.getLogger(DiscountCalculator.class);
+
+    private static final BigDecimal ONE_HUNDRED = BigDecimal.valueOf(100);
+
+    private static final String PROMO_BUNDLE_CART = "BUNDLE_CART";
+
+    private static final Comparator<PricedItem> ITEM_COMPARATOR =
+            Comparator.comparing(PricedItem::productId, Comparator.nullsLast(Comparator.naturalOrder()));
 
     public record BundleRule(
             UUID targetProductId,
@@ -45,17 +47,6 @@ public class DiscountCalculator {
             List<String> appliedPromotionNames
     ) {}
 
-    /**
-     * Calculates combined discounts enforcing strict precedence:
-     * 1) Item SKU discount -> 2) Bundle discount -> 3) Global coupon code on net subtotal.
-     *
-     * @param items List of priced items in the cart
-     * @param promotions List of active candidate promotions
-     * @param bundleRules List of applicable bundle/volume discount rules
-     * @param couponValidationDiscount Raw coupon discount or null
-     * @param couponDiscountPercentage Optional percent-off coupon rate (e.g., 20.0 for 20% off)
-     * @return CalculationResult with exact discount breakdown
-     */
     public CalculationResult calculateDiscounts(
             List<PricedItem> items,
             List<Promotion> promotions,
@@ -67,9 +58,10 @@ public class DiscountCalculator {
             return new CalculationResult(0, 0, 0, 0, 0, 0, List.of());
         }
 
-        // 0. Sort items deterministically by productId to eliminate array ordering variations
         List<PricedItem> deterministicItems = new ArrayList<>(items);
-        deterministicItems.sort(Comparator.comparing(item -> item.productId().toString()));
+        if (deterministicItems.size() > 1) {
+            deterministicItems.sort(ITEM_COMPARATOR);
+        }
 
         long grossSubtotal = 0;
         for (PricedItem item : deterministicItems) {
@@ -77,50 +69,44 @@ public class DiscountCalculator {
         }
 
         List<String> appliedPromotions = new ArrayList<>();
-
-        // Level 1: Item SKU discounts (already incorporated in unit prices or item-level specials)
-        long itemDiscounts = 0;
-
-        // Level 2: Category bundle discounts
         long bundleDiscounts = 0;
+
         if (bundleRules != null && !bundleRules.isEmpty()) {
             for (BundleRule rule : bundleRules) {
-                for (PricedItem item : deterministicItems) {
-                    if (rule.targetProductId() == null || rule.targetProductId().equals(item.productId())) {
-                        if (item.quantity() >= rule.minQuantity()) {
-                            long lineBase = item.lineTotalCents();
-                            long discount = BigDecimal.valueOf(lineBase)
-                                    .multiply(rule.discountPercent())
-                                    .divide(BigDecimal.valueOf(100), 0, RoundingMode.HALF_UP)
-                                    .longValue();
-                            if (rule.maxDiscountCents() != null) {
-                                discount = Math.min(discount, rule.maxDiscountCents());
+                UUID targetId = rule.targetProductId();
+                if (targetId == null) {
+                    for (PricedItem item : deterministicItems) {
+                        bundleDiscounts += applyBundleRule(rule, item, appliedPromotions);
+                    }
+                } else {
+                    int firstIdx = findFirstByProductId(deterministicItems, targetId);
+                    if (firstIdx >= 0) {
+                        for (int i = firstIdx; i < deterministicItems.size(); i++) {
+                            PricedItem item = deterministicItems.get(i);
+                            if (!targetId.equals(item.productId())) {
+                                break;
                             }
-                            bundleDiscounts += discount;
-                            appliedPromotions.add("BUNDLE_" + (rule.targetProductId() != null ? rule.targetProductId() : "CART"));
+                            bundleDiscounts += applyBundleRule(rule, item, appliedPromotions);
                         }
                     }
                 }
             }
         }
 
-        // Evaluate order-level promotions if provided
-        long promoDiscount = 0;
         if (promotions != null && !promotions.isEmpty()) {
-            long remainingAfterBundles = Math.max(0, grossSubtotal - itemDiscounts - bundleDiscounts);
+            long remainingAfterBundles = Math.max(0, grossSubtotal - bundleDiscounts);
             Promotion bestPromo = null;
+            long promoDiscount = 0;
+
             for (Promotion promo : promotions) {
                 if (remainingAfterBundles < promo.getMinOrderCents()) {
                     continue;
                 }
                 long discount;
                 if ("PERCENTAGE".equalsIgnoreCase(promo.getDiscountType())) {
-                    discount = BigDecimal.valueOf(remainingAfterBundles)
-                            .multiply(promo.getDiscountValue())
-                            .divide(BigDecimal.valueOf(100), 0, RoundingMode.HALF_UP)
-                            .longValue();
+                    discount = calculatePercentDiscount(remainingAfterBundles, promo.getDiscountValue());
                 } else {
-                    discount = promo.getDiscountValue().longValue();
+                    discount = promo.getDiscountValue() != null ? promo.getDiscountValue().longValue() : 0;
                 }
                 if (promo.getMaxDiscountCents() != null) {
                     discount = Math.min(discount, promo.getMaxDiscountCents());
@@ -137,40 +123,85 @@ public class DiscountCalculator {
             }
         }
 
-        bundleDiscounts = Math.min(bundleDiscounts, Math.max(0, grossSubtotal - itemDiscounts));
+        bundleDiscounts = Math.min(bundleDiscounts, grossSubtotal);
 
-        // Level 3: Global coupon code applied STRICTLY to net subtotal post-bundle deductions
-        long netSubtotalPostBundle = Math.max(0, grossSubtotal - itemDiscounts - bundleDiscounts);
+        long netSubtotalPostBundle = Math.max(0, grossSubtotal - bundleDiscounts);
         long couponDiscount = 0;
 
         if (couponDiscountPercentage != null && couponDiscountPercentage.compareTo(BigDecimal.ZERO) > 0) {
-            couponDiscount = BigDecimal.valueOf(netSubtotalPostBundle)
-                    .multiply(couponDiscountPercentage)
-                    .divide(BigDecimal.valueOf(100), 0, RoundingMode.HALF_UP)
-                    .longValue();
+            couponDiscount = calculatePercentDiscount(netSubtotalPostBundle, couponDiscountPercentage);
         } else if (couponValidationDiscount != null && couponValidationDiscount > 0) {
             couponDiscount = couponValidationDiscount;
         }
 
-        // Coupon cannot exceed remaining net subtotal
         couponDiscount = Math.min(couponDiscount, netSubtotalPostBundle);
 
-        long totalDiscount = itemDiscounts + bundleDiscounts + couponDiscount;
-        // Strict boundary: total discount must never exceed gross subtotal
-        totalDiscount = Math.min(totalDiscount, grossSubtotal);
+        long totalDiscount = Math.min(bundleDiscounts + couponDiscount, grossSubtotal);
         long netTotal = Math.max(0, grossSubtotal - totalDiscount);
 
-        log.debug("Discount calculation: gross={}, item={}, bundle={}, coupon={}, total={}, net={}",
-                grossSubtotal, itemDiscounts, bundleDiscounts, couponDiscount, totalDiscount, netTotal);
+        log.debug("Discount calculation: gross={}, item=0, bundle={}, coupon={}, total={}, net={}",
+                grossSubtotal, bundleDiscounts, couponDiscount, totalDiscount, netTotal);
 
         return new CalculationResult(
                 grossSubtotal,
-                itemDiscounts,
+                0,
                 bundleDiscounts,
                 couponDiscount,
                 totalDiscount,
                 netTotal,
                 appliedPromotions
         );
+    }
+
+    private static int findFirstByProductId(List<PricedItem> items, UUID targetProductId) {
+        int low = 0;
+        int high = items.size() - 1;
+        int result = -1;
+
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            UUID midId = items.get(mid).productId();
+            int cmp;
+            if (midId == null) {
+                cmp = (targetProductId == null) ? 0 : 1;
+            } else if (targetProductId == null) {
+                cmp = -1;
+            } else {
+                cmp = midId.compareTo(targetProductId);
+            }
+
+            if (cmp >= 0) {
+                if (cmp == 0) {
+                    result = mid;
+                }
+                high = mid - 1;
+            } else {
+                low = mid + 1;
+            }
+        }
+
+        return result;
+    }
+
+    private static long applyBundleRule(BundleRule rule, PricedItem item, List<String> appliedPromotions) {
+        if (item.quantity() >= rule.minQuantity()) {
+            long discount = calculatePercentDiscount(item.lineTotalCents(), rule.discountPercent());
+            if (rule.maxDiscountCents() != null) {
+                discount = Math.min(discount, rule.maxDiscountCents());
+            }
+            appliedPromotions.add(rule.targetProductId() != null ? "BUNDLE_" + rule.targetProductId() : PROMO_BUNDLE_CART);
+            return discount;
+        }
+        return 0;
+    }
+
+    private static long calculatePercentDiscount(long baseCents, BigDecimal percent) {
+        if (baseCents <= 0 || percent == null || percent.signum() <= 0) {
+            return 0;
+        }
+        return BigDecimal.valueOf(baseCents)
+                .multiply(percent)
+                .divide(ONE_HUNDRED, 0, RoundingMode.HALF_UP)
+                .longValue();
     }
 }

@@ -1,0 +1,3 @@
+from airflow.models.baseoperator import BaseOperator
+
+class BigQueryInsertJobOperator(BaseOperator): ...

@@ -10,9 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// MaxAutoFixDiffCents caps automatic discrepancy adjustments at 100 cents ($1.00).
+const MaxAutoFixDiffCents int64 = 100
 
 type DBReconciler struct {
 	db     *sql.DB
@@ -22,6 +26,12 @@ type DBReconciler struct {
 }
 
 func NewDBReconciler(db *sql.DB, logger *slog.Logger, tracer trace.Tracer, pubsub *EventPublisher) *DBReconciler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if tracer == nil {
+		tracer = otel.Tracer("reconciliation")
+	}
 	return &DBReconciler{
 		db:     db,
 		logger: logger,
@@ -39,7 +49,16 @@ type ReconciliationResult struct {
 }
 
 func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time) (*ReconciliationResult, error) {
-	ctx, span := r.tracer.Start(ctx, "reconciliation.daily_run",
+	tracer := r.tracer
+	if tracer == nil {
+		tracer = otel.Tracer("reconciliation")
+	}
+	logger := r.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	ctx, span := tracer.Start(ctx, "reconciliation.daily_run",
 		trace.WithAttributes(attribute.String("run_date", runDate.Format("2006-01-02"))))
 	defer span.End()
 
@@ -80,7 +99,7 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 
 	// Detect mismatches
 	mismatches := r.detectMismatches(ledgerEntries, pspEntries)
-	r.logger.Info("mismatches detected", "count", len(mismatches), "run_id", runID)
+	logger.Info("mismatches detected", "count", len(mismatches), "run_id", runID)
 
 	// Process mismatches
 	autoFixedCount := 0
@@ -89,7 +108,7 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 	for _, mismatch := range mismatches {
 		err := r.processMismatch(ctx, tx, runID, mismatch)
 		if err != nil {
-			r.logger.Warn("failed to process mismatch", "error", err, "transaction_id", mismatch.TransactionID)
+			logger.Warn("failed to process mismatch", "error", err, "transaction_id", mismatch.TransactionID)
 			continue
 		}
 
@@ -100,12 +119,14 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 		}
 
 		// Publish event
-		if err := r.pubsub.PublishMismatchEvent(ctx, runID, mismatch); err != nil {
-			r.logger.WarnContext(ctx, "failed to publish mismatch event", "error", err, "run_id", runID)
-		}
-		discrepancyCents := calculateDiscrepancyCents(mismatch.LedgerAmount, mismatch.PSPAmount)
-		if discrepancyCents > 0 {
-			_ = r.pubsub.PublishDiscrepancyAlert(ctx, runID, mismatch, discrepancyCents)
+		if r.pubsub != nil {
+			if err := r.pubsub.PublishMismatchEvent(ctx, runID, mismatch); err != nil {
+				logger.WarnContext(ctx, "failed to publish mismatch event", "error", err, "run_id", runID)
+			}
+			discrepancyCents := calculateDiscrepancyCents(mismatch.LedgerAmount, mismatch.PSPAmount)
+			if discrepancyCents > 0 {
+				_ = r.pubsub.PublishDiscrepancyAlert(ctx, runID, mismatch, discrepancyCents)
+			}
 		}
 	}
 
@@ -135,11 +156,13 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 	)
 
 	// Publish completion event
-	if err := r.pubsub.PublishCompletionEvent(ctx, runID, len(mismatches), autoFixedCount, manualReviewCount); err != nil {
-		r.logger.WarnContext(ctx, "failed to publish completion event", "error", err, "run_id", runID)
+	if r.pubsub != nil {
+		if err := r.pubsub.PublishCompletionEvent(ctx, runID, len(mismatches), autoFixedCount, manualReviewCount); err != nil {
+			logger.WarnContext(ctx, "failed to publish completion event", "error", err, "run_id", runID)
+		}
 	}
 
-	r.logger.Info("reconciliation completed",
+	logger.Info("reconciliation completed",
 		"run_id", runID,
 		"mismatches", len(mismatches),
 		"auto_fixed", autoFixedCount,
@@ -251,17 +274,17 @@ func (r *DBReconciler) queryPSPEntries(ctx context.Context, tx *sql.Tx) (map[str
 func (r *DBReconciler) detectMismatches(ledger, psp map[string]string) []MismatchDetail {
 	var mismatches []MismatchDetail
 
-	// Check for amount mismatches and missing ledger entries
+	// Missing entries require human investigation so they are never marked auto-fixed.
 	for txnID, pspAmount := range psp {
 		if ledgerAmount, exists := ledger[txnID]; !exists {
 			mismatches = append(mismatches, MismatchDetail{
 				TransactionID: txnID,
 				PSPAmount:     pspAmount,
 				Reason:        "missing_ledger_entry",
-				AutoFixed:     true,
+				AutoFixed:     false,
+				ManualReview:  true,
 			})
 		} else if ledgerAmount != pspAmount {
-			// Check for rounding differences and timing skew
 			if ShouldAutoFix(ledgerAmount, pspAmount) {
 				mismatches = append(mismatches, MismatchDetail{
 					TransactionID: txnID,
@@ -277,12 +300,12 @@ func (r *DBReconciler) detectMismatches(ledger, psp map[string]string) []Mismatc
 					PSPAmount:     pspAmount,
 					Reason:        "amount_mismatch_manual_review",
 					AutoFixed:     false,
+					ManualReview:  true,
 				})
 			}
 		}
 	}
 
-	// Check for missing PSP exports
 	for txnID := range ledger {
 		if _, exists := psp[txnID]; !exists {
 			mismatches = append(mismatches, MismatchDetail{
@@ -290,6 +313,7 @@ func (r *DBReconciler) detectMismatches(ledger, psp map[string]string) []Mismatc
 				LedgerAmount:  ledger[txnID],
 				Reason:        "missing_psp_export",
 				AutoFixed:     false,
+				ManualReview:  true,
 			})
 		}
 	}
@@ -297,32 +321,43 @@ func (r *DBReconciler) detectMismatches(ledger, psp map[string]string) []Mismatc
 	return mismatches
 }
 
+// ShouldAutoFix permits automatic adjustment only when the discrepancy is both
+// within 5% of the base amount and at most MaxAutoFixDiffCents (100 cents).
 func ShouldAutoFix(ledgerAmountStr, pspAmountStr string) bool {
-	ledgerAmount := new(big.Float)
-	pspAmount := new(big.Float)
-
-	ledgerAmount.SetString(ledgerAmountStr)
-	pspAmount.SetString(pspAmountStr)
-
-	diff := new(big.Float).Sub(ledgerAmount, pspAmount)
-	if diff.Sign() < 0 {
-		diff.Neg(diff)
+	ledgerStr := strings.TrimSpace(ledgerAmountStr)
+	pspStr := strings.TrimSpace(pspAmountStr)
+	if ledgerStr == "" || pspStr == "" {
+		return false
 	}
 
+	ledgerAmount, ok := new(big.Rat).SetString(ledgerStr)
+	if !ok {
+		return false
+	}
+	pspAmount, ok := new(big.Rat).SetString(pspStr)
+	if !ok {
+		return false
+	}
+
+	diff := new(big.Rat).Sub(ledgerAmount, pspAmount)
+	diff.Abs(diff)
 	if diff.Sign() == 0 {
 		return true
 	}
 
-	base := new(big.Float).Abs(ledgerAmount)
-	if base.Sign() == 0 {
-		base = new(big.Float).Abs(pspAmount)
-	}
-	if base.Sign() == 0 {
-		return true
+	if diff.Cmp(big.NewRat(MaxAutoFixDiffCents, 1)) > 0 {
+		return false
 	}
 
-	// Auto-fix if difference is at most 5% of base amount
-	threshold := new(big.Float).Mul(base, big.NewFloat(0.05))
+	base := new(big.Rat).Abs(ledgerAmount)
+	if base.Sign() == 0 {
+		base = new(big.Rat).Abs(pspAmount)
+	}
+	if base.Sign() == 0 {
+		return false
+	}
+
+	threshold := new(big.Rat).Mul(base, big.NewRat(5, 100))
 	return diff.Cmp(threshold) <= 0
 }
 
@@ -361,13 +396,11 @@ func (r *DBReconciler) processMismatch(ctx context.Context, tx *sql.Tx, runID in
 		pspAmt = "0.00"
 	}
 
-	discrepancyCents := calculateDiscrepancyCents(ledgerAmt, pspAmt)
-
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO reconciliation_mismatches
-		(run_id, transaction_id, ledger_amount, psp_amount, discrepancy_amount, discrepancy_reason, auto_fixed, manual_review_required, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-		runID, mismatch.TransactionID, ledgerAmt, pspAmt, discrepancyCents, reason, mismatch.AutoFixed, manualReview)
+		(run_id, transaction_id, ledger_amount, psp_amount, discrepancy_reason, auto_fixed, manual_review_required, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+		runID, mismatch.TransactionID, ledgerAmt, pspAmt, reason, mismatch.AutoFixed, manualReview)
 
 	return err
 }

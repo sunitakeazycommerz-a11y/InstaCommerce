@@ -221,7 +221,8 @@ func main() {
 		cdcConfig := cdc.CDCConsumerConfig{
 			KafkaBrokers:   cfg.KafkaBrokers,
 			KafkaGroupID:   cfg.CDCGroupID,
-			CDCTopic:       "reconciliation.cdc",
+			CDCTopics:      cfg.CDCTopics,
+			DB:             db,
 			MinBytes:       cfg.CDCMinBytes,
 			MaxBytes:       cfg.CDCMaxBytes,
 			MaxWait:        cfg.CDCMaxWait,
@@ -366,7 +367,7 @@ func loadConfig() Config {
 		KafkaTopic:            getenv("KAFKA_TOPIC", defaultKafkaTopic),
 		KafkaClientID:         getenv("KAFKA_CLIENT_ID", "reconciliation-engine"),
 		CDCEnabled:            getenvBool("CDC_ENABLED", true),
-		CDCTopics:             splitCSV(getenv("CDC_TOPICS", "reconciliation.cdc")),
+		CDCTopics:             splitCSV(getenv("CDC_TOPICS", "payments.cdc,reconciliation.cdc")),
 		CDCGroupID:            getenv("CDC_GROUP_ID", "reconciliation-cdc-consumer"),
 		CDCMinBytes:           getenvInt("CDC_MIN_BYTES", 10*1024),
 		CDCMaxBytes:           getenvInt("CDC_MAX_BYTES", 10*1024*1024),

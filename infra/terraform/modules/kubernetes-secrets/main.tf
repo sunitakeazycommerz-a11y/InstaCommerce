@@ -147,6 +147,11 @@ resource "random_password" "reconciliation_engine_token" {
   special = true
 }
 
+resource "random_password" "reverse_etl_orchestrator_token" {
+  length  = 64
+  special = true
+}
+
 resource "random_password" "stream_processor_service_token" {
   length  = 64
   special = true
@@ -201,13 +206,14 @@ resource "kubernetes_secret" "service_tokens" {
     "mobile-bff-service-token"                = random_password.mobile_bff_service_token.result
     "admin-gateway-service-token"             = random_password.admin_gateway_service_token.result
 
-    # Go Services (7)
+    # Go Services (8)
     "cdc-consumer-service-token"              = random_password.cdc_consumer_service_token.result
     "dispatch-optimizer-service-token"        = random_password.dispatch_optimizer_service_token.result
     "location-ingestion-service-token"        = random_password.location_ingestion_service_token.result
     "outbox-relay-service-token"              = random_password.outbox_relay_service_token.result
     "payment-webhook-service-token"           = random_password.payment_webhook_service_token.result
     "reconciliation-engine-token"             = random_password.reconciliation_engine_token.result
+    "reverse-etl-orchestrator-token"          = random_password.reverse_etl_orchestrator_token.result
     "stream-processor-service-token"          = random_password.stream_processor_service_token.result
 
     # Python Services (2)
@@ -242,6 +248,7 @@ resource "kubernetes_secret" "service_tokens" {
     random_password.outbox_relay_service_token,
     random_password.payment_webhook_service_token,
     random_password.reconciliation_engine_token,
+    random_password.reverse_etl_orchestrator_token,
     random_password.stream_processor_service_token,
     random_password.ai_orchestrator_service_token,
     random_password.ai_inference_service_token

@@ -9,7 +9,7 @@ node only touches the slice it owns.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -81,7 +81,7 @@ class AgentState(BaseModel):
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str = ""
     session_id: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # -- Input ---------------------------------------------------------------
     query: str = ""
@@ -121,3 +121,14 @@ class AgentState(BaseModel):
     # -- Graph metadata ------------------------------------------------------
     current_node: str = "start"
     completed_nodes: List[str] = Field(default_factory=list)
+
+    def current_elapsed_ms(self, now: Optional[datetime] = None) -> float:
+        """Return elapsed milliseconds from ``created_at``, monotonic with ``elapsed_ms``."""
+        reference = now or datetime.now(timezone.utc)
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        created = self.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        measured = max(0.0, (reference - created).total_seconds() * 1000.0)
+        return max(self.elapsed_ms, measured)

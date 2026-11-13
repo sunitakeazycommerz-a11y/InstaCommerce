@@ -20,10 +20,32 @@ from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, 
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
+
+
+def _first_present(mapping, *keys, default=None):
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+    return default
+
+
+def _parse_event_ts(event_time_str):
+    if event_time_str:
+        try:
+            return isoparse(event_time_str).timestamp()
+        except (ValueError, TypeError):
+            return time.time()
+    return time.time()
+
+
+def _window_end_iso(window) -> str:
+    if window is None or window is beam.DoFn.WindowParam:
+        return datetime.now(timezone.utc).isoformat()
+    return window.end.to_utc_datetime().isoformat()
 
 SESSION_GAP_SECONDS = 900  # 15 minutes
 
@@ -65,27 +87,25 @@ class CartEventParser(beam.DoFn):
         _, value = element
         try:
             event = json.loads(value.decode("utf-8"))
-            payload = event.get("payload", {})
+            payload = event.get("payload") or {}
+            event_time_str = _first_present(
+                event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
+            )
             parsed = {
-                "cart_id": payload.get("cartId"),
-                "user_id": payload.get("userId"),
-                "event_type": event.get("eventType"),
-                "zone_id": payload.get("zoneId", ""),
-                "cart_value_cents": payload.get("cartValueCents", 0),
-                "item_count": payload.get("itemCount", 0),
-                "sku_ids": payload.get("skuIds", []),
-                "event_time": event.get("eventTime"),
+                "cart_id": _first_present(payload, "cartId", "cart_id")
+                or _first_present(event, "cartId", "cart_id", "aggregateId", "aggregate_id"),
+                "user_id": _first_present(payload, "userId", "user_id")
+                or _first_present(event, "userId", "user_id"),
+                "event_type": _first_present(event, "eventType", "event_type"),
+                "zone_id": _first_present(payload, "zoneId", "zone_id", default=""),
+                "cart_value_cents": _first_present(payload, "cartValueCents", "cart_value_cents", default=0),
+                "item_count": _first_present(payload, "itemCount", "item_count", default=0),
+                "sku_ids": _first_present(payload, "skuIds", "sku_ids", default=[]),
+                "event_time": event_time_str,
             }
             if not parsed["cart_id"] or not parsed["user_id"]:
                 raise ValueError("Missing cartId or userId")
-            event_time_str = event.get("eventTime")
-            if event_time_str:
-                try:
-                    event_ts = isoparse(event_time_str).timestamp()
-                except (ValueError, TypeError):
-                    event_ts = time.time()
-            else:
-                event_ts = time.time()
+            event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue(parsed, event_ts)
         except Exception as e:
             logger.warning("Failed to parse cart event: %s", e)
@@ -207,7 +227,7 @@ class AbandonmentRateAggregator(beam.CombineFn):
         }
 
 
-def format_abandonment_row(element):
+def format_abandonment_row(element, window=beam.DoFn.WindowParam):
     """Format abandonment metrics for BigQuery."""
     zone_id, metrics = element
     return {
@@ -217,7 +237,7 @@ def format_abandonment_row(element):
         "abandonment_rate": metrics["abandonment_rate"],
         "abandoned_value_cents": metrics["abandoned_value_cents"],
         "converted_value_cents": metrics["converted_value_cents"],
-        "window_timestamp": datetime.utcnow().isoformat(),
+        "window_timestamp": _window_end_iso(window),
     }
 
 

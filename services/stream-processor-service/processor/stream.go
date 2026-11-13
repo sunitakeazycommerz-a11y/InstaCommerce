@@ -31,17 +31,218 @@ func DefaultStreamConfig() StreamConfig {
 	}
 }
 
-// StreamDispatcher orchestrates bounded message queuing, worker concurrency, backpressure, and panic recovery.
+// StreamDispatcher orchestrates bounded message queuing, worker concurrency, backpressure, and monotonic per-partition offset commits.
 type StreamDispatcher struct {
-	cfg       StreamConfig
-	ch        chan kafka.Message
-	logger    *slog.Logger
-	paused    atomic.Bool
-	pauseCount atomic.Int64
+	cfg         StreamConfig
+	ch          chan queuedMessage
+	logger      *slog.Logger
+	paused      atomic.Bool
+	pauseCount  atomic.Int64
 	resumeCount atomic.Int64
-	handler   func(context.Context, kafka.Message) error
-	committer func(context.Context, kafka.Message) error
-	wg        sync.WaitGroup
+	handler     func(context.Context, kafka.Message) error
+	committer   func(context.Context, kafka.Message) error
+	tracker     *offsetTracker
+	wg          sync.WaitGroup
+}
+
+type queuedMessage struct {
+	msg   kafka.Message
+	entry *trackedOffset
+}
+
+type topicPartition struct {
+	topic     string
+	partition int
+}
+
+type offsetStatus uint8
+
+const (
+	offsetPending offsetStatus = iota
+	offsetCompleted
+	offsetFailed
+)
+
+type trackedOffset struct {
+	msg       kafka.Message
+	status    offsetStatus
+	discarded bool
+}
+
+type partitionTracker struct {
+	mu            sync.Mutex
+	queue         []*trackedOffset
+	failedSeen    bool
+	readyToCommit *kafka.Message
+	committing    bool
+}
+
+type offsetTracker struct {
+	mu         sync.Mutex
+	partitions map[topicPartition]*partitionTracker
+}
+
+func newOffsetTracker() *offsetTracker {
+	return &offsetTracker{
+		partitions: make(map[topicPartition]*partitionTracker),
+	}
+}
+
+func (ot *offsetTracker) partition(msg kafka.Message) *partitionTracker {
+	key := topicPartition{topic: msg.Topic, partition: msg.Partition}
+	ot.mu.Lock()
+	pt, ok := ot.partitions[key]
+	if !ok {
+		pt = &partitionTracker{}
+		ot.partitions[key] = pt
+	}
+	ot.mu.Unlock()
+	return pt
+}
+
+func (ot *offsetTracker) enqueue(msg kafka.Message) *trackedOffset {
+	pt := ot.partition(msg)
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if pt.failedSeen {
+		return nil
+	}
+	entry := &trackedOffset{msg: msg, status: offsetPending}
+	pt.queue = append(pt.queue, entry)
+	return entry
+}
+
+func (ot *offsetTracker) cancel(msg kafka.Message, entry *trackedOffset) {
+	if entry == nil {
+		return
+	}
+	pt := ot.partition(msg)
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if entry.discarded {
+		return
+	}
+	for i := len(pt.queue) - 1; i >= 0; i-- {
+		if pt.queue[i] == entry {
+			copy(pt.queue[i:], pt.queue[i+1:])
+			pt.queue[len(pt.queue)-1] = nil
+			pt.queue = pt.queue[:len(pt.queue)-1]
+			entry.discarded = true
+			return
+		}
+	}
+}
+
+func (ot *offsetTracker) resolve(
+	ctx context.Context,
+	msg kafka.Message,
+	entry *trackedOffset,
+	succeeded bool,
+	commitFn func(context.Context, kafka.Message) error,
+) error {
+	if entry == nil {
+		return nil
+	}
+	pt := ot.partition(msg)
+	pt.mu.Lock()
+	if entry.discarded {
+		pt.mu.Unlock()
+		return nil
+	}
+	if !succeeded {
+		entry.status = offsetFailed
+		pt.failedSeen = true
+		for i, item := range pt.queue {
+			if item == entry {
+				for j := i + 1; j < len(pt.queue); j++ {
+					pt.queue[j].discarded = true
+					pt.queue[j] = nil
+				}
+				pt.queue = pt.queue[:i+1]
+				break
+			}
+		}
+		pt.mu.Unlock()
+		return nil
+	}
+	entry.status = offsetCompleted
+	return pt.commitReadyLocked(ctx, commitFn)
+}
+
+func (ot *offsetTracker) skip(
+	ctx context.Context,
+	msg kafka.Message,
+	commitFn func(context.Context, kafka.Message) error,
+) error {
+	pt := ot.partition(msg)
+	pt.mu.Lock()
+	if pt.failedSeen {
+		pt.mu.Unlock()
+		return nil
+	}
+	entry := &trackedOffset{msg: msg, status: offsetCompleted}
+	pt.queue = append(pt.queue, entry)
+	return pt.commitReadyLocked(ctx, commitFn)
+}
+
+func (pt *partitionTracker) commitReadyLocked(
+	ctx context.Context,
+	commitFn func(context.Context, kafka.Message) error,
+) error {
+	pt.advanceLocked()
+	if commitFn == nil {
+		pt.readyToCommit = nil
+		pt.mu.Unlock()
+		return nil
+	}
+	return pt.flushCommits(ctx, commitFn)
+}
+
+func (pt *partitionTracker) advanceLocked() {
+	popped := 0
+	for popped < len(pt.queue) && pt.queue[popped].status == offsetCompleted {
+		msg := pt.queue[popped].msg
+		pt.readyToCommit = &msg
+		pt.queue[popped] = nil
+		popped++
+	}
+	if popped == 0 {
+		return
+	}
+	remaining := len(pt.queue) - popped
+	if remaining == 0 {
+		if cap(pt.queue) > 1024 {
+			pt.queue = nil
+		} else {
+			pt.queue = pt.queue[:0]
+		}
+		return
+	}
+	copy(pt.queue, pt.queue[popped:])
+	clear(pt.queue[remaining:])
+	pt.queue = pt.queue[:remaining]
+}
+
+// flushCommits expects pt.mu held on entry and releases it before returning.
+func (pt *partitionTracker) flushCommits(ctx context.Context, commitFn func(context.Context, kafka.Message) error) error {
+	if pt.readyToCommit == nil || pt.committing {
+		pt.mu.Unlock()
+		return nil
+	}
+	pt.committing = true
+	var lastErr error
+	for pt.readyToCommit != nil {
+		msg := *pt.readyToCommit
+		pt.readyToCommit = nil
+		pt.mu.Unlock()
+
+		lastErr = commitFn(ctx, msg)
+
+		pt.mu.Lock()
+	}
+	pt.committing = false
+	pt.mu.Unlock()
+	return lastErr
 }
 
 // NewStreamDispatcher creates a new dispatcher with bounded channel and backpressure.
@@ -72,10 +273,11 @@ func NewStreamDispatcher(
 
 	return &StreamDispatcher{
 		cfg:       cfg,
-		ch:        make(chan kafka.Message, cfg.BufferSize),
+		ch:        make(chan queuedMessage, cfg.BufferSize),
 		logger:    logger,
 		handler:   handler,
 		committer: committer,
+		tracker:   newOffsetTracker(),
 	}
 }
 
@@ -99,18 +301,24 @@ func (sd *StreamDispatcher) worker(ctx context.Context, id int) {
 		select {
 		case <-ctx.Done():
 			return
-		case msg, ok := <-sd.ch:
+		case qm, ok := <-sd.ch:
 			if !ok {
 				return
 			}
-			sd.processWithRecovery(ctx, msg)
+			sd.processWithRecovery(ctx, qm)
 		}
 	}
 }
 
-func (sd *StreamDispatcher) processWithRecovery(ctx context.Context, msg kafka.Message) {
+func (sd *StreamDispatcher) processWithRecovery(ctx context.Context, qm queuedMessage) {
+	succeeded := sd.runHandlerSafely(ctx, qm.msg)
+	_ = sd.tracker.resolve(ctx, qm.msg, qm.entry, succeeded, sd.commit)
+}
+
+func (sd *StreamDispatcher) runHandlerSafely(ctx context.Context, msg kafka.Message) (succeeded bool) {
 	defer func() {
 		if r := recover(); r != nil {
+			succeeded = false
 			sd.logger.Error("recovered from panic in stream worker",
 				slog.Any("panic", r),
 				slog.String("topic", msg.Topic),
@@ -127,23 +335,42 @@ func (sd *StreamDispatcher) processWithRecovery(ctx context.Context, msg kafka.M
 			slog.Int64("offset", msg.Offset),
 			slog.String("error", err.Error()),
 		)
-		return
+		return false
 	}
+	return true
+}
 
-	if sd.committer != nil {
-		if err := sd.committer(ctx, msg); err != nil && !errors.Is(err, context.Canceled) {
-			sd.logger.Error("commit error in stream worker",
-				slog.String("topic", msg.Topic),
-				slog.Int64("offset", msg.Offset),
-				slog.String("error", err.Error()),
-			)
-		}
+func (sd *StreamDispatcher) commit(ctx context.Context, msg kafka.Message) error {
+	if sd.committer == nil {
+		return nil
 	}
+	err := sd.committer(ctx, msg)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		sd.logger.Error("commit error in stream worker",
+			slog.String("topic", msg.Topic),
+			slog.Int("partition", msg.Partition),
+			slog.Int64("offset", msg.Offset),
+			slog.String("error", err.Error()),
+		)
+	}
+	return err
+}
+
+// Skip records a skipped duplicate message in partition order and commits it once all prior dispatched offsets on that partition complete.
+func (sd *StreamDispatcher) Skip(ctx context.Context, msg kafka.Message) error {
+	return sd.tracker.skip(ctx, msg, sd.committer)
 }
 
 // Submit enqueues a message, applying backpressure if buffer utilization reaches HighWatermark (80%).
 // While paused, Submit blocks the calling consumer goroutine until workers drain the buffer below LowWatermark (30%).
 func (sd *StreamDispatcher) Submit(ctx context.Context, msg kafka.Message) error {
+	var ticker *time.Ticker
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+
 	for {
 		queueLen := len(sd.ch)
 		if queueLen >= sd.cfg.HighWatermark {
@@ -166,20 +393,29 @@ func (sd *StreamDispatcher) Submit(ctx context.Context, msg kafka.Message) error
 					slog.Int("low_watermark", sd.cfg.LowWatermark),
 				)
 			} else {
+				if ticker == nil {
+					ticker = time.NewTicker(sd.cfg.PauseCheckWait)
+				}
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
-				case <-time.After(sd.cfg.PauseCheckWait):
+				case <-ticker.C:
 					continue
 				}
 			}
 		}
 
-		// Enqueue the message
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		// Register in partition order before the message becomes visible to workers.
+		entry := sd.tracker.enqueue(msg)
 		select {
 		case <-ctx.Done():
+			sd.tracker.cancel(msg, entry)
 			return ctx.Err()
-		case sd.ch <- msg:
+		case sd.ch <- queuedMessage{msg: msg, entry: entry}:
 			if len(sd.ch) >= sd.cfg.HighWatermark {
 				if !sd.paused.Swap(true) {
 					sd.pauseCount.Add(1)

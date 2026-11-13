@@ -7,8 +7,12 @@ CLI utility powered by LSP servers (gopls, pyright, jdtls) and semantic AST pars
 import argparse
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 # Add script directory to sys.path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -224,6 +228,291 @@ def cmd_walkthrough(file_path: str):
     print("\n" + "=" * 80)
 
 
+def _detect_go_stack(svc_dir: str) -> str:
+    go_mod_path = os.path.join(svc_dir, "go.mod")
+    if os.path.isfile(go_mod_path):
+        with open(go_mod_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                match = re.match(r"^go\s+(\d+\.\d+)", line.strip())
+                if match:
+                    return f"Go {match.group(1)}"
+    return "Go 1.25"
+
+
+_SKIP_DIRS = {".git", ".venv", "node_modules", "build", "__pycache__", "vendor"}
+_FILE_EXT_TO_KIND = {
+    ".go": "go",
+    ".py": "python",
+    ".proto": "proto",
+    ".java": "java",
+}
+
+
+def _resolve_gradle_project(abs_path: str) -> Optional[str]:
+    try:
+        rel = Path(abs_path).resolve().relative_to(Path(REPO_ROOT).resolve())
+    except ValueError:
+        return None
+    parts = rel.parts
+    if len(parts) >= 2 and parts[0] == "services":
+        svc_root = os.path.join(REPO_ROOT, "services", parts[1])
+        if os.path.isfile(os.path.join(svc_root, "build.gradle.kts")):
+            return f":services:{parts[1]}"
+    if len(parts) >= 1 and parts[0] == "contracts":
+        if os.path.isfile(os.path.join(REPO_ROOT, "contracts", "build.gradle.kts")):
+            return ":contracts"
+    return None
+
+
+def _collect_files(root_dir: str, suffix: str) -> List[str]:
+    matches: List[str] = []
+    for cur_root, dirs, files in os.walk(root_dir):
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
+        for name in sorted(files):
+            if name.endswith(suffix):
+                matches.append(os.path.join(cur_root, name))
+    return matches
+
+
+def _detect_check_kind(abs_path: str) -> Optional[str]:
+    if os.path.isfile(abs_path):
+        return _FILE_EXT_TO_KIND.get(os.path.splitext(abs_path)[1].lower())
+    if not os.path.isdir(abs_path):
+        return None
+    if os.path.isfile(os.path.join(abs_path, "build.gradle.kts")) and _resolve_gradle_project(abs_path):
+        return "java"
+    if os.path.isfile(os.path.join(abs_path, "go.mod")) or _collect_files(abs_path, ".go"):
+        return "go"
+    if _collect_files(abs_path, ".proto"):
+        return "proto"
+    if os.path.isfile(os.path.join(abs_path, "requirements.txt")) or _collect_files(abs_path, ".py"):
+        return "python"
+    if _collect_files(abs_path, ".java") and _resolve_gradle_project(abs_path):
+        return "java"
+    return None
+
+
+def _missing_tool_result(target: str, tool: str, hint: str) -> Dict[str, Any]:
+    return {
+        "path": target,
+        "tool": tool,
+        "status": "error",
+        "exit_code": 1,
+        "diagnostics": [],
+        "summary": {"error": f"{tool} not found on PATH ({hint})"},
+        "output": f"Error: {tool} not found on PATH. {hint}",
+    }
+
+
+def _check_go(abs_path: str) -> Dict[str, Any]:
+    gopls_bin = shutil.which("gopls")
+    if not gopls_bin:
+        return _missing_tool_result(abs_path, "gopls", "Install via: brew install gopls")
+    go_files = [abs_path] if os.path.isfile(abs_path) else _collect_files(abs_path, ".go")
+    if not go_files:
+        return {
+            "path": abs_path,
+            "tool": "gopls",
+            "status": "error",
+            "exit_code": 1,
+            "diagnostics": [],
+            "summary": {"filesAnalyzed": 0, "errorCount": 1},
+            "output": f"No .go files found under {abs_path}",
+        }
+    proc = subprocess.run([gopls_bin, "check", *go_files], cwd=REPO_ROOT, capture_output=True, text=True)
+    combined = "\n".join(part for part in (proc.stdout.strip(), proc.stderr.strip()) if part)
+    diagnostics: List[Dict[str, Any]] = []
+    for line in combined.splitlines():
+        match = re.match(r"^(.+?):(\d+):(\d+)(?:-\d+)?:\s*(.+)$", line)
+        if match:
+            diagnostics.append({
+                "file": match.group(1),
+                "line": int(match.group(2)),
+                "column": int(match.group(3)),
+                "severity": "error",
+                "message": match.group(4),
+            })
+        elif line.strip():
+            diagnostics.append({"severity": "error", "message": line.strip()})
+    return {
+        "path": abs_path,
+        "tool": "gopls",
+        "status": "pass" if proc.returncode == 0 else "fail",
+        "exit_code": proc.returncode,
+        "diagnostics": diagnostics,
+        "summary": {"filesAnalyzed": len(go_files), "errorCount": len(diagnostics)},
+        "output": combined,
+    }
+
+
+def _check_python(abs_path: str) -> Dict[str, Any]:
+    pyright_bin = shutil.which("pyright")
+    if not pyright_bin:
+        return _missing_tool_result(abs_path, "pyright", "Install via: pip install pyright or brew install pyright")
+    proc = subprocess.run([pyright_bin, "--outputjson", abs_path], cwd=REPO_ROOT, capture_output=True, text=True)
+    diagnostics: List[Dict[str, Any]] = []
+    summary: Dict[str, Any] = {}
+    output = proc.stdout.strip()
+    if output:
+        try:
+            payload = json.loads(output)
+            raw_diags = payload.get("generalDiagnostics", [])
+            for item in raw_diags:
+                start = item.get("range", {}).get("start", {})
+                diag = dict(item)
+                if "line" not in diag and isinstance(start.get("line"), int):
+                    diag["line"] = start["line"] + 1
+                if "column" not in diag and isinstance(start.get("character"), int):
+                    diag["column"] = start["character"] + 1
+                diagnostics.append(diag)
+            summary = payload.get("summary", {})
+        except json.JSONDecodeError:
+            pass
+    if not output and proc.stderr.strip():
+        output = proc.stderr.strip()
+    return {
+        "path": abs_path,
+        "tool": "pyright",
+        "status": "pass" if proc.returncode == 0 else "fail",
+        "exit_code": proc.returncode,
+        "diagnostics": diagnostics,
+        "summary": summary,
+        "output": output,
+    }
+
+
+def _check_proto(abs_path: str) -> Dict[str, Any]:
+    protolint_bin = shutil.which("protolint")
+    if not protolint_bin:
+        return _missing_tool_result(abs_path, "protolint", "Install via: brew install protolint")
+    proc = subprocess.run(
+        [protolint_bin, "lint", "-reporter", "json", abs_path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    diagnostics: List[Dict[str, Any]] = []
+    output = proc.stdout.strip() or proc.stderr.strip()
+    if proc.stdout.strip():
+        try:
+            payload = json.loads(proc.stdout)
+            diagnostics = payload.get("lints") or []
+        except json.JSONDecodeError:
+            pass
+    return {
+        "path": abs_path,
+        "tool": "protolint",
+        "status": "pass" if proc.returncode == 0 else "fail",
+        "exit_code": proc.returncode,
+        "diagnostics": diagnostics,
+        "summary": {"errorCount": len(diagnostics)},
+        "output": output,
+    }
+
+
+def _check_java(abs_path: str) -> Dict[str, Any]:
+    project = _resolve_gradle_project(abs_path)
+    gradlew = os.path.join(REPO_ROOT, "gradlew")
+    if not project:
+        return {
+            "path": abs_path,
+            "tool": "gradle",
+            "status": "error",
+            "exit_code": 1,
+            "diagnostics": [],
+            "summary": {"error": f"Unable to map {abs_path} to a Gradle subproject"},
+            "output": f"Error: {abs_path} is not inside a recognized Gradle subproject",
+        }
+    if not os.path.isfile(gradlew):
+        return _missing_tool_result(abs_path, "gradlew", "Expected ./gradlew at repository root")
+    cmd = [gradlew, f"{project}:compileJava", f"{project}:compileTestJava", "--no-daemon", "--console=plain"]
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    combined = "\n".join(part for part in (proc.stdout.strip(), proc.stderr.strip()) if part)
+    diagnostics: List[Dict[str, Any]] = []
+    for line in combined.splitlines():
+        match = re.match(r"^(.+?\.java):(\d+):\s*(error|warning):\s*(.+)$", line)
+        if match:
+            diagnostics.append({
+                "file": match.group(1),
+                "line": int(match.group(2)),
+                "severity": match.group(3),
+                "message": match.group(4),
+            })
+    return {
+        "path": abs_path,
+        "tool": "gradle",
+        "status": "pass" if proc.returncode == 0 else "fail",
+        "exit_code": proc.returncode,
+        "diagnostics": diagnostics,
+        "summary": {"project": project, "diagnosticCount": len(diagnostics)},
+        "output": combined,
+    }
+
+
+_CHECKERS: Dict[str, Callable[[str], Dict[str, Any]]] = {
+    "go": _check_go,
+    "python": _check_python,
+    "proto": _check_proto,
+    "java": _check_java,
+}
+
+
+def _display_path(abs_path: str, original: str) -> str:
+    try:
+        return str(Path(abs_path).resolve().relative_to(Path(REPO_ROOT).resolve()))
+    except ValueError:
+        return original
+
+
+def cmd_check(target_path: str, as_json: bool = False) -> None:
+    """Runs static diagnostics and type checking for a file or directory."""
+    abs_path = os.path.abspath(target_path)
+    display_path = _display_path(abs_path, target_path)
+
+    if not os.path.exists(abs_path):
+        result: Dict[str, Any] = {
+            "path": display_path,
+            "tool": "none",
+            "status": "error",
+            "exit_code": 1,
+            "diagnostics": [],
+            "summary": {"error": f"Path not found: {target_path}"},
+            "output": f"Error: Path not found: {target_path}",
+        }
+    else:
+        kind = _detect_check_kind(abs_path)
+        if not kind:
+            result = {
+                "path": display_path,
+                "tool": "none",
+                "status": "error",
+                "exit_code": 1,
+                "diagnostics": [],
+                "summary": {"error": f"Unsupported target type: {target_path}"},
+                "output": f"Error: Could not determine checker for {target_path} (expected .go, .py, .proto, .java, or service dir)",
+            }
+        else:
+            result = _CHECKERS[kind](abs_path)
+            result["path"] = display_path
+
+    if as_json:
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"[+] Check [{result['tool']}]: {result['path']} -> {result['status'].upper()}")
+        if result["diagnostics"]:
+            for d in result["diagnostics"]:
+                loc = f"{d.get('file', result['path'])}:{d.get('line', '?')}"
+                sev = d.get("severity", "error")
+                print(f"  - [{sev}] {loc}: {d.get('message', '')}")
+        elif result["status"] != "pass" and result["output"]:
+            print(result["output"])
+        if result["summary"]:
+            print(f"    Summary: {json.dumps(result['summary'])}")
+
+    if result["exit_code"] != 0:
+        sys.exit(result["exit_code"])
+
+
 def cmd_service(service_name: str):
     """Performs an architectural code tour of an entire service."""
     svc_dir = os.path.join(REPO_ROOT, "services", service_name)
@@ -241,7 +530,11 @@ def cmd_service(service_name: str):
     is_go = os.path.isfile(os.path.join(svc_dir, "go.mod"))
     is_python = os.path.isfile(os.path.join(svc_dir, "requirements.txt"))
 
-    stack = "Java 21 / Spring Boot 4.0" if is_java else ("Go 1.22" if is_go else ("Python 3.13 / FastAPI" if is_python else "Unknown"))
+    stack = (
+        "Java 21 / Spring Boot 4.0"
+        if is_java
+        else (_detect_go_stack(svc_dir) if is_go else ("Python 3.12+ / FastAPI" if is_python else "Unknown"))
+    )
     print(f"• Runtime Stack:     {stack}")
 
     # Count files
@@ -301,6 +594,11 @@ def main():
     p_refs.add_argument("line", type=int, help="Line number (1-based)")
     p_refs.add_argument("col", type=int, default=1, nargs="?", help="Column number (1-based)")
 
+    # check
+    p_check = subparsers.add_parser("check", help="Run static diagnostics and type checking on a file or directory")
+    p_check.add_argument("path", help="Target file or directory (.go, .py, .proto, .java, or service dir)")
+    p_check.add_argument("--json", action="store_true", dest="as_json", help="Output structured JSON diagnostics")
+
     # walkthrough
     p_walk = subparsers.add_parser("walkthrough", help="Generate detailed code walkthrough of a file")
     p_walk.add_argument("file", help="Path to source file (.java, .go, .py)")
@@ -319,6 +617,8 @@ def main():
         cmd_definition(args.file, args.line, args.col)
     elif args.command == "refs":
         cmd_references(args.file, args.line, args.col)
+    elif args.command == "check":
+        cmd_check(args.path, as_json=args.as_json)
     elif args.command == "walkthrough":
         cmd_walkthrough(args.file)
     elif args.command == "service":

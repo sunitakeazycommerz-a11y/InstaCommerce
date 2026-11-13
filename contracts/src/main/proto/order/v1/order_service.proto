@@ -1,11 +1,11 @@
 syntax = "proto3";
 package order.v1;
 
+import "common/v1/money.proto";
+
 option java_package = "com.instacommerce.contracts.order.v1";
 option java_multiple_files = true;
 option go_package = "github.com/instacommerce/go-shared/pkg/proto/order/v1;orderv1";
-
-import "common/v1/money.proto";
 
 service OrderService {
   rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);

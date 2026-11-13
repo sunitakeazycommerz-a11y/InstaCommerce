@@ -1,9 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/IBM/sarama"
 )
 
 func TestResolveKafkaTopic(t *testing.T) {
@@ -105,3 +113,144 @@ func TestBuildEventMessage(t *testing.T) {
 	}
 }
 
+func newTestRelayService(brokers []string) *relayService {
+	cfg := sarama.NewConfig()
+	cfg.ClientID = "outbox-relay-test"
+	cfg.Version = sarama.V2_5_0_0
+	cfg.Net.DialTimeout = 5 * time.Second
+	cfg.Net.ReadTimeout = 5 * time.Second
+	cfg.Net.WriteTimeout = 5 * time.Second
+	return &relayService{
+		cfg: Config{
+			KafkaBrokers:  brokers,
+			KafkaClientID: "outbox-relay-test",
+			ReadyTimeout:  5 * time.Second,
+		},
+		kafkaConfig: cfg,
+	}
+}
+
+func TestCheckKafkaHonorsContextDeadlineWithoutGoroutineLeak(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer ln.Close()
+
+	var openConns atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			openConns.Add(1)
+			wg.Add(1)
+			go func(c net.Conn) {
+				defer wg.Done()
+				defer openConns.Add(-1)
+				defer c.Close()
+				buf := make([]byte, 256)
+				for {
+					if _, err := c.Read(buf); err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	svc := newTestRelayService([]string{ln.Addr().String()})
+
+	runtime.GC()
+	baseGoroutines := runtime.NumGoroutine()
+
+	const attempts = 8
+	for i := 0; i < attempts; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+		start := time.Now()
+		err := svc.checkKafka(ctx)
+		elapsed := time.Since(start)
+		cancel()
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("attempt %d (elapsed=%v ctxErr=%v): expected context.DeadlineExceeded, got %v", i, elapsed, ctx.Err(), err)
+		}
+		if elapsed > 300*time.Millisecond {
+			t.Fatalf("attempt %d: checkKafka took %v, exceeded context deadline bound", i, elapsed)
+		}
+	}
+
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if openConns.Load() == 0 && runtime.NumGoroutine() <= baseGoroutines+2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if open := openConns.Load(); open != 0 {
+		t.Fatalf("expected 0 open broker connections after timeout, got %d", open)
+	}
+	if got := runtime.NumGoroutine(); got > baseGoroutines+2 {
+		t.Fatalf("goroutine leak after checkKafka timeouts: baseline=%d current=%d", baseGoroutines, got)
+	}
+
+	_ = ln.Close()
+	wg.Wait()
+}
+
+func TestCheckKafkaReturnsCanceledWithoutDialing(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer ln.Close()
+
+	var accepted atomic.Int64
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			_ = conn.Close()
+		}
+	}()
+
+	svc := newTestRelayService([]string{ln.Addr().String()})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := svc.checkKafka(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if n := accepted.Load(); n != 0 {
+		t.Fatalf("expected 0 dials on canceled context, got %d", n)
+	}
+}
+
+func TestCheckKafkaHealthyMockBroker(t *testing.T) {
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+
+	metadata := sarama.NewMockMetadataResponse(t).
+		SetBroker(broker.Addr(), broker.BrokerID()).
+		SetController(broker.BrokerID())
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t),
+		"MetadataRequest":    metadata,
+	})
+
+	svc := newTestRelayService([]string{broker.Addr()})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := svc.checkKafka(ctx); err != nil {
+		t.Fatalf("expected healthy mock broker to pass checkKafka, got %v", err)
+	}
+}

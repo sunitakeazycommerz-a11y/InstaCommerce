@@ -1,11 +1,11 @@
 syntax = "proto3";
 package cart.v1;
 
+import "common/v1/money.proto";
+
 option java_package = "com.instacommerce.contracts.cart.v1";
 option java_multiple_files = true;
 option go_package = "github.com/instacommerce/go-shared/pkg/proto/cart/v1;cartv1";
-
-import "common/v1/money.proto";
 
 service CartService {
   rpc GetCart(GetCartRequest) returns (GetCartResponse);

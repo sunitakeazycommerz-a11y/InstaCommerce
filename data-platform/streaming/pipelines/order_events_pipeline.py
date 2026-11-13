@@ -13,10 +13,32 @@ from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, 
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
+
+
+def _first_present(mapping, *keys, default=None):
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+    return default
+
+
+def _parse_event_ts(event_time_str):
+    if event_time_str:
+        try:
+            return isoparse(event_time_str).timestamp()
+        except (ValueError, TypeError):
+            return time.time()
+    return time.time()
+
+
+def _window_end_iso(window) -> str:
+    if window is None or window is beam.DoFn.WindowParam:
+        return datetime.now(timezone.utc).isoformat()
+    return window.end.to_utc_datetime().isoformat()
 
 
 class OrderPipelineOptions(PipelineOptions):
@@ -66,32 +88,42 @@ class OrderEventParser(beam.DoFn):
         key, value = element
         try:
             event = json.loads(value.decode("utf-8"))
-            payload = event.get("payload", {})
+            payload = event.get("payload") or {}
+            event_time_str = _first_present(
+                event,
+                "eventTime",
+                "event_time",
+                "timestamp",
+                "occurredAt",
+                "occurred_at",
+                "event_timestamp",
+                "createdAt",
+                "created_at",
+            )
             parsed = {
-                "event_type": event.get("eventType"),
-                "order_id": event.get("orderId") or event.get("aggregateId"),
-                "user_id": payload.get("userId"),
-                "store_id": payload.get("storeId"),
-                "total_cents": payload.get("totalCents", 0),
-                "placed_at": payload.get("placedAt"),
-                "zone_id": payload.get("zoneId", ""),
-                "event_time": event.get("eventTime"),
+                "event_type": _first_present(event, "eventType", "event_type"),
+                "order_id": _first_present(event, "orderId", "order_id", "aggregateId", "aggregate_id")
+                or _first_present(payload, "orderId", "order_id"),
+                "user_id": _first_present(payload, "userId", "user_id")
+                or _first_present(event, "userId", "user_id"),
+                "store_id": _first_present(payload, "storeId", "store_id")
+                or _first_present(event, "storeId", "store_id"),
+                "total_cents": _first_present(
+                    payload,
+                    "totalCents",
+                    "total_amount_cents",
+                    "total_cents",
+                    "totalAmountCents",
+                    default=0,
+                ),
+                "placed_at": _first_present(payload, "placedAt", "placed_at"),
+                "zone_id": _first_present(payload, "zoneId", "zone_id", default=""),
+                "delivery_seconds": _first_present(payload, "deliverySeconds", "delivery_seconds"),
+                "event_time": event_time_str,
             }
             if not parsed["order_id"]:
                 raise ValueError("Missing order_id in event")
-            event_time_str = (
-                event.get("eventTime")
-                or event.get("timestamp")
-                or event.get("occurredAt")
-                or event.get("createdAt")
-            )
-            if event_time_str:
-                try:
-                    event_ts = isoparse(event_time_str).timestamp()
-                except (ValueError, TypeError):
-                    event_ts = time.time()
-            else:
-                event_ts = time.time()
+            event_ts = _parse_event_ts(event_time_str)
 
             # Check for late-arriving events beyond allowed lateness window (1 hour)
             current_time = time.time()
@@ -110,8 +142,8 @@ class OrderEventParser(beam.DoFn):
                         "store_id": parsed["store_id"] or "UNKNOWN",
                         "zone_id": parsed["zone_id"] or "UNKNOWN",
                         "total_cents": parsed["total_cents"],
-                        "event_time": event_time_str or datetime.utcfromtimestamp(event_ts).isoformat(),
-                        "received_at": datetime.utcnow().isoformat(),
+                        "event_time": event_time_str or datetime.fromtimestamp(event_ts, tz=timezone.utc).isoformat(),
+                        "received_at": datetime.now(timezone.utc).isoformat(),
                         "lateness_seconds": round(lateness, 2),
                     },
                 )
@@ -182,18 +214,18 @@ class SLAComplianceAggregator(beam.CombineFn):
         }
 
 
-def format_volume_row(element):
+def format_volume_row(element, window=beam.DoFn.WindowParam):
     """Format aggregated volume data for BigQuery insertion."""
     key, value = element
     return {
         "store_id": key,
         "order_count": value["count"],
         "gmv_cents": value["gmv_cents"],
-        "window_timestamp": datetime.utcnow().isoformat(),
+        "window_timestamp": _window_end_iso(window),
     }
 
 
-def format_sla_row(element):
+def format_sla_row(element, window=beam.DoFn.WindowParam):
     """Format SLA compliance data for BigQuery insertion."""
     key, value = element
     return {
@@ -201,7 +233,7 @@ def format_sla_row(element):
         "total_orders": value["total"],
         "within_sla": value["within_sla"],
         "compliance_rate": value["compliance_rate"],
-        "window_timestamp": datetime.utcnow().isoformat(),
+        "window_timestamp": _window_end_iso(window),
     }
 
 

@@ -1,11 +1,11 @@
 syntax = "proto3";
 package wallet.v1;
 
+import "common/v1/money.proto";
+
 option java_package = "com.instacommerce.contracts.wallet.v1";
 option java_multiple_files = true;
 option go_package = "github.com/instacommerce/go-shared/pkg/proto/wallet/v1;walletv1";
-
-import "common/v1/money.proto";
 
 service WalletService {
   rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);

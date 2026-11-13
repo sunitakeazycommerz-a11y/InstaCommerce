@@ -39,7 +39,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest(classes = WarehouseServiceApplication.class)
 @AutoConfigureMockMvc
-@Testcontainers
+@Testcontainers(disabledWithoutDocker = true)
 @WithMockUser(username = "warehouse-test-user", roles = {"USER"})
 @TestPropertySource(
     properties = {

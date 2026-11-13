@@ -91,7 +91,7 @@ cd services/<python-service> && pytest tests/test_file.py::test_name -v
 
 # Run AI service locally with reload
 cd services/ai-orchestrator-service && uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload
-cd services/ai-inference-service && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+cd services/ai-inference-service && uvicorn app.main:app --host 0.0.0.0 --port 8101 --reload
 ```
 
 ### Data Platform & ML

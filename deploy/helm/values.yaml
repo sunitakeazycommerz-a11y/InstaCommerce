@@ -619,7 +619,6 @@ services:
       requests: { cpu: 500m, memory: 768Mi }
       limits: { cpu: 1000m, memory: 1536Mi }
     env:
-      SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8100"
       INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
     hpa:
@@ -637,7 +636,6 @@ services:
       requests: { cpu: 750m, memory: 1024Mi }
       limits: { cpu: 1500m, memory: 2048Mi }
     env:
-      SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8101"
       INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
     hpa:
@@ -655,7 +653,6 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
-      SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8102"
     hpa:
       minReplicas: 2

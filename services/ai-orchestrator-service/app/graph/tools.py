@@ -14,14 +14,16 @@ micro-services.  Built-in resilience features:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
-import time
 import posixpath
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import SplitResult, unquote, urlsplit
 
 import httpx
 
@@ -29,6 +31,183 @@ from app.config import Settings
 from app.graph.state import ToolResult
 
 logger = logging.getLogger("ai_orchestrator.tools")
+
+_ALLOWED_PATH_PREFIXES: Tuple[str, ...] = (
+    "/search",
+    "/products",
+    "/pricing",
+    "/inventory",
+    "/cart",
+    "/orders",
+    "/api/pricing",
+    "/api/inventory",
+    "/api/carts",
+    "/api/orders",
+)
+_TRAVERSAL_INDICATORS: Tuple[str, ...] = (
+    "..",
+    "/etc/",
+    ".env",
+    "%2e%2e",
+    "%2f",
+    "%5c",
+    "\\",
+    "\x00",
+)
+_SCHEME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+_PARAM_SCHEME_INDICATORS: Tuple[str, ...] = (
+    "://",
+    "javascript:",
+    "data:",
+    "file:",
+    "gopher:",
+)
+_PATH_PARAM_PATTERN = re.compile(r"\A[a-zA-Z0-9_.\-]+\Z")
+_UNRESOLVED_PLACEHOLDER_RE = re.compile(r"\{[^}]+\}")
+_BLOCKED_METADATA_HOSTS = frozenset({"169.254.169.254", "metadata.google.internal", "metadata.goog"})
+
+
+def _unquote_iteratively(raw: str, rounds: int = 3) -> str:
+    current = raw
+    for _ in range(rounds):
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    return current
+
+
+def _has_traversal(value: str) -> bool:
+    for candidate in (value, _unquote_iteratively(value)):
+        lowered = candidate.lower()
+        if any(ind in lowered for ind in _TRAVERSAL_INDICATORS):
+            return True
+    return False
+
+
+def _is_permitted_path(normalized_path: str) -> bool:
+    return any(
+        normalized_path == prefix or normalized_path.startswith(f"{prefix}/")
+        for prefix in _ALLOWED_PATH_PREFIXES
+    )
+
+
+def _validate_base_url(base_url: str) -> Tuple[Optional[SplitResult], Optional[str]]:
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None, "Security violation: invalid or non-HTTP tool base URL scheme"
+    if parsed.username is not None or parsed.password is not None:
+        return None, "Security violation: userinfo not allowed in tool base URL"
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if not hostname or hostname in _BLOCKED_METADATA_HOSTS:
+        return None, "Security violation: blocked SSRF target in tool base URL"
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        ip = None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip is not None and (ip.is_link_local or ip.is_unspecified or ip.is_multicast):
+        return None, "Security violation: blocked SSRF IP range in tool base URL"
+    return parsed, None
+
+
+def _validate_and_build_url(
+    tool: "ToolDescriptor",
+    params: Optional[Dict[str, Any]],
+    path_params: Optional[Dict[str, str]],
+) -> Tuple[Optional[str], Optional[str]]:
+    parsed_base, base_err = _validate_base_url(tool.base_url)
+    if base_err or parsed_base is None:
+        logger.error("security.invalid_base_url", extra={"tool": tool.name})
+        return None, base_err or "Security violation: invalid tool base URL"
+
+    path = tool.path
+    if (
+        not path.startswith("/")
+        or path.startswith("//")
+        or "://" in path
+        or "?" in path
+        or "#" in path
+        or any(ch in path for ch in ("\r", "\n", "\x00", "\\"))
+        or _SCHEME_PATTERN.match(path.lstrip("/"))
+        or _has_traversal(path)
+    ):
+        logger.error("security.invalid_tool_path", extra={"tool": tool.name})
+        return None, "Security violation: invalid or unsafe tool path"
+
+    if path_params:
+        for key, raw_value in path_params.items():
+            value = raw_value if isinstance(raw_value, str) else str(raw_value)
+            decoded = _unquote_iteratively(value)
+            if (
+                _has_traversal(value)
+                or "/" in value
+                or "/" in decoded
+                or "\\" in value
+                or "\\" in decoded
+                or value.startswith(".")
+                or decoded.startswith(".")
+                or "://" in value
+                or "://" in decoded
+                or _SCHEME_PATTERN.match(value)
+                or _SCHEME_PATTERN.match(decoded)
+            ):
+                logger.error(
+                    "security.path_traversal_attempt",
+                    extra={"tool": tool.name, "param_key": key},
+                )
+                return None, "Security violation: path traversal detected in parameter"
+            if not _PATH_PARAM_PATTERN.fullmatch(value):
+                logger.error(
+                    "security.invalid_path_param_chars",
+                    extra={"tool": tool.name, "param_key": key},
+                )
+                return None, "Security violation: invalid characters in path parameter"
+            path = path.replace(f"{{{key}}}", value)
+
+    if _UNRESOLVED_PLACEHOLDER_RE.search(path):
+        logger.error("security.missing_path_param", extra={"tool": tool.name})
+        return None, "Missing required path parameter"
+
+    if params:
+        for key, raw_val in params.items():
+            val_str = str(raw_val)
+            if _has_traversal(val_str):
+                logger.error(
+                    "security.path_traversal_attempt_in_params",
+                    extra={"tool": tool.name, "param_key": key},
+                )
+                return None, "Security violation: path traversal detected in query params"
+            for candidate in (val_str.lower(), _unquote_iteratively(val_str).lower()):
+                if any(ind in candidate for ind in _PARAM_SCHEME_INDICATORS):
+                    logger.error(
+                        "security.scheme_injection_in_params",
+                        extra={"tool": tool.name, "param_key": key},
+                    )
+                    return None, "Security violation: scheme injection detected in query params"
+
+    normalized_path = posixpath.normpath(path)
+    if normalized_path.startswith("//") or not _is_permitted_path(normalized_path):
+        logger.error(
+            "security.unauthorized_path_access",
+            extra={"tool": tool.name, "path": normalized_path},
+        )
+        return None, "Security violation: path not in permitted API whitelist"
+
+    url = f"{tool.base_url.rstrip('/')}{normalized_path}"
+    parsed_url = urlsplit(url)
+    if (
+        parsed_url.scheme != parsed_base.scheme
+        or parsed_url.netloc != parsed_base.netloc
+        or parsed_url.path != normalized_path
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        logger.error("security.url_integrity_violation", extra={"tool": tool.name})
+        return None, "Security violation: resolved URL failed integrity check"
+
+    return url, None
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +307,7 @@ class ToolRegistry:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(10.0, connect=3.0),
                 limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
+                follow_redirects=False,
             )
 
     async def close(self) -> None:
@@ -149,25 +329,25 @@ class ToolRegistry:
                 name="catalog.search",
                 description="Full-text product search",
                 base_url=str(s.catalog_service_url),
-                path="/api/v1/products/search",
+                path="/search",
             ),
             ToolDescriptor(
                 name="catalog.get_product",
                 description="Fetch a single product by ID",
                 base_url=str(s.catalog_service_url),
-                path="/api/v1/products/{product_id}",
+                path="/products/{product_id}",
             ),
             ToolDescriptor(
                 name="catalog.list_products",
                 description="List products with filters",
                 base_url=str(s.catalog_service_url),
-                path="/api/v1/products",
+                path="/products",
             ),
             ToolDescriptor(
                 name="pricing.calculate",
                 description="Calculate price for a product/cart",
                 base_url=str(s.pricing_service_url),
-                path="/api/v1/pricing/calculate",
+                path="/pricing/calculate",
                 method="POST",
                 is_write=False,
             ),
@@ -175,25 +355,27 @@ class ToolRegistry:
                 name="pricing.get_product",
                 description="Get pricing for a product",
                 base_url=str(s.pricing_service_url),
-                path="/api/v1/pricing/products/{product_id}",
+                path="/pricing/products/{product_id}",
             ),
             ToolDescriptor(
                 name="inventory.check",
                 description="Check stock availability",
                 base_url=str(s.inventory_service_url),
-                path="/api/v1/inventory/{product_id}",
+                path="/inventory/check",
+                method="POST",
+                is_write=False,
             ),
             ToolDescriptor(
                 name="cart.get",
                 description="Get user cart",
                 base_url=str(s.cart_service_url),
-                path="/api/v1/carts/{user_id}",
+                path="/cart/{user_id}",
             ),
             ToolDescriptor(
                 name="order.get",
                 description="Get order details",
                 base_url=str(s.order_service_url),
-                path="/api/v1/orders/{order_id}",
+                path="/orders/{order_id}",
             ),
         ]
         for t in defaults:
@@ -245,64 +427,13 @@ class ToolRegistry:
                 error="Circuit breaker open",
             )
 
-        path = tool.path
-        # Validate path and query parameters against traversal attacks (#600)
-        traversal_indicators = ["..", "/etc/", ".env", "%2e%2e", "%2f", "\\"]
-        if path_params:
-            for key, value in path_params.items():
-                if not isinstance(value, str):
-                    value = str(value)
-                val_lower = value.lower()
-                if any(ind in val_lower for ind in traversal_indicators) or "/" in value or "\\" in value:
-                    logger.error(
-                        "security.path_traversal_attempt",
-                        extra={"tool": tool_name, "param_key": key, "param_val": value},
-                    )
-                    return ToolResult(
-                        tool_name=tool_name,
-                        success=False,
-                        error="Security violation: path traversal detected in parameter",
-                    )
-                if not re.match(r"^[a-zA-Z0-9_\-\.:@]+$", value):
-                    logger.error(
-                        "security.invalid_path_param_chars",
-                        extra={"tool": tool_name, "param_key": key, "param_val": value},
-                    )
-                    return ToolResult(
-                        tool_name=tool_name,
-                        success=False,
-                        error="Security violation: invalid characters in path parameter",
-                    )
-                path = path.replace(f"{{{key}}}", value)
-
-        if params:
-            for k, v in params.items():
-                v_str = str(v).lower()
-                if any(ind in v_str for ind in traversal_indicators):
-                    logger.error(
-                        "security.path_traversal_attempt_in_params",
-                        extra={"tool": tool_name, "param_key": k, "param_val": v},
-                    )
-                    return ToolResult(
-                        tool_name=tool_name,
-                        success=False,
-                        error="Security violation: path traversal detected in query params",
-                    )
-
-        # Ensure normalized path stays within permitted API prefixes
-        normalized_path = posixpath.normpath(path)
-        if not normalized_path.startswith(("/api/v1/", "/api/")):
-            logger.error(
-                "security.unauthorized_path_access",
-                extra={"tool": tool_name, "path": normalized_path},
-            )
+        url, validation_error = _validate_and_build_url(tool, params=params, path_params=path_params)
+        if validation_error or url is None:
             return ToolResult(
                 tool_name=tool_name,
                 success=False,
-                error="Security violation: path not in permitted API whitelist",
+                error=validation_error or "Security violation: invalid request URL",
             )
-
-        url = f"{tool.base_url.rstrip('/')}{normalized_path}"
 
         # Idempotency key for write operations
         headers: Dict[str, str] = {}

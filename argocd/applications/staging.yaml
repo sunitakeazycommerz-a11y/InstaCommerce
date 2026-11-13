@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: instacommerce-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: instacommerce-platform
+    environment: staging
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/your-org/instacommerce
+    targetRevision: main
+    path: deploy/helm
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-staging.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: instacommerce-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

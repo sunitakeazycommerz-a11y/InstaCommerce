@@ -1,10 +1,16 @@
 package reconciliation
 
 import (
+	"context"
+	"database/sql/driver"
+	"io"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBalancedLedgerNoMismatches(t *testing.T) {
@@ -47,7 +53,8 @@ func TestMissingLedgerEntry(t *testing.T) {
 	assert.Equal(t, "txn-002", m.TransactionID)
 	assert.Equal(t, "4500", m.PSPAmount)
 	assert.Equal(t, "missing_ledger_entry", m.Reason)
-	assert.True(t, m.AutoFixed, "Missing ledger entry should be marked auto-fixable")
+	assert.False(t, m.AutoFixed, "Missing ledger entry must never be marked auto-fixed")
+	assert.True(t, m.ManualReview, "Missing ledger entry must require manual review")
 }
 
 func TestMissingPSPEntry(t *testing.T) {
@@ -131,6 +138,21 @@ func TestShouldAutoFix(t *testing.T) {
 	assert.False(t, ShouldAutoFix("1000", "1060")) // 6% diff
 	assert.False(t, ShouldAutoFix("1000", "900"))  // 10% diff
 	assert.False(t, ShouldAutoFix("1000", "2000")) // 100% diff
+
+	// Explicit 100-cent absolute cap even when percentage <= 5%
+	assert.True(t, ShouldAutoFix("100000", "100100"))
+	assert.False(t, ShouldAutoFix("100000", "100101"))
+	assert.False(t, ShouldAutoFix("100000", "101000"))
+	assert.False(t, ShouldAutoFix("500000", "500500"))
+
+	// Invalid, empty, or one-sided zero inputs must fail closed
+	assert.False(t, ShouldAutoFix("", "100"))
+	assert.False(t, ShouldAutoFix("100", ""))
+	assert.False(t, ShouldAutoFix("", ""))
+	assert.False(t, ShouldAutoFix("invalid", "100"))
+	assert.False(t, ShouldAutoFix("100", "invalid"))
+	assert.False(t, ShouldAutoFix("0", "50"))
+	assert.False(t, ShouldAutoFix("50", "0"))
 }
 
 func TestReconciliationResultCalculations(t *testing.T) {
@@ -155,4 +177,97 @@ func TestCalculateDiscrepancyCents(t *testing.T) {
 	assert.Equal(t, int64(1000), calculateDiscrepancyCents("1000", "0.00"))
 	assert.Equal(t, int64(2500), calculateDiscrepancyCents("0.00", "2500"))
 	assert.Equal(t, int64(1000), calculateDiscrepancyCents("1000", ""))
+}
+
+func TestProcessMismatch_OmitsDiscrepancyAmount(t *testing.T) {
+	db, state := newStubDB(nil, nil)
+	defer db.Close()
+
+	r := NewDBReconciler(db, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	ctx := context.Background()
+
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	err = r.processMismatch(ctx, tx, 42, MismatchDetail{
+		TransactionID: "txn-002",
+		LedgerAmount:  "",
+		PSPAmount:     "4500",
+		Reason:        "missing_ledger_entry",
+		AutoFixed:     false,
+		ManualReview:  true,
+	})
+	require.NoError(t, err)
+
+	var insertStmt *recordedStatement
+	for i := range state.statements {
+		if strings.Contains(state.statements[i].Query, "INSERT INTO reconciliation_mismatches") {
+			insertStmt = &state.statements[i]
+			break
+		}
+	}
+	require.NotNil(t, insertStmt, "expected INSERT INTO reconciliation_mismatches to be executed")
+	assert.NotContains(t, strings.ToLower(insertStmt.Query), "discrepancy_amount")
+	require.Len(t, insertStmt.Args, 7)
+	assert.Equal(t, int64(42), insertStmt.Args[0].Value)
+	assert.Equal(t, "txn-002", insertStmt.Args[1].Value)
+	assert.Equal(t, "0.00", insertStmt.Args[2].Value)
+	assert.Equal(t, "4500", insertStmt.Args[3].Value)
+	assert.Equal(t, "missing_ledger_entry", insertStmt.Args[4].Value)
+	assert.Equal(t, false, insertStmt.Args[5].Value)
+	assert.Equal(t, true, insertStmt.Args[6].Value)
+}
+
+func TestReconcileDailyRun_EnforcesManualReviewAndGeneratedColumn(t *testing.T) {
+	queryFn := func(_ int64, query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "SELECT run_id FROM reconciliation_runs"):
+			return &stubRows{columns: []string{"run_id"}}, nil
+		case strings.Contains(query, "INSERT INTO reconciliation_runs"):
+			return &stubRows{
+				columns: []string{"run_id"},
+				data:    [][]driver.Value{{int64(77)}},
+			}, nil
+		case strings.Contains(query, "FROM payment_ledger"):
+			return &stubRows{
+				columns: []string{"transaction_id", "amount_cents"},
+				data: [][]driver.Value{
+					{"txn-match", int64(1000)},
+					{"txn-small-diff", int64(100000)},
+					{"txn-cap-exceeded", int64(100000)},
+					{"txn-missing-psp", int64(5000)},
+				},
+			}, nil
+		case strings.Contains(query, "FROM psp_export_snapshot"):
+			return &stubRows{
+				columns: []string{"transaction_id", "amount_cents"},
+				data: [][]driver.Value{
+					{"txn-match", int64(1000)},
+					{"txn-small-diff", int64(100100)},
+					{"txn-cap-exceeded", int64(100500)},
+					{"txn-missing-ledger", int64(4500)},
+				},
+			}, nil
+		default:
+			return &stubRows{}, nil
+		}
+	}
+
+	db, state := newStubDB(queryFn, nil)
+	defer db.Close()
+
+	r := NewDBReconciler(db, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	res, err := r.ReconcileDailyRun(context.Background(), time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	assert.Equal(t, int64(77), res.RunID)
+	assert.Equal(t, 4, res.MismatchCount)
+	assert.Equal(t, 1, res.AutoFixedCount)
+	assert.Equal(t, 3, res.ManualReviewCount)
+
+	for _, stmt := range state.recorded() {
+		if strings.Contains(stmt.Query, "INSERT INTO reconciliation_mismatches") {
+			assert.NotContains(t, strings.ToLower(stmt.Query), "discrepancy_amount")
+		}
+	}
 }

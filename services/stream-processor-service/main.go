@@ -230,14 +230,14 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 				continue
 			}
 
-			// Skip duplicate messages but commit their offsets to advance the consumer.
+			// Skip duplicate messages via dispatcher so commits stay monotonic behind in-flight work.
 			if dup, err := deduper.IsDuplicate(ctx, msg.Topic, msg.Partition, msg.Offset); err != nil {
 				logger.Warn("dedup check failed, processing anyway",
 					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
 			} else if dup {
 				logger.Debug("skipping duplicate message",
 					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset)
-				if err := reader.CommitMessages(ctx, msg); err != nil && !errors.Is(err, context.Canceled) {
+				if err := dispatcher.Skip(ctx, msg); err != nil && !errors.Is(err, context.Canceled) {
 					logger.Error("commit duplicate offset error",
 						"topic", msg.Topic, "offset", msg.Offset, "error", err)
 				}

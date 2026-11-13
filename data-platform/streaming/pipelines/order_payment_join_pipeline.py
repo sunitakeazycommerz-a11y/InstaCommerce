@@ -1,23 +1,41 @@
 # pyright: reportMissingImports=false, reportUnusedExpression=false
 """Order-Payment Streaming Join Pipeline — Apache Beam Kafka → BigQuery
 
-Performs a real-time streaming join between orders.events and payments.events
-on order_id using CoGroupByKey with a 10-minute allowed skew window.
+Performs a real-time stateful streaming join between orders.events and payments.events
+on order_id with a configurable join skew window (no fixed epoch-boundary misses).
 Writes correlated records to BigQuery analytics.realtime_order_payments.
 """
 import apache_beam as beam
+from apache_beam.coders import PickleCoder
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.io.kafka import ReadFromKafka
 from apache_beam.io.gcp.bigquery import WriteToBigQuery
-from apache_beam.transforms.window import FixedWindows, TimestampedValue, Duration
-from apache_beam.transforms.trigger import AfterWatermark, AccumulationMode
+from apache_beam.transforms.timeutil import TimeDomain
+from apache_beam.transforms.userstate import ReadModifyWriteStateSpec, TimerSpec, on_timer
+from apache_beam.transforms.window import GlobalWindows, TimestampedValue
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.parser import isoparse
 
 logger = logging.getLogger(__name__)
+
+
+def _first_present(mapping, *keys, default=None):
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+    return default
+
+
+def _parse_event_ts(event_time_str):
+    if event_time_str:
+        try:
+            return isoparse(event_time_str).timestamp()
+        except (ValueError, TypeError):
+            return time.time()
+    return time.time()
 
 
 class OrderPaymentJoinPipelineOptions(PipelineOptions):
@@ -62,28 +80,30 @@ class ParseOrderFn(beam.DoFn):
         _, value = element
         try:
             event = json.loads(value.decode("utf-8"))
-            payload = event.get("payload", {})
-            order_id = event.get("orderId") or payload.get("orderId") or event.get("aggregateId")
+            payload = event.get("payload") or {}
+            order_id = _first_present(
+                event, "orderId", "order_id", "aggregateId", "aggregate_id"
+            ) or _first_present(payload, "orderId", "order_id")
             if not order_id:
                 raise ValueError("Missing orderId in order event")
+            event_time_str = _first_present(
+                event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
+            )
             parsed = {
                 "order_id": order_id,
-                "user_id": payload.get("userId"),
-                "store_id": payload.get("storeId"),
-                "zone_id": payload.get("zoneId", ""),
-                "total_cents": payload.get("totalCents", 0),
-                "event_type": event.get("eventType"),
-                "placed_at": payload.get("placedAt"),
-                "event_time": event.get("eventTime"),
+                "user_id": _first_present(payload, "userId", "user_id")
+                or _first_present(event, "userId", "user_id"),
+                "store_id": _first_present(payload, "storeId", "store_id")
+                or _first_present(event, "storeId", "store_id"),
+                "zone_id": _first_present(payload, "zoneId", "zone_id", default=""),
+                "total_cents": _first_present(
+                    payload, "totalCents", "total_amount_cents", "total_cents", default=0
+                ),
+                "event_type": _first_present(event, "eventType", "event_type"),
+                "placed_at": _first_present(payload, "placedAt", "placed_at"),
+                "event_time": event_time_str,
             }
-            event_time_str = event.get("eventTime") or event.get("timestamp") or event.get("occurredAt")
-            if event_time_str:
-                try:
-                    event_ts = isoparse(event_time_str).timestamp()
-                except (ValueError, TypeError):
-                    event_ts = time.time()
-            else:
-                event_ts = time.time()
+            event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue((order_id, parsed), event_ts)
         except Exception as e:
             logger.warning("Failed to parse order for join: %s", e)
@@ -102,29 +122,29 @@ class ParsePaymentFn(beam.DoFn):
         _, value = element
         try:
             event = json.loads(value.decode("utf-8"))
-            payload = event.get("payload", {})
-            order_id = payload.get("orderId") or event.get("orderId")
-            payment_id = payload.get("paymentId") or event.get("aggregateId")
+            payload = event.get("payload") or {}
+            order_id = _first_present(payload, "orderId", "order_id") or _first_present(
+                event, "orderId", "order_id"
+            )
+            payment_id = _first_present(payload, "paymentId", "payment_id") or _first_present(
+                event, "paymentId", "payment_id", "aggregateId", "aggregate_id"
+            )
             if not order_id:
                 raise ValueError("Missing orderId in payment event")
+            event_time_str = _first_present(
+                event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
+            )
             parsed = {
                 "order_id": order_id,
                 "payment_id": payment_id,
-                "method": payload.get("method", "UNKNOWN"),
-                "status": payload.get("status", "UNKNOWN"),
-                "amount_cents": payload.get("amountCents", 0),
-                "latency_ms": payload.get("latencyMs"),
-                "event_type": event.get("eventType"),
-                "event_time": event.get("eventTime"),
+                "method": _first_present(payload, "method", "paymentMethod", "payment_method", default="UNKNOWN"),
+                "status": _first_present(payload, "status", default="UNKNOWN"),
+                "amount_cents": _first_present(payload, "amountCents", "amount_cents", default=0),
+                "latency_ms": _first_present(payload, "latencyMs", "latency_ms"),
+                "event_type": _first_present(event, "eventType", "event_type"),
+                "event_time": event_time_str,
             }
-            event_time_str = event.get("eventTime") or event.get("timestamp") or event.get("occurredAt")
-            if event_time_str:
-                try:
-                    event_ts = isoparse(event_time_str).timestamp()
-                except (ValueError, TypeError):
-                    event_ts = time.time()
-            else:
-                event_ts = time.time()
+            event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue((order_id, parsed), event_ts)
         except Exception as e:
             logger.warning("Failed to parse payment for join: %s", e)
@@ -132,6 +152,24 @@ class ParsePaymentFn(beam.DoFn):
                 self.DEAD_LETTER,
                 {"raw": value.decode("utf-8", errors="replace"), "error": str(e)},
             )
+
+
+def _build_joined_row(order_id: str, order_data: dict, payment_data: dict) -> dict:
+    return {
+        "order_id": order_id,
+        "user_id": order_data.get("user_id"),
+        "store_id": order_data.get("store_id"),
+        "zone_id": order_data.get("zone_id"),
+        "order_total_cents": order_data.get("total_cents", 0),
+        "order_status": order_data.get("event_type", "UNKNOWN"),
+        "placed_at": order_data.get("placed_at"),
+        "payment_id": payment_data.get("payment_id"),
+        "payment_method": payment_data.get("method", "UNKNOWN"),
+        "payment_status": payment_data.get("status", "UNKNOWN"),
+        "payment_amount_cents": payment_data.get("amount_cents", 0),
+        "payment_latency_ms": payment_data.get("latency_ms"),
+        "joined_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 class CorrelateOrderPaymentFn(beam.DoFn):
@@ -148,21 +186,66 @@ class CorrelateOrderPaymentFn(beam.DoFn):
         order_data = orders[0] if orders else {}
         payment_data = payments[0] if payments else {}
 
-        yield {
-            "order_id": order_id,
-            "user_id": order_data.get("user_id"),
-            "store_id": order_data.get("store_id"),
-            "zone_id": order_data.get("zone_id"),
-            "order_total_cents": order_data.get("total_cents", 0),
-            "order_status": order_data.get("event_type", "UNKNOWN"),
-            "placed_at": order_data.get("placed_at"),
-            "payment_id": payment_data.get("payment_id"),
-            "payment_method": payment_data.get("method", "UNKNOWN"),
-            "payment_status": payment_data.get("status", "UNKNOWN"),
-            "payment_amount_cents": payment_data.get("amount_cents", 0),
-            "payment_latency_ms": payment_data.get("latency_ms"),
-            "joined_at": datetime.utcnow().isoformat(),
-        }
+        yield _build_joined_row(order_id, order_data, payment_data)
+
+
+class StatefulOrderPaymentJoinFn(beam.DoFn):
+    """Stateful streaming join on order_id using event-time watermark expiry."""
+
+    ORDER_STATE = ReadModifyWriteStateSpec("order", PickleCoder())
+    PAYMENT_STATE = ReadModifyWriteStateSpec("payment", PickleCoder())
+    EMITTED_STATE = ReadModifyWriteStateSpec("emitted", PickleCoder())
+    EXPIRY_TIMER = TimerSpec("expiry", TimeDomain.WATERMARK)
+
+    def __init__(self, join_window_seconds: int = 600):
+        self.join_window_seconds = join_window_seconds
+
+    def process(
+        self,
+        element,
+        timestamp=beam.DoFn.TimestampParam,
+        order_state=beam.DoFn.StateParam(ORDER_STATE),
+        payment_state=beam.DoFn.StateParam(PAYMENT_STATE),
+        emitted_state=beam.DoFn.StateParam(EMITTED_STATE),
+        expiry_timer=beam.DoFn.TimerParam(EXPIRY_TIMER),
+    ):
+        order_id, tagged = element
+        side, payload = tagged
+
+        if side == "order":
+            order_state.write(payload)
+        elif side == "payment":
+            payment_state.write(payload)
+
+        if emitted_state.read():
+            return
+
+        order_data = order_state.read()
+        payment_data = payment_state.read()
+        expiry_timer.set(float(timestamp) + self.join_window_seconds)
+
+        if order_data is not None and payment_data is not None:
+            emitted_state.write(True)
+            yield _build_joined_row(order_id, order_data, payment_data)
+
+    @on_timer(EXPIRY_TIMER)
+    def on_expiry(
+        self,
+        key=beam.DoFn.KeyParam,
+        order_state=beam.DoFn.StateParam(ORDER_STATE),
+        payment_state=beam.DoFn.StateParam(PAYMENT_STATE),
+        emitted_state=beam.DoFn.StateParam(EMITTED_STATE),
+    ):
+        try:
+            if not emitted_state.read():
+                order_data = order_state.read()
+                payment_data = payment_state.read()
+                if order_data is not None or payment_data is not None:
+                    yield _build_joined_row(key, order_data or {}, payment_data or {})
+        finally:
+            order_state.clear()
+            payment_state.clear()
+            emitted_state.clear()
 
 
 ORDER_PAYMENTS_TABLE_SCHEMA = {
@@ -210,15 +293,8 @@ def build_pipeline(options):
             )
         )
 
-        windowed_orders = (
-            parsed_orders.orders
-            | "WindowOrders"
-            >> beam.WindowInto(
-                FixedWindows(window_duration),
-                trigger=AfterWatermark(),
-                allowed_lateness=Duration(seconds=window_duration),
-                accumulation_mode=AccumulationMode.DISCARDING,
-            )
+        tagged_orders = parsed_orders.orders | "TagOrders" >> beam.Map(
+            lambda kv: (kv[0], ("order", kv[1]))
         )
 
         # Read and parse payments
@@ -241,22 +317,18 @@ def build_pipeline(options):
             )
         )
 
-        windowed_payments = (
-            parsed_payments.payments
-            | "WindowPayments"
-            >> beam.WindowInto(
-                FixedWindows(window_duration),
-                trigger=AfterWatermark(),
-                allowed_lateness=Duration(seconds=window_duration),
-                accumulation_mode=AccumulationMode.DISCARDING,
-            )
+        tagged_payments = parsed_payments.payments | "TagPayments" >> beam.Map(
+            lambda kv: (kv[0], ("payment", kv[1]))
         )
 
-        # CoGroupByKey and Join
         (
-            {"orders": windowed_orders, "payments": windowed_payments}
-            | "CoGroupOrdersPayments" >> beam.CoGroupByKey()
-            | "CorrelateStreams" >> beam.ParDo(CorrelateOrderPaymentFn())
+            (tagged_orders, tagged_payments)
+            | "MergeOrderPaymentStreams" >> beam.Flatten()
+            | "WindowGlobal" >> beam.WindowInto(GlobalWindows())
+            | "CorrelateStreams"
+            >> beam.ParDo(
+                StatefulOrderPaymentJoinFn(join_window_seconds=window_duration)
+            )
             | "WriteRealtimeOrderPayments"
             >> WriteToBigQuery(
                 table=pipeline_options.output_table,

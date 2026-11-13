@@ -1,0 +1,3 @@
+from airflow.sensors.base import BaseSensorOperator
+
+class ExternalTaskSensor(BaseSensorOperator): ...

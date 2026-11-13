@@ -2,6 +2,8 @@ package subscription
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -15,10 +17,11 @@ import (
 
 // mockRedisClient implements RedisClient for unit testing in-memory.
 type mockRedisClient struct {
-	mu     sync.RWMutex
-	hashes map[string]map[string]any
-	values map[string]string
-	ttls   map[string]time.Duration
+	mu        sync.RWMutex
+	hashes    map[string]map[string]any
+	values    map[string]string
+	ttls      map[string]time.Duration
+	expireErr error
 }
 
 func newMockRedisClient() *mockRedisClient {
@@ -108,6 +111,10 @@ func (m *mockRedisClient) Expire(ctx context.Context, key string, expiration tim
 	defer m.mu.Unlock()
 
 	cmd := redis.NewBoolCmd(ctx)
+	if m.expireErr != nil {
+		cmd.SetErr(m.expireErr)
+		return cmd
+	}
 	if _, ok := m.values[key]; ok {
 		m.ttls[key] = expiration
 		cmd.SetVal(true)
@@ -296,4 +303,144 @@ func TestRateLimiter(t *testing.T) {
 		require.NoError(t, err)
 	}
 	rl.Stop()
+}
+
+type recordedAuditExec struct {
+	query       string
+	args        []driver.NamedValue
+	ctxErr      error
+	hasDeadline bool
+}
+
+type auditCaptureDB struct {
+	mu    sync.Mutex
+	execs []recordedAuditExec
+}
+
+func (a *auditCaptureDB) Connect(_ context.Context) (driver.Conn, error) {
+	return a, nil
+}
+
+func (a *auditCaptureDB) Driver() driver.Driver {
+	return a
+}
+
+func (a *auditCaptureDB) Open(_ string) (driver.Conn, error) {
+	return a, nil
+}
+
+func (a *auditCaptureDB) Prepare(_ string) (driver.Stmt, error) {
+	return nil, driver.ErrSkip
+}
+
+func (a *auditCaptureDB) Close() error {
+	return nil
+}
+
+func (a *auditCaptureDB) Begin() (driver.Tx, error) {
+	return nil, driver.ErrSkip
+}
+
+func (a *auditCaptureDB) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	_, hasDeadline := ctx.Deadline()
+	a.mu.Lock()
+	a.execs = append(a.execs, recordedAuditExec{
+		query:       query,
+		args:        args,
+		ctxErr:      ctx.Err(),
+		hasDeadline: hasDeadline,
+	})
+	a.mu.Unlock()
+	return driver.RowsAffected(1), nil
+}
+
+func TestSyncUserFeaturesApplies36HourTTL(t *testing.T) {
+	client := newMockRedisClient()
+	pool := NewWorkerPool(WorkerPoolConfig{
+		Concurrency:     5,
+		RateLimitPerSec: 5000,
+		RedisClient:     client,
+	})
+	defer pool.Close()
+
+	records := []UserFeatureRecord{
+		{
+			UserID:           "user-456",
+			CLV:              12500.50,
+			CategoryAffinity: map[string]float64{"dairy": 0.85},
+			LastPurchaseDays: 2,
+			Segment:          "HIGH_VALUE",
+			UpdatedAt:        time.Now(),
+		},
+	}
+
+	result, err := pool.SyncUserFeatures(context.Background(), "job-ttl-1", "sub-1", records)
+	require.NoError(t, err)
+	assert.Equal(t, "COMPLETED", result.Status)
+
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	ttl, hasTTL := client.ttls["user:features:user-456"]
+	require.True(t, hasTTL, "user:features:{id} must have an explicit Redis TTL")
+	assert.Equal(t, 36*time.Hour, ttl)
+}
+
+func TestRecordAuditPersistsCancelledRowWithCanceledContext(t *testing.T) {
+	capture := &auditCaptureDB{}
+	db := sql.OpenDB(capture)
+	defer db.Close()
+
+	client := newMockRedisClient()
+	pool := NewWorkerPool(WorkerPoolConfig{
+		Concurrency:     5,
+		RateLimitPerSec: 5000,
+		RedisClient:     client,
+		DB:              db,
+	})
+	defer pool.Close()
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	records := []UserFeatureRecord{
+		{UserID: "user-1", CLV: 100.0, UpdatedAt: time.Now()},
+	}
+
+	res, err := pool.SyncUserFeatures(canceledCtx, "job-cancel-1", "sub-cancel-1", records)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, "CANCELLED", res.Status)
+
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	require.Len(t, capture.execs, 1, "CANCELLED audit row must still be executed against DB when sync context is canceled")
+	exec := capture.execs[0]
+	assert.NoError(t, exec.ctxErr, "audit DB execution must use a detached non-canceled context")
+	assert.True(t, exec.hasDeadline, "audit DB execution must apply a bounded timeout")
+	assert.Contains(t, exec.query, "INSERT INTO reverse_etl_sync_audit")
+	require.GreaterOrEqual(t, len(exec.args), 5)
+	assert.Equal(t, "job-cancel-1", exec.args[0].Value)
+	assert.Equal(t, "sub-cancel-1", exec.args[1].Value)
+	assert.Equal(t, "user_features", exec.args[2].Value)
+	assert.Equal(t, "CANCELLED", exec.args[4].Value)
+}
+
+func TestSyncUserFeaturesFailsWhenExpireErrors(t *testing.T) {
+	client := newMockRedisClient()
+	client.expireErr = fmt.Errorf("redis expire unavailable")
+
+	pool := NewWorkerPool(WorkerPoolConfig{
+		Concurrency:     2,
+		RateLimitPerSec: 5000,
+		RedisClient:     client,
+	})
+	defer pool.Close()
+
+	records := []UserFeatureRecord{
+		{UserID: "user-err", CLV: 50.0, UpdatedAt: time.Now()},
+	}
+
+	res, err := pool.SyncUserFeatures(context.Background(), "job-expire-err", "sub-1", records)
+	require.Error(t, err)
+	assert.Equal(t, "FAILED", res.Status)
+	assert.Contains(t, err.Error(), "set TTL on user features")
 }
