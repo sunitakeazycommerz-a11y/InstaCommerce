@@ -27,6 +27,9 @@
     "discountCents": { "type": "integer", "minimum": 0 },
     "totalCents": { "type": "integer", "minimum": 0 },
     "currency": { "type": "string" },
+    "deliveryAddress": { "type": "string" },
+    "dropoffLat": { "type": "number", "description": "Latitude of the customer dropoff location" },
+    "dropoffLng": { "type": "number", "description": "Longitude of the customer dropoff location" },
     "placedAt": { "type": "string", "format": "date-time" }
   }
 }

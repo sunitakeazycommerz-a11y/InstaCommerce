@@ -6,6 +6,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -27,6 +28,7 @@ import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -101,6 +103,7 @@ class CheckoutSecurityConfigTest {
     @Autowired private JwtService jwtService;
     @Autowired private WorkflowClient workflowClient;
     @Autowired private CheckoutIdempotencyService idempotencyService;
+    @Autowired private CompensationDlqRepository dlqRepository;
     @Autowired private ObjectMapper objectMapper;
 
     private MockMvc mockMvc;
@@ -151,5 +154,59 @@ class CheckoutSecurityConfigTest {
                 .content(objectMapper.writeValueAsString(new CheckoutRequest("user-1", "pm-1", null, "addr-1"))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.orderId").value("ord-sec-1"));
+    }
+
+    @Test
+    void regularUserForbiddenFromCheckoutDlqEndpoints() throws Exception {
+        Jws<Claims> jws = mock(Jws.class);
+        Claims claims = mock(Claims.class);
+        when(jwtService.validateAccessToken("user-jwt")).thenReturn(jws);
+        when(jws.getPayload()).thenReturn(claims);
+        when(claims.getSubject()).thenReturn("user-1");
+        doReturn(List.of(new SimpleGrantedAuthority("ROLE_USER"))).when(jwtService).extractAuthorities(claims);
+
+        String dlqId = UUID.randomUUID().toString();
+
+        mockMvc.perform(get("/checkout/dlq")
+                .header("Authorization", "Bearer user-jwt"))
+            .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/v1/checkout/dlq")
+                .header("Authorization", "Bearer user-jwt"))
+            .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/checkout/dlq/{id}/resolve", dlqId)
+                .header("Authorization", "Bearer user-jwt"))
+            .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/v1/checkout/dlq/{id}/retry", dlqId)
+                .header("Authorization", "Bearer user-jwt"))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void adminAndInternalServiceCanAccessCheckoutDlqEndpoints() throws Exception {
+        Jws<Claims> adminJws = mock(Jws.class);
+        Claims adminClaims = mock(Claims.class);
+        when(jwtService.validateAccessToken("admin-jwt")).thenReturn(adminJws);
+        when(adminJws.getPayload()).thenReturn(adminClaims);
+        when(adminClaims.getSubject()).thenReturn("admin-1");
+        doReturn(List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))).when(jwtService).extractAuthorities(adminClaims);
+        when(dlqRepository.findAll()).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/checkout/dlq")
+                .header("Authorization", "Bearer admin-jwt"))
+            .andExpect(status().isOk());
+
+        Jws<Claims> internalJws = mock(Jws.class);
+        Claims internalClaims = mock(Claims.class);
+        when(jwtService.validateAccessToken("internal-jwt")).thenReturn(internalJws);
+        when(internalJws.getPayload()).thenReturn(internalClaims);
+        when(internalClaims.getSubject()).thenReturn("ops-svc");
+        doReturn(List.of(new SimpleGrantedAuthority("ROLE_INTERNAL_SERVICE"))).when(jwtService).extractAuthorities(internalClaims);
+
+        mockMvc.perform(get("/checkout/dlq")
+                .header("Authorization", "Bearer internal-jwt"))
+            .andExpect(status().isOk());
     }
 }

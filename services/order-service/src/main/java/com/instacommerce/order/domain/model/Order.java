@@ -13,6 +13,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -70,6 +71,12 @@ public class Order {
 
     @Column(name = "delivery_address", columnDefinition = "text")
     private String deliveryAddress;
+
+    @Column(name = "dropoff_lat", precision = 10, scale = 8)
+    private BigDecimal dropoffLat;
+
+    @Column(name = "dropoff_lng", precision = 11, scale = 8)
+    private BigDecimal dropoffLng;
 
     @Column(name = "quote_id")
     private UUID quoteId;
@@ -219,6 +226,22 @@ public class Order {
 
     public void setDeliveryAddress(String deliveryAddress) {
         this.deliveryAddress = deliveryAddress;
+    }
+
+    public BigDecimal getDropoffLat() {
+        return dropoffLat;
+    }
+
+    public void setDropoffLat(BigDecimal dropoffLat) {
+        this.dropoffLat = dropoffLat;
+    }
+
+    public BigDecimal getDropoffLng() {
+        return dropoffLng;
+    }
+
+    public void setDropoffLng(BigDecimal dropoffLng) {
+        this.dropoffLng = dropoffLng;
     }
 
     public UUID getQuoteId() {

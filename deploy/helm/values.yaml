@@ -196,12 +196,14 @@ istio:
         - order-service
     order-service:
       allowFrom:
+        - admin-gateway-service
         - checkout-orchestrator-service
         - fulfillment-service
         - notification-service
         - wallet-loyalty-service
     payment-service:
       allowFrom:
+        - admin-gateway-service
         - checkout-orchestrator-service
         - fulfillment-service
         - order-service
@@ -231,6 +233,7 @@ istio:
         - catalog-service
     fulfillment-service:
       allowFrom:
+        - admin-gateway-service
         - checkout-orchestrator-service
         - rider-fleet-service
         - warehouse-service
@@ -266,6 +269,7 @@ istio:
         - routing-eta-service
     config-feature-flag-service:
       allowFrom:
+        - admin-gateway-service
         - checkout-orchestrator-service
         - fulfillment-service
         - rider-fleet-service
@@ -273,6 +277,7 @@ istio:
         - pricing-service
     audit-trail-service:
       allowFrom:
+        - admin-gateway-service
         - identity-service
         - order-service
         - payment-service
@@ -1142,6 +1147,12 @@ services:
     env:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8099"
+      FEATURE_FLAG_SERVICE_URL: "http://config-feature-flag-service:8096"
+      RECONCILIATION_ENGINE_URL: "http://reconciliation-engine:8107"
+      AUDIT_TRAIL_SERVICE_URL: "http://audit-trail-service:8094"
+      ORDER_SERVICE_URL: "http://order-service:8080"
+      PAYMENT_SERVICE_URL: "http://payment-service:8080"
+      FULFILLMENT_SERVICE_URL: "http://fulfillment-service:8080"
     hpa:
       minReplicas: 2
       maxReplicas: 6

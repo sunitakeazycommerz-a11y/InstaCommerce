@@ -75,15 +75,15 @@ admin-gateway:
         health-path: /actuator/health
         metrics-path: /actuator/metrics/http.server.requests
       - name: order-service
-        base-url: ${ORDER_SERVICE_URL:http://order-service:8085}
+        base-url: ${ORDER_SERVICE_URL:http://order-service:8084}
         health-path: /actuator/health
         metrics-path: /actuator/metrics/http.server.requests
       - name: payment-service
-        base-url: ${PAYMENT_SERVICE_URL:http://payment-service:8086}
+        base-url: ${PAYMENT_SERVICE_URL:http://payment-service:8085}
         health-path: /actuator/health
         metrics-path: /actuator/metrics/http.server.requests
       - name: fulfillment-service
-        base-url: ${FULFILLMENT_SERVICE_URL:http://fulfillment-service:8087}
+        base-url: ${FULFILLMENT_SERVICE_URL:http://fulfillment-service:8086}
         health-path: /actuator/health
         metrics-path: /actuator/metrics/http.server.requests
 

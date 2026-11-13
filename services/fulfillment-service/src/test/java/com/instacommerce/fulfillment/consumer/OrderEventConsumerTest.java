@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
@@ -127,5 +128,32 @@ class OrderEventConsumerTest {
         consumer.onOrderEvent(record);
 
         verify(pickService).cancelPickTask(orderId, "payment-failed");
+    }
+
+    @Test
+    void handlesOrderPlacedWithDropoffCoordinatesAndOmitsWhenMissing() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        String json = String.format("""
+            {
+              "eventType": "OrderPlaced",
+              "payload": {
+                "orderId": "%s",
+                "userId": "%s",
+                "storeId": "%s",
+                "dropoffLat": 12.9352,
+                "dropoffLng": "77.6245",
+                "items": []
+              }
+            }
+            """, orderId, userId, storeId);
+
+        consumer.onOrderEvent(new ConsumerRecord<>("orders.events", 0, 0, orderId.toString(), json));
+
+        ArgumentCaptor<OrderPlacedPayload> captor = ArgumentCaptor.forClass(OrderPlacedPayload.class);
+        verify(pickService).createPickTask(captor.capture());
+        assertThat(captor.getValue().dropoffLat()).isEqualByComparingTo(new BigDecimal("12.9352"));
+        assertThat(captor.getValue().dropoffLng()).isEqualByComparingTo(new BigDecimal("77.6245"));
     }
 }

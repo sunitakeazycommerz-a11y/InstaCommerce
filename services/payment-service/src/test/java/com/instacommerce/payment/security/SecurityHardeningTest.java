@@ -250,6 +250,22 @@ class SecurityHardeningTest {
             mockMvc.perform(get("/actuator/info"))
                 .andExpect(status().isOk());
         }
+
+        @Test
+        @WithMockUser(roles = "INTERNAL_SERVICE")
+        @DisplayName("/actuator/metrics allowed for INTERNAL_SERVICE")
+        void actuatorMetrics_allowedForInternalService() throws Exception {
+            mockMvc.perform(get("/actuator/metrics"))
+                .andExpect(status().isOk());
+        }
+
+        @Test
+        @WithMockUser(roles = "INTERNAL_SERVICE")
+        @DisplayName("/actuator/info forbidden for INTERNAL_SERVICE")
+        void actuatorInfo_forbiddenForInternalService() throws Exception {
+            mockMvc.perform(get("/actuator/info"))
+                .andExpect(status().isForbidden());
+        }
     }
 
     // ── Fix 7: Webhook error message does not leak details ───────

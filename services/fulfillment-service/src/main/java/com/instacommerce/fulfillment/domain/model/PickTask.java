@@ -12,6 +12,7 @@ import jakarta.persistence.OneToMany;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -67,6 +68,12 @@ public class PickTask {
 
     @Column(name = "tote_color")
     private String toteColor;
+
+    @Column(name = "dropoff_lat", precision = 10, scale = 8)
+    private BigDecimal dropoffLat;
+
+    @Column(name = "dropoff_lng", precision = 11, scale = 8)
+    private BigDecimal dropoffLng;
 
     @OneToMany(mappedBy = "pickTask", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PickItem> items = new ArrayList<>();
@@ -204,5 +211,21 @@ public class PickTask {
 
     public void setToteColor(String toteColor) {
         this.toteColor = toteColor;
+    }
+
+    public BigDecimal getDropoffLat() {
+        return dropoffLat;
+    }
+
+    public void setDropoffLat(BigDecimal dropoffLat) {
+        this.dropoffLat = dropoffLat;
+    }
+
+    public BigDecimal getDropoffLng() {
+        return dropoffLng;
+    }
+
+    public void setDropoffLng(BigDecimal dropoffLng) {
+        this.dropoffLng = dropoffLng;
     }
 }

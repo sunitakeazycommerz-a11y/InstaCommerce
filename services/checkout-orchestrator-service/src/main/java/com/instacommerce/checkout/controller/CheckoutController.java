@@ -30,6 +30,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.lang.Nullable;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -202,6 +203,7 @@ public class CheckoutController {
     }
 
     @GetMapping("/dlq")
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     public ResponseEntity<List<CompensationDlq>> listFailedCompensations() {
         if (dlqRepository == null) {
             return ResponseEntity.ok(List.of());
@@ -210,6 +212,7 @@ public class CheckoutController {
     }
 
     @PostMapping("/dlq/{id}/resolve")
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     public ResponseEntity<CompensationDlq> resolveFailedCompensation(
             @PathVariable UUID id,
             @RequestBody(required = false) Map<String, String> body) {
@@ -226,6 +229,7 @@ public class CheckoutController {
     }
 
     @PostMapping("/dlq/{id}/retry")
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     public ResponseEntity<Map<String, Object>> retryFailedCompensation(@PathVariable UUID id) {
         if (dlqRepository == null) {
             return ResponseEntity.notFound().build();

@@ -10,6 +10,8 @@
     "packedAt": { "type": "string", "format": "date-time" },
     "pickupLat": { "type": "number", "description": "Latitude of the pickup store location" },
     "pickupLng": { "type": "number", "description": "Longitude of the pickup store location" },
+    "dropoffLat": { "type": "number", "description": "Latitude of the customer dropoff location" },
+    "dropoffLng": { "type": "number", "description": "Longitude of the customer dropoff location" },
     "note": { "type": "string" }
   }
 }
