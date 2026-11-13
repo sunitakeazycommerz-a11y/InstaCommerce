@@ -92,7 +92,6 @@ public class NotificationService {
             logger.warn("Notification event {} missing userId", envelope.eventType());
             return;
         }
-        // Cache user contact once to avoid duplicate HTTP calls (Fix N-2)
         Optional<UserContact> cachedUserContact = userDirectoryClient.findUser(userId);
         Map<String, Object> variables = buildVariables(envelope.eventType(), payload, userId,
             orderSnapshot.orElse(null), cachedUserContact.orElse(null));

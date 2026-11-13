@@ -31,6 +31,7 @@ import com.instacommerce.checkout.workflow.activity.PaymentActivity;
 import com.instacommerce.checkout.workflow.activity.PricingActivity;
 import io.temporal.workflow.Workflow;
 import io.temporal.workflow.WorkflowInfo;
+import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -626,5 +627,34 @@ class CheckoutWorkflowImplTest {
 
         assertThat(response.status()).startsWith("FAILED");
         verify(orderActivity, never()).confirmOrder(anyString(), anyString());
+    }
+
+    @Test
+    void shouldPropagateDropoffCoordinatesToOrderCreateRequest() {
+        BigDecimal dropoffLat = new BigDecimal("12.9352");
+        BigDecimal dropoffLng = new BigDecimal("77.6245");
+        CheckoutRequest request = new CheckoutRequest(
+            USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID, dropoffLat, dropoffLng);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(10000L, 0L, 0L, 10000L, "INR", "quote-1", "token-1"));
+        when(inventoryActivity.reserveStock(cartItems))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(eq(10000L), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 15));
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        ArgumentCaptor<OrderCreateRequest> captor = ArgumentCaptor.forClass(OrderCreateRequest.class);
+        verify(orderActivity).createOrder(captor.capture());
+        assertThat(captor.getValue().dropoffLat()).isEqualByComparingTo(dropoffLat);
+        assertThat(captor.getValue().dropoffLng()).isEqualByComparingTo(dropoffLng);
+        assertThat(captor.getValue().withIdempotencyKey("custom-key").dropoffLat()).isEqualByComparingTo(dropoffLat);
     }
 }

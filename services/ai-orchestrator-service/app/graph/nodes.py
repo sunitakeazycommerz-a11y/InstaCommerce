@@ -498,15 +498,18 @@ def _plan_tools(state: AgentState) -> List[Dict[str, Any]]:
         plan.append({"tool": "catalog.search", "params": {"q": state.query}})
     elif state.intent == IntentType.SUBSTITUTE:
         plan.append({"tool": "catalog.search", "params": {"q": state.query}})
-        inv_call: Dict[str, Any] = {"tool": "inventory.check"}
-        if state.context.get("store_id") and state.context.get("items"):
-            inv_call["body"] = {
-                "storeId": state.context["store_id"],
-                "items": state.context["items"],
-            }
-        else:
-            inv_call["params"] = {"q": state.query}
-        plan.append(inv_call)
+        store_id = state.context.get("store_id")
+        items = state.context.get("items")
+        if store_id and items:
+            plan.append(
+                {
+                    "tool": "inventory.check",
+                    "body": {
+                        "storeId": store_id,
+                        "items": items,
+                    },
+                }
+            )
     elif state.intent == IntentType.ORDER_STATUS:
         # Extract order id from context if available
         order_id = state.context.get("order_id", "")

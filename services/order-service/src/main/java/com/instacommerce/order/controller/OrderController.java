@@ -62,6 +62,8 @@ public class OrderController {
             .paymentId(parseOptionalUuid(request.paymentId()))
             .idempotencyKey(idempotencyKey)
             .deliveryAddress(request.effectiveDeliveryAddress())
+            .dropoffLat(request.dropoffLat())
+            .dropoffLng(request.dropoffLng())
             .quoteId(parseOptionalUuid(request.quoteId()))
             .quoteToken(request.quoteToken())
             .build();

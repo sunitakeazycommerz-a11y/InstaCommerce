@@ -18,8 +18,12 @@ import com.instacommerce.order.service.AuditLogService;
 import com.instacommerce.order.service.OrderService;
 import com.instacommerce.order.service.OutboxService;
 import com.instacommerce.order.workflow.model.CreateOrderCommand;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -349,5 +353,87 @@ class OrderControllerTest {
         order.setCurrency("INR");
         order.setTotalCents(1000L);
         return order;
+    }
+
+    @Test
+    @DisplayName("createOrder propagates dropoff coordinates into OrderPlaced outbox payload and validates coordinate pairs")
+    @SuppressWarnings("unchecked")
+    void shouldPersistAndPublishDropoffCoordinatesAndValidateBounds() {
+        OrderRepository orderRepository = mock(OrderRepository.class);
+        OrderStatusHistoryRepository statusHistoryRepository = mock(OrderStatusHistoryRepository.class);
+        OutboxService outboxService = mock(OutboxService.class);
+        AuditLogService auditLogService = mock(AuditLogService.class);
+        PricingQuoteClient pricingQuoteClient = mock(PricingQuoteClient.class);
+        OrderService realOrderService = new OrderService(
+            orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient);
+        OrderController controller = new OrderController(realOrderService);
+
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+        BigDecimal dropoffLat = new BigDecimal("12.93520000");
+        BigDecimal dropoffLng = new BigDecimal("77.62450000");
+
+        when(orderRepository.findByIdempotencyKey(any())).thenReturn(Optional.empty());
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
+            Order o = inv.getArgument(0);
+            if (o.getId() == null) {
+                o.setId(orderId);
+            }
+            return o;
+        });
+
+        OrderCreateRequest request = new OrderCreateRequest(
+            userId.toString(),
+            "store_1",
+            List.of(new CartItem(productId, 1, 500L)),
+            500L,
+            0L,
+            0L,
+            500L,
+            "INR",
+            null,
+            UUID.randomUUID().toString(),
+            UUID.randomUUID().toString(),
+            "addr_1",
+            "123 Main St",
+            "pm_card",
+            null,
+            null,
+            "idem-coords-1",
+            dropoffLat,
+            dropoffLng
+        );
+
+        OrderCreationResult created = controller.createOrder(request);
+        assertThat(created.orderId()).isEqualTo(orderId.toString());
+
+        ArgumentCaptor<Order> savedOrderCaptor = ArgumentCaptor.forClass(Order.class);
+        verify(orderRepository).save(savedOrderCaptor.capture());
+        Order savedOrder = savedOrderCaptor.getValue();
+        assertThat(savedOrder.getDropoffLat()).isEqualByComparingTo(dropoffLat);
+        assertThat(savedOrder.getDropoffLng()).isEqualByComparingTo(dropoffLng);
+
+        when(orderRepository.findByIdForUpdate(orderId)).thenReturn(Optional.of(savedOrder));
+        realOrderService.updateOrderStatus(orderId, OrderStatus.PLACED, "system", "Payment captured");
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderPlaced"), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+            .containsEntry("dropoffLat", dropoffLat)
+            .containsEntry("dropoffLng", dropoffLng);
+
+        Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
+        OrderCreateRequest partialRequest = new OrderCreateRequest(
+            userId.toString(), "store_1", List.of(new CartItem(productId, 1, 500L)),
+            500L, 0L, 0L, 500L, "INR", null, null, null, "addr_1", "123 Main St",
+            "pm_card", null, null, "idem-partial", dropoffLat, null);
+        assertThat(validator.validate(partialRequest)).isNotEmpty();
+
+        OrderCreateRequest outOfBoundsRequest = new OrderCreateRequest(
+            userId.toString(), "store_1", List.of(new CartItem(productId, 1, 500L)),
+            500L, 0L, 0L, 500L, "INR", null, null, null, "addr_1", "123 Main St",
+            "pm_card", null, null, "idem-oob", new BigDecimal("95.0"), new BigDecimal("77.6245"));
+        assertThat(validator.validate(outOfBoundsRequest)).isNotEmpty();
     }
 }

@@ -12,33 +12,43 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 @Component
-public class FulfillmentEventConsumer {
-    private static final Logger logger = LoggerFactory.getLogger(FulfillmentEventConsumer.class);
+public class NotificationEventConsumer {
+    private static final Logger logger = LoggerFactory.getLogger(NotificationEventConsumer.class);
 
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
 
-    public FulfillmentEventConsumer(NotificationService notificationService, ObjectMapper objectMapper) {
+    public NotificationEventConsumer(NotificationService notificationService, ObjectMapper objectMapper) {
         this.notificationService = notificationService;
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = TopicNames.FULFILLMENT_EVENTS, groupId = "notification-service", concurrency = "3")
-    public void onFulfillmentEvent(ConsumerRecord<String, String> record) {
-        handle(record);
+    @KafkaListener(topics = TopicNames.ORDERS_EVENTS, groupId = "notification-service", concurrency = "3")
+    public void onOrderEvent(ConsumerRecord<String, String> record) {
+        handle(record, "order");
     }
 
-    private void handle(ConsumerRecord<String, String> record) {
+    @KafkaListener(topics = TopicNames.PAYMENTS_EVENTS, groupId = "notification-service", concurrency = "3")
+    public void onPaymentEvent(ConsumerRecord<String, String> record) {
+        handle(record, "payment");
+    }
+
+    @KafkaListener(topics = TopicNames.FULFILLMENT_EVENTS, groupId = "notification-service", concurrency = "3")
+    public void onFulfillmentEvent(ConsumerRecord<String, String> record) {
+        handle(record, "fulfillment");
+    }
+
+    private void handle(ConsumerRecord<String, String> record, String domain) {
         try {
             EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
             notificationService.handleEvent(record, envelope);
         } catch (PreferenceLookupException ex) {
-            logger.warn("Transient preference lookup failure for fulfillment event at offset={} partition={}: {}",
-                record.offset(), record.partition(), ex.getMessage());
+            logger.warn("Transient preference lookup failure for {} event at offset={} partition={}: {}",
+                domain, record.offset(), record.partition(), ex.getMessage());
             throw ex;
         } catch (Exception ex) {
-            logger.error("Failed to process fulfillment event at offset={} partition={}: {}",
-                record.offset(), record.partition(), ex.getMessage(), ex);
+            logger.error("Failed to process {} event at offset={} partition={}: {}",
+                domain, record.offset(), record.partition(), ex.getMessage(), ex);
         }
     }
 }

@@ -2,7 +2,6 @@ package com.instacommerce.audit.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -14,7 +13,6 @@ import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.dto.AuditEventRequest;
 import com.instacommerce.audit.dto.AuditEventResponse;
 import com.instacommerce.audit.repository.AuditEventRepository;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -61,7 +59,6 @@ class AuditIngestionServiceTest {
             "corr-abc-123"
         );
 
-        when(hashChainService.partitionBucket(any(Instant.class))).thenReturn("audit_events_2026_11");
         when(hashChainService.getLatestHash()).thenReturn("prev-hash-111");
         when(hashChainService.nextSequenceNumber()).thenReturn(10L);
         when(hashChainService.computeEventHash(any(AuditEvent.class))).thenReturn("computed-hash-222");
@@ -77,7 +74,7 @@ class AuditIngestionServiceTest {
         assertThat(response.action()).isEqualTo("COMPLETE");
 
         InOrder order = inOrder(hashChainService, repository);
-        order.verify(hashChainService).acquirePartitionLock("audit_events_2026_11");
+        order.verify(hashChainService).acquireChainLock();
         order.verify(hashChainService).getLatestHash();
         order.verify(hashChainService).nextSequenceNumber();
         order.verify(hashChainService).computeEventHash(any(AuditEvent.class));
@@ -121,7 +118,6 @@ class AuditIngestionServiceTest {
             "corr-2"
         );
 
-        when(hashChainService.partitionBucket(any(Instant.class))).thenReturn("audit_events_2026_11");
         when(hashChainService.getLatestHash()).thenReturn("genesis-hash");
         when(hashChainService.nextSequenceNumber()).thenReturn(1L, 2L);
         when(hashChainService.computeEventHash(any(AuditEvent.class)))
@@ -132,7 +128,7 @@ class AuditIngestionServiceTest {
         ingestionService.ingestBatch(List.of(req1, req2));
 
         InOrder order = inOrder(hashChainService, repository);
-        order.verify(hashChainService).acquirePartitionLock("audit_events_2026_11");
+        order.verify(hashChainService).acquireChainLock();
         order.verify(hashChainService).getLatestHash();
         order.verify(hashChainService).nextSequenceNumber();
 
@@ -154,6 +150,6 @@ class AuditIngestionServiceTest {
         ingestionService.ingestBatch(List.of());
 
         verifyNoInteractions(hashChainService, repository);
-        verify(hashChainService, never()).acquirePartitionLock(anyString());
+        verify(hashChainService, never()).acquireChainLock();
     }
 }

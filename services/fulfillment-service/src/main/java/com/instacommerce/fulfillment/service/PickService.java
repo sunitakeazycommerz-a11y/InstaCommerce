@@ -86,6 +86,8 @@ public class PickService {
         task.setUserId(payload.userId());
         task.setStoreId(payload.storeId());
         task.setPaymentId(payload.paymentId());
+        task.setDropoffLat(payload.dropoffLat());
+        task.setDropoffLng(payload.dropoffLng());
         task.setStatus(PickTaskStatus.PENDING);
 
         List<OrderPlacedItem> itemsPayload = payload.items() == null ? List.of() : payload.items();
@@ -328,6 +330,12 @@ public class PickService {
         } else {
             logger.warn("Could not resolve pickup coordinates for store {} (order {})",
                     task.getStoreId(), task.getOrderId());
+        }
+        if (task.getDropoffLat() != null) {
+            payload.put("dropoffLat", task.getDropoffLat());
+        }
+        if (task.getDropoffLng() != null) {
+            payload.put("dropoffLng", task.getDropoffLng());
         }
         outboxService.publish("Fulfillment", task.getOrderId().toString(), "OrderPacked", payload);
     }

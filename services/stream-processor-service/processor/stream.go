@@ -166,7 +166,7 @@ func (ot *offsetTracker) resolve(
 		return nil
 	}
 	entry.status = offsetCompleted
-	return pt.commitReadyLocked(ctx, commitFn)
+	return pt.commitReady(ctx, commitFn)
 }
 
 func (ot *offsetTracker) skip(
@@ -182,20 +182,32 @@ func (ot *offsetTracker) skip(
 	}
 	entry := &trackedOffset{msg: msg, status: offsetCompleted}
 	pt.queue = append(pt.queue, entry)
-	return pt.commitReadyLocked(ctx, commitFn)
+	return pt.commitReady(ctx, commitFn)
 }
 
-func (pt *partitionTracker) commitReadyLocked(
+func (pt *partitionTracker) commitReady(
 	ctx context.Context,
 	commitFn func(context.Context, kafka.Message) error,
 ) error {
-	pt.advanceLocked()
-	if commitFn == nil {
-		pt.readyToCommit = nil
-		pt.mu.Unlock()
+	if !pt.advanceAndCheckFlush(commitFn != nil) {
 		return nil
 	}
 	return pt.flushCommits(ctx, commitFn)
+}
+
+// advanceAndCheckFlush expects pt.mu held on entry and always unlocks it before returning.
+func (pt *partitionTracker) advanceAndCheckFlush(hasCommitter bool) bool {
+	defer pt.mu.Unlock()
+	pt.advanceLocked()
+	if !hasCommitter {
+		pt.readyToCommit = nil
+		return false
+	}
+	if pt.readyToCommit == nil || pt.committing {
+		return false
+	}
+	pt.committing = true
+	return true
 }
 
 func (pt *partitionTracker) advanceLocked() {
@@ -223,26 +235,37 @@ func (pt *partitionTracker) advanceLocked() {
 	pt.queue = pt.queue[:remaining]
 }
 
-// flushCommits expects pt.mu held on entry and releases it before returning.
+func (pt *partitionTracker) takeReadyCommit() (kafka.Message, bool) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if pt.readyToCommit == nil {
+		pt.committing = false
+		return kafka.Message{}, false
+	}
+	msg := *pt.readyToCommit
+	pt.readyToCommit = nil
+	return msg, true
+}
+
 func (pt *partitionTracker) flushCommits(ctx context.Context, commitFn func(context.Context, kafka.Message) error) error {
-	if pt.readyToCommit == nil || pt.committing {
-		pt.mu.Unlock()
-		return nil
-	}
-	pt.committing = true
+	completed := false
+	defer func() {
+		if !completed {
+			pt.mu.Lock()
+			pt.committing = false
+			pt.mu.Unlock()
+		}
+	}()
+
 	var lastErr error
-	for pt.readyToCommit != nil {
-		msg := *pt.readyToCommit
-		pt.readyToCommit = nil
-		pt.mu.Unlock()
-
+	for {
+		msg, ok := pt.takeReadyCommit()
+		if !ok {
+			completed = true
+			return lastErr
+		}
 		lastErr = commitFn(ctx, msg)
-
-		pt.mu.Lock()
 	}
-	pt.committing = false
-	pt.mu.Unlock()
-	return lastErr
 }
 
 // NewStreamDispatcher creates a new dispatcher with bounded channel and backpressure.
@@ -358,7 +381,7 @@ func (sd *StreamDispatcher) commit(ctx context.Context, msg kafka.Message) error
 
 // Skip records a skipped duplicate message in partition order and commits it once all prior dispatched offsets on that partition complete.
 func (sd *StreamDispatcher) Skip(ctx context.Context, msg kafka.Message) error {
-	return sd.tracker.skip(ctx, msg, sd.committer)
+	return sd.tracker.skip(ctx, msg, sd.commit)
 }
 
 // Submit enqueues a message, applying backpressure if buffer utilization reaches HighWatermark (80%).

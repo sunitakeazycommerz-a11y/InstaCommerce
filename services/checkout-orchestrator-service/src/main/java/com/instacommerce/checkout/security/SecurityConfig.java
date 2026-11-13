@@ -33,6 +33,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error").permitAll()
+                .requestMatchers("/checkout/dlq/**", "/api/v1/checkout/dlq/**").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)

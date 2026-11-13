@@ -338,6 +338,42 @@ def test_monitoring_alerts_bq_freshness_rejects_invalid_identifiers(monkeypatch:
     mock_bq_client.query.assert_not_called()
 
 
+def test_monitoring_alerts_bq_freshness_parameterizes_table_id(monkeypatch: pytest.MonkeyPatch):
+    """Verify _check_bq_freshness uses ScalarQueryParameter for __TABLES__ lookup."""
+    mock_bq_client = MagicMock()
+    captured_params: list[tuple[str, str, Any]] = []
+
+    def _scalar_param(name: str, param_type: str, value: Any) -> tuple[str, str, Any]:
+        item = (name, param_type, value)
+        captured_params.append(item)
+        return item
+
+    def _job_config(query_parameters: Any = None) -> dict[str, Any]:
+        return {"query_parameters": query_parameters}
+
+    mock_bq_client.query.return_value.result.return_value = [
+        types.SimpleNamespace(minutes_since_update=5)
+    ]
+    monkeypatch.setattr("google.cloud.bigquery.Client", MagicMock(return_value=mock_bq_client))
+    monkeypatch.setattr("google.cloud.bigquery.ScalarQueryParameter", _scalar_param, raising=False)
+    monkeypatch.setattr("google.cloud.bigquery.QueryJobConfig", _job_config, raising=False)
+    monkeypatch.setattr(
+        monitoring_alerts,
+        "CRITICAL_TABLES",
+        ["instacommerce-prod.marts.mart_daily_revenue"],
+    )
+
+    check_fn = monitoring_alerts.dag.task_dict["check_bq_freshness"].python_callable
+    ti = MagicMock()
+    check_fn(ti=ti)
+
+    ti.xcom_push.assert_called_once_with(key="bq_alerts", value=[])
+    assert captured_params == [("table_id", "STRING", "mart_daily_revenue")]
+    called_sql = mock_bq_client.query.call_args.args[0]
+    assert "WHERE table_id = @table_id" in called_sql
+    assert "'mart_daily_revenue'" not in called_sql
+
+
 def test_data_quality_dag_rejects_invalid_sql_identifiers(monkeypatch: pytest.MonkeyPatch):
     """Verify data_quality DAG validates BigQuery identifiers before SQL interpolation."""
     validate_fn = data_quality.dag.task_dict["validate_orders"].python_callable

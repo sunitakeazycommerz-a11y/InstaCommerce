@@ -1,5 +1,6 @@
 package com.instacommerce.checkout.dto;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 public record OrderCreateRequest(
@@ -18,7 +19,9 @@ public record OrderCreateRequest(
     String paymentMethodId,
     String quoteId,
     String quoteToken,
-    String idempotencyKey
+    String idempotencyKey,
+    BigDecimal dropoffLat,
+    BigDecimal dropoffLng
 ) {
     public OrderCreateRequest(
         String userId,
@@ -53,6 +56,48 @@ public record OrderCreateRequest(
             paymentMethodId,
             quoteId,
             quoteToken,
+            null,
+            null,
+            null
+        );
+    }
+
+    public OrderCreateRequest(
+        String userId,
+        String storeId,
+        List<CartItem> items,
+        long subtotalCents,
+        long discountCents,
+        long deliveryFeeCents,
+        long totalCents,
+        String currency,
+        String couponCode,
+        String reservationId,
+        String paymentId,
+        String deliveryAddressId,
+        String paymentMethodId,
+        String quoteId,
+        String quoteToken,
+        String idempotencyKey
+    ) {
+        this(
+            userId,
+            storeId,
+            items,
+            subtotalCents,
+            discountCents,
+            deliveryFeeCents,
+            totalCents,
+            currency,
+            couponCode,
+            reservationId,
+            paymentId,
+            deliveryAddressId,
+            paymentMethodId,
+            quoteId,
+            quoteToken,
+            idempotencyKey,
+            null,
             null
         );
     }
@@ -74,7 +119,9 @@ public record OrderCreateRequest(
             paymentMethodId,
             quoteId,
             quoteToken,
-            idempotencyKey
+            idempotencyKey,
+            dropoffLat,
+            dropoffLng
         );
     }
 }

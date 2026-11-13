@@ -613,7 +613,6 @@ func normalizeLocation(input LocationInput) (LocationUpdate, error) {
 func (s *IngestService) storeLatest(ctx context.Context, update LocationUpdate) error {
 	key := s.cfg.RedisKeyPrefix + update.RiderID
 
-	// Check out-of-order pings (Issue #597)
 	existingMs, err := s.redis.HGet(ctx, key, "timestamp_ms").Int64()
 	if err == nil && existingMs > 0 {
 		if update.Timestamp.UnixMilli() <= existingMs {
@@ -649,7 +648,6 @@ func (s *IngestService) storeLatest(ctx context.Context, update LocationUpdate) 
 		}
 	}
 
-	// Maintain H3 spatial index set in Redis (Issue #607)
 	if update.H3Index != "" {
 		_ = s.redis.SAdd(ctx, "riders:h3:"+update.H3Index, update.RiderID).Err()
 		_ = s.redis.Expire(ctx, "riders:h3:"+update.H3Index, s.cfg.RedisTTL*2).Err()
@@ -752,97 +750,17 @@ func (b *KafkaBatcher) writeBatch(ctx context.Context, updates []LocationUpdate)
 }
 
 func shutdownServer(server *http.Server, healthHandler *health.Handler, timeout time.Duration, logger *slog.Logger) {
-	if healthHandler != nil {
-		healthHandler.SetReady(false)
-	}
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), timeout)
-	defer shutdownCancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("server shutdown failed", "error", err)
-	}
+	health.ShutdownServer(server, healthHandler, timeout, logger)
 }
 
 const kafkaProbeBrokerTimeout = 2 * time.Second
 
 func checkKafka(ctx context.Context, brokers []string) error {
-	dialer := kafka.Dialer{Timeout: kafkaProbeBrokerTimeout}
-	return checkKafkaWithDial(ctx, brokers, func(dialCtx context.Context, broker string) error {
-		conn, err := dialer.DialContext(dialCtx, "tcp", broker)
-		if err != nil {
-			return err
-		}
-		_ = conn.Close()
-		return nil
-	})
+	return health.CheckTCPBrokers(ctx, brokers, kafkaProbeBrokerTimeout)
 }
 
 func checkKafkaWithDial(ctx context.Context, brokers []string, dial func(context.Context, string) error) error {
-	validBrokers := make([]string, 0, len(brokers))
-	for _, b := range brokers {
-		if trimmed := strings.TrimSpace(b); trimmed != "" {
-			validBrokers = append(validBrokers, trimmed)
-		}
-	}
-	if len(validBrokers) == 0 {
-		return errors.New("no brokers configured")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	errs := make([]error, 0, len(validBrokers))
-	for i, broker := range validBrokers {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		attemptCtx, cancel, err := kafkaBrokerAttemptContext(ctx, len(validBrokers)-i)
-		if err != nil {
-			return err
-		}
-
-		dialErr := dial(attemptCtx, broker)
-		cancel()
-		if dialErr == nil {
-			return nil
-		}
-		errs = append(errs, fmt.Errorf("broker %s: %w", broker, dialErr))
-	}
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return errors.Join(errs...)
-}
-
-func kafkaBrokerAttemptContext(ctx context.Context, remainingBrokers int) (context.Context, context.CancelFunc, error) {
-	deadline, hasDeadline := ctx.Deadline()
-	if !hasDeadline {
-		attemptCtx, cancel := context.WithTimeout(ctx, kafkaProbeBrokerTimeout)
-		return attemptCtx, cancel, nil
-	}
-
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		return nil, nil, context.DeadlineExceeded
-	}
-
-	if remainingBrokers <= 1 && remaining <= kafkaProbeBrokerTimeout {
-		return ctx, func() {}, nil
-	}
-
-	budget := remaining / time.Duration(remainingBrokers)
-	if budget <= 0 {
-		budget = remaining
-	}
-	if budget > kafkaProbeBrokerTimeout {
-		budget = kafkaProbeBrokerTimeout
-	}
-	attemptCtx, cancel := context.WithTimeout(ctx, budget)
-	return attemptCtx, cancel, nil
+	return health.CheckTCPBrokersWithDial(ctx, brokers, kafkaProbeBrokerTimeout, dial)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

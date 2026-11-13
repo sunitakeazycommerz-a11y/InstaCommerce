@@ -14,11 +14,11 @@ scrape_configs:
       module: [http_2xx]
     static_configs:
       - targets:
-          - http://cart-service:8090/actuator/health/readiness
-          - http://order-service:8084/actuator/health/readiness
-          - http://inventory-service:8083/actuator/health/readiness
-          - http://payment-service:8085/actuator/health/readiness
-          - http://pricing-service:8089/actuator/health/readiness
+          - http://cart-service:8088/actuator/health/readiness
+          - http://order-service:8080/actuator/health/readiness
+          - http://inventory-service:8080/actuator/health/readiness
+          - http://payment-service:8080/actuator/health/readiness
+          - http://pricing-service:8087/actuator/health/readiness
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

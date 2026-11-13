@@ -53,6 +53,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
+                .requestMatchers("/actuator/metrics/**").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .requestMatchers("/actuator/**").hasRole("ADMIN")
                 .requestMatchers("/error", "/payments/webhook", "/api/payments/webhook", "/api/v1/payments/webhook").permitAll()
                 .requestMatchers(HttpMethod.POST, "/payments/*/capture", "/payments/*/void",

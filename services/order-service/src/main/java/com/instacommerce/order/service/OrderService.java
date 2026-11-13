@@ -24,12 +24,14 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -51,6 +53,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
@@ -64,7 +67,7 @@ public class OrderService {
     private final AuditLogService auditLogService;
     private final PricingQuoteClient pricingQuoteClient;
     private final MeterRegistry meterRegistry;
-    private TransactionTemplate transactionTemplate;
+    private TransactionOperations transactionOperations = TransactionOperations.withoutTransaction();
 
     public OrderService(OrderRepository orderRepository,
                         OrderStatusHistoryRepository statusHistoryRepository,
@@ -89,9 +92,10 @@ public class OrderService {
         this.meterRegistry = meterRegistry;
     }
 
-    @Autowired(required = false)
-    public void setTransactionManager(@Nullable PlatformTransactionManager transactionManager) {
-        this.transactionTemplate = transactionManager != null ? new TransactionTemplate(transactionManager) : null;
+    @Autowired
+    public void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.transactionOperations = new TransactionTemplate(
+            Objects.requireNonNull(transactionManager, "transactionManager must not be null"));
     }
 
     private Order lockOrder(UUID orderId) {
@@ -178,6 +182,8 @@ public class OrderService {
         order.setPaymentId(command.getPaymentId());
         order.setIdempotencyKey(normalizedKey);
         order.setDeliveryAddress(command.getDeliveryAddress());
+        order.setDropoffLat(command.getDropoffLat());
+        order.setDropoffLng(command.getDropoffLng());
         if (command.getQuoteId() != null) {
             order.setQuoteId(command.getQuoteId());
         }
@@ -203,10 +209,7 @@ public class OrderService {
     }
 
     private String executeInTransaction(Supplier<String> action) {
-        if (transactionTemplate == null) {
-            return action.get();
-        }
-        return transactionTemplate.execute(status -> action.get());
+        return transactionOperations.execute(status -> action.get());
     }
 
     static String normalizeIdempotencyKey(String rawKey) {
@@ -386,20 +389,20 @@ public class OrderService {
         if (newStatus == OrderStatus.PLACED) {
             outboxService.publish("Order", saved.getId().toString(), "OrderPlaced", buildOrderPlacedPayload(saved));
         } else if (newStatus == OrderStatus.FAILED) {
-            Map<String, Object> failedPayload = new java.util.LinkedHashMap<>();
+            Map<String, Object> failedPayload = new LinkedHashMap<>();
             failedPayload.put("orderId", saved.getId());
             failedPayload.put("userId", saved.getUserId());
             failedPayload.put("paymentId", saved.getPaymentId());
             failedPayload.put("reason", note != null ? note : "Fulfillment failure");
             outboxService.publish("Order", saved.getId().toString(), "OrderFailed", failedPayload);
         } else if (newStatus == OrderStatus.DELIVERED) {
-            Map<String, Object> deliveredPayload = new java.util.LinkedHashMap<>();
+            Map<String, Object> deliveredPayload = new LinkedHashMap<>();
             deliveredPayload.put("orderId", saved.getId().toString());
             deliveredPayload.put("userId", saved.getUserId().toString());
             deliveredPayload.put("paymentId", saved.getPaymentId() != null ? saved.getPaymentId().toString() : null);
             deliveredPayload.put("totalCents", saved.getTotalCents());
             deliveredPayload.put("currency", saved.getCurrency());
-            deliveredPayload.put("deliveredAt", java.time.Instant.now().toString());
+            deliveredPayload.put("deliveredAt", Instant.now().toString());
             outboxService.publish("Order", saved.getId().toString(), "OrderDelivered", deliveredPayload);
         }
     }
@@ -461,6 +464,12 @@ public class OrderService {
         payload.put("totalCents", order.getTotalCents());
         payload.put("currency", order.getCurrency());
         payload.put("deliveryAddress", order.getDeliveryAddress());
+        if (order.getDropoffLat() != null) {
+            payload.put("dropoffLat", order.getDropoffLat());
+        }
+        if (order.getDropoffLng() != null) {
+            payload.put("dropoffLng", order.getDropoffLng());
+        }
         payload.put("placedAt", order.getUpdatedAt());
         List<OrderItem> items = order.getItems() == null ? List.of() : order.getItems();
         payload.put("items", items.stream()

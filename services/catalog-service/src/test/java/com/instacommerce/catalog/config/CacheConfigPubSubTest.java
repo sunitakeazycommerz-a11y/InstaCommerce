@@ -2,6 +2,7 @@ package com.instacommerce.catalog.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
@@ -94,6 +95,7 @@ class CacheConfigPubSubTest {
                 DefaultMessage msg = new DefaultMessage(
                     channel.getBytes(StandardCharsets.UTF_8),
                     payload.getBytes(StandardCharsets.UTF_8));
+                listenerA.get().onMessage(msg, null);
                 listenerB.get().onMessage(msg, null);
                 return null;
             }).when(templateA).convertAndSend(eq("catalog:cache:invalidate"), any(String.class));
@@ -106,7 +108,9 @@ class CacheConfigPubSubTest {
             assertThat(cacheB.get(productId, String.class)).isEqualTo("Old Product");
 
             cacheA.put(productId, "Updated Product");
-            verify(templateA).convertAndSend("catalog:cache:invalidate", "products:" + productId);
+            verify(templateA).convertAndSend(eq("catalog:cache:invalidate"),
+                argThat((String msg) -> msg.indexOf('|') > 0 && msg.endsWith("|products:" + productId)));
+            assertThat(cacheA.get(productId, String.class)).isEqualTo("Updated Product");
             awaitCacheEviction(cacheB, productId);
 
             cacheB.put(productId, "Stale Again");
@@ -116,8 +120,16 @@ class CacheConfigPubSubTest {
             String colonKey = "store-1:sku-42";
             cacheB.put(colonKey, "Regional Milk");
             cacheA.evict(colonKey);
-            verify(templateA).convertAndSend("catalog:cache:invalidate", "products:" + colonKey);
+            verify(templateA).convertAndSend(eq("catalog:cache:invalidate"),
+                argThat((String msg) -> msg.indexOf('|') > 0 && msg.endsWith("|products:" + colonKey)));
             awaitCacheEviction(cacheB, colonKey);
+
+            String pipeKey = "legacy|sku-9";
+            cacheB.put(pipeKey, "Legacy Pipe");
+            listenerB.get().onMessage(new DefaultMessage(
+                "catalog:cache:invalidate".getBytes(StandardCharsets.UTF_8),
+                ("products:" + pipeKey).getBytes(StandardCharsets.UTF_8)), null);
+            awaitCacheEviction(cacheB, pipeKey);
 
             UUID otherId = UUID.randomUUID();
             cacheB.put(productId, "One");

@@ -30,6 +30,8 @@ public class HashChainService {
         return "audit_events_" + PARTITION_SUFFIX_FORMATTER.format(effective);
     }
 
+    public static final String GLOBAL_CHAIN_LOCK = "audit_events_global_chain";
+
     public long advisoryLockKey(String partitionBucket) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -38,6 +40,10 @@ public class HashChainService {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }
+    }
+
+    public void acquireChainLock() {
+        acquirePartitionLock(GLOBAL_CHAIN_LOCK);
     }
 
     public void acquirePartitionLock(String partitionBucket) {

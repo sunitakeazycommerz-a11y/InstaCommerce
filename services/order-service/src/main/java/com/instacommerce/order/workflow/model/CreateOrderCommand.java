@@ -1,6 +1,7 @@
 package com.instacommerce.order.workflow.model;
 
 import com.instacommerce.order.dto.request.CartItem;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -17,6 +18,8 @@ public final class CreateOrderCommand {
     private final UUID paymentId;
     private final String idempotencyKey;
     private final String deliveryAddress;
+    private final BigDecimal dropoffLat;
+    private final BigDecimal dropoffLng;
     private final UUID quoteId;
     private final String quoteToken;
 
@@ -33,6 +36,8 @@ public final class CreateOrderCommand {
         this.paymentId = builder.paymentId;
         this.idempotencyKey = builder.idempotencyKey;
         this.deliveryAddress = builder.deliveryAddress;
+        this.dropoffLat = builder.dropoffLat;
+        this.dropoffLng = builder.dropoffLng;
         this.quoteId = builder.quoteId;
         this.quoteToken = builder.quoteToken;
     }
@@ -89,6 +94,14 @@ public final class CreateOrderCommand {
         return deliveryAddress;
     }
 
+    public BigDecimal getDropoffLat() {
+        return dropoffLat;
+    }
+
+    public BigDecimal getDropoffLng() {
+        return dropoffLng;
+    }
+
     public UUID getQuoteId() {
         return quoteId;
     }
@@ -110,6 +123,8 @@ public final class CreateOrderCommand {
         private UUID paymentId;
         private String idempotencyKey;
         private String deliveryAddress;
+        private BigDecimal dropoffLat;
+        private BigDecimal dropoffLng;
         private UUID quoteId;
         private String quoteToken;
 
@@ -170,6 +185,16 @@ public final class CreateOrderCommand {
 
         public Builder deliveryAddress(String deliveryAddress) {
             this.deliveryAddress = deliveryAddress;
+            return this;
+        }
+
+        public Builder dropoffLat(BigDecimal dropoffLat) {
+            this.dropoffLat = dropoffLat;
+            return this;
+        }
+
+        public Builder dropoffLng(BigDecimal dropoffLng) {
+            this.dropoffLng = dropoffLng;
             return this;
         }
 

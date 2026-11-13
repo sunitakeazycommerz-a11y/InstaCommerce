@@ -104,6 +104,7 @@ with DAG(
 
         for table_ref in CRITICAL_TABLES:
             table_ref = validate_bq_identifier(table_ref, "table_ref")
+            job_config = None
             if "staging" in table_ref:
                 query = f"""
                     SELECT TIMESTAMP_DIFF(
@@ -126,10 +127,20 @@ with DAG(
                         MINUTE
                     ) AS minutes_since_update
                     FROM `{project_id}.{dataset_name}.__TABLES__`
-                    WHERE table_id = '{table_name}'
+                    WHERE table_id = @table_id
                 """
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("table_id", "STRING", table_name)
+                    ]
+                )
             try:
-                results = list(client.query(query).result())
+                query_job = (
+                    client.query(query, job_config=job_config)
+                    if job_config is not None
+                    else client.query(query)
+                )
+                results = list(query_job.result())
                 if results:
                     minutes_old = results[0].minutes_since_update
                     if minutes_old and minutes_old > BQ_FRESHNESS_THRESHOLD_MINUTES:

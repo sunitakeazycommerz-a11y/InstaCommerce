@@ -254,7 +254,9 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 request.paymentMethodId(),
                 pricingResult.quoteId(),
                 pricingResult.quoteToken(),
-                workflowId + ":order:create"
+                workflowId + ":order:create",
+                request.dropoffLat(),
+                request.dropoffLng()
             );
             OrderCreationResult orderResult = orderActivity.createOrder(orderRequest);
             saga.addCompensation(() -> safeCancelOrder(orderResult.orderId()));

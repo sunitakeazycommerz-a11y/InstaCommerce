@@ -231,6 +231,20 @@ class OrderCreateTransactionBoundaryTest {
         assertThat(keyCaptor.getAllValues()).containsOnly(normalizedKey);
     }
 
+    @Test
+    @DisplayName("setTransactionManager fails fast when null is supplied by Spring wiring")
+    void setTransactionManagerRejectsNull() {
+        OrderService isolatedService = new OrderService(
+            orderRepository,
+            mock(OrderStatusHistoryRepository.class),
+            outboxService,
+            mock(AuditLogService.class),
+            pricingQuoteClient);
+        assertThatThrownBy(() -> isolatedService.setTransactionManager(null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessageContaining("transactionManager");
+    }
+
     private CreateOrderCommand.Builder commandBuilder(String idempotencyKey, UUID quoteId, String quoteToken) {
         return CreateOrderCommand.builder()
             .userId(UUID.randomUUID())

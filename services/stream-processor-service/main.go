@@ -199,7 +199,7 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 	dispatcher := processor.NewStreamDispatcher(
 		processor.DefaultStreamConfig(),
 		logger,
-		handler,
+		wrapHandlerWithDedup(deduper, logger, handler),
 		func(ctx context.Context, msg kafka.Message) error {
 			return reader.CommitMessages(ctx, msg)
 		},
@@ -230,21 +230,7 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 				continue
 			}
 
-			// Skip duplicate messages via dispatcher so commits stay monotonic behind in-flight work.
-			if dup, err := deduper.IsDuplicate(ctx, msg.Topic, msg.Partition, msg.Offset); err != nil {
-				logger.Warn("dedup check failed, processing anyway",
-					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
-			} else if dup {
-				logger.Debug("skipping duplicate message",
-					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset)
-				if err := dispatcher.Skip(ctx, msg); err != nil && !errors.Is(err, context.Canceled) {
-					logger.Error("commit duplicate offset error",
-						"topic", msg.Topic, "offset", msg.Offset, "error", err)
-				}
-				continue
-			}
-
-			if err := dispatcher.Submit(ctx, msg); err != nil {
+			if err := dispatchMessage(ctx, logger, deduper, dispatcher, msg); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
 				}
@@ -252,4 +238,42 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 			}
 		}
 	}()
+}
+
+func wrapHandlerWithDedup(deduper *dedup.Checker, logger *slog.Logger, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
+	return func(ctx context.Context, msg kafka.Message) error {
+		if err := handler(ctx, msg); err != nil {
+			return err
+		}
+		if deduper != nil {
+			if err := deduper.MarkProcessed(ctx, msg.Topic, msg.Partition, msg.Offset); err != nil && logger != nil {
+				logger.Warn("dedup mark failed after processing",
+					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
+			}
+		}
+		return nil
+	}
+}
+
+func dispatchMessage(ctx context.Context, logger *slog.Logger, deduper *dedup.Checker, dispatcher *processor.StreamDispatcher, msg kafka.Message) error {
+	if deduper != nil {
+		dup, err := deduper.CheckDuplicate(ctx, msg.Topic, msg.Partition, msg.Offset)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("dedup check failed, processing anyway",
+					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
+			}
+		} else if dup {
+			if logger != nil {
+				logger.Debug("skipping duplicate message",
+					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset)
+			}
+			if err := dispatcher.Skip(ctx, msg); err != nil && !errors.Is(err, context.Canceled) && logger != nil {
+				logger.Error("commit duplicate offset error",
+					"topic", msg.Topic, "offset", msg.Offset, "error", err)
+			}
+			return nil
+		}
+	}
+	return dispatcher.Submit(ctx, msg)
 }
