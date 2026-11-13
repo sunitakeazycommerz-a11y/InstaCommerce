@@ -10,13 +10,17 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -24,7 +28,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
-@Testcontainers
+@Testcontainers(disabledWithoutDocker = true)
 @EmbeddedKafka(partitions = 1)
 @TestPropertySource(properties = {
     "spring.jpa.hibernate.ddl-auto=validate",
@@ -41,8 +45,8 @@ class NotificationServiceIntegrationTest {
       .withUsername("test")
       .withPassword("test");
 
-  @org.springframework.test.context.DynamicPropertySource
-  static void registerProperties(org.springframework.test.context.DynamicPropertyRegistry registry) {
+  @DynamicPropertySource
+  static void registerProperties(DynamicPropertyRegistry registry) {
     postgres.start();
     registry.add("spring.datasource.url", postgres::getJdbcUrl);
     registry.add("spring.datasource.username", postgres::getUsername);
@@ -51,10 +55,10 @@ class NotificationServiceIntegrationTest {
     registry.add("spring.cloud.gcp.sql.enabled", () -> "false");
   }
 
-  @org.junit.jupiter.api.BeforeAll
+  @BeforeAll
   static void runMigrations() {
     postgres.start();
-    org.flywaydb.core.Flyway.configure()
+    Flyway.configure()
         .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
         .locations("classpath:db/migration")
         .load()

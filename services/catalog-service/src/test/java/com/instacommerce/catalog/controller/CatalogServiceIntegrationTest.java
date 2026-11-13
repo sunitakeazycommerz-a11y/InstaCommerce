@@ -32,7 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
-@Testcontainers
+@Testcontainers(disabledWithoutDocker = true)
 @TestPropertySource(properties = {
     "spring.jpa.hibernate.ddl-auto=validate",
     "spring.flyway.enabled=true"

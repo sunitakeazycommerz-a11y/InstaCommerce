@@ -84,7 +84,7 @@ class DeliveryServiceTest {
         deliveryService.updateETA(deliveryId, estimate);
 
         // Verify outbox event ETA_UPDATED
-        ArgumentCaptor<Map<String, Object>> updateCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> updateCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(
             eq("Delivery"), eq(deliveryId.toString()), eq("ETA_UPDATED"), updateCaptor.capture());
         assertEquals(12, updateCaptor.getValue().get("estimatedMinutes"));
@@ -124,7 +124,7 @@ class DeliveryServiceTest {
         assertEquals(200, delivery.getCompensationAmountCents());
 
         // Verify ETA_BREACH_RISK event published
-        ArgumentCaptor<Map<String, Object>> breachCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> breachCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(
             eq("Delivery"), eq(deliveryId.toString()), eq("ETA_BREACH_RISK"), breachCaptor.capture());
 

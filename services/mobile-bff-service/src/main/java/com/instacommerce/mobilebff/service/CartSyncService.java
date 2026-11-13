@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.connection.Message;
@@ -19,12 +20,13 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
 @Service
-public class CartSyncService {
+public class CartSyncService implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(CartSyncService.class);
 
     private final ObjectMapper objectMapper;
     private final Map<String, Sinks.Many<ServerSentEvent<Map<String, Object>>>> userSinks = new ConcurrentHashMap<>();
+    private RedisMessageListenerContainer listenerContainer;
 
     @Autowired
     public CartSyncService(ObjectMapper objectMapper,
@@ -52,6 +54,7 @@ public class CartSyncService {
                 }, new ChannelTopic("cart:events"));
                 container.afterPropertiesSet();
                 container.start();
+                this.listenerContainer = container;
                 log.info("Initialized Redis Pub/Sub listener for mobile cart sync");
             } catch (Exception e) {
                 log.warn("Failed to initialize Redis Pub/Sub listener in mobile-bff: {}", e.getMessage());
@@ -78,6 +81,19 @@ public class CartSyncService {
                     .build();
             sink.tryEmitNext(sse);
             log.debug("Dispatched cart update SSE to userId={}", userId);
+        }
+    }
+
+    @Override
+    public void destroy() {
+        if (listenerContainer != null) {
+            try {
+                listenerContainer.stop();
+                listenerContainer.destroy();
+                log.info("Stopped Redis Pub/Sub listener container for mobile cart sync");
+            } catch (Exception e) {
+                log.warn("Error stopping Redis listener container: {}", e.getMessage());
+            }
         }
     }
 }
