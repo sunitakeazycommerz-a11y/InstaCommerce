@@ -1,6 +1,7 @@
 package com.instacommerce.audit.service;
 
 import com.instacommerce.audit.domain.model.AuditEvent;
+import com.instacommerce.audit.domain.model.AuditEventBuilder;
 import com.instacommerce.audit.dto.AuditEventRequest;
 import com.instacommerce.audit.dto.AuditEventResponse;
 import com.instacommerce.audit.repository.AuditEventRepository;
@@ -27,7 +28,7 @@ public class AuditIngestionService {
     @Transactional
     public AuditEventResponse ingest(AuditEventRequest request) {
         Instant createdAt = Instant.now();
-        hashChainService.acquirePartitionLock(hashChainService.partitionBucket(createdAt));
+        hashChainService.acquireChainLock();
 
         String previousHash = hashChainService.getLatestHash();
         long seqNum = hashChainService.nextSequenceNumber();
@@ -45,7 +46,7 @@ public class AuditIngestionService {
             return;
         }
         Instant createdAt = Instant.now();
-        hashChainService.acquirePartitionLock(hashChainService.partitionBucket(createdAt));
+        hashChainService.acquireChainLock();
 
         String previousHash = hashChainService.getLatestHash();
         List<AuditEvent> events = new ArrayList<>(requests.size());
@@ -63,7 +64,7 @@ public class AuditIngestionService {
 
     private AuditEvent buildChainedEvent(AuditEventRequest request, long seqNum,
                                          String previousHash, Instant createdAt) {
-        AuditEvent unsigned = AuditEvent.builder()
+        AuditEventBuilder builder = AuditEvent.builder()
                 .eventType(request.eventType())
                 .sourceService(request.sourceService())
                 .actorId(request.actorId())
@@ -77,27 +78,10 @@ public class AuditIngestionService {
                 .correlationId(request.correlationId())
                 .createdAt(createdAt)
                 .sequenceNumber(seqNum)
-                .previousHash(previousHash)
-                .build();
+                .previousHash(previousHash);
 
-        String eventHash = hashChainService.computeEventHash(unsigned);
-        return AuditEvent.builder()
-                .eventType(unsigned.getEventType())
-                .sourceService(unsigned.getSourceService())
-                .actorId(unsigned.getActorId())
-                .actorType(unsigned.getActorType())
-                .resourceType(unsigned.getResourceType())
-                .resourceId(unsigned.getResourceId())
-                .action(unsigned.getAction())
-                .details(unsigned.getDetails())
-                .ipAddress(unsigned.getIpAddress())
-                .userAgent(unsigned.getUserAgent())
-                .correlationId(unsigned.getCorrelationId())
-                .createdAt(unsigned.getCreatedAt())
-                .sequenceNumber(seqNum)
-                .previousHash(previousHash)
-                .eventHash(eventHash)
-                .build();
+        String eventHash = hashChainService.computeEventHash(builder.build());
+        return builder.eventHash(eventHash).build();
     }
 
     static AuditEventResponse toResponse(AuditEvent event) {

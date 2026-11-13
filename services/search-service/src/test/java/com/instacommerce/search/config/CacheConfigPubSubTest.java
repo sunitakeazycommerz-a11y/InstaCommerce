@@ -2,6 +2,7 @@ package com.instacommerce.search.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
@@ -91,6 +92,7 @@ class CacheConfigPubSubTest {
                 DefaultMessage msg = new DefaultMessage(
                     channel.getBytes(StandardCharsets.UTF_8),
                     payload.getBytes(StandardCharsets.UTF_8));
+                listenerA.get().onMessage(msg, null);
                 listenerB.get().onMessage(msg, null);
                 return null;
             }).when(templateA).convertAndSend(eq("search:cache:invalidate"), any(String.class));
@@ -101,7 +103,10 @@ class CacheConfigPubSubTest {
             assertThat(trendingB.get(10)).isNotNull();
 
             trendingA.put(10, List.of("fresh-milk"));
-            verify(templateA).convertAndSend("search:cache:invalidate", "trending:10");
+            verify(templateA).convertAndSend(eq("search:cache:invalidate"),
+                argThat((String msg) -> msg.indexOf('|') > 0 && msg.endsWith("|trending:10")));
+            assertThat(trendingA.get(10)).isNotNull();
+            assertThat(trendingA.get(10).get()).isEqualTo(List.of("fresh-milk"));
             awaitCacheEviction(trendingB, 10);
 
             Cache resultsA = managerA.getCache("searchResults");
@@ -109,8 +114,16 @@ class CacheConfigPubSubTest {
             String colonKey = "store-1:milk:0";
             resultsB.put(colonKey, "cached-page");
             resultsA.evict(colonKey);
-            verify(templateA).convertAndSend("search:cache:invalidate", "searchResults:" + colonKey);
+            verify(templateA).convertAndSend(eq("search:cache:invalidate"),
+                argThat((String msg) -> msg.indexOf('|') > 0 && msg.endsWith("|searchResults:" + colonKey)));
             awaitCacheEviction(resultsB, colonKey);
+
+            String pipeKey = "milk|dairy:0";
+            resultsB.put(pipeKey, "legacy-page");
+            listenerB.get().onMessage(new DefaultMessage(
+                "search:cache:invalidate".getBytes(StandardCharsets.UTF_8),
+                ("searchResults:" + pipeKey).getBytes(StandardCharsets.UTF_8)), null);
+            awaitCacheEviction(resultsB, pipeKey);
 
             resultsB.put("a", "1");
             resultsB.put("b", "2");

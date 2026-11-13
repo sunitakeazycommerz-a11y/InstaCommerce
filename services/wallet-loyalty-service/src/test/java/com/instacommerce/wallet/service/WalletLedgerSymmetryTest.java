@@ -129,6 +129,38 @@ class WalletLedgerSymmetryTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void convenienceMethodsDelegateToSymmetricDoubleEntryLegs() {
+        UUID walletId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        String userAccount = "user_wallet:" + userId;
+
+        walletLedgerService.recordTopUp(walletId, userId, 500L, "topup-1");
+        walletLedgerService.recordPurchase(walletId, userId, 200L, "order-1");
+        walletLedgerService.recordRefund(walletId, userId, 100L, "refund-1");
+        walletLedgerService.recordPromotion(walletId, userId, 150L, "PROMOTION", "promo-1");
+
+        assertThat(recordedEntries).hasSize(4);
+        assertThat(recordedEntries.get(0).getDebitAccount()).isEqualTo("platform_float");
+        assertThat(recordedEntries.get(0).getCreditAccount()).isEqualTo(userAccount);
+        assertThat(recordedEntries.get(0).getTransactionType()).isEqualTo("TOPUP");
+
+        assertThat(recordedEntries.get(1).getDebitAccount()).isEqualTo(userAccount);
+        assertThat(recordedEntries.get(1).getCreditAccount()).isEqualTo("merchant_settlement");
+        assertThat(recordedEntries.get(1).getTransactionType()).isEqualTo("PURCHASE");
+
+        assertThat(recordedEntries.get(2).getDebitAccount()).isEqualTo("merchant_settlement");
+        assertThat(recordedEntries.get(2).getCreditAccount()).isEqualTo(userAccount);
+        assertThat(recordedEntries.get(2).getTransactionType()).isEqualTo("REFUND");
+
+        assertThat(recordedEntries.get(3).getDebitAccount()).isEqualTo("marketing_budget");
+        assertThat(recordedEntries.get(3).getCreditAccount()).isEqualTo(userAccount);
+        assertThat(recordedEntries.get(3).getTransactionType()).isEqualTo("PROMOTION");
+
+        assertThat(walletLedgerService.verifyBalance(userId, 550L)).isTrue();
+        assertThat(totalNetBalanceAcrossAllAccounts(recordedEntries)).isZero();
+    }
+
     private static String expectedCounterparty(ReferenceType refType) {
         return switch (refType) {
             case TOPUP, ADMIN_ADJUSTMENT -> "platform_float";

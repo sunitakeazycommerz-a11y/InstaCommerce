@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -84,6 +85,7 @@ public class CacheConfig {
         private final RedisCacheManager redisCacheManager;
         private final StringRedisTemplate redisTemplate;
         private final RedisMessageListenerContainer listenerContainer;
+        private final String instanceId = UUID.randomUUID().toString();
         private final Map<String, Cache> caches = new ConcurrentHashMap<>();
 
         public TwoLevelCacheManager(RedisCacheManager redisCacheManager, StringRedisTemplate redisTemplate) {
@@ -141,12 +143,20 @@ public class CacheConfig {
                 return;
             }
             String payload = new String(message.getBody(), StandardCharsets.UTF_8);
-            int separatorIdx = payload.indexOf(':');
-            if (separatorIdx <= 0 || separatorIdx >= payload.length() - 1) {
+            int colonIdx = payload.indexOf(':');
+            int originIdx = payload.indexOf('|');
+            if (originIdx > 0 && originIdx < colonIdx) {
+                if (instanceId.equals(payload.substring(0, originIdx))) {
+                    return;
+                }
+                payload = payload.substring(originIdx + 1);
+                colonIdx = payload.indexOf(':');
+            }
+            if (colonIdx <= 0 || colonIdx >= payload.length() - 1) {
                 return;
             }
-            String cacheName = payload.substring(0, separatorIdx);
-            String keyPattern = payload.substring(separatorIdx + 1);
+            String cacheName = payload.substring(0, colonIdx);
+            String keyPattern = payload.substring(colonIdx + 1);
             Cache cache = caches.get(cacheName);
             if (cache instanceof TwoLevelCache twoLevelCache) {
                 twoLevelCache.evictLocal(keyPattern);
@@ -171,7 +181,7 @@ public class CacheConfig {
                         .maximumSize(5000)
                         .expireAfterWrite(l1TtlSeconds, TimeUnit.SECONDS)
                         .build();
-                return new TwoLevelCache(n, l1, redisCache, redisTemplate);
+                return new TwoLevelCache(n, l1, redisCache, redisTemplate, instanceId);
             });
         }
 
@@ -188,15 +198,25 @@ public class CacheConfig {
         private final com.github.benmanes.caffeine.cache.Cache<Object, Object> l1Cache;
         private final RedisCache l2RedisCache;
         private final StringRedisTemplate redisTemplate;
+        private final String instanceId;
 
         public TwoLevelCache(String name,
                              com.github.benmanes.caffeine.cache.Cache<Object, Object> l1Cache,
                              RedisCache l2RedisCache,
                              StringRedisTemplate redisTemplate) {
+            this(name, l1Cache, l2RedisCache, redisTemplate, null);
+        }
+
+        public TwoLevelCache(String name,
+                             com.github.benmanes.caffeine.cache.Cache<Object, Object> l1Cache,
+                             RedisCache l2RedisCache,
+                             StringRedisTemplate redisTemplate,
+                             String instanceId) {
             this.name = name;
             this.l1Cache = l1Cache;
             this.l2RedisCache = l2RedisCache;
             this.redisTemplate = redisTemplate;
+            this.instanceId = instanceId;
         }
 
         @Override
@@ -313,7 +333,8 @@ public class CacheConfig {
         private void publishInvalidation(String keyPattern) {
             if (redisTemplate != null) {
                 try {
-                    redisTemplate.convertAndSend(INVALIDATION_CHANNEL, name + ":" + keyPattern);
+                    String prefix = instanceId != null ? instanceId + "|" : "";
+                    redisTemplate.convertAndSend(INVALIDATION_CHANNEL, prefix + name + ":" + keyPattern);
                 } catch (Exception e) {
                     logger.debug("Failed to publish cache invalidation message: {}", e.getMessage());
                 }

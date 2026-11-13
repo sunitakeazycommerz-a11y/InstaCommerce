@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import com.instacommerce.audit.controller.AuditIntegrityController.IntegrityReport;
 import com.instacommerce.audit.domain.model.AuditEvent;
+import com.instacommerce.audit.repository.AuditArchiveManifestRepository;
 import com.instacommerce.audit.repository.AuditEventRepository;
 import java.time.Instant;
 import java.util.List;
@@ -32,13 +33,16 @@ class AuditIntegrityServiceTest {
     @Mock
     private JdbcTemplate jdbcTemplate;
 
+    @Mock
+    private AuditArchiveManifestRepository manifestRepository;
+
     private HashChainService hashChainService;
     private AuditIntegrityService integrityService;
 
     @BeforeEach
     void setUp() {
         hashChainService = new HashChainService(jdbcTemplate);
-        integrityService = new AuditIntegrityService(repository, hashChainService);
+        integrityService = new AuditIntegrityService(repository, hashChainService, manifestRepository);
     }
 
     @Test
@@ -258,6 +262,42 @@ class AuditIntegrityServiceTest {
         assertThat(report.intact()).isTrue();
         assertThat(report.eventsVerified()).isEqualTo(2);
         assertThat(report.chainBreaks()).isZero();
+    }
+
+    @Test
+    void verifyChain_unarchivedMissingPrefix_detectsBreak() {
+        AuditEvent e10 = buildChainedEvent(10L, "missing-prefix-hash", BASE_TIME);
+        AuditEvent e11 = buildChainedEvent(11L, e10.getEventHash(), BASE_TIME.plusSeconds(10));
+
+        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(e10, e11))
+                .thenReturn(List.of());
+        when(manifestRepository.existsByVerificationStatus("VERIFIED")).thenReturn(false);
+
+        IntegrityReport report = integrityService.verifyChain(null, null, 10);
+
+        assertThat(report.intact()).isFalse();
+        assertThat(report.eventsVerified()).isEqualTo(2);
+        assertThat(report.chainBreaks()).isEqualTo(1);
+        assertThat(report.firstBreakSequence()).isEqualTo("10");
+    }
+
+    @Test
+    void verifyChain_afterVerifiedArchiveDetach_returnsIntact() {
+        AuditEvent e10 = buildChainedEvent(10L, "archived-partition-hash", BASE_TIME);
+        AuditEvent e11 = buildChainedEvent(11L, e10.getEventHash(), BASE_TIME.plusSeconds(10));
+
+        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(e10, e11))
+                .thenReturn(List.of());
+        when(manifestRepository.existsByVerificationStatus("VERIFIED")).thenReturn(true);
+
+        IntegrityReport report = integrityService.verifyChain(null, null, 10);
+
+        assertThat(report.intact()).isTrue();
+        assertThat(report.eventsVerified()).isEqualTo(2);
+        assertThat(report.chainBreaks()).isZero();
+        assertThat(report.firstBreakSequence()).isNull();
     }
 
     private AuditEvent buildChainedEvent(long seq, String previousHash, Instant createdAt) {

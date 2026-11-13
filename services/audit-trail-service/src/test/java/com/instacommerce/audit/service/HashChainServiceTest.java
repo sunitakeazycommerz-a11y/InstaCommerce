@@ -141,4 +141,14 @@ class HashChainServiceTest {
 
         verify(jdbcTemplate).queryForObject("SELECT pg_advisory_xact_lock(?)", Object.class, keyA1);
     }
+
+    @Test
+    @DisplayName("acquireChainLock acquires single global advisory lock independent of partition bucket")
+    void acquireChainLock_executesGlobalPgAdvisoryXactLock() {
+        long globalKey = hashChainService.advisoryLockKey(HashChainService.GLOBAL_CHAIN_LOCK);
+
+        hashChainService.acquireChainLock();
+
+        verify(jdbcTemplate).queryForObject("SELECT pg_advisory_xact_lock(?)", Object.class, globalKey);
+    }
 }

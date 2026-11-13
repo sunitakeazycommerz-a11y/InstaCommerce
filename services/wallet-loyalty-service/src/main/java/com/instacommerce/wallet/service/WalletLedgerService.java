@@ -61,14 +61,11 @@ public class WalletLedgerService {
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordDoubleEntry(UUID walletId, UUID userId, ReferenceType refType,
                                   long amountCents, String referenceId, boolean isCredit) {
-        if (userId == null) {
-            throw new IllegalArgumentException("userId must not be null");
-        }
         if (refType == null) {
             throw new IllegalArgumentException("refType must not be null");
         }
         LedgerMapping mapping = mapReferenceType(refType);
-        String userAccount = "user_wallet:" + userId;
+        String userAccount = userAccount(userId);
         String debitAccount = isCredit ? mapping.counterpartyAccount() : userAccount;
         String creditAccount = isCredit ? userAccount : mapping.counterpartyAccount();
         recordEntry(walletId, debitAccount, creditAccount, amountCents, mapping.transactionType(), referenceId);
@@ -77,26 +74,31 @@ public class WalletLedgerService {
     /** Top-up: money flows from platform float into user wallet. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordTopUp(UUID walletId, UUID userId, long amountCents, String referenceId) {
-        recordEntry(walletId, "platform_float", "user_wallet:" + userId, amountCents, "TOPUP", referenceId);
+        recordDoubleEntry(walletId, userId, ReferenceType.TOPUP, amountCents, referenceId, true);
     }
 
     /** Purchase: money flows from user wallet to merchant settlement. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordPurchase(UUID walletId, UUID userId, long amountCents, String referenceId) {
-        recordEntry(walletId, "user_wallet:" + userId, "merchant_settlement", amountCents, "PURCHASE", referenceId);
+        recordDoubleEntry(walletId, userId, ReferenceType.ORDER, amountCents, referenceId, false);
     }
 
     /** Refund: money flows from merchant settlement back to user wallet. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordRefund(UUID walletId, UUID userId, long amountCents, String referenceId) {
-        recordEntry(walletId, "merchant_settlement", "user_wallet:" + userId, amountCents, "REFUND", referenceId);
+        recordDoubleEntry(walletId, userId, ReferenceType.REFUND, amountCents, referenceId, true);
     }
 
     /** Promotion/cashback/referral: money flows from marketing budget to user wallet. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordPromotion(UUID walletId, UUID userId, long amountCents,
                                 String transactionType, String referenceId) {
-        recordEntry(walletId, "marketing_budget", "user_wallet:" + userId, amountCents, transactionType, referenceId);
+        if ("CASHBACK".equals(transactionType) || "REFERRAL".equals(transactionType)
+                || "PROMOTION".equals(transactionType)) {
+            recordDoubleEntry(walletId, userId, ReferenceType.valueOf(transactionType), amountCents, referenceId, true);
+            return;
+        }
+        recordEntry(walletId, "marketing_budget", userAccount(userId), amountCents, transactionType, referenceId);
     }
 
     /**
@@ -104,7 +106,7 @@ public class WalletLedgerService {
      * Returns true if consistent, false otherwise.
      */
     public boolean verifyBalance(UUID userId, long expectedBalanceCents) {
-        String account = "user_wallet:" + userId;
+        String account = userAccount(userId);
         long ledgerBalance = ledgerRepository.computeBalanceForAccount(account);
         if (ledgerBalance != expectedBalanceCents) {
             log.error("Ledger reconciliation mismatch for {}: ledger={}, wallet={}",
@@ -112,6 +114,13 @@ public class WalletLedgerService {
             return false;
         }
         return true;
+    }
+
+    private static String userAccount(UUID userId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId must not be null");
+        }
+        return "user_wallet:" + userId;
     }
 
     private static LedgerMapping mapReferenceType(ReferenceType refType) {
