@@ -1,11 +1,11 @@
 syntax = "proto3";
 package payment.v1;
 
+import "common/v1/money.proto";
+
 option java_package = "com.instacommerce.contracts.payment.v1";
 option java_multiple_files = true;
 option go_package = "github.com/instacommerce/go-shared/pkg/proto/payment/v1;paymentv1";
-
-import "common/v1/money.proto";
 
 service PaymentService {
   rpc AuthorizePayment(AuthorizeRequest) returns (AuthorizeResponse);
