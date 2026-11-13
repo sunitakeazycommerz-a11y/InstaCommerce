@@ -19,23 +19,25 @@ Graph topology::
     execute_tools
       │
       ▼
-    validate_output
+    respond
       │
       ▼
-    respond
+    validate_output
+      │
+      ├──(needs_escalation)──► escalate ──► END
       │
       ▼
     END
 
-Conditional routing after ``check_policy`` inspects ``needs_escalation``
-and ``risk_level`` to decide whether the request should be processed
-autonomously or handed to a human agent.
+Conditional routing after ``check_policy`` and ``validate_output`` inspects
+``needs_escalation`` to decide whether the request completes autonomously or
+hands off to a human agent.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
@@ -55,10 +57,6 @@ from app.graph.tools import ToolRegistry
 logger = logging.getLogger("ai_orchestrator.graph")
 
 
-# ---------------------------------------------------------------------------
-# Conditional edge helpers
-# ---------------------------------------------------------------------------
-
 def _should_escalate(state: AgentState) -> str:
     """Route after ``check_policy``: escalate or continue processing."""
     if state.needs_escalation:
@@ -66,9 +64,31 @@ def _should_escalate(state: AgentState) -> str:
     return "retrieve_context"
 
 
-# ---------------------------------------------------------------------------
-# Graph builder
-# ---------------------------------------------------------------------------
+def _wrap_sync(
+    fn: Callable[[AgentState], AgentState],
+) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    def _node(state: Dict[str, Any]) -> Dict[str, Any]:
+        s = AgentState(**state)
+        result = fn(s)
+        return result.model_copy(
+            update={"elapsed_ms": result.current_elapsed_ms()}
+        ).model_dump()
+
+    return _node
+
+
+def _wrap_async(
+    fn: Callable[[AgentState], Awaitable[AgentState]],
+) -> Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]:
+    async def _node(state: Dict[str, Any]) -> Dict[str, Any]:
+        s = AgentState(**state)
+        result = await fn(s)
+        return result.model_copy(
+            update={"elapsed_ms": result.current_elapsed_ms()}
+        ).model_dump()
+
+    return _node
+
 
 def build_graph(
     settings: Optional[Settings] = None,
@@ -91,61 +111,24 @@ def build_graph(
     """
     settings = settings or Settings()
 
-    # Wrap async / parameterised nodes so they match the LangGraph
-    # ``(state) -> state`` contract.
-
-    def _classify_intent(state: Dict[str, Any]) -> Dict[str, Any]:
-        s = AgentState(**state)
-        result = classify_intent(s)
-        return result.model_dump()
-
-    def _check_policy(state: Dict[str, Any]) -> Dict[str, Any]:
-        s = AgentState(**state)
-        result = check_policy(s, settings=settings)
-        return result.model_dump()
-
-    async def _retrieve_context(state: Dict[str, Any]) -> Dict[str, Any]:
-        s = AgentState(**state)
-        result = await retrieve_context(s)
-        return result.model_dump()
-
-    async def _execute_tools(state: Dict[str, Any]) -> Dict[str, Any]:
-        s = AgentState(**state)
-        result = await execute_tools(s, registry=tool_registry)
-        return result.model_dump()
-
-    def _validate_output(state: Dict[str, Any]) -> Dict[str, Any]:
-        s = AgentState(**state)
-        result = validate_output(s)
-        return result.model_dump()
-
-    def _respond(state: Dict[str, Any]) -> Dict[str, Any]:
-        s = AgentState(**state)
-        result = respond(s)
-        return result.model_dump()
-
-    def _escalate(state: Dict[str, Any]) -> Dict[str, Any]:
-        s = AgentState(**state)
-        result = escalate(s)
-        return result.model_dump()
-
     def _route_after_policy(state: Dict[str, Any]) -> str:
-        s = AgentState(**state)
-        return _should_escalate(s)
+        return _should_escalate(AgentState(**state))
 
-    # -- Assemble the graph --------------------------------------------------
+    def _route_after_validation(state: Dict[str, Any]) -> str:
+        if AgentState(**state).needs_escalation:
+            return "escalate"
+        return "end"
 
     graph = StateGraph(dict)
 
-    graph.add_node("classify_intent", _classify_intent)
-    graph.add_node("check_policy", _check_policy)
-    graph.add_node("retrieve_context", _retrieve_context)
-    graph.add_node("execute_tools", _execute_tools)
-    graph.add_node("validate_output", _validate_output)
-    graph.add_node("respond", _respond)
-    graph.add_node("escalate", _escalate)
+    graph.add_node("classify_intent", _wrap_sync(classify_intent))
+    graph.add_node("check_policy", _wrap_sync(lambda s: check_policy(s, settings=settings)))
+    graph.add_node("retrieve_context", _wrap_async(retrieve_context))
+    graph.add_node("execute_tools", _wrap_async(lambda s: execute_tools(s, registry=tool_registry)))
+    graph.add_node("respond", _wrap_sync(respond))
+    graph.add_node("validate_output", _wrap_sync(validate_output))
+    graph.add_node("escalate", _wrap_sync(escalate))
 
-    # Edges
     graph.set_entry_point("classify_intent")
     graph.add_edge("classify_intent", "check_policy")
     graph.add_conditional_edges(
@@ -157,9 +140,16 @@ def build_graph(
         },
     )
     graph.add_edge("retrieve_context", "execute_tools")
-    graph.add_edge("execute_tools", "validate_output")
-    graph.add_edge("validate_output", "respond")
-    graph.add_edge("respond", END)
+    graph.add_edge("execute_tools", "respond")
+    graph.add_edge("respond", "validate_output")
+    graph.add_conditional_edges(
+        "validate_output",
+        _route_after_validation,
+        {
+            "end": END,
+            "escalate": "escalate",
+        },
+    )
     graph.add_edge("escalate", END)
 
     compiled = graph.compile()

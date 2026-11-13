@@ -200,6 +200,7 @@ def check_policy(state: AgentState, settings: Optional[Settings] = None) -> Agen
     """
     try:
         settings = settings or Settings()
+        elapsed_ms = state.current_elapsed_ms()
         violations: List[str] = []
 
         # Budget checks
@@ -207,9 +208,9 @@ def check_policy(state: AgentState, settings: Optional[Settings] = None) -> Agen
             violations.append(
                 f"Cost budget exceeded: ${state.total_cost_usd:.4f} >= ${state.max_cost_usd:.2f}"
             )
-        if state.elapsed_ms >= state.max_latency_ms:
+        if elapsed_ms >= state.max_latency_ms:
             violations.append(
-                f"Latency budget exceeded: {state.elapsed_ms:.0f}ms >= {state.max_latency_ms:.0f}ms"
+                f"Latency budget exceeded: {elapsed_ms:.0f}ms >= {state.max_latency_ms:.0f}ms"
             )
         if state.tool_calls_remaining <= 0:
             violations.append("Tool call budget exhausted")
@@ -242,6 +243,7 @@ def check_policy(state: AgentState, settings: Optional[Settings] = None) -> Agen
             )
             return state.model_copy(
                 update={
+                    "elapsed_ms": elapsed_ms,
                     "needs_escalation": True,
                     "escalation_reason": "; ".join(violations),
                     "current_node": "check_policy",
@@ -255,6 +257,7 @@ def check_policy(state: AgentState, settings: Optional[Settings] = None) -> Agen
         )
         return state.model_copy(
             update={
+                "elapsed_ms": elapsed_ms,
                 "current_node": "check_policy",
                 "completed_nodes": state.completed_nodes + ["check_policy"],
             }
@@ -266,6 +269,7 @@ def check_policy(state: AgentState, settings: Optional[Settings] = None) -> Agen
         )
         return state.model_copy(
             update={
+                "elapsed_ms": state.current_elapsed_ms(),
                 "errors": state.errors + [f"check_policy: {exc}"],
                 "needs_escalation": True,
                 "escalation_reason": "Policy check failed unexpectedly",
@@ -398,6 +402,21 @@ async def execute_tools(
             )
             return state.model_copy(
                 update={
+                    "elapsed_ms": state.current_elapsed_ms(),
+                    "current_node": "execute_tools",
+                    "completed_nodes": state.completed_nodes + ["execute_tools"],
+                }
+            )
+
+        elapsed_ms = state.current_elapsed_ms()
+        if elapsed_ms >= state.max_latency_ms:
+            logger.warning(
+                "node.execute_tools.latency_exceeded",
+                extra={"request_id": state.request_id, "elapsed_ms": round(elapsed_ms, 1)},
+            )
+            return state.model_copy(
+                update={
+                    "elapsed_ms": elapsed_ms,
                     "current_node": "execute_tools",
                     "completed_nodes": state.completed_nodes + ["execute_tools"],
                 }
@@ -416,6 +435,7 @@ async def execute_tools(
             )
             return state.model_copy(
                 update={
+                    "elapsed_ms": state.current_elapsed_ms(),
                     "current_node": "execute_tools",
                     "completed_nodes": state.completed_nodes + ["execute_tools"],
                 }
@@ -425,6 +445,8 @@ async def execute_tools(
             if remaining <= 0:
                 break
             if state.total_cost_usd >= state.max_cost_usd:
+                break
+            if state.current_elapsed_ms() >= state.max_latency_ms:
                 break
 
             result = await registry.call(
@@ -449,6 +471,7 @@ async def execute_tools(
             update={
                 "tool_results": results,
                 "tool_calls_remaining": remaining,
+                "elapsed_ms": state.current_elapsed_ms(),
                 "current_node": "execute_tools",
                 "completed_nodes": state.completed_nodes + ["execute_tools"],
             }
@@ -475,7 +498,15 @@ def _plan_tools(state: AgentState) -> List[Dict[str, Any]]:
         plan.append({"tool": "catalog.search", "params": {"q": state.query}})
     elif state.intent == IntentType.SUBSTITUTE:
         plan.append({"tool": "catalog.search", "params": {"q": state.query}})
-        plan.append({"tool": "inventory.check", "params": {"q": state.query}})
+        inv_call: Dict[str, Any] = {"tool": "inventory.check"}
+        if state.context.get("store_id") and state.context.get("items"):
+            inv_call["body"] = {
+                "storeId": state.context["store_id"],
+                "items": state.context["items"],
+            }
+        else:
+            inv_call["params"] = {"q": state.query}
+        plan.append(inv_call)
     elif state.intent == IntentType.ORDER_STATUS:
         # Extract order id from context if available
         order_id = state.context.get("order_id", "")
@@ -526,6 +557,7 @@ def validate_output(state: AgentState) -> AgentState:
             )
             return state.model_copy(
                 update={
+                    "response": response,
                     "needs_escalation": True,
                     "escalation_reason": f"Output policy violations: {'; '.join(error_msgs)}",
                     "errors": state.errors + error_msgs,
