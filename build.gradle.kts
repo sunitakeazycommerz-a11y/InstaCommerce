@@ -114,7 +114,7 @@ subprojects {
             dependency("org.mapstruct:mapstruct:1.5.5.Final")
             dependency("org.mapstruct:mapstruct-processor:1.5.5.Final")
             dependency("com.stripe:stripe-java:24.18.0")
-            dependency("com.google.guava:guava:33.0.0-jre")
+            dependency("com.google.guava:guava:33.7.1-jre")
             dependency("com.google.cloud:google-cloud-storage:2.38.0")
             dependency("org.apache.parquet:parquet-column:1.13.1")
             dependency("com.squareup.okhttp3:mockwebserver:4.12.0")
