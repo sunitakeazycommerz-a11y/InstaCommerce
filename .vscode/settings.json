@@ -1,0 +1,61 @@
+{
+    "editor.codeLens": true,
+    "java.referencesCodeLens.enabled": true,
+    "java.implementationCodeLens": "all",
+    "java.compile.nullAnalysis.mode": "disabled",
+    "java.configuration.updateBuildConfiguration": "automatic",
+    "java.import.gradle.enabled": true,
+    "java.import.gradle.wrapper.enabled": true,
+    "java.jdt.ls.lombokSupport.enabled": true,
+    "java.jdt.ls.java.home": "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
+    "java.import.gradle.java.home": "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
+    "java.configuration.runtimes": [
+        {
+            "name": "JavaSE-21",
+            "path": "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
+            "default": true
+        },
+        {
+            "name": "JavaSE-23",
+            "path": "/Users/omkarkumar/Library/Java/JavaVirtualMachines/openjdk-23.0.2/Contents/Home"
+        }
+    ],
+    "protolint.path": "/opt/homebrew/bin/protolint",
+    "go.goroot": "/opt/homebrew/opt/go/libexec",
+    "go.gopath": "/Users/omkarkumar/go",
+    "go.useLanguageServer": true,
+    "go.alternateTools": {
+        "go": "/opt/homebrew/bin/go",
+        "gopls": "/opt/homebrew/bin/gopls"
+    },
+    "gopls": {
+        "formatting.gofumpt": true,
+        "ui.semanticTokens": true
+    },
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.analysis.typeCheckingMode": "standard",
+    "terminal.integrated.suggest.providers": {
+        "lsp": true
+    },
+    "terminal.integrated.enableWin32InputMode": true,
+    "terminal.integrated.windowsUseConptyDll": true,
+    "terminal.integrated.experimental.aiProfileGrouping": true,
+    "terminal.integrated.localEchoEnabled": "auto",
+    "terminal.integrated.textBlinking": true,
+    "window.autoDetectColorScheme": true,
+    "window.closeWhenEmpty": true,
+    "telemetry.editStats.showDecorations": true,
+    "telemetry.editStats.showStatusBar": true,
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "diffEditor.codeLens": true,
+    "diffEditor.experimental.showMoves": true,
+    "diffEditor.experimental.useTrueInlineView": true,
+    "diffEditor.hideUnchangedRegions.enabled": true,
+    "multiDiffEditor.experimental.fileList": true,
+    "multiDiffEditor.experimental.variant": "cards",
+    "files.associations": {
+        "*.proto": "proto3"
+    },
+    "java.jdt.ls.vmargs": "-XX:+UseParallelGC -XX:GCTimeRatio=4 -XX:AdaptiveSizePolicyWeight=90 -Dsun.zip.disableMemoryMapping=true -Xmx8G -Xms100m -Xlog:disable"
+}

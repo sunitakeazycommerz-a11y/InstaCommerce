@@ -2,13 +2,16 @@
   "venvPath": ".",
   "venv": ".venv",
   "stubPath": "data-platform/typings",
-  "reportMissingImports": "none",
+  "typeCheckingMode": "standard",
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "none",
   "include": [
     "services/ai-inference-service",
     "services/ai-orchestrator-service",
     "data-platform-jobs",
     "data-platform",
     "ml",
+    "monitoring",
     "scripts"
   ],
   "exclude": [
@@ -18,6 +21,19 @@
     "**/.worktrees"
   ],
   "executionEnvironments": [
+    {
+      "root": "services/ai-orchestrator-service",
+      "extraPaths": [
+        "services/ai-orchestrator-service"
+      ]
+    },
+    {
+      "root": "services/ai-inference-service",
+      "extraPaths": [
+        "services/ai-inference-service",
+        "."
+      ]
+    },
     {
       "root": "data-platform/airflow/dags",
       "extraPaths": [
@@ -49,6 +65,20 @@
       "root": "data-platform/streaming",
       "extraPaths": [
         "data-platform/streaming"
+      ]
+    },
+    {
+      "root": "scripts/lsp",
+      "extraPaths": [
+        "scripts/lsp",
+        "scripts"
+      ]
+    },
+    {
+      "root": "scripts",
+      "extraPaths": [
+        "scripts",
+        "scripts/lsp"
       ]
     }
   ]

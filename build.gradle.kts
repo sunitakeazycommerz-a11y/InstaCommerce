@@ -26,6 +26,7 @@ subprojects {
 
     tasks.withType<JavaCompile>().configureEach {
         options.release.set(21)
+        options.compilerArgs.addAll(listOf("-Xlint:deprecation", "-Xlint:unchecked", "-Xlint:rawtypes"))
     }
 
     configure<com.diffplug.gradle.spotless.SpotlessExtension> {
@@ -59,13 +60,18 @@ subprojects {
         dependencies {
             "testImplementation"("org.springframework.boot:spring-boot-starter-test-classic")
         }
+        afterEvaluate {
+            if (configurations.findByName("implementation")?.dependencies?.any { it.group == "org.flywaydb" && it.name == "flyway-core" } == true) {
+                dependencies.add("implementation", "org.springframework.boot:spring-boot-starter-flyway")
+            }
+        }
     }
 
     configurations.configureEach {
         exclude(group = "org.springframework.cloud", module = "spring-cloud-context")
         resolutionStrategy.dependencySubstitution {
             substitute(module("org.lz4:lz4-java"))
-                .using(module("at.yawk.lz4:lz4-java:1.10.1"))
+                .using(module("at.yawk.lz4:lz4-java:1.12.0"))
         }
     }
 

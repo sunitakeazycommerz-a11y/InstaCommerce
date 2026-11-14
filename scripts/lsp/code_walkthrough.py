@@ -425,7 +425,7 @@ def _check_java(abs_path: str) -> Dict[str, Any]:
         }
     if not os.path.isfile(gradlew):
         return _missing_tool_result(abs_path, "gradlew", "Expected ./gradlew at repository root")
-    cmd = [gradlew, f"{project}:compileJava", f"{project}:compileTestJava", "--no-daemon", "--console=plain"]
+    cmd = [gradlew, f"{project}:compileJava", f"{project}:compileTestJava", "--no-daemon", "--max-workers=2", "--console=plain"]
     proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
     combined = "\n".join(part for part in (proc.stdout.strip(), proc.stderr.strip()) if part)
     diagnostics: List[Dict[str, Any]] = []
