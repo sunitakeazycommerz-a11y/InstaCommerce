@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
 import time
 from typing import Any
@@ -103,16 +102,19 @@ class SearchRankingTrainer:
     def _build_datasets(self, df: pd.DataFrame, fold_idx: tuple[np.ndarray, np.ndarray]):
         """Build LightGBM Dataset objects for a single fold."""
         train_idx, val_idx = fold_idx
-        train_df = df.iloc[train_idx]
-        val_df = df.iloc[val_idx]
+        group_col = self.config["training"]["group_column"]
+        label_col = self.config["training"]["label_column"]
+
+        train_df = df.iloc[train_idx].sort_values(group_col).reset_index(drop=True)
+        val_df = df.iloc[val_idx].sort_values(group_col).reset_index(drop=True)
 
         X_train = train_df[self.feature_columns]
-        y_train = train_df[self.config["training"]["label_column"]]
-        groups_train = train_df.groupby(self.config["training"]["group_column"]).size().values
+        y_train = train_df[label_col]
+        groups_train = train_df.groupby(group_col, sort=False).size().values
 
         X_val = val_df[self.feature_columns]
-        y_val = val_df[self.config["training"]["label_column"]]
-        groups_val = val_df.groupby(self.config["training"]["group_column"]).size().values
+        y_val = val_df[label_col]
+        groups_val = val_df.groupby(group_col, sort=False).size().values
 
         return X_train, y_train, groups_train, X_val, y_val, groups_val
 
@@ -121,7 +123,7 @@ class SearchRankingTrainer:
         logger.info("Starting LambdaMART training")
         hp = self.config["hyperparameters"]
         group_col = self.config["training"]["group_column"]
-        label_col = self.config["training"]["label_column"]
+        df = df.sort_values(group_col).reset_index(drop=True)
 
         gkf = GroupKFold(n_splits=5)
         groups = df[group_col].values
@@ -178,9 +180,10 @@ class SearchRankingTrainer:
         if self.model is None:
             raise RuntimeError("Model not trained yet")
 
+        group_col = str(self.config["training"]["group_column"])
+        df = df.sort_values(group_col).reset_index(drop=True)
         X = df[self.feature_columns]
         y_true = np.asarray(df[self.config["training"]["label_column"]].values)
-        group_col = str(self.config["training"]["group_column"])
         scores_raw = self.model.predict(X)
         scores: np.ndarray = np.asarray(scores_raw)
 
@@ -254,7 +257,8 @@ class SearchRankingTrainer:
         """Return SHAP-based feature importance."""
         if self.model is None:
             raise RuntimeError("Model not trained yet")
-        explainer = shap.TreeExplainer(self.model)
+        if shap is not None:
+            shap.TreeExplainer(self.model)
         # Compute on a sample for efficiency
         logger.info("Computing SHAP feature importance")
         return dict(
@@ -397,8 +401,8 @@ def main():
         train_queries = unique_queries[:split_idx]
         test_queries = unique_queries[split_idx:]
 
-        train_df = pd.DataFrame(df[df[group_key].isin(train_queries)])
-        test_df = pd.DataFrame(df[df[group_key].isin(test_queries)])
+        train_df = pd.DataFrame(df[df[group_key].isin(train_queries)]).sort_values(group_key).reset_index(drop=True)
+        test_df = pd.DataFrame(df[df[group_key].isin(test_queries)]).sort_values(group_key).reset_index(drop=True)
 
         logger.info("Train: %d rows, Test: %d rows", len(train_df), len(test_df))
 

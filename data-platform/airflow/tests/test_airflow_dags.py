@@ -135,8 +135,9 @@ from dags.dbt_marts import KafkaLagSensor  # noqa: E402
 
 def _install_mock_admin_client(monkeypatch: pytest.MonkeyPatch, admin_client: Any) -> None:
     admin_cls = MagicMock(return_value=admin_client)
+    consumer_cls = MagicMock(return_value=admin_client)
     mock_admin = _stub_module("confluent_kafka.admin", AdminClient=admin_cls)
-    mock_ck = _stub_module("confluent_kafka", admin=mock_admin)
+    mock_ck = _stub_module("confluent_kafka", admin=mock_admin, Consumer=consumer_cls)
     monkeypatch.setitem(sys.modules, "confluent_kafka", mock_ck)
     monkeypatch.setitem(sys.modules, "confluent_kafka.admin", mock_admin)
 
@@ -161,10 +162,10 @@ def _mock_consumer_admin(
             watermark_map[tp] = (0, high_watermark)
         offsets_by_group[gid] = grp_map
 
-    def _list_offsets(group_ids: list[str]) -> MagicMock:
-        res = MagicMock()
-        res.result.return_value = offsets_by_group[group_ids[0]]
-        return res
+    def _list_offsets(group_ids: list[str]) -> dict[str, MagicMock]:
+        fut = MagicMock()
+        fut.result.return_value = offsets_by_group[group_ids[0]]
+        return {group_ids[0]: fut}
 
     admin.list_consumer_group_offsets.side_effect = _list_offsets
     admin.get_watermark_offsets.side_effect = lambda tp: watermark_map[tp]
@@ -299,9 +300,11 @@ def test_monitoring_alerts_kafka_lag_ignores_negative_sentinel(monkeypatch: pyte
 
     admin = MagicMock()
     admin.list_consumer_groups.return_value.result.return_value = types.SimpleNamespace(valid=groups)
-    admin.list_consumer_group_offsets.return_value.result.return_value = {
+    fut_sentinel = MagicMock()
+    fut_sentinel.result.return_value = {
         tp_sentinel: types.SimpleNamespace(offset=-1001),
     }
+    admin.list_consumer_group_offsets.return_value = {"cg-1": fut_sentinel}
     admin.get_watermark_offsets.return_value = (0, 50000)
     _install_mock_admin_client(monkeypatch, admin)
 
@@ -311,9 +314,11 @@ def test_monitoring_alerts_kafka_lag_ignores_negative_sentinel(monkeypatch: pyte
     ti.xcom_push.assert_called_once_with(key="kafka_alerts", value=[])
     admin.get_watermark_offsets.assert_not_called()
 
-    admin.list_consumer_group_offsets.return_value.result.return_value = {
+    fut_lagging = MagicMock()
+    fut_lagging.result.return_value = {
         tp_lagging: types.SimpleNamespace(offset=100),
     }
+    admin.list_consumer_group_offsets.return_value = {"cg-1": fut_lagging}
     admin.get_watermark_offsets.return_value = (0, 20000)
     with pytest.raises(ValueError, match="payments.events"):
         check_fn(ti=ti)

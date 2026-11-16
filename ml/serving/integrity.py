@@ -19,25 +19,32 @@ from prometheus_client import Counter
 logger = logging.getLogger(__name__)
 
 _INTEGRITY_PASS = Counter(
-    "ml_model_integrity_pass_total",
+    "model_integrity_pass_total",
     "Model artifacts that passed integrity verification",
     labelnames=["model"],
     namespace="ml",
 )
 _INTEGRITY_FAIL = Counter(
-    "ml_model_integrity_fail_total",
+    "model_integrity_fail_total",
     "Model artifacts that failed integrity verification",
     labelnames=["model"],
     namespace="ml",
 )
 _INTEGRITY_SKIP = Counter(
-    "ml_model_integrity_skip_total",
+    "model_integrity_skip_total",
     "Model loads that skipped integrity verification (no CHECKSUMS.sha256)",
     labelnames=["model"],
     namespace="ml",
 )
 
 CHECKSUM_FILENAME = "CHECKSUMS.sha256"
+
+
+def format_feature_view_name(feature_view_name: str, version: int | str = 1) -> str:
+    """Format canonical feature view table name without duplicating leading 'ml_'."""
+    clean_name = feature_view_name.removeprefix("ml_")
+    clean_version = str(version).lstrip("v")
+    return f"ml_{clean_name}_v{clean_version}"
 
 
 def compute_sha256(file_path: Path, chunk_size: int = 8192) -> str:

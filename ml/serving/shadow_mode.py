@@ -10,7 +10,6 @@ agreement monitoring, and CI promotion gate verification.
 import datetime
 import json
 import logging
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import asdict, dataclass
@@ -239,17 +238,34 @@ class ShadowRunner:
         prod_output = production.output
         shadow_output = shadow.output
 
-        # Generic numeric delta for the first shared numeric key
         score_delta: Optional[float] = None
         agrees = True
+
+        primary_m = prod_output.get("metrics", prod_output) if isinstance(prod_output, dict) else {}
+        shadow_m = shadow_output.get("metrics", shadow_output) if isinstance(shadow_output, dict) else {}
+        if isinstance(primary_m, dict) and isinstance(shadow_m, dict):
+            for metric_name in ("ndcg@10", "rmse", "roc_auc", "f1"):
+                pv = primary_m.get(metric_name)
+                sv = shadow_m.get(metric_name)
+                if isinstance(pv, (int, float)) and isinstance(sv, (int, float)):
+                    delta = abs(float(sv) - float(pv))
+                    if score_delta is None:
+                        score_delta = delta
+                    relative_diff = delta / max(abs(float(pv)), 1e-9)
+                    if relative_diff > 0.10:
+                        agrees = False
+
         for key in prod_output:
             if key in shadow_output:
                 pv = prod_output[key]
                 sv = shadow_output[key]
                 if isinstance(pv, (int, float)) and isinstance(sv, (int, float)):
-                    score_delta = abs(float(pv) - float(sv))
-                    # Agreement if within 10 % relative tolerance
-                    if pv != 0 and score_delta / abs(float(pv)) > 0.10:
+                    delta = abs(float(sv) - float(pv))
+                    if score_delta is None:
+                        score_delta = delta
+                    # Agreement if within 10 % relative tolerance (guard pv == 0)
+                    relative_diff = delta / max(abs(float(pv)), 1e-9)
+                    if relative_diff > 0.10:
                         agrees = False
                 elif pv != sv:
                     agrees = False

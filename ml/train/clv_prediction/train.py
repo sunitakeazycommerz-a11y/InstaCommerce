@@ -12,11 +12,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, cast
 
-import mlflow  # type: ignore
+try:
+    import mlflow as _mlflow  # type: ignore
+    mlflow: Any = _mlflow
+except (ImportError, OSError):
+    mlflow: Any = None
 import numpy as np
 import pandas as pd
 import yaml
@@ -74,6 +77,8 @@ class CLVPredictionTrainer:
         rfm = pd.concat([customer_first, customer_last, customer_count], axis=1)
         rfm["frequency"] = rfm["total_orders"] - 1
         rfm["recency"] = (rfm["last_purchase"] - rfm["first_purchase"]).dt.days
+        rfm["recency_days"] = rfm["recency"]
+        rfm["days_since_last_order"] = (observation_end - rfm["last_purchase"]).dt.days
         rfm["T"] = (observation_end - rfm["first_purchase"]).dt.days
 
         # Monetary value: average of repeat purchases
@@ -117,14 +122,14 @@ class CLVPredictionTrainer:
             if r <= 0 or alpha <= 0 or a <= 0 or b <= 0:
                 return 1e10
 
-            from scipy.special import gammaln, betaln
+            from scipy.special import gammaln
 
             ln_A_0 = (
                 gammaln(r + frequency)
                 - gammaln(r)
                 + frequency * np.log(alpha)
-                + np.log(a)
-                - np.log(b + np.maximum(frequency, 1) - 1)
+                + np.log(b)
+                - np.log(a + b + np.maximum(frequency, 1) - 1)
                 - (r + frequency) * np.log(alpha + T)
             )
 
@@ -132,6 +137,9 @@ class CLVPredictionTrainer:
                 gammaln(r + frequency)
                 - gammaln(r)
                 + frequency * np.log(alpha)
+                + np.log(a)
+                - np.log(a + b + np.maximum(frequency, 1) - 1)
+                - (r + frequency) * np.log(alpha + recency)
             )
 
             ll = np.sum(np.logaddexp(ln_A_0, ln_A_1))
@@ -225,14 +233,11 @@ class CLVPredictionTrainer:
             * horizon_days
         )
 
-        # Predicted average monetary value
+        # Predicted average monetary value (Gamma-Gamma posterior mean)
         p, q, v = self.ggf_params["p"], self.ggf_params["q"], self.ggf_params["v"]
-        expected_monetary = (
-            (q - 1) / (p * rfm["frequency"] + q - 1)
-            * (v + rfm["frequency"] * rfm["monetary_value"])
-            / (v + rfm["frequency"] * rfm["monetary_value"])
-            * rfm["monetary_value"]
-        )
+        x = rfm["frequency"]
+        m_x = rfm["monetary_value"]
+        expected_monetary = ((p * m_x * x) + (q - 1) * v) / (p * x + q - 1)
         # Fallback for edge cases
         expected_monetary = expected_monetary.clip(lower=0)
 

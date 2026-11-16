@@ -14,7 +14,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-import mlflow  # type: ignore
+try:
+    import mlflow as _mlflow  # type: ignore
+    mlflow: Any = _mlflow
+except (ImportError, OSError):
+    mlflow: Any = None
 import numpy as np
 import pandas as pd
 import yaml
@@ -81,16 +85,58 @@ class ModelEvaluator:
         "accuracy_pct", "correlation",
     }
 
+    NON_FEATURE_COLUMNS = {
+        "label",
+        "target",
+        "y",
+        "is_fraud",
+        "relevance_label",
+        "query_id",
+        "group_id",
+        "group",
+        "user_id",
+        "customer_id",
+        "order_id",
+        "product_id",
+        "sku_id",
+        "item_id",
+        "rider_id",
+        "store_id",
+        "id",
+        "timestamp",
+        "event_time",
+        "created_at",
+    }
+
     def __init__(self):
         pass
+
+    @classmethod
+    def _select_feature_columns(
+        cls,
+        model: Any,
+        test_data: pd.DataFrame,
+        extra_exclude: tuple[str, ...] = (),
+    ) -> list[str]:
+        if hasattr(model, "feature_names_in_"):
+            in_cols = [str(c) for c in model.feature_names_in_ if c in test_data.columns]
+            if in_cols:
+                return in_cols
+        excluded = cls.NON_FEATURE_COLUMNS | set(extra_exclude)
+        return [
+            c
+            for c in test_data.columns
+            if c not in excluded and not str(c).endswith("_id")
+        ]
 
     def evaluate(
         self,
         model: Any,
         test_data: pd.DataFrame,
-        gates_config: dict,
+        gates_config: dict | None = None,
         model_name: str = "unknown",
         version: str = "v0",
+        task_type: str | None = None,
     ) -> EvalReport:
         """Run metrics, check promotion gates, and generate report.
 
@@ -100,16 +146,20 @@ class ModelEvaluator:
             gates_config: Config dict with promotion_gates section.
             model_name: Name of the model.
             version: Model version string.
+            task_type: Optional explicit task type ('classification' or 'regression').
 
         Returns:
             EvalReport with metrics, gate results, and metadata.
         """
         logger.info("Evaluating model: %s %s", model_name, version)
+        gates_config = gates_config or {}
         report = EvalReport(model_name=model_name, version=version)
 
-        # Compute predictions
-        feature_cols = [c for c in test_data.columns if c not in ("label", "target", "y", "is_fraud", "relevance_label")]
-        if hasattr(model, "predict_proba"):
+        resolved_task_type = task_type or gates_config.get("task_type")
+
+        # Compute predictions excluding label/group/ID columns
+        feature_cols = self._select_feature_columns(model, test_data)
+        if hasattr(model, "predict_proba") and resolved_task_type != "regression":
             y_pred_proba = model.predict_proba(test_data[feature_cols])[:, 1]
             y_pred = (y_pred_proba >= 0.5).astype(int)
         elif hasattr(model, "predict"):
@@ -130,7 +180,7 @@ class ModelEvaluator:
         y_true = np.asarray(test_data[label_col].values)
 
         # Compute metrics based on task type
-        metrics = self._compute_metrics(y_true, y_pred, y_pred_proba)
+        metrics = self._compute_metrics(y_true, y_pred, y_pred_proba, task_type=resolved_task_type)
         report.metrics = metrics
 
         # Check promotion gates
@@ -142,6 +192,7 @@ class ModelEvaluator:
             "test_samples": len(test_data),
             "label_column": label_col,
             "feature_count": len(feature_cols),
+            "task_type": resolved_task_type,
         }
 
         logger.info("Evaluation complete. Gates passed: %s", report.gates_passed)
@@ -152,6 +203,7 @@ class ModelEvaluator:
         y_true: np.ndarray,
         y_pred: np.ndarray,
         y_pred_proba: np.ndarray | None,
+        task_type: str | None = None,
     ) -> dict[str, float]:
         """Compute appropriate metrics based on prediction type."""
         from sklearn.metrics import (
@@ -169,9 +221,12 @@ class ModelEvaluator:
 
         # Determine if classification or regression
         unique_labels = np.unique(y_true)
-        is_classification = len(unique_labels) <= 20 and all(
-            float(v).is_integer() for v in unique_labels
-        )
+        if task_type is not None:
+            is_classification = task_type.lower() in ("classification", "binary", "multiclass")
+        else:
+            is_classification = len(unique_labels) <= 20 and all(
+                float(v).is_integer() for v in unique_labels
+            )
 
         if is_classification:
             metrics["accuracy"] = float(accuracy_score(y_true, y_pred))
@@ -250,10 +305,9 @@ class ModelEvaluator:
             report.details.append("No protected attributes found for bias check")
             return report
 
-        feature_cols = [
-            c for c in test_data.columns
-            if c not in ("label", "target", "y", "is_fraud", "relevance_label") + tuple(protected_attributes)
-        ]
+        feature_cols = self._select_feature_columns(
+            model, test_data, extra_exclude=tuple(protected_attributes)
+        )
 
         if hasattr(model, "predict_proba"):
             y_pred = (model.predict_proba(test_data[feature_cols])[:, 1] >= 0.5).astype(int)
@@ -308,6 +362,25 @@ class ModelEvaluator:
 
         logger.info("Bias check complete. Passed: %s", report.passed)
         return report
+
+
+def evaluate_model(
+    model: Any,
+    test_data: pd.DataFrame,
+    gates_config: dict | None = None,
+    model_name: str = "unknown",
+    version: str = "v0",
+    task_type: str | None = None,
+) -> EvalReport:
+    """Module-level convenience wrapper around ModelEvaluator.evaluate."""
+    return ModelEvaluator().evaluate(
+        model=model,
+        test_data=test_data,
+        gates_config=gates_config,
+        model_name=model_name,
+        version=version,
+        task_type=task_type,
+    )
 
 
 def main():
@@ -370,7 +443,7 @@ def main():
     logger.info("Report saved to %s", args.output)
 
     # Log to MLflow if tracking URI is set
-    if os.environ.get("MLFLOW_TRACKING_URI"):
+    if mlflow is not None and os.environ.get("MLFLOW_TRACKING_URI"):
         with mlflow.start_run():
             mlflow.log_metrics(report.metrics)
             mlflow.log_metric("gates_passed", int(report.gates_passed))

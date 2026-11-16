@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional
+from typing import Iterable
 
 try:
     from google.cloud import bigquery  # type: ignore

@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings
+from app.graph.budgets import BudgetExceededError, BudgetTracker
 from app.graph.state import (
     AgentState,
     IntentType,
@@ -87,6 +89,187 @@ _PII_PATTERNS = [
         "[REDACTED_PHONE]",
     ),
 ]
+
+
+def budget_tracker_from_state(
+    state: AgentState,
+    settings: Optional[Settings] = None,
+) -> BudgetTracker:
+    """Construct a synchronized ``BudgetTracker`` from ``AgentState``."""
+    elapsed_ms = state.current_elapsed_ms()
+    configured_tool_cap = max(
+        settings.tool_call_max if settings is not None else 10,
+        len(state.tool_results) + max(state.tool_calls_remaining, 0),
+    )
+    used_tool_calls = max(0, configured_tool_cap - max(state.tool_calls_remaining, 0))
+    start_ns = time.monotonic_ns() - int(elapsed_ms * 1_000_000)
+    return BudgetTracker(
+        max_cost_usd=state.max_cost_usd,
+        max_tokens=state.max_tokens,
+        max_tool_calls=configured_tool_cap,
+        max_latency_ms=state.max_latency_ms,
+        total_cost_usd=state.total_cost_usd,
+        total_tokens=state.total_tokens_used,
+        tool_calls_used=used_tool_calls,
+        _start_ns=start_ns,
+    )
+
+
+def apply_budget_to_state(state: AgentState, tracker: BudgetTracker) -> AgentState:
+    """Sync tracked budget consumption back onto ``AgentState``."""
+    return state.model_copy(
+        update={
+            "total_cost_usd": tracker.total_cost_usd,
+            "total_tokens_used": tracker.total_tokens,
+            "tool_calls_remaining": tracker.tool_calls_remaining,
+            "elapsed_ms": max(state.elapsed_ms, tracker.elapsed_ms),
+        }
+    )
+
+
+def extract_structured_tool_outputs(
+    tool_results: List[ToolResult],
+    tool_calls: Optional[List[Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Extract structured dicts (pricing_lookup, inventory_check, policy_check, order_status)."""
+    structured: Dict[str, Any] = {}
+    ctx = context or {}
+
+    for key in ("pricing_lookup", "pricing_Lookup", "inventory_check", "policy_check", "order_status"):
+        val = ctx.get(key)
+        if isinstance(val, dict):
+            canonical_key = "pricing_lookup" if key == "pricing_Lookup" else key
+            structured[canonical_key] = dict(val)
+
+    for tr in tool_results:
+        name = getattr(tr, "tool_name", None) or getattr(tr, "name", "")
+        data = getattr(tr, "data", None)
+        if not isinstance(data, dict):
+            continue
+        if name.startswith("pricing"):
+            structured["pricing_lookup"] = dict(data)
+        elif name.startswith("inventory"):
+            structured["inventory_check"] = dict(data)
+        elif name.startswith("order"):
+            structured["order_status"] = dict(data)
+        elif "policy" in name:
+            structured["policy_check"] = dict(data)
+
+    if tool_calls:
+        for tc in tool_calls:
+            tc_name = getattr(tc, "name", "") if not isinstance(tc, dict) else tc.get("name", "")
+            tc_args = getattr(tc, "arguments", {}) if not isinstance(tc, dict) else tc.get("arguments", {})
+            if isinstance(tc_args, dict):
+                if tc_name.startswith("pricing") and "pricing_lookup" not in structured:
+                    structured["pricing_lookup"] = dict(tc_args)
+                elif tc_name.startswith("inventory") and "inventory_check" not in structured:
+                    structured["inventory_check"] = dict(tc_args)
+                elif tc_name.startswith("order") and "order_status" not in structured:
+                    structured["order_status"] = dict(tc_args)
+                elif "policy" in tc_name and "policy_check" not in structured:
+                    structured["policy_check"] = dict(tc_args)
+
+    if "pricing_lookup" in structured:
+        structured["pricing_Lookup"] = structured["pricing_lookup"]
+
+    return structured
+
+
+class AgentExecutionRunner:
+    """Runs graph executions while enforcing per-request and per-session ``BudgetTracker`` limits."""
+
+    def __init__(
+        self,
+        max_session_cost_usd: float = 0.50,
+        max_session_tokens: int = 0,
+        max_session_tool_calls: int = 25,
+    ) -> None:
+        self.max_session_cost_usd = max_session_cost_usd
+        self.max_session_tokens = max_session_tokens
+        self.max_session_tool_calls = max_session_tool_calls
+        self._session_trackers: Dict[str, BudgetTracker] = {}
+
+    def get_session_tracker(self, session_id: Optional[str]) -> Optional[BudgetTracker]:
+        if not session_id:
+            return None
+        if session_id not in self._session_trackers:
+            self._session_trackers[session_id] = BudgetTracker(
+                max_cost_usd=self.max_session_cost_usd,
+                max_tokens=self.max_session_tokens,
+                max_tool_calls=self.max_session_tool_calls,
+                max_latency_ms=60_000.0,
+            )
+        return self._session_trackers[session_id]
+
+    def build_request_tracker(self, state: AgentState) -> BudgetTracker:
+        return budget_tracker_from_state(state)
+
+    async def run(
+        self,
+        graph: Any,
+        state: AgentState,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> AgentState:
+        session_id = state.session_id or state.user_id
+        session_tracker = self.get_session_tracker(session_id)
+        request_tracker = self.build_request_tracker(state)
+
+        try:
+            if session_tracker is not None:
+                # Re-sync session wall-clock anchor if starting a new request in the session
+                session_tracker._start_ns = time.monotonic_ns()
+                session_tracker.check_or_raise()
+            request_tracker.check_or_raise()
+        except BudgetExceededError as exc:
+            logger.warning(
+                "runner.budget_exceeded",
+                extra={"request_id": state.request_id, "reason": str(exc)},
+            )
+            return state.model_copy(
+                update={
+                    "needs_escalation": True,
+                    "escalation_reason": str(exc),
+                    "response": (
+                        "This request exceeds the allowed processing budget. "
+                        f"Your reference number is {state.request_id}."
+                    ),
+                }
+            )
+
+        effective_state = state
+        if session_tracker is not None and session_tracker.max_tokens > 0:
+            remaining_session_tokens = max(
+                0, session_tracker.max_tokens - session_tracker.total_tokens
+            )
+            effective_max_tokens = (
+                min(state.max_tokens, remaining_session_tokens)
+                if state.max_tokens > 0
+                else remaining_session_tokens
+            )
+            effective_state = effective_state.model_copy(
+                update={
+                    "max_tokens": effective_max_tokens,
+                    "max_cost_usd": min(
+                        state.max_cost_usd,
+                        max(0.0, session_tracker.cost_remaining),
+                    ),
+                }
+            )
+
+        if config is not None:
+            result_dict = await graph.ainvoke(effective_state.model_dump(), config=config)
+        else:
+            result_dict = await graph.ainvoke(effective_state.model_dump())
+
+        result = AgentState(**result_dict) if isinstance(result_dict, dict) else result_dict
+
+        if session_tracker is not None:
+            session_tracker.total_cost_usd += max(0.0, result.total_cost_usd - state.total_cost_usd)
+            session_tracker.total_tokens += max(0, result.total_tokens_used - state.total_tokens_used)
+            session_tracker.tool_calls_used += len(result.tool_results) - len(state.tool_results)
+
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -188,10 +371,11 @@ def classify_intent(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def check_policy(state: AgentState, settings: Optional[Settings] = None) -> AgentState:
-    """Pre-execution policy gate.
+    """Pre-execution policy gate backed by ``BudgetTracker``.
 
     Validates:
     * Cost budget not exceeded ($0.50 hard cap).
+    * Token budget (if configured via ``max_tokens > 0``).
     * Latency budget has headroom.
     * Tool-call counter below limit.
     * Risk level is acceptable for autonomous processing.
@@ -200,20 +384,28 @@ def check_policy(state: AgentState, settings: Optional[Settings] = None) -> Agen
     """
     try:
         settings = settings or Settings()
-        elapsed_ms = state.current_elapsed_ms()
+        tracker = budget_tracker_from_state(state, settings=settings)
+        elapsed_ms = tracker.elapsed_ms
         violations: List[str] = []
 
-        # Budget checks
-        if state.total_cost_usd >= state.max_cost_usd:
-            violations.append(
-                f"Cost budget exceeded: ${state.total_cost_usd:.4f} >= ${state.max_cost_usd:.2f}"
-            )
-        if elapsed_ms >= state.max_latency_ms:
-            violations.append(
-                f"Latency budget exceeded: {elapsed_ms:.0f}ms >= {state.max_latency_ms:.0f}ms"
-            )
-        if state.tool_calls_remaining <= 0:
-            violations.append("Tool call budget exhausted")
+        # Enforce via BudgetTracker
+        try:
+            tracker.check_or_raise()
+        except BudgetExceededError:
+            if tracker.is_cost_exceeded():
+                violations.append(
+                    f"Cost budget exceeded: ${tracker.total_cost_usd:.4f} >= ${tracker.max_cost_usd:.2f}"
+                )
+            if tracker.is_latency_exceeded():
+                violations.append(
+                    f"Latency budget exceeded: {elapsed_ms:.0f}ms >= {tracker.max_latency_ms:.0f}ms"
+                )
+            if tracker.is_tool_calls_exceeded():
+                violations.append("Tool call budget exhausted")
+            if tracker.is_tokens_exceeded():
+                violations.append(
+                    f"Token budget exceeded: {tracker.total_tokens} >= {tracker.max_tokens}"
+                )
 
         # Risk gate: CRITICAL always escalates
         if state.risk_level == RiskLevel.CRITICAL:
@@ -376,47 +568,27 @@ async def execute_tools(
     state: AgentState,
     registry: Optional[ToolRegistry] = None,
 ) -> AgentState:
-    """Execute tools based on intent with budget enforcement.
+    """Execute tools based on intent with ``BudgetTracker`` enforcement.
 
-    Tool selection is driven by intent type.  Each invocation decrements
-    ``tool_calls_remaining`` and is tracked in ``tool_results``.
-    Execution stops immediately if any budget ceiling is breached.
+    Tool selection is driven by intent type.  Each invocation increments
+    ``BudgetTracker.record_tool_call()`` and decrements
+    ``tool_calls_remaining``.  Execution stops immediately if any budget
+    ceiling is breached.
     """
     try:
-        if state.tool_calls_remaining <= 0:
-            logger.warning(
-                "node.execute_tools.budget_exhausted",
-                extra={"request_id": state.request_id},
-            )
-            return state.model_copy(
-                update={
-                    "current_node": "execute_tools",
-                    "completed_nodes": state.completed_nodes + ["execute_tools"],
-                }
-            )
+        tracker = budget_tracker_from_state(state, settings=registry.settings if registry else None)
 
-        if state.total_cost_usd >= state.max_cost_usd:
-            logger.warning(
-                "node.execute_tools.cost_exceeded",
-                extra={"request_id": state.request_id},
-            )
+        if not tracker.can_proceed():
+            try:
+                tracker.check_or_raise()
+            except BudgetExceededError as exc:
+                logger.warning(
+                    "node.execute_tools.budget_exceeded",
+                    extra={"request_id": state.request_id, "reason": str(exc)},
+                )
             return state.model_copy(
                 update={
-                    "elapsed_ms": state.current_elapsed_ms(),
-                    "current_node": "execute_tools",
-                    "completed_nodes": state.completed_nodes + ["execute_tools"],
-                }
-            )
-
-        elapsed_ms = state.current_elapsed_ms()
-        if elapsed_ms >= state.max_latency_ms:
-            logger.warning(
-                "node.execute_tools.latency_exceeded",
-                extra={"request_id": state.request_id, "elapsed_ms": round(elapsed_ms, 1)},
-            )
-            return state.model_copy(
-                update={
-                    "elapsed_ms": elapsed_ms,
+                    "elapsed_ms": max(state.elapsed_ms, tracker.elapsed_ms),
                     "current_node": "execute_tools",
                     "completed_nodes": state.completed_nodes + ["execute_tools"],
                 }
@@ -425,7 +597,6 @@ async def execute_tools(
         # Determine which tools to call based on intent
         tool_plan: List[Dict[str, Any]] = _plan_tools(state)
         results: List[ToolResult] = list(state.tool_results)
-        remaining = state.tool_calls_remaining
 
         if registry is None:
             # No registry available — record a synthetic skip result
@@ -435,18 +606,14 @@ async def execute_tools(
             )
             return state.model_copy(
                 update={
-                    "elapsed_ms": state.current_elapsed_ms(),
+                    "elapsed_ms": max(state.elapsed_ms, tracker.elapsed_ms),
                     "current_node": "execute_tools",
                     "completed_nodes": state.completed_nodes + ["execute_tools"],
                 }
             )
 
         for plan in tool_plan:
-            if remaining <= 0:
-                break
-            if state.total_cost_usd >= state.max_cost_usd:
-                break
-            if state.current_elapsed_ms() >= state.max_latency_ms:
+            if not tracker.can_proceed():
                 break
 
             result = await registry.call(
@@ -456,22 +623,24 @@ async def execute_tools(
                 path_params=plan.get("path_params"),
             )
             results.append(result)
-            remaining -= 1
+            tracker.record_tool_call()
 
         logger.info(
             "node.execute_tools",
             extra={
                 "request_id": state.request_id,
                 "tools_called": len(results) - len(state.tool_results),
-                "remaining": remaining,
+                "remaining": tracker.tool_calls_remaining,
             },
         )
 
         return state.model_copy(
             update={
                 "tool_results": results,
-                "tool_calls_remaining": remaining,
-                "elapsed_ms": state.current_elapsed_ms(),
+                "tool_calls_remaining": tracker.tool_calls_remaining,
+                "total_cost_usd": tracker.total_cost_usd,
+                "total_tokens_used": tracker.total_tokens,
+                "elapsed_ms": max(state.elapsed_ms, tracker.elapsed_ms),
                 "current_node": "execute_tools",
                 "completed_nodes": state.completed_nodes + ["execute_tools"],
             }
@@ -548,10 +717,19 @@ def validate_output(state: AgentState) -> AgentState:
         vault = PIIVault()
         response, _ = vault.redact(response)
 
-        # Output policy business rules and cap enforcement
+        # Output policy business rules and cap enforcement with structured tool outputs
         output_policy = OutputPolicy()
-        output_payload = {"response": response, "message": response}
-        val_result = output_policy.validate(state.intent.value, output_payload, state.tool_results)
+        structured = extract_structured_tool_outputs(
+            state.tool_results,
+            context=state.context,
+        )
+        output_payload: Dict[str, Any] = {
+            "intent": state.intent.value,
+            "response": response,
+            "message": response,
+            **structured,
+        }
+        val_result = output_policy.validate(output_payload, tool_results=state.tool_results)
         if not val_result.is_valid:
             error_msgs = [v.message for v in val_result.violations if v.severity == "error"]
             logger.warning(

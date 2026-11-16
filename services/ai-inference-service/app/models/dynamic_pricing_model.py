@@ -6,6 +6,7 @@ Guardrails: price floor (cost + min margin), ceiling (2x base), no demographic d
 from __future__ import annotations
 
 import logging
+import pickle
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -64,6 +65,7 @@ class PricingFeatures(BaseModel):
     base_delivery_fee_cents: int = Field(default=500, ge=0, description="Standard delivery fee")
     cost_per_delivery_cents: int = Field(default=300, ge=0, description="Actual cost per delivery")
     min_margin_cents: int = Field(default=100, ge=0, description="Minimum margin per delivery")
+    min_margin_pct: float = Field(default=0.0, ge=0.0, le=1.0, description="Minimum margin percentage")
 
 
 class PricingResponse(MLBaseModel):
@@ -81,21 +83,38 @@ class PricingResponse(MLBaseModel):
 # ---------------------------------------------------------------------------
 # Guardrails
 # ---------------------------------------------------------------------------
+def clamp_multiplier(
+    raw_multiplier: float,
+    floor: float = 0.8,
+    ceiling: float = 2.0,
+    min_margin_pct: float = 0.0,
+) -> float:
+    """Clamp raw multiplier to [floor, ceiling] after applying min_margin_pct."""
+    if min_margin_pct > 0.0:
+        floor = max(floor, 1.0 + min_margin_pct)
+    floor = min(floor, ceiling)
+    return float(np.clip(raw_multiplier, floor, ceiling))
+
+
 def _apply_guardrails(
     fee_cents: int,
     cost_cents: int,
     min_margin_cents: int,
     base_fee_cents: int,
+    min_margin_pct: float = 0.0,
 ) -> tuple[int, Optional[str]]:
     """Apply pricing guardrails. Returns (adjusted_fee, guardrail_hit)."""
-    floor = cost_cents + min_margin_cents
+    margin_from_pct = int(round(cost_cents * (1.0 + min_margin_pct))) if min_margin_pct > 0.0 else 0
+    floor = max(cost_cents + min_margin_cents, margin_from_pct)
     ceiling = base_fee_cents * 2
+    floor = min(floor, ceiling)
 
-    if fee_cents < floor:
-        return floor, "price_floor"
+    clamped = int(np.clip(fee_cents, floor, ceiling))
     if fee_cents > ceiling:
-        return ceiling, "price_ceiling"
-    return fee_cents, None
+        return clamped, "price_ceiling"
+    if fee_cents < floor:
+        return clamped, "price_floor"
+    return clamped, None
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +152,6 @@ class DynamicPricingModel:
     def load_model(self, path: str) -> None:
         """Load serialised contextual bandit model."""
         try:
-            import pickle
             with open(path, "rb") as f:
                 model = pickle.load(f)
             with self._lock:
@@ -198,6 +216,7 @@ class DynamicPricingModel:
         fee_cents, guardrail = _apply_guardrails(
             fee_cents, features.cost_per_delivery_cents,
             features.min_margin_cents, features.base_delivery_fee_cents,
+            features.min_margin_pct,
         )
 
         discount = max(0, features.base_delivery_fee_cents - fee_cents)
@@ -267,6 +286,7 @@ class DynamicPricingModel:
         fee_cents, guardrail = _apply_guardrails(
             fee_cents, features.cost_per_delivery_cents,
             features.min_margin_cents, features.base_delivery_fee_cents,
+            features.min_margin_pct,
         )
 
         PRICING_PREDICTIONS.labels(model_version=self._version, method="rule_based").inc()
@@ -279,6 +299,21 @@ class DynamicPricingModel:
             model_version=self._version,
             feature_contributions=contributions,
             method="rule_based",
+        )
+
+    @staticmethod
+    def clamp_multiplier(
+        raw_multiplier: float,
+        floor: float = 0.8,
+        ceiling: float = 2.0,
+        min_margin_pct: float = 0.0,
+    ) -> float:
+        """Clamp raw multiplier to [floor, ceiling] after applying min_margin_pct."""
+        return clamp_multiplier(
+            raw_multiplier=raw_multiplier,
+            floor=floor,
+            ceiling=ceiling,
+            min_margin_pct=min_margin_pct,
         )
 
     # -- Feature importance ---------------------------------------------------

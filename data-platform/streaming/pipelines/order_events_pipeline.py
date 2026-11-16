@@ -64,8 +64,17 @@ class OrderEventParser(beam.DoFn):
     """
 
     DEAD_LETTER = "dead_letter"
+    DEAD_LETTER_TAG = "dead_letter"
     LATE_EVENTS = "late_events"
     ALLOWED_LATENESS_SECONDS = 3600  # 1 hour allowed lateness
+    VALID_EVENT_TYPES = {
+        "OrderPlaced",
+        "ORDER_PLACED",
+        "OrderDelivered",
+        "ORDER_DELIVERED",
+        "OrderCreated",
+        "ORDER_CREATED",
+    }
 
     def process(self, element):
         key, value = element
@@ -106,6 +115,8 @@ class OrderEventParser(beam.DoFn):
             }
             if not parsed["order_id"]:
                 raise ValueError("Missing order_id in event")
+            if parsed["event_type"] and parsed["event_type"] not in self.VALID_EVENT_TYPES:
+                raise ValueError(f"Unsupported event_type in event: {parsed['event_type']}")
             event_ts = _parse_event_ts(event_time_str)
 
             # Check for late-arriving events beyond allowed lateness window (1 hour)
@@ -139,6 +150,10 @@ class OrderEventParser(beam.DoFn):
                 self.DEAD_LETTER,
                 {"raw": value.decode("utf-8", errors="replace"), "error": str(e)},
             )
+
+
+ParseAndValidateOrderEvent = OrderEventParser
+DEAD_LETTER_TAG = OrderEventParser.DEAD_LETTER
 
 
 class OrderVolumeAggregator(beam.CombineFn):
@@ -312,7 +327,7 @@ def build_pipeline(options):
         (
             events
             | "FilterDelivered"
-            >> beam.Filter(lambda e: e["event_type"] == "ORDER_DELIVERED")
+            >> beam.Filter(lambda e: e["event_type"] in ("ORDER_DELIVERED", "OrderDelivered"))
             | "Window30MinSliding" >> beam.WindowInto(
                 SlidingWindows(1800, 60),
                 trigger=AfterWatermark(

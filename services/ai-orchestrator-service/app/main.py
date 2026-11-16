@@ -16,14 +16,31 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
+import app.api.handlers as v2_handlers
+from app.api.handlers import (
+    router as v2_router,
+    set_audit_publisher,
+    set_checkpoint_saver,
+    set_compiled_graph,
+)
 from app.audit import AuditEventPublisher, NoOpAuditPublisher
-from app.config import Settings
+from app.auth import InternalServiceAuthMiddleware
 from app.cache.semantic_cache import SemanticCache
+from app.config import Settings
+from app.graph.budgets import BudgetExceededError, BudgetTracker
+from app.graph.checkpoints import RedisCheckpointSaver
+from app.graph.graph import build_agent_graph
+from app.graph.nodes import extract_structured_tool_outputs
+from app.guardrails import InjectionDetector, OutputPolicy, PIIVault
 from app.guardrails.injection import wrap_user_input
 from app.guardrails.rate_limiter import RATE_LIMIT_EXCEEDED, TokenBucketRateLimiter
 
 settings = Settings()
 logger = logging.getLogger("ai_orchestrator")
+_v1_injection_detector = InjectionDetector()
+_v1_pii_vault = PIIVault()
+_v1_output_policy = OutputPolicy()
+_v1_session_budgets: Dict[str, BudgetTracker] = {}
 
 
 STANDARD_LOG_RECORD_ATTRS = {
@@ -437,6 +454,9 @@ class ToolClients:
         self._headers = headers
         timeout_seconds = min(config.request_timeout_seconds, config.tool_call_timeout_seconds)
         self._timeout = httpx.Timeout(timeout_seconds)
+        self.search = httpx.AsyncClient(
+            base_url=str(config.search_service_url), timeout=self._timeout, headers=self._headers
+        )
         self.catalog = httpx.AsyncClient(
             base_url=str(config.catalog_service_url), timeout=self._timeout, headers=self._headers
         )
@@ -456,6 +476,7 @@ class ToolClients:
 
     async def close(self) -> None:
         await asyncio.gather(
+            self.search.aclose(),
             self.catalog.aclose(),
             self.pricing.aclose(),
             self.inventory.aclose(),
@@ -489,11 +510,18 @@ class ToolClients:
         return self._safe_json(response)
 
     async def search_catalog(self, query: str, category: Optional[str], limit: int) -> Dict[str, Any]:
-        params: Dict[str, Any] = {"q": query, "page": 0, "size": limit}
+        params: Dict[str, Any] = {"query": query, "q": query, "page": 0, "size": limit}
         if category:
             params["category"] = category
-        response = await self._request(self.catalog, "GET", "/search", params=params)
-        return self._safe_json(response)
+        try:
+            response = await self._request(self.search, "GET", "/search", params=params)
+            return self._safe_json(response)
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            fallback_params: Dict[str, Any] = {"q": query, "query": query, "page": 0, "size": limit}
+            if category:
+                fallback_params["category"] = category
+            response = await self._request(self.catalog, "GET", "/products", params=fallback_params)
+            return self._safe_json(response)
 
     async def list_products(self, category: Optional[str], limit: int) -> Dict[str, Any]:
         params: Dict[str, Any] = {"page": 0, "size": limit}
@@ -525,8 +553,14 @@ class ToolClients:
         response = await self._request(self.inventory, "POST", "/inventory/check", json=payload)
         return self._safe_json(response)
 
-    async def get_cart(self, user_id: Optional[UUID]) -> Dict[str, Any]:
-        response = await self._request(self.cart, "GET", "/cart", headers=self._user_headers(user_id))
+    async def get_cart(self, user_id: Optional[UUID | str]) -> Dict[str, Any]:
+        uid = str(user_id).strip() if user_id is not None else ""
+        if not uid:
+            raise ValueError("user_id is required")
+        parsed_uid = parse_uuid(uid)
+        response = await self._request(
+            self.cart, "GET", f"/cart/{uid}", headers=self._user_headers(parsed_uid)
+        )
         return self._safe_json(response)
 
     async def get_order(self, order_id: UUID) -> Dict[str, Any]:
@@ -692,8 +726,10 @@ async def _execute_tool_call(tool_call: ToolCall, clients: ToolClients) -> ToolR
             data = await clients.check_inventory(str(store_id), items)
             return ToolResult(name=name, success=True, data=data)
         if name == "cart.get":
-            user_id = parse_uuid(args.get("user_id"))
-            data = await clients.get_cart(user_id)
+            raw_uid = args.get("user_id")
+            if raw_uid is None or not str(raw_uid).strip():
+                return ToolResult(name=name, success=False, error="user_id_required")
+            data = await clients.get_cart(str(raw_uid).strip())
             return ToolResult(name=name, success=True, data=data)
         if name == "order.get":
             order_id = parse_uuid(args.get("order_id"))
@@ -1320,7 +1356,18 @@ async def lifespan(app_instance: FastAPI):
         audit_publisher = NoOpAuditPublisher()
     await audit_publisher.start()
     set_audit_publisher(audit_publisher)
+    checkpoint_saver = RedisCheckpointSaver(redis_url=settings.redis_url)
+    set_checkpoint_saver(checkpoint_saver)
+    v2_registry = await v2_handlers._get_registry()
+    v2_graph = build_agent_graph(
+        settings=settings,
+        tool_registry=v2_registry,
+        checkpointer=checkpoint_saver,
+    )
+    set_compiled_graph(v2_graph)
     app_instance.state.audit_publisher = audit_publisher
+    app_instance.state.checkpoint_saver = checkpoint_saver
+    app_instance.state.agent_graph = v2_graph
     app_instance.state.clients = clients
     app_instance.state.llm = llm_client
     app_instance.state.retriever = retriever
@@ -1340,6 +1387,10 @@ async def lifespan(app_instance: FastAPI):
         yield
     finally:
         await audit_publisher.stop()
+        if v2_handlers._tool_registry is not None:
+            await v2_handlers._tool_registry.close()
+        await v2_handlers.shutdown_handlers()
+        await checkpoint_saver.close()
         await clients.close()
         await llm_client.close()
 
@@ -1347,8 +1398,17 @@ async def lifespan(app_instance: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.state.tracer = init_telemetry(app)
 
-from app.auth import InternalServiceAuthMiddleware
-from app.api.handlers import router as v2_router, set_audit_publisher
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all exception handler that logs details server-side without leaking exc."""
+    logger.exception("unhandled.exception", extra={"path": str(request.url.path)})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "error": "INTERNAL_ERROR"},
+    )
+
+
 app.include_router(v2_router)
 
 
@@ -1532,11 +1592,77 @@ async def _publish_v1_audit_events(
 @app.post("/agent/assist", response_model=AssistResponse)
 async def assist(request: AssistRequest) -> AssistResponse:
     resources = build_resources(app)
+    is_inj, _, inj_reason = _v1_injection_detector.check(request.query)
+    if is_inj:
+        request_id = derive_request_id(request.request_id, {"query": request.query}, "assist")
+        log_event("assist.injection_blocked", level=logging.WARNING, request_id=request_id, reason=inj_reason)
+        return AssistResponse(
+            request_id=request_id,
+            mode="fallback",
+            intent="unknown",
+            message="Your request could not be processed automatically. Connecting you with a support specialist.",
+        )
+
+    redacted_query, _ = _v1_pii_vault.redact(request.query)
+    sanitized_request = request.model_copy(update={"query": redacted_query})
+
+    session_key = request.session_id or (str(request.user_id) if request.user_id else None)
+    tracker = BudgetTracker(
+        max_cost_usd=0.50,
+        max_tool_calls=resources.guardrails.max_calls,
+        max_latency_ms=resources.guardrails.max_total_seconds * 1000.0,
+    )
+    if session_key:
+        tracker = _v1_session_budgets.setdefault(
+            session_key,
+            BudgetTracker(
+                max_cost_usd=0.50,
+                max_tool_calls=resources.guardrails.max_calls * 5,
+                max_latency_ms=60_000.0,
+            ),
+        )
+        tracker._start_ns = time.monotonic_ns()
+        try:
+            tracker.check_or_raise()
+        except BudgetExceededError:
+            request_id = derive_request_id(request.request_id, {"query": redacted_query}, "assist")
+            return AssistResponse(
+                request_id=request_id,
+                mode="fallback",
+                intent="budget_exceeded",
+                message="Session processing budget exceeded. Connecting you with a support specialist.",
+            )
+
     budget = ToolBudget(resources.guardrails.max_calls, resources.guardrails.max_total_seconds)
-    state = {"request": request, "resources": resources, "budget": budget}
+    state = {"request": sanitized_request, "resources": resources, "budget": budget}
     result = await ASSIST_GRAPH.ainvoke(state)
-    await _publish_v1_audit_events(result, request, resources)
-    return result["response"]
+    response: AssistResponse = result["response"]
+
+    structured = extract_structured_tool_outputs(
+        result.get("tool_results", []),
+        tool_calls=result.get("tool_calls", []),
+    )
+    raw_output: Dict[str, Any] = {
+        "intent": response.intent,
+        "response": response.message,
+        "message": response.message,
+        **structured,
+    }
+    val_result = _v1_output_policy.validate(raw_output, tool_results=response.tool_results)
+    if val_result.sanitised_output:
+        sanitised_msg = str(
+            val_result.sanitised_output.get("response")
+            or val_result.sanitised_output.get("message")
+            or response.message
+        )
+        response = response.model_copy(update={"message": sanitised_msg})
+    if not val_result.is_valid:
+        response = response.model_copy(
+            update={"message": "Connecting you with a support specialist to review this request."}
+        )
+
+    await _publish_v1_audit_events(result, sanitized_request, resources)
+    return response
 
 
 @app.post("/agent/substitute", response_model=SubstituteResponse)

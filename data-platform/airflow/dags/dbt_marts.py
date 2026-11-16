@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
-from airflow.sensors.base import BaseSensorOperator
 from airflow.sensors.external_task import ExternalTaskSensor
+from plugins.kafka_lag_sensor import KafkaLagSensor
 
 def failure_alert(context):
     try:
@@ -30,62 +30,6 @@ default_args = {
 DBT_PROJECT_DIR = "/opt/airflow/dbt"
 DBT_PROFILES_DIR = "/opt/airflow/dbt/profiles"
 SLACK_CONN_ID = "slack_data_alerts"
-
-
-class KafkaLagSensor(BaseSensorOperator):
-    """Sensor that checks Kafka consumer lag before proceeding with daily dbt runs (Issue #655)."""
-
-    def __init__(
-        self,
-        topic: str = "orders.events",
-        max_lag: int = 100,
-        bootstrap_servers: str = "kafka-bootstrap:9092",
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.topic = topic
-        self.max_lag = max_lag
-        self.bootstrap_servers = bootstrap_servers
-
-    def poke(self, context):
-        try:
-            from confluent_kafka.admin import AdminClient
-
-            client = AdminClient({"bootstrap.servers": self.bootstrap_servers})
-            consumer_groups = client.list_consumer_groups().result()
-            max_observed_lag = 0
-            found_partition = False
-
-            for group in consumer_groups.valid:
-                offsets = client.list_consumer_group_offsets([group.group_id]).result()
-                group_lag = 0
-                group_has_topic = False
-                for tp, offset_info in offsets.items():
-                    if tp.topic == self.topic and offset_info.offset >= 0:
-                        _, high_watermark = client.get_watermark_offsets(tp)
-                        if high_watermark >= 0:
-                            group_lag += max(0, high_watermark - offset_info.offset)
-                            group_has_topic = True
-                            found_partition = True
-                if group_has_topic:
-                    max_observed_lag = max(max_observed_lag, group_lag)
-
-            if not found_partition:
-                self.log.warning("No committed Kafka offsets found for topic %s", self.topic)
-                return False
-
-            within_tolerance = max_observed_lag <= self.max_lag
-            self.log.info(
-                "Kafka lag for topic %s: %d (max_lag=%d, within_tolerance=%s)",
-                self.topic,
-                max_observed_lag,
-                self.max_lag,
-                within_tolerance,
-            )
-            return within_tolerance
-        except Exception as e:
-            self.log.warning("Kafka lag probe failed: %s", e)
-            return False
 
 
 with DAG(

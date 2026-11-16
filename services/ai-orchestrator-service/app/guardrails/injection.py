@@ -100,6 +100,10 @@ class InjectionDetector:
     # Public API
     # ------------------------------------------------------------------
 
+    def check(self, text: str) -> Tuple[bool, float, str]:
+        """Check *text* for prompt injection indicators (alias for ``detect``)."""
+        return self.detect(text)
+
     def detect(self, text: str) -> Tuple[bool, float, str]:
         """Analyse *text* for prompt injection indicators.
 

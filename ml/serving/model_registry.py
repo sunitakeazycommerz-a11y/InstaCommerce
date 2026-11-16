@@ -8,15 +8,52 @@ with support for:
 * Per-model kill switches for instant rollback to rule-based fallback
 """
 
-import json
+import hashlib
 import logging
-import os
 import random
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .predictor import BasePredictor, ModelMetadata, ModelStatus
+from .integrity import CHECKSUM_FILENAME
+from .predictor import BasePredictor, ModelStatus
 
 logger = logging.getLogger(__name__)
+
+
+class ABTestRouter:
+    """Deterministic A/B traffic router using (user_id, model_name) hashing."""
+
+    def __init__(self, routing: Optional[Dict[str, Dict[str, float]]] = None) -> None:
+        self._routing: Dict[str, Dict[str, float]] = routing or {}
+
+    def set_variants(self, model_name: str, variants: Dict[str, float]) -> None:
+        for v, w in variants.items():
+            if w < 0:
+                raise ValueError(f"Negative weight for variant '{v}': {w}")
+        self._routing[model_name] = dict(variants)
+
+    def route(
+        self,
+        user_id: str,
+        model_name: str,
+        variants: Optional[Dict[str, float]] = None,
+    ) -> Optional[str]:
+        weights_map = variants if variants is not None else self._routing.get(model_name)
+        if not weights_map:
+            return None
+        total = sum(weights_map.values())
+        if total <= 0:
+            return None
+        digest = hashlib.sha256(f"{user_id}:{model_name}".encode("utf-8")).digest()
+        bucket = int.from_bytes(digest[:8], "big") / float(1 << 64)
+        cumulative = 0.0
+        chosen: Optional[str] = None
+        for variant, weight in weights_map.items():
+            chosen = variant
+            cumulative += weight / total
+            if bucket < cumulative:
+                return variant
+        return chosen
 
 
 class ModelRegistry:
@@ -64,7 +101,12 @@ class ModelRegistry:
     # Retrieval
     # ------------------------------------------------------------------
 
-    def get(self, model_name: str, version: Optional[str] = None) -> BasePredictor:
+    def get(
+        self,
+        model_name: str,
+        version: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> BasePredictor:
         """Retrieve a registered predictor.
 
         If a kill switch is active for the model the predictor's status
@@ -87,6 +129,21 @@ class ModelRegistry:
         if self._kill_switches.get(model_name, False):
             predictor.status = ModelStatus.DEGRADED
             return predictor
+
+        target_version = version
+        if target_version is None and model_name in self._ab_routing:
+            target_version = self.resolve_version(model_name, user_id=user_id)
+
+        if target_version is not None and target_version != "latest":
+            model_path = Path(predictor.model_dir)
+            version_dir = model_path / target_version
+            if version_dir.exists() and predictor._version != target_version:
+                predictor._load_model(target_version)
+                predictor._version = target_version
+                if predictor._model is not None:
+                    predictor.status = ModelStatus.READY
+            elif predictor._version != target_version:
+                predictor._version = target_version
 
         return predictor
 
@@ -118,7 +175,7 @@ class ModelRegistry:
         self._ab_routing[model_name] = routing
         logger.info("A/B routing updated", extra={"model": model_name, "routing": routing})
 
-    def resolve_version(self, model_name: str) -> Optional[str]:
+    def resolve_version(self, model_name: str, user_id: Optional[str] = None) -> Optional[str]:
         """Sample a version according to A/B routing weights.
 
         Returns ``None`` if no routing is configured (use default version).
@@ -126,6 +183,8 @@ class ModelRegistry:
         routing = self._ab_routing.get(model_name)
         if not routing:
             return None
+        if user_id is not None:
+            return ABTestRouter(self._ab_routing).route(user_id=user_id, model_name=model_name)
         versions = list(routing.keys())
         weights = list(routing.values())
         total = sum(weights)
@@ -206,10 +265,6 @@ class ModelRegistry:
         that indicates whether the model's artifacts passed SHA-256
         checksum verification at load time.
         """
-        from pathlib import Path
-
-        from .integrity import CHECKSUM_FILENAME
-
         model_status: Dict[str, Any] = {}
         for name, predictor in self._models.items():
             entry = predictor.health()

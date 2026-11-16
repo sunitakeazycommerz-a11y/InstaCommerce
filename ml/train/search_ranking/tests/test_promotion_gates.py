@@ -1,6 +1,5 @@
 """Unit tests for Search Ranking automated promotion gates and degradation alerting."""
 
-import pytest
 from ml.train.search_ranking.train import _check_promotion_gates
 
 

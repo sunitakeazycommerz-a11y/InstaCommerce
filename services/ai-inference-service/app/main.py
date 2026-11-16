@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from math import exp
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Literal, cast
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Literal
 import hashlib
 import json
 import logging
@@ -14,12 +14,22 @@ import random
 import threading
 import time
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.auth import InternalServiceAuthMiddleware
 from app.batching import DynamicBatcher
+from app.core.shadow import dispatch_shadow_prediction
+from app.features.redis_client import (
+    FeatureFetcher,
+    RedisFeatureClient,
+    create_child_trace_context,
+    reset_current_trace_context,
+    set_current_trace_context,
+)
 from app.models import (
     DemandModel, DemandFeatures, DemandResponse,
     PersonalizationModel, PersonalizationFeatures, PersonalizationResponse,
@@ -259,39 +269,37 @@ class UnavailableFeatureStoreClient(FeatureStoreClient):
 class RedisFeatureStoreClient(FeatureStoreClient):
     backend = "redis"
 
-    def __init__(self, url: str, prefix: str) -> None:
-        import redis
+    def __init__(self, url: str, prefix: str = "user:features", redis_client: Optional[Any] = None) -> None:
+        self._prefix = prefix.rstrip(":") if prefix else "user:features"
+        self._delegate = RedisFeatureClient(
+            redis_client=redis_client,
+            redis_url=url if redis_client is None else None,
+            prefix=self._prefix,
+        )
+        self._client = self._delegate._client
 
-        self._client = redis.Redis.from_url(url, decode_responses=True)
-        self._prefix = prefix.rstrip(":")
+    @property
+    def last_span(self) -> Optional[Dict[str, Any]]:
+        return self._delegate.last_span
+
+    @property
+    def recorded_spans(self) -> List[Dict[str, Any]]:
+        return self._delegate.recorded_spans
 
     def _key(self, entity_id: str) -> str:
         return f"{self._prefix}:{entity_id}" if self._prefix else entity_id
 
     def get_features(self, entity_id: str, feature_names: Sequence[str]) -> Dict[str, float]:
-        key = self._key(entity_id)
-        if feature_names:
-            values = cast(List[Any], self._client.hmget(key, list(feature_names)))
-            return {
-                name: float(value)
-                for name, value in zip(feature_names, values)
-                if value is not None
-            }
-        data = cast(Dict[str, Any], self._client.hgetall(key))
-        return {name: float(value) for name, value in data.items()}
+        return self._delegate.get_features(entity_id, feature_names)
+
+    def get_user_features(self, user_id: str, traceparent: Optional[str] = None) -> Dict[str, Any]:
+        return self._delegate.get_user_features(user_id, traceparent=traceparent)
 
     def health(self) -> Dict[str, str]:
-        try:
-            self._client.ping()
-            return {"backend": self.backend, "status": "ok"}
-        except Exception:
-            return {"backend": self.backend, "status": "degraded"}
+        return self._delegate.health()
 
     def close(self) -> None:
-        try:
-            self._client.close()
-        except Exception:
-            pass
+        self._delegate.close()
 
 
 class BigQueryFeatureStoreClient(FeatureStoreClient):
@@ -591,7 +599,11 @@ def build_cache_key(model_name: str, model_version: str, features: Dict[str, flo
 
 
 def maybe_run_shadow(
-    model_name: str, features: Dict[str, float], primary_version: str, registry: ModelRegistry
+    model_name: str,
+    features: Dict[str, float],
+    primary_version: str,
+    registry: ModelRegistry,
+    primary_output: Optional[Dict[str, Any]] = None,
 ) -> None:
     shadow_version = settings.shadow_models.get(model_name)
     if not shadow_version or shadow_version == primary_version:
@@ -603,11 +615,16 @@ def maybe_run_shadow(
         shadow_model = registry.get(model_name, shadow_version)
     except KeyError:
         return
-    try:
-        perform_inference(model_name, features, shadow_model)
-        SHADOW_REQUESTS.labels(model=model_name, version=shadow_model.version).inc()
-    except Exception as exc:
-        logger.warning("Shadow inference failed for %s: %s", model_name, exc.__class__.__name__)
+    SHADOW_REQUESTS.labels(model=model_name, version=shadow_model.version).inc()
+    dispatch_shadow_prediction(
+        model_name,
+        shadow_model.version,
+        perform_inference,
+        primary_output,
+        model_name,
+        features,
+        shadow_model,
+    )
 
 
 def execute_inference(
@@ -631,7 +648,7 @@ def execute_inference(
             cache.set(key, result)
     else:
         result = perform_inference(model_name, features, model_config)
-    maybe_run_shadow(model_name, features, model_config.version, registry)
+    maybe_run_shadow(model_name, features, model_config.version, registry, primary_output=result)
     return result, cache_hit
 
 
@@ -731,16 +748,44 @@ def process_batch_item(
         ).observe(time.perf_counter() - start)
 
 
+class TraceContextMiddleware(BaseHTTPMiddleware):
+    """W3C traceparent context propagation middleware."""
+
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
+        incoming_tp = request.headers.get("traceparent")
+        incoming_trace_id = request.headers.get("x-trace-id")
+        ctx = create_child_trace_context(incoming_tp, incoming_trace_id)
+        request.state.trace_context = ctx
+        request.state.trace_id = ctx["trace_id"]
+        request.state.span_id = ctx["span_id"]
+        request.state.traceparent = ctx["traceparent"]
+        token = set_current_trace_context(ctx)
+        try:
+            response: Response = await call_next(request)
+            response.headers["traceparent"] = ctx["traceparent"]
+            response.headers["X-Trace-Id"] = ctx["trace_id"]
+            return response
+        finally:
+            reset_current_trace_context(token)
+
+
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     registry = ModelRegistry.from_sources(DEFAULT_WEIGHTS, load_registry_data())
     cache = InferenceCache(settings.cache_max_items, settings.cache_ttl_seconds) if settings.cache_enabled else None
     feature_store = build_feature_store(settings)
+    redis_feature_client = (
+        feature_store._delegate
+        if isinstance(feature_store, RedisFeatureStoreClient)
+        else (RedisFeatureClient(redis_url=settings.redis_url) if settings.redis_url else None)
+    )
+    feature_fetcher = FeatureFetcher(redis_client=redis_feature_client, cache=cache)
     batcher = DynamicBatcher(max_batch_size=64, max_wait_ms=5.0)
     await batcher.start()
     app_instance.state.registry = registry
     app_instance.state.cache = cache
     app_instance.state.feature_store = feature_store
+    app_instance.state.feature_fetcher = feature_fetcher
     app_instance.state.batcher = batcher
     app_instance.state.demand_model = DemandModel()
     app_instance.state.personalization_model = PersonalizationModel()
@@ -751,12 +796,13 @@ async def lifespan(app_instance: FastAPI):
     finally:
         await batcher.stop()
         feature_store.close()
+        feature_fetcher.close()
 
 
 app = FastAPI(title="AI Inference Service", version="1.1.0", lifespan=lifespan)
 
-from app.auth import InternalServiceAuthMiddleware
 app.add_middleware(InternalServiceAuthMiddleware)
+app.add_middleware(TraceContextMiddleware)
 
 app.state.tracer = init_telemetry(app)
 

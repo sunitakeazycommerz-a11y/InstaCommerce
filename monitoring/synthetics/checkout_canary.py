@@ -23,9 +23,18 @@ CANARY_FAILURE_TOTAL = Counter("synthetic_canary_failure_total", "Total syntheti
 
 
 class SyntheticCheckoutCanary:
-    def __init__(self, base_url: str = None):
+    def __init__(self, base_url: str | None = None, allow_mock: bool | None = None):
         self.base_url = base_url or os.getenv("API_BASE_URL", "http://localhost:8080")
+        if allow_mock is None:
+            self.allow_mock = os.getenv("CANARY_ALLOW_MOCK", "true").lower() == "true"
+        else:
+            self.allow_mock = allow_mock
         self.consecutive_failures = 0
+
+    def _check_response(self, resp: requests.Response, step_name: str) -> None:
+        threshold = 500 if self.allow_mock else 400
+        if resp.status_code >= threshold:
+            raise RuntimeError(f"{step_name} failed with status {resp.status_code}")
 
     def run_checkout_journey(self) -> bool:
         correlation_id = f"canary-{uuid.uuid4()}"
@@ -38,44 +47,53 @@ class SyntheticCheckoutCanary:
 
         start_time = time.time()
         journey_success = False
+        product_id = "00000000-0000-0000-0000-000000000002"
 
         try:
             # Step 1: Search Catalog
             search_url = f"{self.base_url}/api/v1/search"
-            # Note: During mock/offline runs, we tolerate 200 or 404 mock responses if upstream endpoints are stubbed
-            resp = requests.get(search_url, params={"q": "milk"}, headers=headers, timeout=5)
-            if resp.status_code >= 500:
-                raise RuntimeError(f"Search endpoint failed with status {resp.status_code}")
+            resp = requests.get(
+                search_url,
+                params={"query": "milk", "q": "milk"},
+                headers=headers,
+                timeout=5,
+            )
+            self._check_response(resp, "Search endpoint")
 
             # Step 2: Add Item to Cart
             cart_url = f"{self.base_url}/api/v1/cart/items"
-            cart_payload = {"productId": "prod-canary-milk-001", "quantity": 1}
+            cart_payload = {
+                "productId": product_id,
+                "productName": "Canary Organic Milk 1L",
+                "sku": "SKU-CANARY-01",
+                "quantity": 1,
+                "unitPriceCents": 499,
+            }
             resp = requests.post(cart_url, json=cart_payload, headers=headers, timeout=5)
-            if resp.status_code >= 500:
-                raise RuntimeError(f"Add to cart failed with status {resp.status_code}")
+            self._check_response(resp, "Add to cart")
 
             # Step 3: Reserve Inventory
-            reserve_url = f"{self.base_url}/api/v1/inventory/reservations"
+            reserve_url = f"{self.base_url}/api/v1/inventory/reserve"
             reserve_payload = {
-                "reservationId": str(uuid.uuid4()),
+                "idempotencyKey": f"{correlation_id}-reserve",
                 "storeId": "00000000-0000-0000-0000-000000000001",
-                "items": [{"sku": "SKU-CANARY-01", "quantity": 1}],
+                "items": [{"productId": product_id, "quantity": 1}],
             }
             resp = requests.post(reserve_url, json=reserve_payload, headers=headers, timeout=5)
-            if resp.status_code >= 500:
-                raise RuntimeError(f"Inventory reservation failed with status {resp.status_code}")
+            self._check_response(resp, "Inventory reservation")
 
             # Step 4: Sandbox Payment Authorization
             payment_url = f"{self.base_url}/api/v1/payments/authorize"
             payment_payload = {
                 "amountCents": 499,
                 "currency": "USD",
+                "orderId": str(uuid.uuid4()),
                 "paymentMethod": "sandbox_card",
+                "idempotencyKey": f"{correlation_id}-payment",
                 "sandbox": True,
             }
             resp = requests.post(payment_url, json=payment_payload, headers=headers, timeout=5)
-            if resp.status_code >= 500:
-                raise RuntimeError(f"Payment authorization failed with status {resp.status_code}")
+            self._check_response(resp, "Payment authorization")
 
             journey_success = True
             self.consecutive_failures = 0

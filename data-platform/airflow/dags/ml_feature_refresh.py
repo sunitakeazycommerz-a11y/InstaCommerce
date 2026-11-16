@@ -5,9 +5,6 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.providers.google.cloud.operators.bigquery import (
-    BigQueryInsertJobOperator,
-)
 
 def failure_alert(context):
     try:
@@ -111,8 +108,6 @@ with DAG(
 
     def _validate_feature_freshness(**context):
         """Validate that all features were updated within the threshold."""
-        from datetime import timezone
-
         from google.cloud import bigquery
 
         client = bigquery.Client(project=PROJECT_ID)

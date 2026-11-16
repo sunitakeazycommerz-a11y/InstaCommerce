@@ -261,22 +261,7 @@ def build_pipeline(options):
 
         events = parsed.parsed
 
-        # 15-minute session window per user → abandonment detection
-        sessions = (
-            events
-            | "KeyByUser" >> beam.Map(lambda e: (e["user_id"], e))
-            | "SessionWindow"
-            >> beam.WindowInto(
-                Sessions(pipeline_options.session_gap_seconds),
-                trigger=AfterWatermark(),
-                allowed_lateness=Duration(seconds=900),
-                accumulation_mode=AccumulationMode.DISCARDING,
-            )
-            | "AggregateSession" >> beam.CombinePerKey(CartSessionAggregator())
-            | "ExtractSessionValues" >> beam.Values()
-        )
-
-        # Aggregate abandonment rate per zone (re-window into fixed 1-min for output)
+        # Aggregate abandonment rate per zone (15-min session window per user, re-windowed into fixed 1-min for output)
         (
             events
             | "KeyByUserForZone" >> beam.Map(lambda e: (e["user_id"], e))

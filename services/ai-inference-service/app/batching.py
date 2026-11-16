@@ -60,6 +60,7 @@ class DynamicBatcher:
         self.max_batch_size = max_batch_size
         self.max_wait_s = max_wait_ms / 1000.0
         self._queues: Dict[str, asyncio.Queue[_BatchItem]] = {}
+        self._queue: List[_BatchItem] = []
         self._workers: Dict[str, asyncio.Task] = {}
         self._running = False
 
@@ -80,11 +81,27 @@ class DynamicBatcher:
                 self._workers[key] = asyncio.create_task(self._worker_loop(key, queue))
 
     async def stop(self) -> None:
-        """Cancel worker tasks and drain queues."""
+        """Cancel worker tasks, cancel pending futures, and drain queues."""
         self._running = False
         for task in self._workers.values():
             task.cancel()
         self._workers.clear()
+
+        for queue in self._queues.values():
+            while not queue.empty():
+                try:
+                    queued_item = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if hasattr(queued_item, "future") and not queued_item.future.done():
+                    queued_item.future.cancel()
+
+        for queued_item in list(self._queue):
+            if hasattr(queued_item, "future") and not queued_item.future.done():
+                queued_item.future.cancel()
+
+        self._queue.clear()
+        self._queues.clear()
 
     async def submit(
         self,
@@ -107,6 +124,7 @@ class DynamicBatcher:
             future=future,
             enqueued_at=time.perf_counter(),
         )
+        self._queue.append(item)
         await queue.put(item)
         return await future
 
@@ -201,7 +219,13 @@ class DynamicBatcher:
                         "bias": bias,
                         "model_version": version,
                     }
-                item.future.set_result(res)
+                if not item.future.done():
+                    item.future.set_result(res)
             except Exception as exc:
                 if not item.future.done():
                     item.future.set_exception(exc)
+            finally:
+                try:
+                    self._queue.remove(item)
+                except ValueError:
+                    pass

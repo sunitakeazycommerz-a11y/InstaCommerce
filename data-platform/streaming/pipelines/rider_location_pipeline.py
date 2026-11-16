@@ -40,7 +40,7 @@ class RiderPipelineOptions(PipelineOptions):
         )
         parser.add_argument(
             "--kafka_topic",
-            default="rider.location",
+            default="rider.location.updates",
             help="Kafka topic to consume rider location pings from",
         )
         parser.add_argument(

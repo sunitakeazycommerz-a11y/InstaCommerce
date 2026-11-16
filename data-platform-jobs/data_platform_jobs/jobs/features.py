@@ -21,7 +21,7 @@ def run_feature_refresh(context: JobContext) -> None:
             COUNT(DISTINCT order_id) AS orders_30d,
             AVG(total_cents) / 100.0 AS avg_order_value_30d
         FROM `{settings.project_id}.{settings.bq_staging_dataset}.stg_orders`
-        WHERE DATE(placed_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+        WHERE DATE(placed_at) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
         GROUP BY user_id
         """,
         f"""
@@ -31,7 +31,7 @@ def run_feature_refresh(context: JobContext) -> None:
             COUNT(DISTINCT order_id) AS sales_30d,
             AVG(quantity) AS avg_units_per_order
         FROM `{settings.project_id}.{settings.bq_staging_dataset}.stg_orders`
-        WHERE DATE(placed_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+        WHERE DATE(placed_at) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
         GROUP BY product_id
         """,
     ]

@@ -1,24 +1,17 @@
 """Unit tests for the data-platform Great Expectations quality check runner."""
-import json
-import tempfile
-from pathlib import Path
-
 from unittest.mock import MagicMock
 
 import pytest
-import yaml
 
 import run_quality_checks
 from run_quality_checks import (
     build_bigquery_context,
     discover_suites,
-    load_fixture_data,
     load_suite_config,
     run_suite_bigquery,
     run_suite_on_fixture,
     validate_expectation,
     FIXTURES_DIR,
-    SUITES_DIR,
 )
 
 

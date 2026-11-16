@@ -1,7 +1,10 @@
 import asyncio
+import time
 import pytest
 import numpy as np
 from app.batching import DynamicBatcher
+from app.core.batching import DynamicBatcher as CoreDynamicBatcher, _BatchItem
+from app.core.shadow import ShadowRunner
 from app.models.onnx_runner import ManagedOnnxSession, check_memory_threshold, get_current_rss_bytes
 
 
@@ -76,3 +79,54 @@ def test_check_memory_threshold_alert():
     # Test tight threshold trigger
     exceeded_high, rss, limit = check_memory_threshold(0.0001)
     assert exceeded_high is True
+
+
+@pytest.mark.asyncio
+async def test_dynamic_batcher_stop_cancels_queued_futures():
+    """Verify DynamicBatcher.stop() cancels remaining queued futures before clearing _queue."""
+    batcher = CoreDynamicBatcher(max_batch_size=64, max_wait_ms=500.0)
+    loop = asyncio.get_running_loop()
+    fut1 = loop.create_future()
+    fut2 = loop.create_future()
+
+    item1 = _BatchItem(model_name="eta", features={}, model_config=None, future=fut1, enqueued_at=0.0)
+    item2 = _BatchItem(model_name="eta", features={}, model_config=None, future=fut2, enqueued_at=0.0)
+    batcher._queue.append(item1)
+    q = batcher._get_queue("eta:v1")
+    await q.put(item2)
+
+    await batcher.stop()
+
+    assert fut1.cancelled()
+    assert fut2.cancelled()
+    assert len(batcher._queue) == 0
+
+
+@pytest.mark.asyncio
+async def test_shadow_runner_async_create_task_and_metrics():
+    """Verify shadow prediction runs via asyncio.create_task without blocking primary and tracks agreement."""
+    runner = ShadowRunner(tolerance=0.1)
+
+    async def slow_agreeing_shadow() -> dict[str, float]:
+        await asyncio.sleep(0.05)
+        return {"ranking_score": 0.82}
+
+    async def diverging_shadow() -> dict[str, float]:
+        await asyncio.sleep(0.01)
+        return {"ranking_score": 0.10}
+
+    start = time.perf_counter()
+    task1 = runner.dispatch("ranking", "v2", slow_agreeing_shadow, {"ranking_score": 0.80})
+    elapsed = time.perf_counter() - start
+    # Dispatch via create_task must return immediately (< 20ms despite 50ms sleep)
+    assert elapsed < 0.025
+    assert task1 is not None
+
+    task2 = runner.dispatch("ranking", "v2", diverging_shadow, {"ranking_score": 0.80})
+    assert task2 is not None
+
+    await asyncio.gather(task1, task2)
+    assert runner.agreement_count == 1
+    assert runner.divergence_count == 1
+    assert runner.stats["total"] == 2
+    assert runner.stats["agreement_rate"] == 0.5

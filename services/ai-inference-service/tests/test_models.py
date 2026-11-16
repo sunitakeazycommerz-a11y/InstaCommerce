@@ -1,7 +1,14 @@
+from unittest.mock import MagicMock
+
 from app.models.demand_model import DemandModel, DemandFeatures
 from app.models.personalization_model import PersonalizationModel, PersonalizationFeatures, RecommendationSurface
 from app.models.clv_model import CLVModel, CLVFeatures, CLVSegment
-from app.models.dynamic_pricing_model import DynamicPricingModel, PricingFeatures
+from app.models.dynamic_pricing_model import (
+    DynamicPricingModel,
+    PricingFeatures,
+    _apply_guardrails,
+    clamp_multiplier,
+)
 from app.models.eta_model import ETAModel, ETAFeatures, ETAStage
 from app.models.fraud_model import FraudModel, FraudFeatures, FraudDecision
 from app.models.ranking_model import RankingModel, RankingFeatures
@@ -111,3 +118,46 @@ def test_personalization_model():
     response = model.predict(features)
     assert response.user_id == "user-123"
     assert len(response.recommendations) > 0
+
+
+def test_dynamic_pricing_floor_clamped_to_ceiling():
+    """Verify floor = min(floor, ceiling) after min_margin_pct so np.clip never inverts."""
+    # min_margin_pct pushes floor (1.0 + 0.95 = 1.95) above ceiling (1.5)
+    clamped_mult = clamp_multiplier(raw_multiplier=1.2, floor=0.8, ceiling=1.5, min_margin_pct=0.95)
+    assert clamped_mult == 1.5
+
+    # Fee guardrails where cost + margin exceeds 2x base_fee ceiling
+    fee, guardrail = _apply_guardrails(
+        fee_cents=400,
+        cost_cents=900,
+        min_margin_cents=300,
+        base_fee_cents=500,  # ceiling = 1000, raw floor = 1200 -> clamped floor = 1000
+        min_margin_pct=0.5,
+    )
+    assert fee == 1000
+    assert guardrail == "price_floor"
+
+
+def test_personalization_predict_ml_blends_model_scores():
+    """Verify _predict_ml calls self._model.predict / predict_proba and blends with feature scores."""
+    model = PersonalizationModel()
+    mock_estimator = MagicMock()
+    mock_estimator.predict.return_value = [0.1, 0.95, 0.2]
+    model._model = mock_estimator
+
+    features = PersonalizationFeatures(
+        user_id="user-ml-blend",
+        surface=RecommendationSurface.HOMEPAGE,
+        candidate_product_ids=["prod-a", "prod-b", "prod-c"],
+        user_embedding=[0.5, 0.5, 0.5, 0.5],
+        candidate_embeddings=[
+            [0.4, 0.4, 0.4, 0.4],
+            [0.4, 0.4, 0.4, 0.4],
+            [0.4, 0.4, 0.4, 0.4],
+        ],
+    )
+    response = model.predict(features)
+    assert mock_estimator.predict.called
+    assert response.method == "ml"
+    # prod-b has highest ML score (0.95) with identical embeddings, so it ranks #1
+    assert response.recommendations[0]["product_id"] == "prod-b"

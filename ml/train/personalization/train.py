@@ -13,20 +13,25 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
+import pickle
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, List, Optional, Tuple, cast
 
 try:
     import mlflow  # type: ignore
 except (ImportError, OSError):
     mlflow = None
 
+try:
+    import torch as _torch  # type: ignore
+    torch: Any = _torch
+except (ImportError, OSError):
+    torch = None
+
 import numpy as np
 import pandas as pd
 import yaml
 from google.cloud import bigquery  # type: ignore
-from sklearn.metrics import ndcg_score
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -370,12 +375,31 @@ class PersonalizationTrainer:
         np.save(export_dir / "user_embeddings.npy", self.user_tower)
         np.save(export_dir / "item_embeddings.npy", self.item_tower)
 
+        user_id_map = {uid: i for i, uid in enumerate(self.user_embeddings.keys())}
+        item_id_map = {iid: i for i, iid in enumerate(self.item_embeddings.keys())}
+
         with open(export_dir / "user_id_map.json", "w") as f:
-            json.dump({uid: i for i, uid in enumerate(self.user_embeddings.keys())}, f)
+            json.dump(user_id_map, f)
         with open(export_dir / "item_id_map.json", "w") as f:
-            json.dump({iid: i for i, iid in enumerate(self.item_embeddings.keys())}, f)
+            json.dump(item_id_map, f)
         with open(export_dir / "popular_items.json", "w") as f:
             json.dump(self.popular_items[:50], f)
+        with open(export_dir / "feature_vocab.json", "w") as f:
+            json.dump(
+                {
+                    "user_id_map": user_id_map,
+                    "item_id_map": item_id_map,
+                    "popular_items": self.popular_items[:50],
+                },
+                f,
+            )
+
+        state_dict = {"user_tower": self.user_tower, "item_tower": self.item_tower}
+        if torch is not None:
+            torch.save(state_dict, export_dir / "model.pt")
+        else:
+            with open(export_dir / "model.pt", "wb") as f:
+                pickle.dump(state_dict, f)
 
         logger.info("Model exported to %s", export_dir)
 
@@ -429,6 +453,9 @@ def main():
     gates = config.get("promotion_gates", {})
     gate_passed = _check_promotion_gates(metrics, gates)
 
+    output_dir = Path(args.output_dir) / config["version"]
+    trainer.export(str(output_dir))
+
     if mlflow is not None:
         with mlflow.start_run(run_name=args.run_name):
             mlflow.log_params({
@@ -439,9 +466,6 @@ def main():
             mlflow.log_param("version", config["version"])
             mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
             mlflow.log_metric("promotion_gate_passed", int(gate_passed))
-
-            output_dir = Path(args.output_dir) / config["version"]
-            trainer.export(str(output_dir))
             mlflow.log_artifacts(str(output_dir))
             mlflow.log_artifact(args.config)
 

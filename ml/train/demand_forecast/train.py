@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,7 +19,7 @@ import pandas as pd
 import yaml
 from google.cloud import bigquery  # type: ignore
 from prophet import Prophet  # type: ignore
-from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
+from sklearn.metrics import mean_absolute_error
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")

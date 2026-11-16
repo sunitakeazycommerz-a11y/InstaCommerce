@@ -13,9 +13,15 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Dict, Optional
 
 from app.graph.state import AgentState
+
+try:
+    import redis.asyncio as aioredis  # type: ignore[import-untyped]
+except ImportError:
+    aioredis = None  # type: ignore[assignment]
 
 logger = logging.getLogger("ai_orchestrator.checkpoints")
 
@@ -99,85 +105,107 @@ class RedisCheckpointSaver(CheckpointSaver):
         self,
         redis_url: str = "redis://localhost:6379/0",
         ttl_s: int = _DEFAULT_TTL_S,
+        retry_cooldown_s: float = 15.0,
+        max_cooldown_s: float = 300.0,
     ) -> None:
         self._redis_url = redis_url
         self._ttl_s = ttl_s
+        self._retry_cooldown_s = max(0.0, retry_cooldown_s)
+        self._max_cooldown_s = max(self._retry_cooldown_s, max_cooldown_s)
         self._redis: Any = None
         self._fallback = InMemoryCheckpointSaver()
         self._use_fallback = False
+        self._init_failed = False
+        self._consecutive_failures = 0
+        self._next_retry_at = 0.0
+
+    def _mark_redis_failure(self) -> None:
+        self._redis = None
+        self._init_failed = True
+        self._use_fallback = True
+        backoff = min(
+            self._retry_cooldown_s * (2 ** self._consecutive_failures),
+            self._max_cooldown_s,
+        )
+        self._consecutive_failures += 1
+        self._next_retry_at = time.monotonic() + backoff
 
     async def _get_redis(self) -> Any:
-        """Lazy-initialise the Redis client."""
-        if self._redis is not None:
+        """Lazy-initialise Redis with exponential-backoff cooldown retry on transient failure."""
+        if self._redis is not None and not self._init_failed and not self._use_fallback:
             return self._redis
-        try:
-            from redis.asyncio import Redis  # type: ignore[import-untyped]
 
-            self._redis = Redis.from_url(
+        if self._init_failed or self._use_fallback:
+            if time.monotonic() < self._next_retry_at:
+                return None
+
+        if aioredis is None:
+            self._mark_redis_failure()
+            return None
+
+        try:
+            client = aioredis.Redis.from_url(
                 self._redis_url,
                 decode_responses=True,
                 socket_connect_timeout=2.0,
                 socket_timeout=2.0,
             )
-            await self._redis.ping()
+            await client.ping()
+            self._redis = client
+            self._init_failed = False
+            self._use_fallback = False
+            self._consecutive_failures = 0
+            self._next_retry_at = 0.0
             logger.info("checkpoint.redis.connected", extra={"url": self._redis_url})
             return self._redis
         except Exception:
             logger.warning(
                 "checkpoint.redis.unavailable",
-                extra={"url": self._redis_url},
+                extra={"url": self._redis_url, "failures": self._consecutive_failures + 1},
             )
-            self._use_fallback = True
+            self._mark_redis_failure()
             return None
 
     async def save(self, thread_id: str, state: AgentState) -> None:
-        if self._use_fallback:
+        redis = await self._get_redis()
+        if redis is None:
             await self._fallback.save(thread_id, state)
             return
         try:
-            redis = await self._get_redis()
-            if redis is None:
-                await self._fallback.save(thread_id, state)
-                return
             key = f"{self._KEY_PREFIX}{thread_id}"
             await redis.setex(key, self._ttl_s, state.model_dump_json())
             logger.debug("checkpoint.save.redis", extra={"thread_id": thread_id})
         except Exception:
             logger.warning("checkpoint.save.redis_error", extra={"thread_id": thread_id})
-            self._use_fallback = True
+            self._mark_redis_failure()
             await self._fallback.save(thread_id, state)
 
     async def load(self, thread_id: str) -> Optional[AgentState]:
-        if self._use_fallback:
+        redis = await self._get_redis()
+        if redis is None:
             return await self._fallback.load(thread_id)
         try:
-            redis = await self._get_redis()
-            if redis is None:
-                return await self._fallback.load(thread_id)
             key = f"{self._KEY_PREFIX}{thread_id}"
             raw = await redis.get(key)
             if raw is None:
-                return None
+                return await self._fallback.load(thread_id)
             return AgentState.model_validate_json(raw)
         except Exception:
             logger.warning("checkpoint.load.redis_error", extra={"thread_id": thread_id})
-            self._use_fallback = True
+            self._mark_redis_failure()
             return await self._fallback.load(thread_id)
 
     async def delete(self, thread_id: str) -> None:
-        if self._use_fallback:
+        redis = await self._get_redis()
+        if redis is None:
             await self._fallback.delete(thread_id)
             return
         try:
-            redis = await self._get_redis()
-            if redis is None:
-                await self._fallback.delete(thread_id)
-                return
             key = f"{self._KEY_PREFIX}{thread_id}"
             await redis.delete(key)
         except Exception:
             logger.warning("checkpoint.delete.redis_error", extra={"thread_id": thread_id})
-            self._use_fallback = True
+            self._mark_redis_failure()
             await self._fallback.delete(thread_id)
 
     async def close(self) -> None:

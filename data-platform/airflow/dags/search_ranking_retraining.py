@@ -7,7 +7,6 @@ and triggers automated shadow mode deployment when candidate beats production ba
 """
 
 from datetime import datetime, timedelta
-import json
 import logging
 
 from airflow import DAG

@@ -7,7 +7,6 @@ to drive dynamic pricing, inventory pre-positioning, and rider scheduling.
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .predictor import BasePredictor, ModelMetadata, ModelStatus, PredictionResult
@@ -24,6 +23,23 @@ class DemandPredictor(BasePredictor):
     Primary model is Facebook Prophet serialised to JSON.  Falls back to
     historical weekly averages when the model is unavailable.
     """
+
+    HOURLY_FACTORS: Dict[int, float] = {
+        0: 0.3,
+        1: 0.3,
+        2: 0.3,
+        3: 0.3,
+        4: 0.3,
+        5: 0.3,
+        11: 1.6,
+        12: 1.6,
+        13: 1.6,
+        14: 1.6,
+        18: 1.8,
+        19: 1.8,
+        20: 1.8,
+        21: 1.8,
+    }
 
     def __init__(
         self,
@@ -98,9 +114,9 @@ class DemandPredictor(BasePredictor):
 
         start = time.monotonic()
         try:
-            import pandas as pd  # type: ignore[import-untyped]
-
             horizon = int(features.get("horizon_hours", _DEFAULT_HORIZON_HOURS))
+            hour_of_day = int(features.get("hour_of_day", 12))
+            hour_multiplier = self.HOURLY_FACTORS.get(hour_of_day, 1.0)
             future = self._model.make_future_dataframe(periods=horizon, freq="h")
             forecast = self._model.predict(future)
 
@@ -109,12 +125,16 @@ class DemandPredictor(BasePredictor):
             hourly_forecast: List[Dict[str, Any]] = [
                 {
                     "ds": str(row["ds"]),
-                    "yhat": round(float(row["yhat"]), 1),
-                    "yhat_lower": round(float(row["yhat_lower"]), 1),
-                    "yhat_upper": round(float(row["yhat_upper"]), 1),
+                    "yhat": round(float(row["yhat"]) * self.HOURLY_FACTORS.get((hour_of_day + idx) % 24, 1.0), 1),
+                    "yhat_lower": round(float(row["yhat_lower"]) * self.HOURLY_FACTORS.get((hour_of_day + idx) % 24, 1.0), 1),
+                    "yhat_upper": round(float(row["yhat_upper"]) * self.HOURLY_FACTORS.get((hour_of_day + idx) % 24, 1.0), 1),
                 }
-                for _, row in tail.iterrows()
+                for idx, (_, row) in enumerate(tail.iterrows())
             ]
+            predicted_demand = round(
+                (hourly_forecast[0]["yhat"] if hourly_forecast else 50.0 * hour_multiplier),
+                1,
+            )
 
             latency_ms = (time.monotonic() - start) * 1_000
             return PredictionResult(
@@ -122,6 +142,7 @@ class DemandPredictor(BasePredictor):
                     "zone_id": features.get("zone_id"),
                     "category": features.get("category"),
                     "horizon_hours": horizon,
+                    "predicted_demand": predicted_demand,
                     "forecast": hourly_forecast,
                     "peak_demand": max(h["yhat"] for h in hourly_forecast),
                 },
@@ -154,8 +175,9 @@ class DemandPredictor(BasePredictor):
         baseline = self._weekly_baselines.get(key, {})
         base_demand = baseline.get(day_of_week, 50.0)
 
-        # Simple hour-of-day multiplier (peak lunch/dinner)
-        hour_multiplier = self._hour_multiplier(hour_of_day)
+        # Hour-of-day multiplier (peak lunch/dinner)
+        hour_multiplier = self.HOURLY_FACTORS.get(hour_of_day, 1.0)
+        predicted_demand = round(base_demand * hour_multiplier, 1)
 
         hourly_forecast: List[Dict[str, Any]] = []
         for h_offset in range(horizon):
@@ -172,6 +194,7 @@ class DemandPredictor(BasePredictor):
                 "zone_id": zone_id,
                 "category": category,
                 "horizon_hours": horizon,
+                "predicted_demand": predicted_demand,
                 "forecast": hourly_forecast,
                 "peak_demand": max(h["demand"] for h in hourly_forecast) if hourly_forecast else 0,
             },
@@ -185,16 +208,10 @@ class DemandPredictor(BasePredictor):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _hour_multiplier(hour: int) -> float:
+    @classmethod
+    def _hour_multiplier(cls, hour: int) -> float:
         """Peak-hour demand multiplier."""
-        if 11 <= hour <= 14:
-            return 1.6  # lunch peak
-        if 18 <= hour <= 21:
-            return 1.8  # dinner peak
-        if 0 <= hour <= 5:
-            return 0.3  # late night
-        return 1.0
+        return cls.HOURLY_FACTORS.get(hour, 1.0)
 
     def _resolve_latest_version(self) -> str:
         if not self.model_dir.exists():

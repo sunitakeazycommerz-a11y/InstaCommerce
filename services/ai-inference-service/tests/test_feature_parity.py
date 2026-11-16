@@ -1,7 +1,16 @@
 """Unit tests for offline-to-online feature store parity and conversion rate windowing."""
 
 import datetime
-from app.features.redis_client import RedisFeatureStoreClient
+import pytest
+from app.features.redis_client import (
+    FeatureFetcher,
+    RedisFeatureClient,
+    RedisFeatureStoreClient,
+    create_child_trace_context,
+    parse_traceparent,
+    reset_current_trace_context,
+    set_current_trace_context,
+)
 from ml.features.feature_definitions import (
     WINDOW_30D_EXCLUDING_TODAY,
     compute_user_conversion_rate_30d,
@@ -222,3 +231,63 @@ def test_get_user_features_handles_corrupt_entries_gracefully():
 
     fake.hashes["user:features:all-corrupt-bytes"] = {b"\xff": b"val"}
     assert client.get_user_features("all-corrupt-bytes")["is_fallback"] is True
+
+
+def test_feature_fetcher_wires_redis_and_falls_back_to_cache():
+    """Verify FeatureFetcher reads user:features:{user_id} from RedisFeatureClient and falls back to cache."""
+    fake = _FakeRedisClient()
+    fake.hashes["user:features:user-redis"] = {
+        "order_count_30d": "9",
+        "conversion_rate_30d": "0.45",
+        "clv": "3200.0",
+    }
+    redis_client = RedisFeatureClient(redis_client=fake)
+    fetcher = FeatureFetcher(redis_client=redis_client, fallback_store={"user-cached": {"order_count_30d": 4, "conversion_rate_30d": 0.2}})
+
+    res_online = fetcher.get_user_features("user-redis")
+    assert res_online["order_count_30d"] == 9
+    assert res_online["conversion_rate_30d"] == 0.45
+
+    # Simulate Redis failure and verify graceful fallback
+    fake.hgetall_error = RuntimeError("redis_down")
+    fake.get_error = RuntimeError("redis_down")
+    res_fallback = fetcher.get_user_features("user-cached")
+    assert res_fallback["order_count_30d"] == 4
+    assert res_fallback["conversion_rate_30d"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_traceparent_propagation_middleware_and_feature_store(client):
+    """Verify W3C traceparent middleware propagation and outgoing feature-store child spans."""
+    incoming_trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+    incoming_span_id = "00f067aa0ba902b7"
+    incoming_tp = f"00-{incoming_trace_id}-{incoming_span_id}-01"
+
+    resp = await client.get("/health", headers={"traceparent": incoming_tp})
+    assert resp.status_code == 200
+    assert resp.headers["X-Trace-Id"] == incoming_trace_id
+
+    resp_tp = resp.headers["traceparent"]
+    parsed_resp = parse_traceparent(resp_tp)
+    assert parsed_resp is not None
+    assert parsed_resp["trace_id"] == incoming_trace_id
+    assert parsed_resp["span_id"] != incoming_span_id
+    assert parsed_resp["flags"] == "01"
+
+    # Verify outgoing feature-store span inherits trace_id and uses current span as parent
+    ctx = create_child_trace_context(incoming_tp)
+    token = set_current_trace_context(ctx)
+    try:
+        fake = _FakeRedisClient()
+        fake.hashes["user:features:u-trace"] = {"order_count_30d": "5"}
+        fs_client = RedisFeatureClient(redis_client=fake)
+        fs_client.get_user_features("u-trace")
+        assert fs_client.last_span is not None
+        assert fs_client.last_span["trace_id"] == incoming_trace_id
+        assert fs_client.last_span["parent_span_id"] == ctx["span_id"]
+        assert fs_client.last_span["span_id"] != ctx["span_id"]
+        prop_headers = fs_client.get_propagation_headers()
+        assert prop_headers["X-Trace-Id"] == incoming_trace_id
+        assert prop_headers["traceparent"].startswith(f"00-{incoming_trace_id}-")
+    finally:
+        reset_current_trace_context(token)

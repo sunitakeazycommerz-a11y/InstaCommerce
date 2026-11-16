@@ -1,10 +1,8 @@
 """Unit tests for A/B Testing ExperimentClient and cross-language consistency."""
 
-import pytest
 from ml.experiments.experiment_client import (
     ExperimentClient,
     compute_bucket_percent,
-    murmur3_32,
 )
 
 

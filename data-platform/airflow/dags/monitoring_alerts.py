@@ -59,30 +59,52 @@ with DAG(
 
     def _check_kafka_lag(**context):
         """Check Kafka consumer group lag for critical topics."""
+        from confluent_kafka import Consumer
         from confluent_kafka.admin import AdminClient
 
-        admin = AdminClient({"bootstrap.servers": "kafka.instacommerce.internal:9092"})
+        bootstrap_servers = "kafka.instacommerce.internal:9092"
+        admin = AdminClient({"bootstrap.servers": bootstrap_servers})
+        consumer = Consumer(
+            {
+                "bootstrap.servers": bootstrap_servers,
+                "group.id": "airflow-kafka-lag-monitor",
+                "enable.auto.commit": False,
+            }
+        )
 
         alerts = []
-        for topic in CRITICAL_TOPICS:
-            try:
-                # Fetch consumer group lag via admin API
-                consumer_groups = admin.list_consumer_groups().result()
-                for group in consumer_groups.valid:
-                    offsets = admin.list_consumer_group_offsets(
-                        [group.group_id]
-                    ).result()
-                    for tp, offset_info in offsets.items():
-                        if tp.topic == topic and offset_info.offset >= 0:
-                            watermarks = admin.get_watermark_offsets(tp)
-                            if watermarks and watermarks[1] >= 0:
-                                lag = max(0, watermarks[1] - offset_info.offset)
-                                if lag > KAFKA_LAG_THRESHOLD:
-                                    alerts.append(
-                                        f"{topic} (group={group.group_id}): lag={lag:,}"
-                                    )
-            except Exception as e:
-                alerts.append(f"{topic}: error checking lag - {str(e)}")
+        try:
+            for topic in CRITICAL_TOPICS:
+                try:
+                    # Fetch consumer group lag via admin API + consumer watermarks
+                    consumer_groups = admin.list_consumer_groups().result()
+                    for group in consumer_groups.valid:
+                        futures_dict = admin.list_consumer_group_offsets(
+                            [group.group_id]
+                        )
+                        for _, future in futures_dict.items():
+                            result_obj = future.result()
+                            offsets_iter = (
+                                result_obj.items()
+                                if isinstance(result_obj, dict)
+                                else [
+                                    (tp, tp)
+                                    for tp in getattr(result_obj, "topic_partitions", []) or []
+                                ]
+                            )
+                            for tp, offset_info in offsets_iter:
+                                if tp.topic == topic and offset_info.offset >= 0:
+                                    watermarks = consumer.get_watermark_offsets(tp)
+                                    if watermarks and watermarks[1] >= 0:
+                                        lag = max(0, watermarks[1] - offset_info.offset)
+                                        if lag > KAFKA_LAG_THRESHOLD:
+                                            alerts.append(
+                                                f"{topic} (group={group.group_id}): lag={lag:,}"
+                                            )
+                except Exception as e:
+                    alerts.append(f"{topic}: error checking lag - {str(e)}")
+        finally:
+            consumer.close()
 
         context["ti"].xcom_push(key="kafka_alerts", value=alerts)
         if alerts:

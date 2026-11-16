@@ -1,7 +1,6 @@
 """Unit tests for ModelMonitor Two-Sample KS-test drift detection and BigQuery feature sampling."""
 
 import numpy as np
-import pytest
 from ml.serving.monitoring import ModelMonitor
 
 

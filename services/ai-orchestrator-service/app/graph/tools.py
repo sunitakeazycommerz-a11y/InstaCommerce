@@ -295,6 +295,7 @@ class ToolRegistry:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self.settings = settings
         self._client: Optional[httpx.AsyncClient] = None
         self._tools: Dict[str, ToolDescriptor] = {}
         self._register_defaults()
@@ -327,8 +328,8 @@ class ToolRegistry:
         defaults: List[ToolDescriptor] = [
             ToolDescriptor(
                 name="catalog.search",
-                description="Full-text product search",
-                base_url=str(s.catalog_service_url),
+                description="Full-text product search via search-service",
+                base_url=str(s.search_service_url),
                 path="/search",
             ),
             ToolDescriptor(
@@ -426,6 +427,18 @@ class ToolRegistry:
                 success=False,
                 error="Circuit breaker open",
             )
+
+        if tool_name == "cart.get":
+            raw_uid = (path_params or {}).get("user_id") if path_params else None
+            if (raw_uid is None or not str(raw_uid).strip()) and params:
+                raw_uid = params.get("user_id")
+            if raw_uid is None or not str(raw_uid).strip():
+                return ToolResult(
+                    tool_name=tool_name,
+                    success=False,
+                    error="user_id_required: empty user_id rejected before cart lookup",
+                )
+            path_params = {**(path_params or {}), "user_id": str(raw_uid).strip()}
 
         url, validation_error = _validate_and_build_url(tool, params=params, path_params=path_params)
         if validation_error or url is None:
@@ -537,6 +550,37 @@ class ToolRegistry:
             error=last_error,
             latency_ms=elapsed_ms,
         )
+
+    async def search_catalog(
+        self,
+        query: str,
+        category: Optional[str] = None,
+        limit: int = 10,
+    ) -> ToolResult:
+        """Search products via search-service ``/search``, falling back to catalog ``/products``."""
+        params: Dict[str, Any] = {"query": query, "q": query, "size": limit}
+        if category:
+            params["category"] = category
+
+        result = await self.call("catalog.search", params=params)
+        if result.success:
+            return result
+
+        fallback_params: Dict[str, Any] = {"q": query, "query": query, "size": limit}
+        if category:
+            fallback_params["category"] = category
+        logger.info("tools.search_catalog.fallback_to_catalog", extra={"error": result.error})
+        return await self.call("catalog.list_products", params=fallback_params)
+
+    async def get_cart(self, user_id: Optional[str]) -> ToolResult:
+        """Fetch cart from ``{cart_service_url}/cart/{user_id}``, rejecting empty user_id."""
+        if not user_id or not str(user_id).strip():
+            return ToolResult(
+                tool_name="cart.get",
+                success=False,
+                error="user_id_required: empty user_id rejected before cart lookup",
+            )
+        return await self.call("cart.get", path_params={"user_id": str(user_id).strip()})
 
     @property
     def available_tools(self) -> List[str]:

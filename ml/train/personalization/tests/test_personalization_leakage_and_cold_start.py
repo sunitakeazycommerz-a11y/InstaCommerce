@@ -1,6 +1,5 @@
 """Unit tests for Personalization target leakage prevention and cold-start fallback."""
 
-import datetime
 import pandas as pd
 import pytest
 from ml.serving.personalization_predictor import PersonalizationPredictor

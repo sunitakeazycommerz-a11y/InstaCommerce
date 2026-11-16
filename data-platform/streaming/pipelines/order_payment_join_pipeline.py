@@ -308,6 +308,21 @@ def build_pipeline(options):
             )
         )
 
+        # Route dead-letter outputs
+        (
+            (
+                parsed_orders[ParseOrderFn.DEAD_LETTER],
+                parsed_payments[ParsePaymentFn.DEAD_LETTER],
+            )
+            | "FlattenDeadLetters" >> beam.Flatten()
+            | "FormatJoinDeadLetter" >> beam.Map(json.dumps)
+            | "WriteJoinDeadLetter"
+            >> beam.io.WriteToText(
+                "gs://instacommerce-dataflow/dead-letter/order-payment-join",
+                file_name_suffix=".json",
+            )
+        )
+
 
 def run():
     """Entry point for the order-payment join pipeline."""

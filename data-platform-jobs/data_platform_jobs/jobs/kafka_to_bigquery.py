@@ -53,9 +53,9 @@ def run_batch_loader(context: JobContext) -> None:
         target_table = f"{settings.project_id}.{settings.bq_raw_dataset}.kafka_events"
         errors = client.insert_rows_json(target_table, rows)
         if errors:
-            logger.warning("BigQuery insert errors: %s", errors)
-        else:
-            logger.info("Inserted %s Kafka events into %s", len(rows), target_table)
+            logger.error("BigQuery insert errors: %s", errors)
+            raise RuntimeError(f"BigQuery insert_rows_json failed: {errors}")
+        logger.info("Inserted %s Kafka events into %s", len(rows), target_table)
         consumer.commit()
     finally:
         consumer.close()

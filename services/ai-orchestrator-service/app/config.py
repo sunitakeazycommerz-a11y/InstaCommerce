@@ -48,11 +48,13 @@ class Settings(BaseSettings):
     internal_service_token: Optional[str] = None
     user_id_header_name: str = "X-User-Id"
 
-    catalog_service_url: Union[AnyHttpUrl, str] = "http://catalog-service:8080"
-    pricing_service_url: Union[AnyHttpUrl, str] = "http://pricing-service:8087"
-    inventory_service_url: Union[AnyHttpUrl, str] = "http://inventory-service:8080"
-    cart_service_url: Union[AnyHttpUrl, str] = "http://cart-service:8088"
-    order_service_url: Union[AnyHttpUrl, str] = "http://order-service:8080"
+    search_service_url: Union[AnyHttpUrl, str] = "http://search-service:8088"
+    catalog_service_url: Union[AnyHttpUrl, str] = "http://catalog-service:8082"
+    pricing_service_url: Union[AnyHttpUrl, str] = "http://pricing-service:8089"
+    inventory_service_url: Union[AnyHttpUrl, str] = "http://inventory-service:8083"
+    cart_service_url: Union[AnyHttpUrl, str] = "http://cart-service:8090"
+    order_service_url: Union[AnyHttpUrl, str] = "http://order-service:8084"
+    redis_url: str = "redis://localhost:6379/0"
 
     llm_api_url: Optional[AnyHttpUrl] = None
     llm_api_key: Optional[str] = None

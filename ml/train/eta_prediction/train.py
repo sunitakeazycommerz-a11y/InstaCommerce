@@ -8,9 +8,7 @@ assigned), in-transit (real-time updates during delivery).
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Any
 
 import lightgbm as lgb
 import mlflow  # type: ignore

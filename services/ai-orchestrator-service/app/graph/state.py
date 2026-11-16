@@ -102,6 +102,7 @@ class AgentState(BaseModel):
     # -- Budget tracking -----------------------------------------------------
     total_tokens_used: int = 0
     total_cost_usd: float = 0.0
+    max_tokens: int = 0
     max_cost_usd: float = 0.50
     max_latency_ms: float = 10000.0
     elapsed_ms: float = 0.0

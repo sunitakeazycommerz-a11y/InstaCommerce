@@ -15,9 +15,12 @@ from pydantic import BaseModel, Field
 
 from app.audit import AuditEventPublisher
 from app.config import Settings
-from app.graph.graph import build_graph
-from app.graph.state import AgentState
+from app.graph.checkpoints import CheckpointSaver, RedisCheckpointSaver
+from app.graph.graph import build_agent_graph
+from app.graph.nodes import AgentExecutionRunner, extract_structured_tool_outputs
+from app.graph.state import AgentState, RiskLevel
 from app.graph.tools import ToolRegistry
+from app.guardrails import InjectionDetector, OutputPolicy, PIIVault
 
 logger = logging.getLogger("ai_orchestrator.api")
 
@@ -29,7 +32,13 @@ router = APIRouter(prefix="/v2", tags=["agent-v2"])
 _settings: Optional[Settings] = None
 _tool_registry: Optional[ToolRegistry] = None
 _compiled_graph: Any = None
+_checkpoint_saver: Optional[CheckpointSaver] = None
 _audit_publisher: Optional[AuditEventPublisher] = None
+
+_injection_detector = InjectionDetector()
+_pii_vault = PIIVault()
+_output_policy = OutputPolicy()
+_execution_runner = AgentExecutionRunner()
 
 
 def _get_settings() -> Settings:
@@ -47,15 +56,46 @@ async def _get_registry() -> ToolRegistry:
     return _tool_registry
 
 
-async def _get_graph() -> Any:
+def set_checkpoint_saver(saver: Optional[CheckpointSaver]) -> None:
+    """Inject the checkpoint saver (e.g., ``RedisCheckpointSaver``) from lifespan."""
+    global _checkpoint_saver, _compiled_graph
+    _checkpoint_saver = saver
+    _compiled_graph = None
+
+
+def set_compiled_graph(graph: Any) -> None:
+    """Set pre-compiled graph explicitly (e.g., from lifespan)."""
     global _compiled_graph
+    _compiled_graph = graph
+
+
+async def _get_graph() -> Any:
+    global _compiled_graph, _checkpoint_saver
     if _compiled_graph is None:
+        settings = _get_settings()
         registry = await _get_registry()
-        _compiled_graph = build_graph(
-            settings=_get_settings(),
+        if _checkpoint_saver is None:
+            _checkpoint_saver = RedisCheckpointSaver(redis_url=settings.redis_url)
+        _compiled_graph = build_agent_graph(
+            settings=settings,
             tool_registry=registry,
+            checkpointer=_checkpoint_saver,
         )
     return _compiled_graph
+
+
+async def shutdown_handlers() -> None:
+    """Close shared v2 handler resources cleanly during lifespan shutdown."""
+    global _tool_registry, _checkpoint_saver, _compiled_graph
+    if _tool_registry is not None:
+        await _tool_registry.close()
+        _tool_registry = None
+    if _checkpoint_saver is not None and hasattr(_checkpoint_saver, "close"):
+        close_fn = getattr(_checkpoint_saver, "close")
+        res = close_fn()
+        if res is not None:
+            await res
+    _compiled_graph = None
 
 
 def set_audit_publisher(publisher: AuditEventPublisher) -> None:
@@ -81,6 +121,7 @@ class AgentRequest(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
     conversation_history: List[Dict[str, str]] = Field(default_factory=list)
     max_cost_usd: float = Field(default=0.50, ge=0.0, le=0.50)
+    max_tokens: int = Field(default=0, ge=0)
     max_latency_ms: float = Field(default=10_000.0, ge=0.0, le=30_000.0)
 
 
@@ -103,33 +144,86 @@ class AgentResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# Shared guarded execution helper
 # ---------------------------------------------------------------------------
 
-@router.post("/agent/invoke", response_model=AgentResponse)
-async def invoke_agent(request: AgentRequest) -> AgentResponse:
-    """Invoke the LangGraph agent for a user query.
-
-    This is the primary v2 endpoint.  It constructs an ``AgentState``,
-    runs the compiled graph, and returns a structured response.
-    """
+async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
+    """Run injection detection, PII redaction, budgeted graph invocation, and output policy."""
     start_ns = time.monotonic_ns()
 
     try:
+        # Step 1: Prompt injection check BEFORE invoking graph
+        is_injection, inj_conf, inj_reason = _injection_detector.check(request.query)
+        if is_injection:
+            logger.warning(
+                "api.assist.injection_blocked",
+                extra={"reason": inj_reason, "confidence": inj_conf, "user_id": request.user_id},
+            )
+            elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+            return AgentResponse(
+                request_id=f"blocked-{int(time.time() * 1000)}",
+                response=(
+                    "Your request could not be processed automatically. "
+                    "I am connecting you with a support specialist."
+                ),
+                intent="unknown",
+                intent_confidence=0.0,
+                risk_level=RiskLevel.CRITICAL.value,
+                escalated=True,
+                escalation_reason=f"Prompt injection detected: {inj_reason}",
+                elapsed_ms=round(elapsed_ms, 1),
+            )
+
+        # Step 2: Redact PII in query BEFORE invoking graph
+        redacted_query, _ = _pii_vault.redact(request.query)
+        redacted_context = _pii_vault.redact_value(request.context)
+
         graph = await _get_graph()
 
         initial_state = AgentState(
-            query=request.query,
+            query=redacted_query,
             user_id=request.user_id,
             session_id=request.session_id,
-            context=request.context,
+            context=redacted_context if isinstance(redacted_context, dict) else {},
             conversation_history=request.conversation_history,
             max_cost_usd=min(request.max_cost_usd, 0.50),  # hard cap
+            max_tokens=request.max_tokens,
             max_latency_ms=request.max_latency_ms,
         )
 
-        result_dict = await graph.ainvoke(initial_state.model_dump())
-        result = AgentState(**result_dict)
+        # Step 3: Enforce request and session budgets via AgentExecutionRunner
+        result = await _execution_runner.run(graph, initial_state)
+
+        # Step 4: Pass structured tool outputs into _output_policy.validate(raw_output)
+        structured_tools = extract_structured_tool_outputs(
+            result.tool_results,
+            tool_calls=getattr(result, "tool_calls", None),
+            context=result.context,
+        )
+        raw_output: Dict[str, Any] = {
+            "intent": result.intent.value,
+            "response": result.response,
+            "message": result.response,
+            **structured_tools,
+        }
+        val_result = _output_policy.validate(raw_output, tool_results=result.tool_results)
+        final_response_text = result.response
+        if val_result.sanitised_output:
+            final_response_text = str(
+                val_result.sanitised_output.get("response")
+                or val_result.sanitised_output.get("message")
+                or final_response_text
+            )
+        escalated = result.needs_escalation
+        escalation_reason = result.escalation_reason
+        if not val_result.is_valid:
+            error_msgs = [v.message for v in val_result.violations if v.severity == "error"]
+            escalated = True
+            escalation_reason = escalation_reason or f"Output policy violations: {'; '.join(error_msgs)}"
+            final_response_text = (
+                "I'm connecting you with a support specialist who can better assist you. "
+                f"Your reference number is {result.request_id}."
+            )
 
         elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000
 
@@ -139,7 +233,7 @@ async def invoke_agent(request: AgentRequest) -> AgentResponse:
                 "request_id": result.request_id,
                 "intent": result.intent.value,
                 "elapsed_ms": round(elapsed_ms, 1),
-                "escalated": result.needs_escalation,
+                "escalated": escalated,
             },
         )
 
@@ -154,14 +248,14 @@ async def invoke_agent(request: AgentRequest) -> AgentResponse:
                     intent=result.intent.value,
                     confidence=result.intent_confidence,
                     risk_level=result.risk_level.value,
-                    query_length=len(request.query),
+                    query_length=len(redacted_query),
                 )
-                if result.needs_escalation:
+                if escalated:
                     await publisher.publish_escalation_triggered(
                         request_id=result.request_id,
                         user_id=request.user_id,
                         session_id=request.session_id,
-                        reason=result.escalation_reason or "unknown",
+                        reason=escalation_reason or "unknown",
                         intent=result.intent.value,
                         risk_level=result.risk_level.value,
                     )
@@ -172,8 +266,8 @@ async def invoke_agent(request: AgentRequest) -> AgentResponse:
                     intent=result.intent.value,
                     intent_confidence=result.intent_confidence,
                     risk_level=result.risk_level.value,
-                    escalated=result.needs_escalation,
-                    escalation_reason=result.escalation_reason,
+                    escalated=escalated,
+                    escalation_reason=escalation_reason,
                     tool_results_count=len(result.tool_results),
                     total_cost_usd=result.total_cost_usd,
                     elapsed_ms=elapsed_ms,
@@ -184,13 +278,13 @@ async def invoke_agent(request: AgentRequest) -> AgentResponse:
 
         return AgentResponse(
             request_id=result.request_id,
-            response=result.response,
+            response=final_response_text,
             intent=result.intent.value,
             intent_confidence=result.intent_confidence,
             risk_level=result.risk_level.value,
             citations=result.response_citations,
-            escalated=result.needs_escalation,
-            escalation_reason=result.escalation_reason,
+            escalated=escalated,
+            escalation_reason=escalation_reason,
             tool_results_summary=[
                 {
                     "tool": tr.tool_name,
@@ -204,7 +298,9 @@ async def invoke_agent(request: AgentRequest) -> AgentResponse:
             elapsed_ms=round(elapsed_ms, 1),
             errors=result.errors,
         )
-    except Exception as exc:
+    except HTTPException:
+        raise
+    except Exception:
         elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000
         logger.exception(
             "api.invoke_agent.error",
@@ -212,8 +308,24 @@ async def invoke_agent(request: AgentRequest) -> AgentResponse:
         )
         raise HTTPException(
             status_code=500,
-            detail=f"Agent invocation failed: {exc}",
+            detail="Agent invocation failed due to an internal error",
         )
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/agent/invoke", response_model=AgentResponse)
+async def invoke_agent(request: AgentRequest) -> AgentResponse:
+    """Invoke the LangGraph agent for a user query."""
+    return await _execute_guarded_agent(request)
+
+
+@router.post("/assist", response_model=AgentResponse)
+async def assist_v2(request: AgentRequest) -> AgentResponse:
+    """v2 assist endpoint applying input guardrails, graph execution, and structured output validation."""
+    return await _execute_guarded_agent(request)
 
 
 @router.get("/agent/health")

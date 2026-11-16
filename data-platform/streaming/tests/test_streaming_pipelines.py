@@ -108,10 +108,17 @@ if "apache_beam" not in sys.modules:
         BooleanCoder=MagicMock(),
         StrUtf8Coder=MagicMock(),
     )
+    class _MockPipelineOptions:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def view_as(self, cls: Any) -> Any:
+            return MagicMock()
+
     mock_pipeline_options = _stub_module(
         "apache_beam.options.pipeline_options",
-        PipelineOptions=MagicMock(),
-        StandardOptions=MagicMock(),
+        PipelineOptions=_MockPipelineOptions,
+        StandardOptions=_MockPipelineOptions,
     )
     mock_options = _stub_module("apache_beam.options", pipeline_options=mock_pipeline_options)
     mock_kafka = _stub_module("apache_beam.io.kafka", ReadFromKafka=MagicMock())
@@ -164,9 +171,9 @@ if streaming_dir not in sys.path:
     sys.path.insert(0, streaming_dir)
 
 from pipelines.order_events_pipeline import (  # noqa: E402
+    DEAD_LETTER_TAG,
     OrderEventParser,
-    OrderVolumeAggregator,
-    SLAComplianceAggregator,
+    ParseAndValidateOrderEvent,
     format_sla_row,
     format_volume_row,
 )
@@ -175,7 +182,6 @@ from pipelines.cart_events_pipeline import (  # noqa: E402
     format_abandonment_row,
 )
 from pipelines.payment_events_pipeline import (  # noqa: E402
-    PaymentSuccessRateAggregator,
     FormatBigQueryInsertFailureFn,
     format_metrics_row,
 )
@@ -184,6 +190,7 @@ from pipelines.inventory_events_pipeline import (  # noqa: E402
     format_velocity_row,
 )
 from pipelines.rider_location_pipeline import (  # noqa: E402
+    RiderPipelineOptions,
     compute_spatial_cell,
     SpatialPreAggregateFn,
     ZoneUtilizationAggregator,
@@ -564,3 +571,40 @@ def test_stateful_order_payment_join_emits_unmatched_on_expiry():
     assert out2[0]["order_total_cents"] == 1999
     assert out2[0]["payment_status"] == "UNKNOWN"
     assert order_state.read() is None
+
+
+def test_order_event_parser_accepts_pascal_case_and_routes_dead_letter():
+    """Verify ParseAndValidateOrderEvent accepts OrderPlaced/OrderDelivered and dead-letters invalid events."""
+    parser = ParseAndValidateOrderEvent()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for evt_type in ("OrderPlaced", "OrderDelivered"):
+        raw = json.dumps({
+            "eventType": evt_type,
+            "orderId": f"ord-{evt_type}",
+            "eventTime": now_iso,
+            "payload": {"userId": "u1", "storeId": "s1", "totalCents": 900},
+        }).encode("utf-8")
+        out = list(parser.process(("k", raw)))
+        assert len(out) == 1
+        assert out[0].value["event_type"] == evt_type
+
+    bad_raw = json.dumps({
+        "eventType": "UnknownEvent",
+        "orderId": "ord-bad",
+        "eventTime": now_iso,
+    }).encode("utf-8")
+    dlq_out = list(parser.process(("k", bad_raw)))
+    assert len(dlq_out) == 1
+    assert dlq_out[0].tag == DEAD_LETTER_TAG
+
+
+def test_rider_location_default_topic():
+    """Verify RiderPipelineOptions defaults --kafka_topic to rider.location.updates."""
+    mock_parser = MagicMock()
+    RiderPipelineOptions._add_argparse_args(mock_parser)
+    topic_calls = [
+        call for call in mock_parser.add_argument.call_args_list
+        if call.args and call.args[0] == "--kafka_topic"
+    ]
+    assert len(topic_calls) == 1
+    assert topic_calls[0].kwargs["default"] == "rider.location.updates"

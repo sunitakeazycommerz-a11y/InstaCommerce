@@ -9,11 +9,16 @@ import logging
 import os
 import re
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # Configurable thresholds
@@ -91,34 +96,35 @@ class OutputPolicy:
 
     def validate(
         self,
-        intent: str,
-        output: Dict[str, Any],
+        intent: Union[str, Dict[str, Any], None] = None,
+        output: Optional[Dict[str, Any]] = None,
         tool_results: Optional[List[Any]] = None,
+        *,
+        raw_output: Optional[Dict[str, Any]] = None,
     ) -> ValidationResult:
         """Check *output* against business policies for *intent*.
 
-        Parameters
-        ----------
-        intent:
-            The classified intent of the user query (e.g. ``"refund"``).
-        output:
-            The AI-generated output dictionary.
-        tool_results:
-            Optional list of tool results used for citation validation.
-
-        Returns
-        -------
-        ValidationResult
-            Aggregate result with any violations and the sanitised output.
+        Supports both ``validate(intent, output, tool_results)`` and
+        ``validate(raw_output)`` (reading ``intent`` from the dict).
         """
+        if raw_output is not None:
+            resolved_output = dict(raw_output)
+            resolved_intent = str(intent if isinstance(intent, str) and intent else resolved_output.get("intent") or "assist")
+        elif isinstance(intent, dict):
+            resolved_output = dict(intent)
+            resolved_intent = str(resolved_output.get("intent") or "assist")
+        else:
+            resolved_intent = str(intent or "assist")
+            resolved_output = dict(output) if output is not None else {}
+
         violations: List[ValidationViolation] = []
 
         try:
-            violations.extend(self._check_schema(intent, output))
-            violations.extend(self._check_business_rules(intent, output))
-            violations.extend(self._check_content_safety(output))
+            violations.extend(self._check_schema(resolved_intent, resolved_output))
+            violations.extend(self._check_business_rules(resolved_intent, resolved_output))
+            violations.extend(self._check_content_safety(resolved_output))
             violations.extend(
-                self._check_citations(output, tool_results or [])
+                self._check_citations(resolved_output, tool_results or [])
             )
         except Exception:
             logger.exception("Output validation encountered an error")
@@ -131,13 +137,13 @@ class OutputPolicy:
             )
 
         status = self._derive_status(violations)
-        sanitised = self._sanitise_output(output, violations)
+        sanitised = self._sanitise_output(resolved_output, violations)
 
         if violations:
             logger.info(
                 "Output validation complete",
                 extra={
-                    "intent": intent,
+                    "intent": resolved_intent,
                     "status": status.value,
                     "violation_count": len(violations),
                 },
@@ -162,14 +168,23 @@ class OutputPolicy:
         """Verify that the output contains the expected fields for *intent*."""
         violations: List[ValidationViolation] = []
         required = self.REQUIRED_FIELDS.get(intent, [])
-        for field in required:
-            if field not in output:
+        order_ctx = output.get("order_status")
+        policy_ctx = output.get("policy_check")
+        pricing_ctx = output.get("pricing_lookup") or output.get("pricing_Lookup")
+        for field_name in required:
+            present = (
+                field_name in output
+                or (isinstance(order_ctx, dict) and field_name in order_ctx)
+                or (isinstance(policy_ctx, dict) and field_name in policy_ctx)
+                or (isinstance(pricing_ctx, dict) and field_name in pricing_ctx)
+            )
+            if not present:
                 violations.append(
                     ValidationViolation(
                         rule="missing_required_field",
                         severity="error",
-                        message=f"Missing required field '{field}' for intent '{intent}'.",
-                        field=field,
+                        message=f"Missing required field '{field_name}' for intent '{intent}'.",
+                        field=field_name,
                     )
                 )
         return violations
@@ -183,11 +198,24 @@ class OutputPolicy:
     ) -> List[ValidationViolation]:
         """Enforce business limits on refunds, discounts, etc."""
         violations: List[ValidationViolation] = []
+        raw_policy = output.get("policy_check")
+        policy_ctx: Dict[str, Any] = raw_policy if isinstance(raw_policy, dict) else {}
+        raw_pricing = output.get("pricing_lookup")
+        if not isinstance(raw_pricing, dict):
+            raw_pricing = output.get("pricing_Lookup")
+        pricing_ctx: Dict[str, Any] = raw_pricing if isinstance(raw_pricing, dict) else {}
+        raw_order = output.get("order_status")
+        order_ctx: Dict[str, Any] = raw_order if isinstance(raw_order, dict) else {}
 
         # Refund cap (Hard-coded max $15.00 / 1500 cents or 100% of order total, whichever is lower) (#615)
         if intent in ("refund", "support"):
-            amount = output.get("amount_cents")
-            order_total = output.get("order_total_cents")
+            amount = output.get("amount_cents") or policy_ctx.get("amount_cents")
+            order_total = (
+                output.get("order_total_cents")
+                or order_ctx.get("order_total_cents")
+                or order_ctx.get("total_cents")
+                or pricing_ctx.get("total_cents")
+            )
             max_allowed = self.MAX_REFUND_AMOUNT_CENTS  # default 1500 cents ($15.00)
             if isinstance(order_total, (int, float)) and order_total > 0:
                 max_allowed = min(max_allowed, int(order_total))
@@ -232,7 +260,7 @@ class OutputPolicy:
 
         # Discount cap
         if intent == "discount":
-            pct = output.get("discount_percent")
+            pct = output.get("discount_percent") or pricing_ctx.get("discount_percent")
             if isinstance(pct, (int, float)) and pct > self.MAX_DISCOUNT_PERCENT:
                 violations.append(
                     ValidationViolation(
@@ -332,12 +360,6 @@ class OutputPolicy:
     @staticmethod
     def _collect_ids(data: Dict[str, Any], dest: set[str]) -> None:
         """Recursively collect UUID-like string values from *data*."""
-        import re
-
-        _UUID_RE = re.compile(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            re.IGNORECASE,
-        )
         for value in data.values():
             if isinstance(value, str) and _UUID_RE.fullmatch(value):
                 dest.add(value)

@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,7 +23,6 @@ from google.cloud import bigquery  # type: ignore
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import (
     auc,
-    classification_report,
     f1_score,
     precision_recall_curve,
     roc_auc_score,
