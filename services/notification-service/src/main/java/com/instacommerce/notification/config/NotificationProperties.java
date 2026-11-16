@@ -48,6 +48,7 @@ public class NotificationProperties {
     public static class Providers {
         private final SendGrid sendgrid = new SendGrid();
         private final Twilio twilio = new Twilio();
+        private final Fcm fcm = new Fcm();
 
         public SendGrid getSendgrid() {
             return sendgrid;
@@ -55,6 +56,40 @@ public class NotificationProperties {
 
         public Twilio getTwilio() {
             return twilio;
+        }
+
+        public Fcm getFcm() {
+            return fcm;
+        }
+    }
+
+    public static class Fcm {
+        private String projectId;
+        private String accessToken;
+        private String endpointUrl;
+
+        public String getProjectId() {
+            return projectId;
+        }
+
+        public void setProjectId(String projectId) {
+            this.projectId = projectId;
+        }
+
+        public String getAccessToken() {
+            return accessToken;
+        }
+
+        public void setAccessToken(String accessToken) {
+            this.accessToken = accessToken;
+        }
+
+        public String getEndpointUrl() {
+            return endpointUrl;
+        }
+
+        public void setEndpointUrl(String endpointUrl) {
+            this.endpointUrl = endpointUrl;
         }
     }
 
@@ -120,7 +155,7 @@ public class NotificationProperties {
 
     public static class Identity {
         private String baseUrl;
-        private Duration preferenceCacheTtl = Duration.ofSeconds(60);
+        private Duration preferenceCacheTtl = Duration.ofMinutes(5);
 
         public String getBaseUrl() {
             return baseUrl;

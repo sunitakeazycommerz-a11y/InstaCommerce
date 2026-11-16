@@ -29,6 +29,8 @@ import com.instacommerce.fulfillment.service.DeliveryService;
 import com.instacommerce.fulfillment.service.PickService;
 import java.util.List;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -60,10 +62,10 @@ class BatchPickingIntegrationTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
 
-    @org.junit.jupiter.api.BeforeAll
+    @BeforeAll
     static void runMigrations() {
         POSTGRES.start();
-        org.flywaydb.core.Flyway.configure()
+        Flyway.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration")
             .load()

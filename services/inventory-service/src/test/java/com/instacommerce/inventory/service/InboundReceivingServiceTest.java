@@ -13,7 +13,6 @@ import com.instacommerce.inventory.repository.StockBatchRepository;
 import com.instacommerce.inventory.repository.StockItemRepository;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +26,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -149,7 +149,7 @@ class InboundReceivingServiceTest {
             eq("INBOUND_ASN"),
             eq(asnId.toString()),
             eq("InboundAsnReconciled"),
-            any(Map.class)
+            anyMap()
         );
     }
 }

@@ -16,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -40,6 +41,9 @@ class PerishableLiquidationServiceTest {
 
     @Mock
     private OutboxService outboxService;
+
+    @Captor
+    private ArgumentCaptor<Map<String, Object>> payloadCaptor;
 
     private PerishableLiquidationService liquidationService;
 
@@ -101,7 +105,6 @@ class PerishableLiquidationServiceTest {
         assertEquals(50, response.discountPercent());
 
         // Verify outbox event emitted for pricing-service
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(outboxService).publish(
             eq("STOCK_BATCH"),
             eq(batchId.toString()),

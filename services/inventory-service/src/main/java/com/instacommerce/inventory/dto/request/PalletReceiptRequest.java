@@ -1,7 +1,13 @@
 package com.instacommerce.inventory.dto.request;
 
-import jakarta.validation.constraints.NotBlank;
+import java.util.Map;
+import java.util.UUID;
 
 public record PalletReceiptRequest(
-    @NotBlank String receivedBy
-) {}
+    String receivedBy,
+    Map<UUID, Integer> receivedQuantities
+) {
+    public PalletReceiptRequest(String receivedBy) {
+        this(receivedBy, null);
+    }
+}

@@ -53,13 +53,13 @@ public class StockController {
     }
 
     @PostMapping("/adjust")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     public StockCheckItemResponse adjust(@Valid @RequestBody StockAdjustRequest request) {
         return inventoryService.adjustStock(request);
     }
 
     @PostMapping("/adjust-batch")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
     public StockCheckResponse adjustBatch(@Valid @RequestBody StockAdjustBatchRequest request) {
         return inventoryService.adjustStockBatch(request);
     }

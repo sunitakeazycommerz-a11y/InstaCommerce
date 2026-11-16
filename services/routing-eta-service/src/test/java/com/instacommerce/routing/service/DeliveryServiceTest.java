@@ -86,10 +86,10 @@ class DeliveryServiceTest {
 
         deliveryService.updateETA(deliveryId, estimate);
 
-        // Verify outbox event ETA_UPDATED
+        // Verify outbox event EtaUpdated
         ArgumentCaptor<Map<String, Object>> updateCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(
-            eq("Delivery"), eq(deliveryId.toString()), eq("ETA_UPDATED"), updateCaptor.capture());
+            eq("Delivery"), eq(deliveryId.toString()), eq("EtaUpdated"), updateCaptor.capture());
         assertEquals(12, updateCaptor.getValue().get("estimatedMinutes"));
 
         // Verify WebSocket broadcast
@@ -126,10 +126,10 @@ class DeliveryServiceTest {
         assertTrue(delivery.isCompensationTriggered());
         assertEquals(200, delivery.getCompensationAmountCents());
 
-        // Verify ETA_BREACH_RISK event published
+        // Verify ETABreachRisk event published once (and not duplicated on subsequent pings)
         ArgumentCaptor<Map<String, Object>> breachCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(
-            eq("Delivery"), eq(deliveryId.toString()), eq("ETA_BREACH_RISK"), breachCaptor.capture());
+            eq("Delivery"), eq(deliveryId.toString()), eq("ETABreachRisk"), breachCaptor.capture());
 
         Map<String, Object> payload = breachCaptor.getValue();
         assertEquals(200, payload.get("autoCompensationCents"));
@@ -138,6 +138,11 @@ class DeliveryServiceTest {
 
         // Verify breach risk WebSocket broadcast
         verify(messagingTemplate).convertAndSend(eq("/topic/deliveries/" + deliveryId + "/breach-risk"), any(Object.class));
+
+        // Second recalculation with ongoing breach must NOT emit duplicate ETABreachRisk compensation event
+        deliveryService.updateETA(deliveryId, breachEstimate);
+        verify(outboxService).publish(
+            eq("Delivery"), eq(deliveryId.toString()), eq("ETABreachRisk"), any());
     }
 
     @Test

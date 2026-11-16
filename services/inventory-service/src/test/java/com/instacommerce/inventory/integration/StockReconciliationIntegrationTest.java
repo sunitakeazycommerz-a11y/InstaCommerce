@@ -20,6 +20,8 @@ import com.instacommerce.inventory.service.StockReconciliationService.PhysicalSt
 import com.instacommerce.inventory.service.StockReconciliationService.ReconciliationSummary;
 import java.util.List;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,10 +52,10 @@ class StockReconciliationIntegrationTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
 
-    @org.junit.jupiter.api.BeforeAll
+    @BeforeAll
     static void runMigrations() {
         POSTGRES.start();
-        org.flywaydb.core.Flyway.configure()
+        Flyway.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration")
             .load()
@@ -99,11 +101,11 @@ class StockReconciliationIntegrationTest {
         UUID storeId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
-        // System stock: on_hand = 50, reserved = 10 -> total = 60
+        // System stock: on_hand = 60 (includes 10 reserved, 50 available)
         StockItem stock = new StockItem();
         stock.setProductId(productId);
         stock.setStoreId(storeId);
-        stock.setOnHand(50);
+        stock.setOnHand(60);
         stock.setReserved(10);
         stockItemRepository.save(stock);
 

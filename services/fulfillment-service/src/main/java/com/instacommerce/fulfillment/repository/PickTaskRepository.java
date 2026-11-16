@@ -3,6 +3,7 @@ package com.instacommerce.fulfillment.repository;
 import com.instacommerce.fulfillment.domain.model.PickTask;
 import com.instacommerce.fulfillment.domain.model.PickTaskStatus;
 import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -12,6 +13,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 public interface PickTaskRepository extends JpaRepository<PickTask, UUID> {
@@ -28,6 +30,13 @@ public interface PickTaskRepository extends JpaRepository<PickTask, UUID> {
     List<PickTask> findByBatchId(UUID batchId);
 
     List<PickTask> findByStoreIdAndStatusAndBatchIdIsNullOrderByCreatedAtAsc(UUID storeId, PickTaskStatus status, Pageable pageable);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
+    @Query("SELECT p FROM PickTask p WHERE p.storeId = :storeId AND p.status = :status AND p.batchId IS NULL ORDER BY p.createdAt ASC")
+    List<PickTask> findUnbatchedForWaveLock(@Param("storeId") UUID storeId,
+                                            @Param("status") PickTaskStatus status,
+                                            Pageable pageable);
 
     @Modifying
     @Query("update PickTask p set p.userId = :placeholder, p.userErased = true where p.userId = :userId")

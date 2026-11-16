@@ -36,16 +36,20 @@ public interface RiderAvailabilityRepository extends JpaRepository<RiderAvailabi
           AND ra.current_lng IS NOT NULL
           AND (
             6371 * acos(
-              cos(radians(:lat)) * cos(radians(ra.current_lat))
-              * cos(radians(ra.current_lng) - radians(:lng))
-              + sin(radians(:lat)) * sin(radians(ra.current_lat))
+              LEAST(1.0, GREATEST(-1.0,
+                cos(radians(:lat)) * cos(radians(ra.current_lat))
+                * cos(radians(ra.current_lng) - radians(:lng))
+                + sin(radians(:lat)) * sin(radians(ra.current_lat))
+              ))
             )
           ) <= :radiusKm
         ORDER BY
           (6371 * acos(
-            cos(radians(:lat)) * cos(radians(ra.current_lat))
-            * cos(radians(ra.current_lng) - radians(:lng))
-            + sin(radians(:lat)) * sin(radians(ra.current_lat))
+            LEAST(1.0, GREATEST(-1.0,
+              cos(radians(:lat)) * cos(radians(ra.current_lat))
+              * cos(radians(ra.current_lng) - radians(:lng))
+              + sin(radians(:lat)) * sin(radians(ra.current_lat))
+            ))
           )) ASC,
           r.rating_avg DESC
         LIMIT 1

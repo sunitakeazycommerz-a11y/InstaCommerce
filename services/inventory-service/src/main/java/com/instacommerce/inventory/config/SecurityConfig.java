@@ -53,7 +53,8 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error").permitAll()
-                .requestMatchers(HttpMethod.POST, "/inventory/adjust").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/inventory/adjust", "/inventory/adjust-batch")
+                    .hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)

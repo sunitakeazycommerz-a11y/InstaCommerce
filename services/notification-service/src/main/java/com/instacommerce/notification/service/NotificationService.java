@@ -96,10 +96,13 @@ public class NotificationService {
         Map<String, Object> variables = buildVariables(envelope.eventType(), payload, userId,
             orderSnapshot.orElse(null), cachedUserContact.orElse(null));
         UserPreferenceService.Preferences preferences = userPreferenceService.getPreferences(userId);
+        boolean promotional = isPromotionalEvent(envelope.eventType());
         for (NotificationChannel channel : template.channels()) {
-            if (!userPreferenceService.allowNotification(preferences, channel, false)) {
+            if (!userPreferenceService.allowNotification(preferences, channel, promotional)) {
                 persistSkipped(eventId, envelope.eventType(), userId, channel, template.templateId(),
-                    "Opted out");
+                    promotional && userPreferenceService.isWithinQuietHours(preferences)
+                        ? "Suppressed during quiet hours"
+                        : "Opted out");
                 continue;
             }
             String recipient = resolveRecipient(channel, payload, cachedUserContact.orElse(null), userId);
@@ -135,6 +138,16 @@ public class NotificationService {
             String subject = channel == NotificationChannel.EMAIL ? template.subject() : null;
             sender.send(request, log, subject, body);
         }
+    }
+
+    private boolean isPromotionalEvent(String eventType) {
+        if (eventType == null) {
+            return false;
+        }
+        return eventType.startsWith("Promotion")
+            || eventType.startsWith("Marketing")
+            || eventType.contains("Campaign")
+            || eventType.contains("Promo");
     }
 
     private void persistSkipped(String eventId, String eventType, UUID userId, NotificationChannel channel,

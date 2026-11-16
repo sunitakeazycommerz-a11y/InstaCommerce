@@ -41,26 +41,64 @@ public class DeliveryController {
 
     @PostMapping("/fulfillment/orders/{orderId}/proof-of-delivery")
     public DeliveryResponse uploadProofOfDelivery(@PathVariable UUID orderId,
-                                                  @Valid @RequestBody ProofOfDeliveryRequest request) {
+                                                  @Valid @RequestBody ProofOfDeliveryRequest request,
+                                                  @AuthenticationPrincipal String principal,
+                                                  Authentication authentication) {
         return deliveryService.recordProofOfDelivery(orderId, request.photoUrl(), request.format(),
-            request.sizeBytes(), request.masked());
+            request.sizeBytes(), request.masked(), toUuidOrNull(principal), isPrivileged(authentication));
     }
 
     @PostMapping("/fulfillment/orders/{orderId}/delivered")
     public DeliveryResponse markDelivered(@PathVariable UUID orderId,
-                                          @Valid @RequestBody(required = false) MarkDeliveredRequest request) {
-        return deliveryService.markDelivered(orderId);
+                                          @Valid @RequestBody(required = false) MarkDeliveredRequest request,
+                                          @AuthenticationPrincipal String principal,
+                                          Authentication authentication) {
+        return deliveryService.markDelivered(orderId, toUuidOrNull(principal), isPrivileged(authentication));
     }
 
     private UUID toUuid(String principal) {
-        return principal == null ? null : UUID.fromString(principal);
+        if (principal == null || principal.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(principal);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Invalid subject UUID");
+        }
+    }
+
+    private UUID toUuidOrNull(String principal) {
+        if (principal == null || principal.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(principal);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     private boolean isAdmin(Authentication authentication) {
+        return hasAnyRole(authentication, "ROLE_ADMIN");
+    }
+
+    private boolean isPrivileged(Authentication authentication) {
+        return hasAnyRole(authentication, "ROLE_ADMIN", "ROLE_INTERNAL_SERVICE");
+    }
+
+    private boolean hasAnyRole(Authentication authentication, String... roles) {
         if (authentication == null || authentication.getAuthorities() == null) {
             return false;
         }
         return authentication.getAuthorities().stream()
-            .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+            .anyMatch(authority -> {
+                String value = authority.getAuthority();
+                for (String role : roles) {
+                    if (role.equals(value)) {
+                        return true;
+                    }
+                }
+                return false;
+            });
     }
 }

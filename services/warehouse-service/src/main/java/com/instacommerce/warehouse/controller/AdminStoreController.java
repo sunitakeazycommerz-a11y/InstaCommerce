@@ -4,6 +4,7 @@ import com.instacommerce.warehouse.domain.model.StoreStatus;
 import com.instacommerce.warehouse.dto.request.CreateStoreRequest;
 import com.instacommerce.warehouse.dto.request.CreateZoneRequest;
 import com.instacommerce.warehouse.dto.request.UpdateZoneRequest;
+import com.instacommerce.warehouse.dto.request.UpsertStoreHoursRequest;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.service.CapacityService;
 import com.instacommerce.warehouse.service.StoreService;
@@ -119,5 +120,12 @@ public class AdminStoreController {
             @PathVariable UUID zoneId) {
         zoneService.deleteZone(id, zoneId);
         return ResponseEntity.noContent().build();
+    }
+
+    @PutMapping("/{id}/hours")
+    public ResponseEntity<StoreResponse.HoursResponse> upsertStoreHours(
+            @PathVariable UUID id,
+            @RequestBody @Valid UpsertStoreHoursRequest request) {
+        return ResponseEntity.ok(storeService.upsertStoreHours(id, request));
     }
 }

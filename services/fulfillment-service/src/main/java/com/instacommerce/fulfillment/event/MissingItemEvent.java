@@ -8,6 +8,16 @@ public record MissingItemEvent(
     int missingQty,
     String referenceId,
     UUID paymentId,
-    long refundAmountCents
+    long refundAmountCents,
+    UUID substituteProductId,
+    int substitutedQty
 ) {
+    public MissingItemEvent(UUID productId,
+                            UUID storeId,
+                            int missingQty,
+                            String referenceId,
+                            UUID paymentId,
+                            long refundAmountCents) {
+        this(productId, storeId, missingQty, referenceId, paymentId, refundAmountCents, null, 0);
+    }
 }

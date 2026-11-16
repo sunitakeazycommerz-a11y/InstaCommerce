@@ -21,6 +21,7 @@ dependencies {
     implementation("io.github.resilience4j:resilience4j-spring-boot3")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
+    implementation("com.github.ben-manes.caffeine:caffeine")
     implementation("net.javacrumbs.shedlock:shedlock-spring")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template")

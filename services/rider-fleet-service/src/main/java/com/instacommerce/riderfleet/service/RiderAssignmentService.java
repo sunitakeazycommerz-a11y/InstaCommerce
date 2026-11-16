@@ -23,6 +23,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
@@ -33,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class RiderAssignmentService {
     private static final Logger logger = LoggerFactory.getLogger(RiderAssignmentService.class);
+    private static final long DEFAULT_DELIVERY_FEE_CENTS = 3000L;
 
     private final RiderRepository riderRepository;
     private final RiderAvailabilityRepository availabilityRepository;
@@ -40,6 +42,7 @@ public class RiderAssignmentService {
     private final OutboxService outboxService;
     private final RiderFleetProperties properties;
     private final DispatchOptimizerClient dispatchOptimizerClient;
+    private final RiderEarningsService riderEarningsService;
 
     public RiderAssignmentService(RiderRepository riderRepository,
                                    RiderAvailabilityRepository availabilityRepository,
@@ -47,12 +50,25 @@ public class RiderAssignmentService {
                                    OutboxService outboxService,
                                    RiderFleetProperties properties,
                                    DispatchOptimizerClient dispatchOptimizerClient) {
+        this(riderRepository, availabilityRepository, assignmentRepository, outboxService,
+            properties, dispatchOptimizerClient, null);
+    }
+
+    @Autowired
+    public RiderAssignmentService(RiderRepository riderRepository,
+                                   RiderAvailabilityRepository availabilityRepository,
+                                   RiderAssignmentRepository assignmentRepository,
+                                   OutboxService outboxService,
+                                   RiderFleetProperties properties,
+                                   DispatchOptimizerClient dispatchOptimizerClient,
+                                   RiderEarningsService riderEarningsService) {
         this.riderRepository = riderRepository;
         this.availabilityRepository = availabilityRepository;
         this.assignmentRepository = assignmentRepository;
         this.outboxService = outboxService;
         this.properties = properties;
         this.dispatchOptimizerClient = dispatchOptimizerClient;
+        this.riderEarningsService = riderEarningsService;
     }
 
     /**
@@ -187,12 +203,24 @@ public class RiderAssignmentService {
                 double lat = ra.getCurrentLat().doubleValue();
                 double lng = ra.getCurrentLng().doubleValue();
                 String vehicle = r.getVehicleType() != null ? r.getVehicleType().name().toLowerCase() : "scooter";
+                double avgRating = r.getRatingAvg() != null ? r.getRatingAvg().doubleValue() : 5.0;
+                double defaultSpeedKmh = switch (vehicle) {
+                    case "bicycle" -> 15.0;
+                    case "car" -> 28.0;
+                    default -> 22.0;
+                };
                 return new DispatchOptimizerClient.RiderState(
                     ra.getRiderId().toString(),
                     new DispatchOptimizerClient.Position(lat, lng),
                     0,
                     vehicle,
-                    true
+                    true,
+                    r.getTotalDeliveries(),
+                    avgRating,
+                    0,
+                    defaultSpeedKmh,
+                    100.0,
+                    storeId != null ? storeId.toString() : null
                 );
             })
             .toList();
@@ -239,17 +267,36 @@ public class RiderAssignmentService {
         RiderAssignment assignment = assignmentOpt.get();
         UUID riderId = assignment.getRiderId();
 
-        riderRepository.findById(riderId).ifPresent(rider -> {
-            if (rider.getStatus() == RiderStatus.ON_DELIVERY) {
-                rider.setStatus(RiderStatus.ACTIVE);
+        Optional<Rider> riderOpt = riderRepository.findById(riderId);
+        boolean canReleaseToAvailable = false;
+        if (riderOpt.isPresent()) {
+            Rider rider = riderOpt.get();
+            RiderStatus currentStatus = rider.getStatus();
+            if (currentStatus != RiderStatus.SUSPENDED
+                && currentStatus != RiderStatus.INACTIVE
+                && currentStatus != RiderStatus.BLOCKED) {
+                rider.setTotalDeliveries(rider.getTotalDeliveries() + 1);
+                if (currentStatus == RiderStatus.ON_DELIVERY) {
+                    rider.setStatus(RiderStatus.ACTIVE);
+                }
                 riderRepository.save(rider);
+                canReleaseToAvailable = true;
+            } else {
+                logger.warn("Skipping availability restore on delivery completion for rider={} in status={}",
+                    riderId, currentStatus);
             }
-        });
+        }
 
-        availabilityRepository.findByRiderId(riderId).ifPresent(availability -> {
-            availability.setAvailable(true);
-            availabilityRepository.save(availability);
-        });
+        if (canReleaseToAvailable) {
+            availabilityRepository.findByRiderId(riderId).ifPresent(availability -> {
+                availability.setAvailable(true);
+                availabilityRepository.save(availability);
+            });
+        }
+
+        if (riderEarningsService != null && riderOpt.isPresent()) {
+            riderEarningsService.recordEarning(orderId, riderId, DEFAULT_DELIVERY_FEE_CENTS, 0L);
+        }
 
         outboxService.publish("Rider", riderId.toString(), "DeliveryCompleted",
             Map.of("riderId", riderId, "orderId", orderId, "completedAt", Instant.now().toString()));
@@ -268,17 +315,20 @@ public class RiderAssignmentService {
         RiderAssignment assignment = assignmentOpt.get();
         UUID riderId = assignment.getRiderId();
 
-        riderRepository.findById(riderId).ifPresent(rider -> {
+        Optional<Rider> riderOpt = riderRepository.findById(riderId);
+        if (riderOpt.isPresent()) {
+            Rider rider = riderOpt.get();
             if (rider.getStatus() == RiderStatus.ON_DELIVERY) {
                 rider.setStatus(RiderStatus.ACTIVE);
                 riderRepository.save(rider);
             }
-        });
-
-        availabilityRepository.findByRiderId(riderId).ifPresent(availability -> {
-            availability.setAvailable(true);
-            availabilityRepository.save(availability);
-        });
+            if (rider.getStatus() == RiderStatus.ACTIVE) {
+                availabilityRepository.findByRiderId(riderId).ifPresent(availability -> {
+                    availability.setAvailable(true);
+                    availabilityRepository.save(availability);
+                });
+            }
+        }
 
         outboxService.publish("Rider", riderId.toString(), "RiderAssignmentCancelled",
             Map.of("riderId", riderId, "orderId", orderId, "reason", reason != null ? reason : ""));

@@ -18,6 +18,7 @@ import java.util.UUID;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,13 +30,25 @@ public class CapacityService {
     private final StoreCapacityRepository capacityRepository;
     private final StoreRepository storeRepository;
     private final OutboxService outboxService;
+    private final CapacityAlertPublisher capacityAlertPublisher;
 
     public CapacityService(StoreCapacityRepository capacityRepository,
                            StoreRepository storeRepository,
                            OutboxService outboxService) {
+        this(capacityRepository, storeRepository, outboxService, new CapacityAlertPublisher(outboxService));
+    }
+
+    @Autowired
+    public CapacityService(StoreCapacityRepository capacityRepository,
+                           StoreRepository storeRepository,
+                           OutboxService outboxService,
+                           CapacityAlertPublisher capacityAlertPublisher) {
         this.capacityRepository = capacityRepository;
         this.storeRepository = storeRepository;
         this.outboxService = outboxService;
+        this.capacityAlertPublisher = capacityAlertPublisher != null
+                ? capacityAlertPublisher
+                : new CapacityAlertPublisher(outboxService);
     }
 
     @Transactional(readOnly = true)
@@ -120,7 +133,7 @@ public class CapacityService {
         if (currentPending >= maxConcurrent) {
             log.warn("Dark store {} reached 100% capacity ({}/{}). Pausing new orders for micro-zone.",
                     storeId, currentPending, maxConcurrent);
-            outboxService.publish("StoreCapacity", storeId.toString(), "StoreCapacityPaused",
+            capacityAlertPublisher.publishCapacityPaused(storeId.toString(),
                     Map.of("storeId", storeId.toString(), "currentPending", currentPending, "maxConcurrent", maxConcurrent));
             throw new CapacityExceededException(storeId.toString());
         }
@@ -135,7 +148,13 @@ public class CapacityService {
 
         store.setCurrentPendingOrders(currentPending + 1);
         storeRepository.save(store);
-        incrementOrderCount(storeId, now);
+        if (!incrementOrderCount(storeId, now)) {
+            log.warn("Dark store {} reached hourly order capacity. Pausing new orders.", storeId);
+            capacityAlertPublisher.publishCapacityPaused(storeId.toString(),
+                    Map.of("storeId", storeId.toString(), "currentPending", currentPending,
+                            "maxOrdersPerHour", store.getCapacityOrdersPerHour()));
+            throw new CapacityExceededException(storeId.toString());
+        }
         return true;
     }
 

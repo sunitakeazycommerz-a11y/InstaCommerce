@@ -13,6 +13,7 @@ import com.instacommerce.notification.repository.NotificationLogRepository;
 import com.instacommerce.notification.service.MaskingUtil;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -112,7 +113,7 @@ public class RetryableNotificationSender {
             log.getChannel(),
             log.getTemplateId(),
             log.getRecipient(),
-            java.util.Map.of()
+            Map.of()
         );
     }
 }

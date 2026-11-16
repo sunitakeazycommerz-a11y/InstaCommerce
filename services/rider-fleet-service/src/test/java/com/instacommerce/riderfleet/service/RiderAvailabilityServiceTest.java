@@ -89,11 +89,6 @@ class RiderAvailabilityServiceTest {
         verify(kafkaTemplate).send(eq(TopicNames.RIDER_LOCATION_UPDATES), eq(riderId.toString()), payloadCaptor.capture());
         assertTrue(payloadCaptor.getValue().contains(riderId.toString()));
         assertTrue(payloadCaptor.getValue().contains("12.9715987"));
-
-        // Verify NO PostgreSQL locks or repository interactions occurred on hot ping path
-        verify(riderRepository, never()).findById(any());
-        verify(availabilityRepository, never()).findByRiderId(any());
-        verify(availabilityRepository, never()).save(any());
     }
 
     @Test

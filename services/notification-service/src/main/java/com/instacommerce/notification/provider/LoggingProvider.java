@@ -5,10 +5,13 @@ import com.instacommerce.notification.service.MaskingUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 @Component
 @Profile("!prod")
+@Order(Ordered.LOWEST_PRECEDENCE)
 public class LoggingProvider implements NotificationProvider {
     private static final Logger logger = LoggerFactory.getLogger(LoggingProvider.class);
 

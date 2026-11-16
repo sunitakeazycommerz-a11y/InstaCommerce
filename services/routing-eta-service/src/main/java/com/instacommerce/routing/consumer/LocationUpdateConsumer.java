@@ -13,6 +13,7 @@ import com.instacommerce.routing.service.DeliveryService;
 import com.instacommerce.routing.service.ETAService;
 import com.instacommerce.routing.service.TrackingService;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -92,7 +93,7 @@ public class LocationUpdateConsumer {
                 heading = new BigDecimal(event.path("heading").asText());
             }
 
-            java.util.List<UUID> deliveryIds = new java.util.ArrayList<>();
+            List<UUID> deliveryIds = new ArrayList<>();
             String deliveryIdStr = event.hasNonNull("deliveryId") ? event.path("deliveryId").asText()
                 : event.hasNonNull("delivery_id") ? event.path("delivery_id").asText() : null;
 

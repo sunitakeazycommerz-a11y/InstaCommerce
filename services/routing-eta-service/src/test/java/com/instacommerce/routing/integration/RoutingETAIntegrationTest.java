@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.flywaydb.core.Flyway;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -104,7 +105,7 @@ class RoutingETAIntegrationTest {
         .perform(get("/deliveries/{id}/eta", testDeliveryId))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.estimatedMinutes").isNumber())
-        .andExpect(jsonPath("$.estimatedMinutes").value(org.hamcrest.Matchers.greaterThan(0)));
+        .andExpect(jsonPath("$.estimatedMinutes").value(Matchers.greaterThan(0)));
   }
 
   @Test
@@ -114,7 +115,7 @@ class RoutingETAIntegrationTest {
         .perform(get("/deliveries/{id}/eta", testDeliveryId))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.distanceKm").isNumber())
-        .andExpect(jsonPath("$.distanceKm").value(org.hamcrest.Matchers.greaterThanOrEqualTo(0.0)));
+        .andExpect(jsonPath("$.distanceKm").value(Matchers.greaterThanOrEqualTo(0.0)));
   }
 
   @Test

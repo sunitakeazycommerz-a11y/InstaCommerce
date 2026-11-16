@@ -9,6 +9,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -67,7 +69,7 @@ public class StockReconciliationService {
     ) {}
 
     /**
-     * Executes reconciliation comparing system stock (onHand + reserved) against physical WMS inventory (Issue #572).
+     * Executes reconciliation comparing system stock (onHand, which includes reserved) against physical WMS inventory (Issue #572).
      */
     @Transactional
     public ReconciliationSummary reconcileStock(UUID storeId, List<PhysicalStockCount> physicalCounts) {
@@ -78,12 +80,20 @@ public class StockReconciliationService {
             physicalCounts = List.of();
         }
 
+        List<UUID> productIds = physicalCounts.stream()
+            .map(PhysicalStockCount::productId)
+            .distinct()
+            .toList();
+        Map<UUID, StockItem> stockByProduct = productIds.isEmpty()
+            ? Map.of()
+            : stockItemRepository.findByStoreIdAndProductIdIn(storeId, productIds).stream()
+                .collect(Collectors.toMap(StockItem::getProductId, Function.identity()));
+
         List<DriftItem> discrepancies = new ArrayList<>();
         Instant now = Instant.now();
 
         for (PhysicalStockCount item : physicalCounts) {
-            StockItem stock = stockItemRepository.findByProductIdAndStoreId(item.productId(), storeId)
-                .orElse(null);
+            StockItem stock = stockByProduct.get(item.productId());
 
             if (stock == null) {
                 log.warn("Reconciliation found SKU {} in physical WMS but missing in system inventory for store {}",
@@ -91,7 +101,7 @@ public class StockReconciliationService {
                 continue;
             }
 
-            int systemStock = stock.getOnHand() + stock.getReserved();
+            int systemStock = stock.getOnHand();
             int drift = item.physicalCount() - systemStock;
 
             if (drift != 0) {
@@ -181,17 +191,32 @@ public class StockReconciliationService {
         StockItem stock = stockItemRepository.findByProductIdAndStoreId(productId, storeId)
             .orElseThrow(() -> new ProductNotFoundException(productId, storeId));
 
+        int reserved = stock.getReserved();
+        int adjustedOnHand = Math.max(verifiedPhysicalQty, reserved);
+        boolean clamped = verifiedPhysicalQty < reserved;
+        if (clamped) {
+            log.error("CRITICAL: Verified physical count {} is below reserved {} for SKU {} at store {}; clamping onHand to {} to satisfy constraint chk_reserved_le_on_hand",
+                verifiedPhysicalQty, reserved, productId, storeId, adjustedOnHand);
+        }
+
         stock.setFrozen(false);
-        stock.setOnHand(verifiedPhysicalQty);
+        stock.setOnHand(adjustedOnHand);
         stockItemRepository.save(stock);
 
         Map<String, Object> auditPayload = new LinkedHashMap<>();
         auditPayload.put("productId", productId.toString());
         auditPayload.put("storeId", storeId.toString());
         auditPayload.put("verifiedPhysicalQty", verifiedPhysicalQty);
+        auditPayload.put("appliedOnHand", adjustedOnHand);
+        auditPayload.put("reserved", reserved);
+        auditPayload.put("shortfallBelowReserved", clamped ? reserved - verifiedPhysicalQty : 0);
         auditPayload.put("unfrozenAt", Instant.now().toString());
 
+        if (clamped) {
+            outboxService.publish("StockItem", productId.toString(), "StockReservedShortfallDetected", auditPayload);
+        }
         outboxService.publish("StockItem", productId.toString(), "CycleCountAuditCompleted", auditPayload);
-        log.info("SKU {} at store {} unfrozen with verified physical count {}", productId, storeId, verifiedPhysicalQty);
+        log.info("SKU {} at store {} unfrozen with verified physical count {} (applied onHand={})",
+            productId, storeId, verifiedPhysicalQty, adjustedOnHand);
     }
 }

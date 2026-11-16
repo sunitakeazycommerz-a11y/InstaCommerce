@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.inventory.InventoryServiceApplication;
+import com.instacommerce.inventory.client.WarehouseClient;
 import com.instacommerce.inventory.domain.model.Reservation;
 import com.instacommerce.inventory.domain.model.ReservationStatus;
 import com.instacommerce.inventory.domain.model.StockItem;
@@ -13,13 +14,18 @@ import com.instacommerce.inventory.dto.request.InventoryItemRequest;
 import com.instacommerce.inventory.dto.request.ReserveRequest;
 import com.instacommerce.inventory.dto.response.ReserveResponse;
 import com.instacommerce.inventory.exception.InsufficientStockException;
+import com.instacommerce.inventory.exception.StoreInactiveException;
+import com.instacommerce.inventory.exception.StoreNotFoundException;
 import com.instacommerce.inventory.repository.ReservationRepository;
 import com.instacommerce.inventory.repository.StockItemRepository;
 import com.instacommerce.inventory.service.ReservationService;
 import java.util.List;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -53,10 +59,10 @@ class ReservationIntegrationTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
 
-    @org.junit.jupiter.api.BeforeAll
+    @BeforeAll
     static void runMigrations() {
         POSTGRES.start();
-        org.flywaydb.core.Flyway.configure()
+        Flyway.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration")
             .load()
@@ -64,7 +70,7 @@ class ReservationIntegrationTest {
     }
 
     @MockitoBean
-    private com.instacommerce.inventory.client.WarehouseClient warehouseClient;
+    private WarehouseClient warehouseClient;
 
     @Autowired
     private ReservationService reservationService;
@@ -236,7 +242,7 @@ class ReservationIntegrationTest {
         UUID storeId = UUID.randomUUID();
         createStockItem(productId, storeId, 100, 0);
 
-        org.mockito.Mockito.doThrow(new com.instacommerce.inventory.exception.StoreInactiveException(storeId, "MAINTENANCE"))
+        Mockito.doThrow(new StoreInactiveException(storeId, "MAINTENANCE"))
             .when(warehouseClient).validateStoreActive(storeId);
 
         ReserveRequest request = new ReserveRequest(
@@ -246,7 +252,7 @@ class ReservationIntegrationTest {
         );
 
         assertThatThrownBy(() -> reservationService.reserve(request))
-            .isInstanceOf(com.instacommerce.inventory.exception.StoreInactiveException.class);
+            .isInstanceOf(StoreInactiveException.class);
 
         // Verify stock untouched
         StockItem unchanged = stockItemRepository.findByProductIdAndStoreId(productId, storeId).orElseThrow();
@@ -259,7 +265,7 @@ class ReservationIntegrationTest {
         UUID storeId = UUID.randomUUID();
         createStockItem(productId, storeId, 100, 0);
 
-        org.mockito.Mockito.doThrow(new com.instacommerce.inventory.exception.StoreNotFoundException(storeId))
+        Mockito.doThrow(new StoreNotFoundException(storeId))
             .when(warehouseClient).validateStoreActive(storeId);
 
         ReserveRequest request = new ReserveRequest(
@@ -269,7 +275,7 @@ class ReservationIntegrationTest {
         );
 
         assertThatThrownBy(() -> reservationService.reserve(request))
-            .isInstanceOf(com.instacommerce.inventory.exception.StoreNotFoundException.class);
+            .isInstanceOf(StoreNotFoundException.class);
 
         // Verify stock untouched
         StockItem unchanged = stockItemRepository.findByProductIdAndStoreId(productId, storeId).orElseThrow();

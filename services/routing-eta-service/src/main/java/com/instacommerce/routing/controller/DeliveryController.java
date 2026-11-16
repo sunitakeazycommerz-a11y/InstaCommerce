@@ -47,7 +47,8 @@ public class DeliveryController {
             : delivery.pickupLng().doubleValue();
         ETAResponse eta = etaService.calculateETA(
             fromLat, fromLng,
-            delivery.dropoffLat().doubleValue(), delivery.dropoffLng().doubleValue());
+            delivery.dropoffLat().doubleValue(), delivery.dropoffLng().doubleValue(),
+            delivery.storeId(), delivery.vehicleType(), 0.0);
         return ResponseEntity.ok(eta);
     }
 

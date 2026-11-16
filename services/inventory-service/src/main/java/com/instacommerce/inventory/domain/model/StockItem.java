@@ -1,5 +1,7 @@
 package com.instacommerce.inventory.domain.model;
 
+import com.instacommerce.inventory.exception.InsufficientStockException;
+import com.instacommerce.inventory.exception.StockFrozenException;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -118,14 +120,14 @@ public class StockItem {
 
     public void reserve(int quantity) {
         if (this.isFrozen) {
-            throw new com.instacommerce.inventory.exception.StockFrozenException(productId, storeId);
+            throw new StockFrozenException(productId, storeId);
         }
         if (quantity <= 0) {
             throw new IllegalArgumentException("Reservation quantity must be strictly positive: " + quantity);
         }
         int available = this.onHand - this.reserved;
         if (available < quantity) {
-            throw new com.instacommerce.inventory.exception.InsufficientStockException(productId, available, quantity);
+            throw new InsufficientStockException(productId, available, quantity);
         }
         this.reserved += quantity;
     }
@@ -135,7 +137,7 @@ public class StockItem {
             throw new IllegalArgumentException("Confirmation quantity must be strictly positive: " + quantity);
         }
         if (this.reserved < quantity || this.onHand < quantity) {
-            throw new com.instacommerce.inventory.exception.InsufficientStockException(
+            throw new InsufficientStockException(
                 productId, Math.min(this.reserved, this.onHand), quantity);
         }
         this.onHand -= quantity;
@@ -147,7 +149,7 @@ public class StockItem {
             throw new IllegalArgumentException("Release quantity cannot be negative: " + quantity);
         }
         if (this.reserved < quantity) {
-            throw new com.instacommerce.inventory.exception.InsufficientStockException(productId, this.reserved, quantity);
+            throw new InsufficientStockException(productId, this.reserved, quantity);
         }
         this.reserved -= quantity;
     }

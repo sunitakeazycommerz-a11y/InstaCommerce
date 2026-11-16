@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
@@ -23,7 +24,7 @@ public class KafkaErrorConfig {
             IllegalArgumentException.class,
             NullPointerException.class
         );
-        errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+        errorHandler.setLogLevel(KafkaException.Level.WARN);
         return errorHandler;
     }
 }

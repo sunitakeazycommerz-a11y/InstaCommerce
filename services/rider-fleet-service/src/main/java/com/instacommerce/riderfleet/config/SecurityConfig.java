@@ -1,5 +1,6 @@
 package com.instacommerce.riderfleet.config;
 
+import com.instacommerce.riderfleet.security.InternalServiceAuthFilter;
 import com.instacommerce.riderfleet.security.JwtAuthenticationFilter;
 import com.instacommerce.riderfleet.security.RestAccessDeniedHandler;
 import com.instacommerce.riderfleet.security.RestAuthenticationEntryPoint;
@@ -30,6 +31,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
+                                                   InternalServiceAuthFilter internalServiceAuthFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler) throws Exception {
         http.csrf(csrf -> csrf.disable())
@@ -38,12 +40,14 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error").permitAll()
                 .requestMatchers("/admin/**").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.POST, "/riders/assign", "/riders/assignments/**").hasAnyRole("INTERNAL", "ADMIN")
-                .requestMatchers(HttpMethod.GET, "/riders/available").hasAnyRole("INTERNAL", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/riders/assign", "/riders/assignments/**")
+                    .hasAnyRole("INTERNAL", "INTERNAL_SERVICE", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/riders/available").hasAnyRole("INTERNAL", "INTERNAL_SERVICE", "ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)
                 .accessDeniedHandler(accessDeniedHandler))
+            .addFilterBefore(internalServiceAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

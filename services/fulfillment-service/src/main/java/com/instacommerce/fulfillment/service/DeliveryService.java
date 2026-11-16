@@ -22,6 +22,7 @@ import com.instacommerce.fulfillment.exception.RiderNotFoundException;
 import com.instacommerce.fulfillment.repository.DeliveryRepository;
 import com.instacommerce.fulfillment.repository.PickTaskRepository;
 import com.instacommerce.fulfillment.repository.RiderRepository;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -29,16 +30,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class DeliveryService {
     private static final Logger logger = LoggerFactory.getLogger(DeliveryService.class);
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final DeliveryRepository deliveryRepository;
     private final PickTaskRepository pickTaskRepository;
@@ -86,8 +88,14 @@ public class DeliveryService {
 
     @Transactional
     public DeliveryResponse markDelivered(UUID orderId) {
+        return markDelivered(orderId, null, true);
+    }
+
+    @Transactional
+    public DeliveryResponse markDelivered(UUID orderId, UUID authenticatedRiderId, boolean privileged) {
         Delivery delivery = deliveryRepository.findByOrderId(orderId)
             .orElseThrow(() -> new DeliveryNotFoundException(orderId));
+        assertRiderOwnership(delivery, authenticatedRiderId, privileged);
         if (delivery.getStatus().isTerminal()) {
             throw new InvalidDeliveryStateException(orderId, delivery.getStatus(), "mark delivered");
         }
@@ -206,8 +214,15 @@ public class DeliveryService {
 
     @Transactional
     public DeliveryResponse recordProofOfDelivery(UUID orderId, String photoUrl, String format, Integer sizeBytes, Boolean masked) {
+        return recordProofOfDelivery(orderId, photoUrl, format, sizeBytes, masked, null, true);
+    }
+
+    @Transactional
+    public DeliveryResponse recordProofOfDelivery(UUID orderId, String photoUrl, String format, Integer sizeBytes, Boolean masked,
+                                                  UUID authenticatedRiderId, boolean privileged) {
         Delivery delivery = deliveryRepository.findByOrderId(orderId)
             .orElseThrow(() -> new DeliveryNotFoundException(orderId));
+        assertRiderOwnership(delivery, authenticatedRiderId, privileged);
         if (delivery.getStatus() == DeliveryStatus.FAILED) {
             throw new InvalidDeliveryStateException(orderId, delivery.getStatus(), "record proof of delivery");
         }
@@ -243,6 +258,16 @@ public class DeliveryService {
             });
     }
 
+    private void assertRiderOwnership(Delivery delivery, UUID authenticatedRiderId, boolean privileged) {
+        if (privileged) {
+            return;
+        }
+        UUID assignedRiderId = delivery.getRider() != null ? delivery.getRider().getId() : null;
+        if (authenticatedRiderId == null || !authenticatedRiderId.equals(assignedRiderId)) {
+            throw new AccessDeniedException("Delivery is not assigned to the authenticated rider");
+        }
+    }
+
     private Delivery assignDelivery(Delivery existing, UUID orderId, Rider rider, int etaMinutes, UUID userId) {
         Delivery delivery = existing == null ? new Delivery() : existing;
         delivery.setOrderId(orderId);
@@ -250,7 +275,7 @@ public class DeliveryService {
         delivery.setStatus(DeliveryStatus.ASSIGNED);
         delivery.setEstimatedMinutes(etaMinutes);
         if (delivery.getDispatchOtp() == null) {
-            String otp = String.format("%06d", ThreadLocalRandom.current().nextInt(100000, 1000000));
+            String otp = String.format("%06d", SECURE_RANDOM.nextInt(100000, 1000000));
             delivery.setDispatchOtp(otp);
         }
         delivery.setDispatchedAt(Instant.now());
@@ -264,7 +289,6 @@ public class DeliveryService {
         eventPayload.put("riderName", rider.getName());
         eventPayload.put("estimatedMinutes", saved.getEstimatedMinutes());
         eventPayload.put("dispatchedAt", saved.getDispatchedAt());
-        eventPayload.put("dispatchOtp", saved.getDispatchOtp());
         outboxService.publish("Fulfillment", orderId.toString(), "OrderDispatched", eventPayload);
         return saved;
     }

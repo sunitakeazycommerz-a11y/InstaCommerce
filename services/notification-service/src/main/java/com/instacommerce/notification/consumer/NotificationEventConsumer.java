@@ -33,9 +33,18 @@ public class NotificationEventConsumer {
         handle(record, "payment");
     }
 
-    @KafkaListener(topics = TopicNames.FULFILLMENT_EVENTS, groupId = "notification-service", concurrency = "3")
+    @KafkaListener(
+        topics = {TopicNames.FULFILLMENT_EVENTS, TopicNames.DELIVERY_EVENTS},
+        groupId = "notification-service",
+        concurrency = "3"
+    )
     public void onFulfillmentEvent(ConsumerRecord<String, String> record) {
         handle(record, "fulfillment");
+    }
+
+    @KafkaListener(topics = TopicNames.RIDER_EVENTS, groupId = "notification-service", concurrency = "3")
+    public void onRiderEvent(ConsumerRecord<String, String> record) {
+        handle(record, "rider");
     }
 
     private void handle(ConsumerRecord<String, String> record, String domain) {
@@ -46,9 +55,14 @@ public class NotificationEventConsumer {
             logger.warn("Transient preference lookup failure for {} event at offset={} partition={}: {}",
                 domain, record.offset(), record.partition(), ex.getMessage());
             throw ex;
+        } catch (RuntimeException ex) {
+            logger.error("Failed to process {} event at offset={} partition={}: {}",
+                domain, record.offset(), record.partition(), ex.getMessage(), ex);
+            throw ex;
         } catch (Exception ex) {
             logger.error("Failed to process {} event at offset={} partition={}: {}",
                 domain, record.offset(), record.partition(), ex.getMessage(), ex);
+            throw new IllegalStateException("Failed to process " + domain + " event", ex);
         }
     }
 }

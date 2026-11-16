@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,6 +32,7 @@ public class StagingTelemetryController {
     }
 
     @PostMapping("/telemetry")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<StagingTelemetryResponse> recordTelemetry(
             @PathVariable UUID storeId,
             @RequestBody @Valid StagingTelemetryRequest request) {
@@ -49,6 +51,7 @@ public class StagingTelemetryController {
     }
 
     @PostMapping("/validate-dispatch")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'PICKER', 'INTERNAL_SERVICE')")
     public ResponseEntity<DispatchPackagingResponse> validateDispatch(
             @PathVariable UUID storeId,
             @RequestBody @Valid DispatchPackagingRequest request) {

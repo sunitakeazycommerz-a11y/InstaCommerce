@@ -6,10 +6,12 @@ import com.instacommerce.warehouse.domain.model.StoreHours;
 import com.instacommerce.warehouse.domain.model.StoreStatus;
 import com.instacommerce.warehouse.dto.mapper.StoreMapper;
 import com.instacommerce.warehouse.dto.request.CreateStoreRequest;
+import com.instacommerce.warehouse.dto.request.UpsertStoreHoursRequest;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.exception.StoreNotFoundException;
 import com.instacommerce.warehouse.repository.StoreHoursRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
+import java.time.Clock;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -22,6 +24,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
@@ -36,15 +39,26 @@ public class StoreService {
     private final StoreHoursRepository storeHoursRepository;
     private final OutboxService outboxService;
     private final WarehouseProperties warehouseProperties;
+    private final Clock clock;
 
     public StoreService(StoreRepository storeRepository,
                         StoreHoursRepository storeHoursRepository,
                         OutboxService outboxService,
                         WarehouseProperties warehouseProperties) {
+        this(storeRepository, storeHoursRepository, outboxService, warehouseProperties, Clock.systemUTC());
+    }
+
+    @Autowired
+    public StoreService(StoreRepository storeRepository,
+                        StoreHoursRepository storeHoursRepository,
+                        OutboxService outboxService,
+                        WarehouseProperties warehouseProperties,
+                        Clock clock) {
         this.storeRepository = storeRepository;
         this.storeHoursRepository = storeHoursRepository;
         this.outboxService = outboxService;
         this.warehouseProperties = warehouseProperties;
+        this.clock = clock != null ? clock : Clock.systemUTC();
     }
 
     @Transactional(readOnly = true)
@@ -99,6 +113,36 @@ public class StoreService {
         }
         ZonedDateTime storeNow = toStoreTime(store, now);
         return checkStoreHours(storeId, storeNow);
+    }
+
+    @Transactional
+    @CacheEvict(value = "stores", key = "#storeId")
+    public StoreResponse.HoursResponse upsertStoreHours(UUID storeId, UpsertStoreHoursRequest request) {
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> new StoreNotFoundException(storeId));
+        StoreHours hours = storeHoursRepository.findByStoreIdAndDayOfWeek(storeId, request.dayOfWeek())
+                .orElseGet(() -> {
+                    StoreHours created = new StoreHours();
+                    created.setStore(store);
+                    created.setDayOfWeek(request.dayOfWeek());
+                    return created;
+                });
+        hours.setOpensAt(request.opensAt());
+        hours.setClosesAt(request.closesAt());
+        hours.setHoliday(Boolean.TRUE.equals(request.holiday()));
+        StoreHours saved = storeHoursRepository.save(hours);
+        outboxService.publish("Store", storeId.toString(), "StoreHoursUpdated",
+                Map.of("storeId", storeId.toString(),
+                        "dayOfWeek", saved.getDayOfWeek(),
+                        "opensAt", saved.getOpensAt().toString(),
+                        "closesAt", saved.getClosesAt().toString(),
+                        "holiday", saved.isHoliday()));
+        return new StoreResponse.HoursResponse(
+                saved.getId(),
+                saved.getDayOfWeek(),
+                saved.getOpensAt().toString(),
+                saved.getClosesAt().toString(),
+                saved.isHoliday());
     }
 
     private boolean checkStoreHours(UUID storeId, ZonedDateTime storeNow) {
@@ -176,7 +220,10 @@ public class StoreService {
 
     private ZonedDateTime toStoreTime(Store store, LocalDateTime now) {
         ZoneId storeZone = resolveZoneId(store.getTimezone());
-        return now.atZone(storeZone);
+        if (now != null) {
+            return now.atZone(ZoneId.systemDefault()).withZoneSameInstant(storeZone);
+        }
+        return ZonedDateTime.ofInstant(Instant.now(clock), storeZone);
     }
 
     private ZoneId resolveZoneId(String timezone) {

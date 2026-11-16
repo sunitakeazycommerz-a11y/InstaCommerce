@@ -3,6 +3,7 @@ package com.instacommerce.notification.provider;
 import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.notification.domain.model.NotificationChannel;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -28,8 +29,8 @@ public class SendGridEmailProvider implements NotificationProvider {
 
     public SendGridEmailProvider(NotificationProperties notificationProperties) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(java.time.Duration.ofSeconds(2));
-        requestFactory.setReadTimeout(java.time.Duration.ofSeconds(5));
+        requestFactory.setConnectTimeout(Duration.ofSeconds(2));
+        requestFactory.setReadTimeout(Duration.ofSeconds(5));
         this.restTemplate = new RestTemplate(requestFactory);
         this.notificationProperties = notificationProperties;
     }

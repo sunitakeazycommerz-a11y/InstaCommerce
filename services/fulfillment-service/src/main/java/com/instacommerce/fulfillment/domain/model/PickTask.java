@@ -17,6 +17,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "pick_tasks")
@@ -48,7 +50,7 @@ public class PickTask {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, columnDefinition = "pick_task_status")
-    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.NAMED_ENUM)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     private PickTaskStatus status = PickTaskStatus.PENDING;
 
     @Column(name = "started_at")

@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,6 +28,7 @@ public class SafetyStockController {
     }
 
     @PostMapping("/stores/{storeId}/safety-stock/ingest")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<SafetyStockResponse> ingestBuffer(
             @PathVariable UUID storeId,
             @Valid @RequestBody SafetyStockItemRequest request) {
@@ -34,6 +36,7 @@ public class SafetyStockController {
     }
 
     @PostMapping("/stores/{storeId}/safety-stock/ingest-batch")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<List<SafetyStockResponse>> ingestBatch(
             @PathVariable UUID storeId,
             @Valid @RequestBody List<SafetyStockItemRequest> requests) {
@@ -55,6 +58,7 @@ public class SafetyStockController {
     }
 
     @PostMapping("/stores/{storeId}/safety-stock/check-reorders")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<List<SafetyStockResponse>> checkReorders(@PathVariable UUID storeId) {
         return ResponseEntity.ok(safetyStockService.checkStoreReorders(storeId));
     }

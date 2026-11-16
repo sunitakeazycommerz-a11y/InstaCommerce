@@ -6,6 +6,7 @@ import com.instacommerce.inventory.dto.request.SafetyStockItemRequest;
 import com.instacommerce.inventory.dto.response.SafetyStockResponse;
 import com.instacommerce.inventory.repository.SkuSafetyStockBufferRepository;
 import com.instacommerce.inventory.repository.StockItemRepository;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -21,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class SafetyStockService {
     private static final Logger log = LoggerFactory.getLogger(SafetyStockService.class);
+    static final Duration REORDER_ALERT_COOLDOWN = Duration.ofHours(4);
 
     private final SkuSafetyStockBufferRepository bufferRepository;
     private final StockItemRepository stockItemRepository;
@@ -51,7 +55,8 @@ public class SafetyStockService {
         buffer = bufferRepository.save(buffer);
 
         // Evaluate against current stock
-        return evaluateAndReorderIfNeeded(storeId, buffer);
+        StockItem stock = stockItemRepository.findByStoreIdAndProductId(storeId, buffer.getProductId()).orElse(null);
+        return evaluateAndReorderIfNeeded(storeId, buffer, stock);
     }
 
     @Transactional
@@ -79,9 +84,10 @@ public class SafetyStockService {
     @Transactional(readOnly = true)
     public List<SafetyStockResponse> getStoreBuffers(UUID storeId) {
         List<SkuSafetyStockBuffer> buffers = bufferRepository.findByStoreId(storeId);
+        Map<UUID, StockItem> stockByProduct = loadStockByProduct(storeId, buffers);
         List<SafetyStockResponse> responses = new ArrayList<>();
         for (SkuSafetyStockBuffer buffer : buffers) {
-            StockItem stock = stockItemRepository.findByStoreIdAndProductId(storeId, buffer.getProductId()).orElse(null);
+            StockItem stock = stockByProduct.get(buffer.getProductId());
             int onHand = stock != null ? stock.getOnHand() : 0;
             int reserved = stock != null ? stock.getReserved() : 0;
             int available = Math.max(0, onHand - reserved);
@@ -94,23 +100,40 @@ public class SafetyStockService {
     @Transactional
     public List<SafetyStockResponse> checkStoreReorders(UUID storeId) {
         List<SkuSafetyStockBuffer> buffers = bufferRepository.findByStoreId(storeId);
+        Map<UUID, StockItem> stockByProduct = loadStockByProduct(storeId, buffers);
         List<SafetyStockResponse> responses = new ArrayList<>();
         for (SkuSafetyStockBuffer buffer : buffers) {
-            responses.add(evaluateAndReorderIfNeeded(storeId, buffer));
+            responses.add(evaluateAndReorderIfNeeded(storeId, buffer, stockByProduct.get(buffer.getProductId())));
         }
         return responses;
     }
 
-    private SafetyStockResponse evaluateAndReorderIfNeeded(UUID storeId, SkuSafetyStockBuffer buffer) {
-        StockItem stock = stockItemRepository.findByStoreIdAndProductId(storeId, buffer.getProductId()).orElse(null);
+    private Map<UUID, StockItem> loadStockByProduct(UUID storeId, List<SkuSafetyStockBuffer> buffers) {
+        List<UUID> productIds = buffers.stream()
+            .map(SkuSafetyStockBuffer::getProductId)
+            .distinct()
+            .toList();
+        if (productIds.isEmpty()) {
+            return Map.of();
+        }
+        return stockItemRepository.findByStoreIdAndProductIdIn(storeId, productIds).stream()
+            .collect(Collectors.toMap(StockItem::getProductId, Function.identity()));
+    }
+
+    private SafetyStockResponse evaluateAndReorderIfNeeded(UUID storeId, SkuSafetyStockBuffer buffer, StockItem stock) {
         int onHand = stock != null ? stock.getOnHand() : 0;
         int reserved = stock != null ? stock.getReserved() : 0;
         int available = Math.max(0, onHand - reserved);
         boolean reorderNeeded = available <= buffer.getReorderThreshold();
 
         if (reorderNeeded) {
-            // Check throttle or trigger PO
             Instant now = Instant.now();
+            Instant lastAlert = buffer.getLastReorderEventAt();
+            if (lastAlert != null && lastAlert.plus(REORDER_ALERT_COOLDOWN).isAfter(now)) {
+                log.debug("Skipping reorder alert within cooldown window: store={} sku={} lastAlert={}",
+                    storeId, buffer.getProductId(), lastAlert);
+                return toResponse(buffer, onHand, available, true);
+            }
             buffer.setLastReorderEventAt(now);
             bufferRepository.save(buffer);
 

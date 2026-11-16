@@ -8,6 +8,9 @@ server:
 spring:
   application:
     name: warehouse-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   config:
     import: optional:sm://
   lifecycle:

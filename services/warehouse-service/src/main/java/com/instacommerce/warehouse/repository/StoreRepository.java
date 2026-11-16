@@ -18,9 +18,9 @@ public interface StoreRepository extends JpaRepository<Store, UUID> {
             SELECT * FROM (
                 SELECT s.*, (
                     6371 * acos(
-                        LEAST(1.0, cos(radians(:lat)) * cos(radians(s.latitude))
+                        LEAST(1.0, GREATEST(-1.0, cos(radians(:lat)) * cos(radians(s.latitude))
                         * cos(radians(s.longitude) - radians(:lng))
-                        + sin(radians(:lat)) * sin(radians(s.latitude)))
+                        + sin(radians(:lat)) * sin(radians(s.latitude))))
                     )
                 ) AS distance_km
                 FROM stores s

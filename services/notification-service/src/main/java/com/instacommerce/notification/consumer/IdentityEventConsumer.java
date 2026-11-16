@@ -37,9 +37,14 @@ public class IdentityEventConsumer {
             }
             Instant erasedAt = event.erasedAt() == null ? Instant.now() : event.erasedAt();
             userErasureService.anonymizeUser(event.userId(), erasedAt);
+        } catch (RuntimeException ex) {
+            logger.error("Failed to process identity event at offset={} partition={}: {}",
+                record.offset(), record.partition(), ex.getMessage(), ex);
+            throw ex;
         } catch (Exception ex) {
             logger.error("Failed to process identity event at offset={} partition={}: {}",
                 record.offset(), record.partition(), ex.getMessage(), ex);
+            throw new IllegalStateException("Failed to process identity event", ex);
         }
     }
 }

@@ -2,14 +2,19 @@ package com.instacommerce.inventory.exception;
 
 import com.instacommerce.inventory.dto.response.ErrorDetail;
 import com.instacommerce.inventory.dto.response.ErrorResponse;
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import java.time.Instant;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -43,8 +48,8 @@ public class GlobalExceptionHandler {
                 "Resource was modified by another request, please retry", List.of(), request));
     }
 
-    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
-    public ResponseEntity<ErrorResponse> handleDataIntegrity(org.springframework.dao.DataIntegrityViolationException ex,
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrity(DataIntegrityViolationException ex,
                                                              HttpServletRequest request) {
         log.warn("Data integrity conflict on {} {}", request.getMethod(), request.getRequestURI(), ex);
         return ResponseEntity.status(HttpStatus.CONFLICT)
@@ -52,13 +57,32 @@ public class GlobalExceptionHandler {
                 "Data integrity violation or concurrent conflict, please retry", List.of(), request));
     }
 
-    @ExceptionHandler({org.springframework.dao.PessimisticLockingFailureException.class,
-                       org.springframework.dao.CannotAcquireLockException.class})
+    @ExceptionHandler({PessimisticLockingFailureException.class,
+                       CannotAcquireLockException.class})
     public ResponseEntity<ErrorResponse> handleLockFailure(Exception ex, HttpServletRequest request) {
         log.warn("Pessimistic lock timeout on {} {}", request.getMethod(), request.getRequestURI(), ex);
         return ResponseEntity.status(HttpStatus.CONFLICT)
             .body(buildError("LOCK_ACQUISITION_TIMEOUT",
                 "Failed to acquire lock within timeout period, please retry", List.of(), request));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex,
+                                                               HttpServletRequest request) {
+        return ResponseEntity.badRequest()
+            .body(buildError("INVALID_ARGUMENT", ex.getMessage(), List.of(), request));
+    }
+
+    @ExceptionHandler({NoSuchElementException.class, EntityNotFoundException.class})
+    public ResponseEntity<ErrorResponse> handleNotFound(RuntimeException ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(buildError("RESOURCE_NOT_FOUND", ex.getMessage(), List.of(), request));
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalState(IllegalStateException ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(buildError("INVALID_STATE", ex.getMessage(), List.of(), request));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

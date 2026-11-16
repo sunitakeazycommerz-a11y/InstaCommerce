@@ -1,5 +1,6 @@
 package com.instacommerce.routing.config;
 
+import com.instacommerce.routing.security.InternalServiceAuthFilter;
 import com.instacommerce.routing.security.JwtAuthenticationFilter;
 import com.instacommerce.routing.security.RestAccessDeniedHandler;
 import com.instacommerce.routing.security.RestAuthenticationEntryPoint;
@@ -8,6 +9,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -29,6 +31,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
+                                                   InternalServiceAuthFilter internalServiceAuthFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler) throws Exception {
         http.cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -36,10 +39,14 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error", "/ws/**").permitAll()
+                .requestMatchers("/admin/routing/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/tracking/location")
+                    .hasAnyRole("RIDER", "ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)
                 .accessDeniedHandler(accessDeniedHandler))
+            .addFilterBefore(internalServiceAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

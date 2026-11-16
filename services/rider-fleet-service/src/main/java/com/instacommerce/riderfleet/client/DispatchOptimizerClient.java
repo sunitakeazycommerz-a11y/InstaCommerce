@@ -1,5 +1,7 @@
 package com.instacommerce.riderfleet.client;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.instacommerce.riderfleet.config.RiderFleetProperties;
 import com.instacommerce.riderfleet.security.InternalServiceAuthInterceptor;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -58,38 +60,48 @@ public class DispatchOptimizerClient {
     }
 
     public record Position(
-        @com.fasterxml.jackson.annotation.JsonProperty("lat") double lat,
-        @com.fasterxml.jackson.annotation.JsonProperty("lng") double lng
+        @JsonProperty("lat") double lat,
+        @JsonProperty("lng") double lng
     ) {}
 
     public record RiderState(
-        @com.fasterxml.jackson.annotation.JsonProperty("id") String id,
-        @com.fasterxml.jackson.annotation.JsonProperty("position") Position position,
-        @com.fasterxml.jackson.annotation.JsonProperty("active_orders") int activeOrders,
-        @com.fasterxml.jackson.annotation.JsonProperty("vehicle_type") String vehicleType,
-        @com.fasterxml.jackson.annotation.JsonProperty("is_available") boolean isAvailable
-    ) {}
+        @JsonProperty("id") String id,
+        @JsonProperty("position") Position position,
+        @JsonProperty("active_orders") int activeOrders,
+        @JsonProperty("vehicle_type") String vehicleType,
+        @JsonProperty("is_available") boolean isAvailable,
+        @JsonProperty("total_deliveries") int totalDeliveries,
+        @JsonProperty("avg_rating") double avgRating,
+        @JsonProperty("consecutive_deliveries") int consecutiveDeliveries,
+        @JsonProperty("avg_speed_kmh") double avgSpeedKmh,
+        @JsonProperty("battery_percent") double batteryPercent,
+        @JsonProperty("zone") String zone
+    ) {
+        public RiderState(String id, Position position, int activeOrders, String vehicleType, boolean isAvailable) {
+            this(id, position, activeOrders, vehicleType, isAvailable, 0, 5.0, 0, 22.0, 100.0, null);
+        }
+    }
 
     public record OrderRequest(
-        @com.fasterxml.jackson.annotation.JsonProperty("id") String id,
-        @com.fasterxml.jackson.annotation.JsonProperty("position") Position position
+        @JsonProperty("id") String id,
+        @JsonProperty("position") Position position
     ) {}
 
     public record OptimizationRequest(
-        @com.fasterxml.jackson.annotation.JsonProperty("riders") List<RiderState> riders,
-        @com.fasterxml.jackson.annotation.JsonProperty("orders") List<OrderRequest> orders
+        @JsonProperty("riders") List<RiderState> riders,
+        @JsonProperty("orders") List<OrderRequest> orders
     ) {}
 
-    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record Assignment(
-        @com.fasterxml.jackson.annotation.JsonProperty("rider_id") String riderId,
-        @com.fasterxml.jackson.annotation.JsonProperty("order_ids") List<String> orderIds,
-        @com.fasterxml.jackson.annotation.JsonProperty("estimated_eta_minutes") Double estimatedEtaMinutes
+        @JsonProperty("rider_id") String riderId,
+        @JsonProperty("order_ids") List<String> orderIds,
+        @JsonProperty("estimated_eta_minutes") Double estimatedEtaMinutes
     ) {}
 
-    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record OptimizationResult(
-        @com.fasterxml.jackson.annotation.JsonProperty("assignments") List<Assignment> assignments,
-        @com.fasterxml.jackson.annotation.JsonProperty("unassigned_orders") List<String> unassignedOrders
+        @JsonProperty("assignments") List<Assignment> assignments,
+        @JsonProperty("unassigned_orders") List<String> unassignedOrders
     ) {}
 }

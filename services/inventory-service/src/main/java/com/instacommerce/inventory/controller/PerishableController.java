@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,6 +30,7 @@ public class PerishableController {
     }
 
     @PostMapping("/stores/{storeId}/batches")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<StockBatchResponse> createBatch(
             @PathVariable UUID storeId,
             @Valid @RequestBody CreateBatchRequest request) {
@@ -41,6 +43,7 @@ public class PerishableController {
     }
 
     @PostMapping("/stores/{storeId}/perishables/trigger-markdowns")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<List<StockBatchResponse>> triggerStoreMarkdowns(
             @PathVariable UUID storeId,
             @RequestParam(required = false, defaultValue = "24") int hoursAhead) {
@@ -48,6 +51,7 @@ public class PerishableController {
     }
 
     @PostMapping("/perishables/trigger-markdowns")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<List<StockBatchResponse>> triggerGlobalMarkdowns(
             @RequestParam(required = false, defaultValue = "24") int hoursAhead) {
         return ResponseEntity.ok(perishableService.triggerMarkdownsGlobal(Duration.ofHours(hoursAhead)));

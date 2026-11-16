@@ -15,6 +15,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -37,6 +38,9 @@ class SafetyStockServiceTest {
 
     @Mock
     private OutboxService outboxService;
+
+    @Captor
+    private ArgumentCaptor<Map<String, Object>> payloadCaptor;
 
     private SafetyStockService safetyStockService;
 
@@ -84,7 +88,6 @@ class SafetyStockServiceTest {
         assertTrue(response.reorderNeeded());
 
         // Verify outbox event emitted
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(outboxService).publish(
             eq("INVENTORY_SAFETY_STOCK"),
             eq(storeId + ":" + productId),

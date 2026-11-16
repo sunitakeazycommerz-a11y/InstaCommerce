@@ -1,5 +1,6 @@
 package com.instacommerce.notification.service;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.instacommerce.notification.config.InternalServiceAuthInterceptor;
 import com.instacommerce.notification.config.NotificationProperties;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -68,7 +69,7 @@ public class RestUserDirectoryClient implements UserDirectoryClient {
         return sb.toString();
     }
 
-    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonIgnoreProperties(ignoreUnknown = true)
     private record IdentityUserResponse(
         UUID id,
         String email,

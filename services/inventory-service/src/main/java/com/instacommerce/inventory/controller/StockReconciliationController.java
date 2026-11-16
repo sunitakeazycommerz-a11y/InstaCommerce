@@ -10,6 +10,7 @@ import jakarta.validation.constraints.NotNull;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -39,18 +40,21 @@ public class StockReconciliationController {
     ) {}
 
     @PostMapping("/reconciliation/run")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<ReconciliationSummary> runReconciliation(@Valid @RequestBody RunReconciliationRequest request) {
         ReconciliationSummary summary = reconciliationService.reconcileStock(request.storeId(), request.physicalCounts());
         return ResponseEntity.ok(summary);
     }
 
     @PostMapping("/alerts/missing-item")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<CycleCountTask> reportMissingItem(@Valid @RequestBody MissingItemAlert alert) {
         CycleCountTask task = reconciliationService.reportMissingItem(alert);
         return ResponseEntity.ok(task);
     }
 
     @PostMapping("/audit/unfreeze")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
     public ResponseEntity<Void> unfreezeStock(@Valid @RequestBody UnfreezeRequest request) {
         reconciliationService.unfreezeStock(request.productId(), request.storeId(), request.verifiedPhysicalQty());
         return ResponseEntity.ok().build();

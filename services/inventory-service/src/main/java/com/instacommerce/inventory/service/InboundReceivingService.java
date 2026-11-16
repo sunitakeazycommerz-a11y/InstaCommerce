@@ -87,6 +87,12 @@ public class InboundReceivingService {
 
     @Transactional
     public AsnResponse receiveByPalletBarcode(String palletBarcode, String receivedBy) {
+        return receiveByPalletBarcode(palletBarcode, receivedBy, null);
+    }
+
+    @Transactional
+    public AsnResponse receiveByPalletBarcode(String palletBarcode, String receivedBy,
+                                              Map<UUID, Integer> receivedQuantities) {
         InboundAsn asn = asnRepository.findByPalletBarcode(palletBarcode)
             .orElseThrow(() -> new NoSuchElementException("Inbound ASN not found for pallet barcode: " + palletBarcode));
 
@@ -101,9 +107,14 @@ public class InboundReceivingService {
 
         final UUID storeId = asn.getStoreId();
 
-        // Reconcile and update available inventory
+        // Reconcile and update available inventory using verified received quantities
         for (AsnLineItem item : asn.getLineItems()) {
-            item.setReceivedQuantity(item.getExpectedQuantity());
+            int acceptedQty = resolveAcceptedQuantity(item, receivedQuantities);
+            item.setReceivedQuantity(acceptedQty);
+
+            if (acceptedQty <= 0) {
+                continue;
+            }
 
             // 1. Update on-hand inventory in store
             StockItem stockItem = stockItemRepository.findByStoreIdAndProductId(storeId, item.getProductId())
@@ -116,7 +127,7 @@ public class InboundReceivingService {
                     return newStock;
                 });
 
-            stockItem.setOnHand(stockItem.getOnHand() + item.getExpectedQuantity());
+            stockItem.setOnHand(stockItem.getOnHand() + acceptedQty);
             stockItemRepository.save(stockItem);
 
             // 2. Register stock batch if batch number & expiry are supplied
@@ -133,7 +144,7 @@ public class InboundReceivingService {
                         return newBatch;
                     });
 
-                batch.setQuantity(batch.getQuantity() + item.getExpectedQuantity());
+                batch.setQuantity(batch.getQuantity() + acceptedQty);
                 if (item.getExpiryDate() != null) {
                     batch.setExpiryDate(item.getExpiryDate());
                 }
@@ -161,6 +172,18 @@ public class InboundReceivingService {
             palletBarcode, asn.getAsnNumber(), asn.getStoreId());
 
         return toResponse(asn);
+    }
+
+    private int resolveAcceptedQuantity(AsnLineItem item, Map<UUID, Integer> receivedQuantities) {
+        if (receivedQuantities != null && receivedQuantities.containsKey(item.getProductId())) {
+            int supplied = receivedQuantities.get(item.getProductId());
+            if (supplied < 0) {
+                throw new IllegalArgumentException(
+                    "Received quantity cannot be negative for product " + item.getProductId());
+            }
+            return supplied;
+        }
+        return item.getReceivedQuantity() > 0 ? item.getReceivedQuantity() : item.getExpectedQuantity();
     }
 
     @Transactional(readOnly = true)

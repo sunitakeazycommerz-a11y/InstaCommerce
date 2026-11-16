@@ -17,6 +17,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -42,7 +43,7 @@ public class ETAService {
         this(routingProperties, (RoutingBarrierRepository) null, null, null);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public ETAService(RoutingProperties routingProperties,
                       ObjectProvider<RoutingBarrierRepository> barrierRepositoryProvider,
                       ObjectProvider<WeatherConditionRepository> weatherRepositoryProvider,
@@ -69,7 +70,13 @@ public class ETAService {
      */
     @Cacheable(value = "eta", key = "#root.target.cacheKey(#fromLat, #fromLng, #toLat, #toLng)")
     public ETAResponse calculateETA(double fromLat, double fromLng, double toLat, double toLng) {
-        ETAEstimate estimate = calculateETAWithConfidence(fromLat, fromLng, toLat, toLng, null, "MOTORCYCLE", 0.0);
+        return calculateETA(fromLat, fromLng, toLat, toLng, null, "MOTORCYCLE", 0.0);
+    }
+
+    public ETAResponse calculateETA(double fromLat, double fromLng, double toLat, double toLng,
+                                    UUID storeId, String vehicleType, double inclinePercent) {
+        ETAEstimate estimate = calculateETAWithConfidence(
+            fromLat, fromLng, toLat, toLng, storeId, vehicleType, inclinePercent);
         return new ETAResponse(
             estimate.etaMinutes(),
             estimate.distanceKm(),

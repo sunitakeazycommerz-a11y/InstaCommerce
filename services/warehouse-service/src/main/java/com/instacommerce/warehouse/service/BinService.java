@@ -60,11 +60,17 @@ public class BinService {
                                     bin.getMaxVolumeCm3(), bin.getCurrentVolumeCm3(), addedVol));
                 }
 
+                int addedWeight = request.weightGrams() != null ? request.weightGrams() : 0;
+                if (bin.getCurrentWeightGrams() + addedWeight > bin.getMaxWeightGrams()) {
+                    throw new BinAlreadyOccupiedException(
+                            String.format("Bin %s-%s-%s-%s weight capacity exceeded. Max: %d, Current: %d, Requested: %d",
+                                    request.aisle(), request.rack(), request.shelf(), request.binNumber(),
+                                    bin.getMaxWeightGrams(), bin.getCurrentWeightGrams(), addedWeight));
+                }
+
                 bin.setSku(request.sku());
                 bin.setCurrentVolumeCm3(bin.getCurrentVolumeCm3() + addedVol);
-                if (request.weightGrams() != null) {
-                    bin.setCurrentWeightGrams(bin.getCurrentWeightGrams() + request.weightGrams());
-                }
+                bin.setCurrentWeightGrams(bin.getCurrentWeightGrams() + addedWeight);
                 bin.setOccupied(true);
             } else {
                 bin = new WarehouseBin();
@@ -78,8 +84,12 @@ public class BinService {
                 if (vol > bin.getMaxVolumeCm3()) {
                     throw new BinAlreadyOccupiedException("Requested item volume exceeds max bin capacity");
                 }
+                int weight = request.weightGrams() != null ? request.weightGrams() : 0;
+                if (weight > bin.getMaxWeightGrams()) {
+                    throw new BinAlreadyOccupiedException("Requested item weight exceeds max bin capacity");
+                }
                 bin.setCurrentVolumeCm3(vol);
-                bin.setCurrentWeightGrams(request.weightGrams() != null ? request.weightGrams() : 0);
+                bin.setCurrentWeightGrams(weight);
                 bin.setOccupied(true);
             }
 

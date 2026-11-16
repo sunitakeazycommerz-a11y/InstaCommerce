@@ -4,6 +4,7 @@ import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.notification.domain.model.NotificationChannel;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,8 +30,8 @@ public class TwilioSmsProvider implements NotificationProvider {
 
     public TwilioSmsProvider(NotificationProperties notificationProperties) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(java.time.Duration.ofSeconds(2));
-        requestFactory.setReadTimeout(java.time.Duration.ofSeconds(5));
+        requestFactory.setConnectTimeout(Duration.ofSeconds(2));
+        requestFactory.setReadTimeout(Duration.ofSeconds(5));
         this.restTemplate = new RestTemplate(requestFactory);
         this.notificationProperties = notificationProperties;
     }

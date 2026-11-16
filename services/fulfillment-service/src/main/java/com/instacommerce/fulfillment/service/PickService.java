@@ -205,7 +205,7 @@ public class PickService {
         }
 
         int missingQtyDelta = calculateMissingQtyDelta(previousStatus, previousPickedQty, item);
-        if (missingQtyDelta > 0) {
+        if (missingQtyDelta > 0 || item.getStatus() == PickItemStatus.SUBSTITUTED) {
             substitutionService.handleMissingItem(task, item, missingQtyDelta);
         }
 
@@ -299,10 +299,26 @@ public class PickService {
         if (status == PickItemStatus.MISSING) {
             return Math.max(quantity - pickedQty, 0);
         }
-        if (status == PickItemStatus.PICKED && pickedQty < quantity) {
+        if ((status == PickItemStatus.PICKED || status == PickItemStatus.SUBSTITUTED) && pickedQty < quantity) {
             return quantity - pickedQty;
         }
         return 0;
+    }
+
+    @Transactional
+    public void onBatchCompleted(PickTask task) {
+        if (task.getStatus() == PickTaskStatus.CANCELLED) {
+            return;
+        }
+        if (task.getCompletedAt() == null) {
+            task.setCompletedAt(Instant.now());
+        }
+        task.setStatus(PickTaskStatus.COMPLETED);
+        PickTask saved = pickTaskRepository.save(task);
+        if (saved.getStartedAt() != null && saved.getCompletedAt() != null) {
+            pickDurationTimer.record(Duration.between(saved.getStartedAt(), saved.getCompletedAt()));
+        }
+        publishPacked(saved, "batch-complete");
     }
 
     private void completeTask(PickTask task) {

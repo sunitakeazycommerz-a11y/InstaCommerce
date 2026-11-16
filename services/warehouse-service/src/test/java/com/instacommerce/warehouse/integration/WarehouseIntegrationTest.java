@@ -11,6 +11,11 @@ import com.instacommerce.warehouse.domain.model.Store;
 import com.instacommerce.warehouse.domain.model.StoreHours;
 import com.instacommerce.warehouse.domain.model.StoreStatus;
 import com.instacommerce.warehouse.domain.model.StoreZone;
+import com.instacommerce.warehouse.dto.request.BinAssignmentRequest;
+import com.instacommerce.warehouse.dto.request.DispatchPackagingRequest;
+import com.instacommerce.warehouse.dto.request.OptimizePathRequest;
+import com.instacommerce.warehouse.dto.request.PickItemLocationRequest;
+import com.instacommerce.warehouse.dto.request.StagingTelemetryRequest;
 import com.instacommerce.warehouse.repository.StagingTelemetryRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
 import com.instacommerce.warehouse.repository.WarehouseBinRepository;
@@ -20,6 +25,7 @@ import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,7 +46,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(classes = WarehouseServiceApplication.class)
 @AutoConfigureMockMvc
 @Testcontainers(disabledWithoutDocker = true)
-@WithMockUser(username = "warehouse-test-user", roles = {"USER"})
+@WithMockUser(username = "warehouse-test-user", roles = {"ADMIN"})
 @TestPropertySource(
     properties = {
         "spring.jpa.hibernate.ddl-auto=validate",
@@ -210,13 +216,13 @@ class WarehouseIntegrationTest {
         .perform(get("/stores/{id}/capacity", testStoreId))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.maxOrders").isNumber())
-        .andExpect(jsonPath("$.maxOrders").value(org.hamcrest.Matchers.greaterThanOrEqualTo(0)));
+        .andExpect(jsonPath("$.maxOrders").value(Matchers.greaterThanOrEqualTo(0)));
   }
 
   @Test
   @DisplayName("Bin assignment supports unique locations and rejects conflicting SKUs (Issue #580)")
   void testBinLocationAssignmentAndCollisionPrevention() throws Exception {
-    var assignReq1 = new com.instacommerce.warehouse.dto.request.BinAssignmentRequest(
+    var assignReq1 = new BinAssignmentRequest(
         "A1", "R1", "S1", "B1", "SKU-BEV-COLA", 10000, 1500);
 
     // Initial assignment succeeds
@@ -229,7 +235,7 @@ class WarehouseIntegrationTest {
         .andExpect(jsonPath("$.currentVolumeCm3").value(10000));
 
     // Duplicate assignment with different SKU to the same bin location throws 409 BIN_ALREADY_OCCUPIED
-    var conflictingReq = new com.instacommerce.warehouse.dto.request.BinAssignmentRequest(
+    var conflictingReq = new BinAssignmentRequest(
         "A1", "R1", "S1", "B1", "SKU-SNACK-CHIPS", 5000, 200);
 
     mockMvc.perform(post("/stores/{id}/bins/assign", testStoreId)
@@ -250,7 +256,7 @@ class WarehouseIntegrationTest {
   @DisplayName("Cold chain staging temperature telemetry triggers alerts and validates dispatch packaging (Issue #585)")
   void testColdChainStagingTelemetryAndThresholdAlerts() throws Exception {
     // 1. Normal reading (2.5°C) for CHILLED bay
-    var normalReading = new com.instacommerce.warehouse.dto.request.StagingTelemetryRequest(
+    var normalReading = new StagingTelemetryRequest(
         "SENSOR-BT-01", "BAY-CHILLED-1", "CHILLED", new BigDecimal("2.50"), 95);
 
     mockMvc.perform(post("/stores/{id}/staging/telemetry", testStoreId)
@@ -261,7 +267,7 @@ class WarehouseIntegrationTest {
         .andExpect(jsonPath("$.alertTriggered").value(false));
 
     // 2. High reading (5.5°C > 4.0°C threshold) for CHILLED bay
-    var breachReading1 = new com.instacommerce.warehouse.dto.request.StagingTelemetryRequest(
+    var breachReading1 = new StagingTelemetryRequest(
         "SENSOR-BT-01", "BAY-CHILLED-1", "CHILLED", new BigDecimal("5.50"), 94);
 
     mockMvc.perform(post("/stores/{id}/staging/telemetry", testStoreId)
@@ -271,7 +277,7 @@ class WarehouseIntegrationTest {
         .andExpect(jsonPath("$.breached").value(true));
 
     // 3. Second breach reading confirms sustained breach and triggers alert
-    var breachReading2 = new com.instacommerce.warehouse.dto.request.StagingTelemetryRequest(
+    var breachReading2 = new StagingTelemetryRequest(
         "SENSOR-BT-01", "BAY-CHILLED-1", "CHILLED", new BigDecimal("6.00"), 93);
 
     mockMvc.perform(post("/stores/{id}/staging/telemetry", testStoreId)
@@ -282,7 +288,7 @@ class WarehouseIntegrationTest {
         .andExpect(jsonPath("$.alertTriggered").value(true));
 
     // 4. Validate cold chain dispatch packaging: valid
-    var validPackaging = new com.instacommerce.warehouse.dto.request.DispatchPackagingRequest(
+    var validPackaging = new DispatchPackagingRequest(
         "ORD-9901", "CHILLED", true, true);
     mockMvc.perform(post("/stores/{id}/staging/validate-dispatch", testStoreId)
             .contentType(MediaType.APPLICATION_JSON)
@@ -291,7 +297,7 @@ class WarehouseIntegrationTest {
         .andExpect(jsonPath("$.verified").value(true));
 
     // 5. Validate cold chain dispatch packaging: missing cold packs throws 400
-    var invalidPackaging = new com.instacommerce.warehouse.dto.request.DispatchPackagingRequest(
+    var invalidPackaging = new DispatchPackagingRequest(
         "ORD-9902", "CHILLED", true, false);
     mockMvc.perform(post("/stores/{id}/staging/validate-dispatch", testStoreId)
             .contentType(MediaType.APPLICATION_JSON)
@@ -304,15 +310,15 @@ class WarehouseIntegrationTest {
   @DisplayName("Store layout pick path orders heavy items first and fragile bakery items last (Issue #589)")
   void testDarkStorePickPathOptimizationTSP() throws Exception {
     var items = List.of(
-        new com.instacommerce.warehouse.dto.request.PickItemLocationRequest(
+        new PickItemLocationRequest(
             "SKU-BREAD", "Fresh Sourdough Bread", "A10", "S2", "B1", "FRAGILE", 1),
-        new com.instacommerce.warehouse.dto.request.PickItemLocationRequest(
+        new PickItemLocationRequest(
             "SKU-WATER", "Mineral Water 5L Pack", "A1", "S1", "B2", "HEAVY", 2),
-        new com.instacommerce.warehouse.dto.request.PickItemLocationRequest(
+        new PickItemLocationRequest(
             "SKU-CEREAL", "Corn Flakes Ambient", "A4", "S3", "B5", "AMBIENT", 1)
     );
 
-    var pathReq = new com.instacommerce.warehouse.dto.request.OptimizePathRequest(
+    var pathReq = new OptimizePathRequest(
         "ENTRANCE", "PACKING", items);
 
     mockMvc.perform(post("/stores/{id}/layout/optimize-path", testStoreId)

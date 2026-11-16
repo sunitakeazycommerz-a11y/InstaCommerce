@@ -42,17 +42,20 @@ public class BatchPickingService {
     private final PickItemRepository pickItemRepository;
     private final AisleRoutingOptimizer aisleRoutingOptimizer;
     private final AuditLogService auditLogService;
+    private final PickService pickService;
 
     public BatchPickingService(PickBatchRepository pickBatchRepository,
                                PickTaskRepository pickTaskRepository,
                                PickItemRepository pickItemRepository,
                                AisleRoutingOptimizer aisleRoutingOptimizer,
-                               AuditLogService auditLogService) {
+                               AuditLogService auditLogService,
+                               PickService pickService) {
         this.pickBatchRepository = pickBatchRepository;
         this.pickTaskRepository = pickTaskRepository;
         this.pickItemRepository = pickItemRepository;
         this.aisleRoutingOptimizer = aisleRoutingOptimizer;
         this.auditLogService = auditLogService;
+        this.pickService = pickService;
     }
 
     @Transactional
@@ -61,7 +64,7 @@ public class BatchPickingService {
             ? request.maxOrders() : 4;
 
         List<PickTask> pendingTasks = pickTaskRepository
-            .findByStoreIdAndStatusAndBatchIdIsNullOrderByCreatedAtAsc(
+            .findUnbatchedForWaveLock(
                 request.storeId(), PickTaskStatus.PENDING, PageRequest.of(0, maxOrders));
 
         if (pendingTasks.isEmpty()) {
@@ -76,7 +79,8 @@ public class BatchPickingService {
         batch.setStartedAt(Instant.now());
         batch.setTotalOrders(pendingTasks.size());
 
-        List<PickItem> allItems = new ArrayList<>();
+        List<UUID> taskIds = pendingTasks.stream().map(PickTask::getId).toList();
+        List<PickItem> allItems = new ArrayList<>(pickItemRepository.findByPickTask_IdIn(taskIds));
         List<BatchToteAssignment> totes = new ArrayList<>();
         Map<UUID, PickTask> taskByOrderId = new HashMap<>();
 
@@ -96,9 +100,6 @@ public class BatchPickingService {
             }
             taskByOrderId.put(task.getOrderId(), task);
             totes.add(new BatchToteAssignment(task.getOrderId(), barcode, color));
-
-            List<PickItem> taskItems = pickItemRepository.findByPickTask_Id(task.getId());
-            allItems.addAll(taskItems);
         }
 
         batch.setTotalItems(allItems.size());
@@ -136,14 +137,14 @@ public class BatchPickingService {
             .orElseThrow(() -> new IllegalArgumentException("Batch not found: " + batchId));
 
         List<PickTask> tasks = pickTaskRepository.findByBatchId(batchId);
+        List<UUID> taskIds = tasks.stream().map(PickTask::getId).toList();
+        List<PickItem> allItems = taskIds.isEmpty() ? List.of() : pickItemRepository.findByPickTask_IdIn(taskIds);
         List<BatchToteAssignment> totes = new ArrayList<>();
-        List<PickItem> allItems = new ArrayList<>();
         Map<UUID, PickTask> taskByOrderId = new HashMap<>();
 
         for (PickTask task : tasks) {
             totes.add(new BatchToteAssignment(task.getOrderId(), task.getToteBarcode(), task.getToteColor()));
             taskByOrderId.put(task.getOrderId(), task);
-            allItems.addAll(pickItemRepository.findByPickTask_Id(task.getId()));
         }
 
         List<PickItem> optimizedRouteItems = aisleRoutingOptimizer.optimizePickPath(allItems);
@@ -195,9 +196,7 @@ public class BatchPickingService {
         List<PickTask> tasks = pickTaskRepository.findByBatchId(batchId);
         for (PickTask task : tasks) {
             if (task.getStatus() != PickTaskStatus.COMPLETED && task.getStatus() != PickTaskStatus.CANCELLED) {
-                task.setStatus(PickTaskStatus.COMPLETED);
-                task.setCompletedAt(Instant.now());
-                pickTaskRepository.save(task);
+                pickService.onBatchCompleted(task);
             }
         }
 

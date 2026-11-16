@@ -84,7 +84,9 @@ public class RiderController {
         if (authentication == null || !authentication.isAuthenticated()) {
             throw new AccessDeniedException("Authentication required");
         }
-        if (hasRole(authentication, "ROLE_ADMIN") || hasRole(authentication, "ROLE_INTERNAL")) {
+        if (hasRole(authentication, "ROLE_ADMIN")
+            || hasRole(authentication, "ROLE_INTERNAL")
+            || hasRole(authentication, "ROLE_INTERNAL_SERVICE")) {
             return;
         }
         if (!riderId.toString().equals(authentication.getName())) {

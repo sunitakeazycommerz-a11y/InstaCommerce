@@ -16,14 +16,14 @@ public interface RiderRepository extends JpaRepository<Rider, UUID> {
 
     @Query("""
         SELECT r FROM Rider r
-        WHERE r.status = com.instacommerce.riderfleet.domain.model.RiderStatus.ACTIVE
+        WHERE r.status = RiderStatus.ACTIVE
           AND r.storeId = :storeId
         """)
     List<Rider> findAvailableRidersByStoreId(@Param("storeId") UUID storeId);
 
     @Query("""
         SELECT r FROM Rider r
-        WHERE r.status = com.instacommerce.riderfleet.domain.model.RiderStatus.ON_DELIVERY
+        WHERE r.status = RiderStatus.ON_DELIVERY
           AND r.updatedAt < :cutoff
         """)
     List<Rider> findStuckOnDeliveryRiders(@Param("cutoff") Instant cutoff, Pageable pageable);

@@ -121,7 +121,7 @@ public class DeliveryService {
         log.info("Created delivery {} for order {}", delivery.getId(), orderId);
 
         outboxService.publish("Delivery", delivery.getId().toString(),
-            "DELIVERY_CREATED", toResponse(delivery));
+            "DeliveryCreated", toResponse(delivery));
 
         return toResponse(delivery);
     }
@@ -141,8 +141,15 @@ public class DeliveryService {
         delivery = deliveryRepository.save(delivery);
         log.info("Delivery {} status updated to {}", deliveryId, newStatus);
 
+        Map<String, Object> statusPayload = new HashMap<>();
+        statusPayload.put("deliveryId", delivery.getId().toString());
+        statusPayload.put("orderId", delivery.getOrderId().toString());
+        statusPayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
+        statusPayload.put("status", delivery.getStatus().name());
+        statusPayload.put("updatedAt", delivery.getUpdatedAt() != null
+            ? delivery.getUpdatedAt().toString() : Instant.now().toString());
         outboxService.publish("Delivery", deliveryId.toString(),
-            "DELIVERY_STATUS_UPDATED", toResponse(delivery));
+            "DeliveryStatusUpdated", statusPayload);
 
         return toResponse(delivery);
     }
@@ -165,7 +172,7 @@ public class DeliveryService {
         log.info("Delivery {} completed for order {}", deliveryId, delivery.getOrderId());
 
         outboxService.publish("Delivery", deliveryId.toString(),
-            "DELIVERY_COMPLETED", toResponse(delivery));
+            "DeliveryCompleted", toResponse(delivery));
 
         return toResponse(delivery);
     }
@@ -202,7 +209,7 @@ public class DeliveryService {
         updatePayload.put("vehicleRecommendation", estimate.vehicleRecommendation());
         updatePayload.put("calculatedAt", estimate.calculatedAt().toString());
 
-        outboxService.publish("Delivery", deliveryId.toString(), "ETA_UPDATED", updatePayload);
+        outboxService.publish("Delivery", deliveryId.toString(), "EtaUpdated", updatePayload);
 
         if (messagingTemplate != null) {
             messagingTemplate.convertAndSend("/topic/deliveries/" + deliveryId + "/eta", (Object) updatePayload);
@@ -217,34 +224,82 @@ public class DeliveryService {
             if (firstBreach) {
                 delivery.setCompensationTriggered(true);
                 delivery.setCompensationAmountCents(200); // Automated $2 apology wallet credit per Issue #596
-            }
 
-            log.warn("ETA breach risk for delivery {}: probability={}, eta={}min, sla={}min",
-                deliveryId, estimate.breachProbability(), estimate.etaMinutes(),
-                routingProperties.getBreach().getSlaThresholdMinutes());
+                log.warn("ETA breach risk for delivery {}: probability={}, eta={}min, sla={}min",
+                    deliveryId, estimate.breachProbability(), estimate.etaMinutes(),
+                    routingProperties.getBreach().getSlaThresholdMinutes());
 
-            Map<String, Object> breachPayload = new HashMap<>();
-            breachPayload.put("deliveryId", deliveryId.toString());
-            breachPayload.put("orderId", delivery.getOrderId().toString());
-            breachPayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
-            breachPayload.put("currentEtaMinutes", estimate.etaMinutes());
-            breachPayload.put("etaLowMinutes", estimate.etaLowMinutes());
-            breachPayload.put("etaHighMinutes", estimate.etaHighMinutes());
-            breachPayload.put("slaMinutes", routingProperties.getBreach().getSlaThresholdMinutes());
-            breachPayload.put("breachProbability", estimate.breachProbability());
-            breachPayload.put("timestamp", Instant.now().toString());
-            breachPayload.put("autoCompensationCents", 200);
-            breachPayload.put("customerMessage", "We're running slightly late! Here is a $2 apology wallet credit on us.");
-            breachPayload.put("priorityEscalation", true);
+                Map<String, Object> breachPayload = new HashMap<>();
+                breachPayload.put("deliveryId", deliveryId.toString());
+                breachPayload.put("orderId", delivery.getOrderId().toString());
+                breachPayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
+                breachPayload.put("currentEtaMinutes", estimate.etaMinutes());
+                breachPayload.put("etaLowMinutes", estimate.etaLowMinutes());
+                breachPayload.put("etaHighMinutes", estimate.etaHighMinutes());
+                breachPayload.put("slaMinutes", routingProperties.getBreach().getSlaThresholdMinutes());
+                breachPayload.put("breachProbability", estimate.breachProbability());
+                breachPayload.put("timestamp", Instant.now().toString());
+                breachPayload.put("autoCompensationCents", 200);
+                breachPayload.put("customerMessage", "We're running slightly late! Here is a $2 apology wallet credit on us.");
+                breachPayload.put("priorityEscalation", true);
 
-            outboxService.publish("Delivery", deliveryId.toString(), "ETA_BREACH_RISK", breachPayload);
+                outboxService.publish("Delivery", deliveryId.toString(), "ETABreachRisk", breachPayload);
 
-            if (messagingTemplate != null) {
-                messagingTemplate.convertAndSend("/topic/deliveries/" + deliveryId + "/breach-risk", (Object) breachPayload);
+                if (messagingTemplate != null) {
+                    messagingTemplate.convertAndSend("/topic/deliveries/" + deliveryId + "/breach-risk", (Object) breachPayload);
+                }
             }
         }
 
         delivery = deliveryRepository.save(delivery);
+    }
+
+    @Transactional
+    public void advanceOrderDispatched(UUID orderId, UUID riderId) {
+        var deliveryOpt = deliveryRepository.findByOrderId(orderId);
+        if (deliveryOpt.isEmpty()) {
+            log.warn("Received OrderDispatched for unknown delivery order={}", orderId);
+            return;
+        }
+        Delivery delivery = deliveryOpt.get();
+        if (delivery.getRiderId() == null && riderId != null) {
+            delivery.setRiderId(riderId);
+        }
+        if (delivery.getStatus() == DeliveryStatus.PENDING) {
+            delivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+            if (delivery.getStartedAt() == null) {
+                delivery.setStartedAt(Instant.now());
+            }
+            deliveryRepository.save(delivery);
+        }
+        if (delivery.getStatus() == DeliveryStatus.RIDER_ASSIGNED || delivery.getStatus() == DeliveryStatus.ASSIGNED) {
+            updateStatus(delivery.getId(), DeliveryStatus.PICKED_UP);
+            updateStatus(delivery.getId(), DeliveryStatus.EN_ROUTE);
+        }
+    }
+
+    @Transactional
+    public void advanceOrderDelivered(UUID orderId) {
+        var deliveryOpt = deliveryRepository.findByOrderId(orderId);
+        if (deliveryOpt.isEmpty()) {
+            log.warn("Received OrderDelivered for unknown delivery order={}", orderId);
+            return;
+        }
+        Delivery delivery = deliveryOpt.get();
+        if (delivery.getStatus().isTerminal()) {
+            return;
+        }
+        if (delivery.getStatus() == DeliveryStatus.PENDING) {
+            delivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+        }
+        if (delivery.getStatus() == DeliveryStatus.RIDER_ASSIGNED || delivery.getStatus() == DeliveryStatus.ASSIGNED) {
+            delivery.setStatus(DeliveryStatus.PICKED_UP);
+        }
+        if (delivery.getStatus() == DeliveryStatus.PICKED_UP) {
+            delivery.setStatus(DeliveryStatus.EN_ROUTE);
+        }
+        deliveryRepository.save(delivery);
+        completeDelivery(delivery.getId());
     }
 
     @Transactional(readOnly = true)

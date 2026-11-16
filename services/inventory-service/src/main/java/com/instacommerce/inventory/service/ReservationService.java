@@ -155,7 +155,7 @@ public class ReservationService {
         return InventoryMapper.toReserveResponse(reservation);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = ReservationExpiredException.class)
     public void confirm(UUID reservationId) {
         Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> new ReservationNotFoundException(reservationId));
@@ -203,7 +203,7 @@ public class ReservationService {
             "StockConfirmed", eventPayload);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = ReservationExpiredException.class)
     public void cancel(UUID reservationId) {
         Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> new ReservationNotFoundException(reservationId));
