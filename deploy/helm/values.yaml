@@ -180,85 +180,153 @@ istio:
     - name: admin-gateway-deny-unauthenticated
       selector:
         app: admin-gateway-service
-      principals:
-        - cluster.local/ns/{{ .Release.Namespace }}/sa/istio-ingressgateway
+      action: DENY
+      notPrincipals:
+        - "*"
+      rules:
+        - from:
+            - source:
+                notPrincipals: ["*"]
   denyDefault:
     enabled: true
   servicePolicies:
     identity-service:
       allowFrom:
+        - istio-ingressgateway
         - mobile-bff-service
         - admin-gateway-service
         - checkout-orchestrator-service
+        - order-service
+        - fulfillment-service
+        - notification-service
+        - ai-orchestrator-service
     checkout-orchestrator-service:
       allowFrom:
         - mobile-bff-service
+        - admin-gateway-service
         - order-service
+        - ai-orchestrator-service
     order-service:
       allowFrom:
+        - mobile-bff-service
         - admin-gateway-service
         - checkout-orchestrator-service
         - fulfillment-service
         - notification-service
         - wallet-loyalty-service
+        - ai-orchestrator-service
+        - payment-webhook-service
+        - reconciliation-engine
     payment-service:
       allowFrom:
+        - mobile-bff-service
         - admin-gateway-service
         - checkout-orchestrator-service
         - fulfillment-service
         - order-service
+        - ai-orchestrator-service
+        - payment-webhook-service
+        - reconciliation-engine
     inventory-service:
       allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
         - order-service
         - fulfillment-service
         - checkout-orchestrator-service
         - search-service
+        - ai-orchestrator-service
+        - warehouse-service
     cart-service:
       allowFrom:
         - mobile-bff-service
+        - admin-gateway-service
         - checkout-orchestrator-service
         - order-service
+        - ai-orchestrator-service
     pricing-service:
       allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
         - cart-service
         - order-service
         - checkout-orchestrator-service
+        - ai-orchestrator-service
+        - search-service
     catalog-service:
       allowFrom:
         - mobile-bff-service
+        - admin-gateway-service
         - search-service
+        - cart-service
+        - pricing-service
+        - order-service
+        - checkout-orchestrator-service
+        - fulfillment-service
+        - ai-orchestrator-service
     search-service:
       allowFrom:
         - mobile-bff-service
+        - admin-gateway-service
         - catalog-service
+        - ai-orchestrator-service
     fulfillment-service:
       allowFrom:
+        - mobile-bff-service
         - admin-gateway-service
         - checkout-orchestrator-service
+        - order-service
         - rider-fleet-service
+        - routing-eta-service
         - warehouse-service
+        - ai-orchestrator-service
     rider-fleet-service:
       allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
         - fulfillment-service
         - dispatch-optimizer-service
+        - routing-eta-service
+        - location-ingestion-service
+        - order-service
     warehouse-service:
       allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
         - fulfillment-service
         - inventory-service
+        - order-service
+        - rider-fleet-service
+        - routing-eta-service
     notification-service:
       allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
         - order-service
         - payment-service
         - fulfillment-service
         - identity-service
+        - rider-fleet-service
+        - routing-eta-service
+        - wallet-loyalty-service
+        - fraud-detection-service
     wallet-loyalty-service:
       allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
         - order-service
         - checkout-orchestrator-service
+        - payment-service
+        - payment-webhook-service
+        - ai-orchestrator-service
     fraud-detection-service:
       allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
         - checkout-orchestrator-service
         - payment-service
+        - order-service
+        - ai-orchestrator-service
     ai-orchestrator-service:
       allowFrom:
         - mobile-bff-service
@@ -267,14 +335,23 @@ istio:
       allowFrom:
         - ai-orchestrator-service
         - routing-eta-service
+        - fraud-detection-service
+        - search-service
+        - pricing-service
+        - admin-gateway-service
     config-feature-flag-service:
       allowFrom:
+        - mobile-bff-service
         - admin-gateway-service
         - checkout-orchestrator-service
         - fulfillment-service
         - rider-fleet-service
+        - routing-eta-service
         - fraud-detection-service
         - pricing-service
+        - order-service
+        - payment-service
+        - ai-orchestrator-service
     audit-trail-service:
       allowFrom:
         - admin-gateway-service
@@ -282,10 +359,108 @@ istio:
         - order-service
         - payment-service
         - fulfillment-service
+        - wallet-loyalty-service
+        - fraud-detection-service
+        - config-feature-flag-service
+        - payment-webhook-service
+        - reconciliation-engine
     routing-eta-service:
+      allowFrom:
+        - mobile-bff-service
+        - admin-gateway-service
+        - fulfillment-service
+        - rider-fleet-service
+        - order-service
+        - dispatch-optimizer-service
+        - location-ingestion-service
+    mobile-bff-service:
+      allowFrom:
+        - istio-ingressgateway
+        - admin-gateway-service
+    admin-gateway-service:
+      allowFrom:
+        - istio-ingressgateway
+    outbox-relay:
+      allowFrom:
+        - admin-gateway-service
+        - order-service
+        - payment-service
+        - inventory-service
+        - fulfillment-service
+    outbox-relay-service:
+      allowFrom:
+        - admin-gateway-service
+        - order-service
+        - payment-service
+        - inventory-service
+        - fulfillment-service
+    payment-webhook:
+      allowFrom:
+        - istio-ingressgateway
+        - admin-gateway-service
+        - payment-service
+    payment-webhook-service:
+      allowFrom:
+        - istio-ingressgateway
+        - admin-gateway-service
+        - payment-service
+    reconciliation-engine:
+      allowFrom:
+        - admin-gateway-service
+        - payment-service
+        - order-service
+        - payment-webhook
+        - payment-webhook-service
+    dispatch-optimizer-service:
       allowFrom:
         - fulfillment-service
         - rider-fleet-service
+        - routing-eta-service
+        - admin-gateway-service
+    location-ingestion:
+      allowFrom:
+        - istio-ingressgateway
+        - mobile-bff-service
+        - rider-fleet-service
+        - routing-eta-service
+        - admin-gateway-service
+    location-ingestion-service:
+      allowFrom:
+        - istio-ingressgateway
+        - mobile-bff-service
+        - rider-fleet-service
+        - routing-eta-service
+        - admin-gateway-service
+    cdc-consumer:
+      allowFrom:
+        - admin-gateway-service
+        - order-service
+        - payment-service
+        - inventory-service
+    cdc-consumer-service:
+      allowFrom:
+        - admin-gateway-service
+        - order-service
+        - payment-service
+        - inventory-service
+    stream-processor:
+      allowFrom:
+        - admin-gateway-service
+        - location-ingestion
+        - location-ingestion-service
+        - routing-eta-service
+        - rider-fleet-service
+    stream-processor-service:
+      allowFrom:
+        - admin-gateway-service
+        - location-ingestion
+        - location-ingestion-service
+        - routing-eta-service
+        - rider-fleet-service
+    reverse-etl-orchestrator:
+      allowFrom:
+        - admin-gateway-service
+        - ai-orchestrator-service
 
 vpa:
   enabled: true
@@ -427,13 +602,13 @@ services:
   catalog-service:
     replicas: 2
     image: catalog-service
-    port: 8080
+    port: 8082
     resources:
       requests: { cpu: 250m, memory: 384Mi }
       limits: { cpu: 500m, memory: 768Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8080"
+      SERVER_PORT: "8082"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///catalog_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
     hpa:
       minReplicas: 2
@@ -443,13 +618,13 @@ services:
   inventory-service:
     replicas: 2
     image: inventory-service
-    port: 8080
+    port: 8083
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8080"
+      SERVER_PORT: "8083"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///inventory_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
     hpa:
       minReplicas: 2
@@ -459,20 +634,20 @@ services:
   order-service:
     replicas: 2
     image: order-service
-    port: 8080
+    port: 8084
     resources:
       requests: { cpu: 500m, memory: 768Mi }
       limits: { cpu: 1000m, memory: 1536Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8080"
+      SERVER_PORT: "8084"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///order_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       ORDER_CHECKOUT_DIRECT_SAGA_ENABLED: "true"
       ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED: "false"
-      INVENTORY_SERVICE_URL: "http://inventory-service:8080"
-      CART_SERVICE_URL: "http://cart-service:8088"
-      PAYMENT_SERVICE_URL: "http://payment-service:8080"
-      PRICING_SERVICE_URL: "http://pricing-service:8087"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8083"
+      CART_SERVICE_URL: "http://cart-service:8090"
+      PAYMENT_SERVICE_URL: "http://payment-service:8085"
+      PRICING_SERVICE_URL: "http://pricing-service:8089"
     hpa:
       minReplicas: 2
       maxReplicas: 10
@@ -481,13 +656,13 @@ services:
   payment-service:
     replicas: 2
     image: payment-service
-    port: 8080
+    port: 8085
     resources:
       requests: { cpu: 500m, memory: 768Mi }
       limits: { cpu: 1000m, memory: 1536Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8080"
+      SERVER_PORT: "8085"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///payment_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED: "false"
       PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_TOPIC: "orders.events"
@@ -505,19 +680,19 @@ services:
   fulfillment-service:
     replicas: 2
     image: fulfillment-service
-    port: 8080
+    port: 8086
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8080"
+      SERVER_PORT: "8086"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///fulfillment_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       FULFILLMENT_CHOREOGRAPHY_ORDER_STATUS_CALLBACK_ENABLED: "true"
-      ORDER_SERVICE_URL: "http://order-service:8080"
-      PAYMENT_SERVICE_URL: "http://payment-service:8080"
-      INVENTORY_SERVICE_URL: "http://inventory-service:8080"
-      WAREHOUSE_SERVICE_URL: "http://warehouse-service:8090"
+      ORDER_SERVICE_URL: "http://order-service:8084"
+      PAYMENT_SERVICE_URL: "http://payment-service:8085"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8083"
+      WAREHOUSE_SERVICE_URL: "http://warehouse-service:8092"
     hpa:
       minReplicas: 2
       maxReplicas: 5
@@ -526,14 +701,16 @@ services:
   notification-service:
     replicas: 2
     image: notification-service
-    port: 8080
+    port: 8087
     resources:
       requests: { cpu: 200m, memory: 256Mi }
       limits: { cpu: 400m, memory: 512Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8080"
+      SERVER_PORT: "8087"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///notification_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      IDENTITY_SERVICE_URL: "http://identity-service:8081"
+      ORDER_SERVICE_URL: "http://order-service:8084"
     hpa:
       minReplicas: 2
       maxReplicas: 5
@@ -542,13 +719,13 @@ services:
   search-service:
     replicas: 2
     image: search-service
-    port: 8086
+    port: 8088
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8086"
+      SERVER_PORT: "8088"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///search_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
       SPRING_DATA_REDIS_PORT: "6379"
@@ -560,13 +737,13 @@ services:
   pricing-service:
     replicas: 2
     image: pricing-service
-    port: 8087
+    port: 8089
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8087"
+      SERVER_PORT: "8089"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///pricing_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
       SPRING_DATA_REDIS_PORT: "6379"
@@ -578,16 +755,17 @@ services:
   cart-service:
     replicas: 2
     image: cart-service
-    port: 8088
+    port: 8090
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8088"
+      SERVER_PORT: "8090"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///cart_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
       SPRING_DATA_REDIS_PORT: "6379"
+      PRICING_SERVICE_URL: "http://pricing-service:8089"
     hpa:
       minReplicas: 2
       maxReplicas: 15
@@ -596,19 +774,19 @@ services:
   checkout-orchestrator-service:
     replicas: 2
     image: checkout-orchestrator-service
-    port: 8089
+    port: 8091
     resources:
       requests: { cpu: 500m, memory: 768Mi }
       limits: { cpu: 1000m, memory: 1536Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8089"
+      SERVER_PORT: "8091"
       TEMPORAL_SERVICE_ADDRESS: temporal:7233
-      CART_SERVICE_URL: "http://cart-service:8088"
-      PRICING_SERVICE_URL: "http://pricing-service:8087"
-      INVENTORY_SERVICE_URL: "http://inventory-service:8080"
-      PAYMENT_SERVICE_URL: "http://payment-service:8080"
-      ORDER_SERVICE_URL: "http://order-service:8080"
+      CART_SERVICE_URL: "http://cart-service:8090"
+      PRICING_SERVICE_URL: "http://pricing-service:8089"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8083"
+      PAYMENT_SERVICE_URL: "http://payment-service:8085"
+      ORDER_SERVICE_URL: "http://order-service:8084"
     hpa:
       minReplicas: 2
       maxReplicas: 10
@@ -666,7 +844,7 @@ services:
 
   outbox-relay:
     replicas: 2
-    image: outbox-relay
+    image: outbox-relay-service
     port: 8103
     readinessPath: /health/ready
     livenessPath: /health/live
@@ -674,7 +852,11 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
+      OUTBOX_TOPIC: "orders.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
     hpa:
       minReplicas: 2
       maxReplicas: 6
@@ -690,11 +872,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${ORDER_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "1s"
-      BATCH_SIZE: "100"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/order_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "orders.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-payment:
@@ -707,11 +891,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${PAYMENT_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "1s"
-      BATCH_SIZE: "100"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/payment_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "payments.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-cart:
@@ -724,11 +910,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${CART_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "2s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/cart_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "cart.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-fulfillment:
@@ -741,11 +929,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${FULFILLMENT_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "1s"
-      BATCH_SIZE: "100"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/fulfillment_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "fulfillment.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-inventory:
@@ -758,11 +948,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${INVENTORY_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "2s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/inventory_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "inventory.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-identity:
@@ -775,11 +967,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${IDENTITY_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "5s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/identity_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "identity.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-catalog:
@@ -792,11 +986,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${CATALOG_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "5s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/catalog_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "catalog.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-rider-fleet:
@@ -809,11 +1005,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${RIDER_FLEET_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "1s"
-      BATCH_SIZE: "100"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/rider_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "rider.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-warehouse:
@@ -826,11 +1024,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${WAREHOUSE_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "5s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/warehouse_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "warehouse.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-pricing:
@@ -843,11 +1043,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${PRICING_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "5s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/pricing_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "pricing.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-wallet-loyalty:
@@ -860,11 +1062,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${WALLET_LOYALTY_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "2s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/wallet_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "wallet.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-fraud-detection:
@@ -877,11 +1081,13 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${FRAUD_DETECTION_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "5s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/fraud_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "fraud.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   outbox-relay-routing-eta:
@@ -894,16 +1100,18 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "${ROUTING_ETA_DB_URL}"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      POLL_INTERVAL: "2s"
-      BATCH_SIZE: "50"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/routing_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      OUTBOX_TOPIC: "delivery.events"
+      OUTBOX_POLL_INTERVAL: "500ms"
+      OUTBOX_BATCH_SIZE: "100"
       HEALTH_PORT: "8103"
 
   cdc-consumer:
     replicas: 2
-    image: cdc-consumer
+    image: cdc-consumer-service
     port: 8104
     readinessPath: /health/ready
     livenessPath: /health/live
@@ -911,6 +1119,7 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8104"
       SERVER_PORT: "8104"
     hpa:
       minReplicas: 2
@@ -919,7 +1128,7 @@ services:
 
   location-ingestion:
     replicas: 2
-    image: location-ingestion
+    image: location-ingestion-service
     port: 8105
     readinessPath: /health/ready
     livenessPath: /health/live
@@ -927,6 +1136,7 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8105"
       SERVER_PORT: "8105"
     hpa:
       minReplicas: 2
@@ -935,7 +1145,7 @@ services:
 
   payment-webhook:
     replicas: 2
-    image: payment-webhook
+    image: payment-webhook-service
     port: 8106
     readinessPath: /health/ready
     livenessPath: /health/live
@@ -943,6 +1153,7 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8106"
       SERVER_PORT: "8106"
     hpa:
       minReplicas: 2
@@ -959,6 +1170,7 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      PORT: "8107"
       SERVER_PORT: "8107"
     hpa:
       minReplicas: 2
@@ -975,14 +1187,15 @@ services:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: 1000m, memory: 1024Mi }
     env:
+      HTTP_PORT: "8108"
       SERVER_PORT: "8108"
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
-      REDIS_URL: "${REDIS_URL}"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      REDIS_URL: "redis-cluster.default.svc.cluster.local:6379"
       HEALTH_PORT: "8108"
 
   reverse-etl-orchestrator:
     image: reverse-etl-orchestrator
-    port: 8080
+    port: 8109
     replicas: 2
     readinessPath: /health/ready
     livenessPath: /health/live
@@ -990,11 +1203,13 @@ services:
       requests: { cpu: 250m, memory: 256Mi }
       limits: { cpu: 500m, memory: 512Mi }
     env:
-      API_ADDR: ":8080"
-      HEALTH_ADDR: ":8081"
+      SERVER_PORT: "8109"
+      API_ADDR: ":8109"
+      HEALTH_ADDR: ":8110"
       METRICS_ADDR: ":9090"
-      DATABASE_URL: jdbc:postgresql:///reverse_etl_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
-      KAFKA_BROKERS: "${KAFKA_BROKERS}"
+      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/reverse_etl_db?sslmode=disable"
+      KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      WAREHOUSE_SOURCE_MODE: "mock"
       TEMPORAL_HOST: temporal.temporal:7233
       TEMPORAL_NAMESPACE: reverse-etl
     hpa:
@@ -1005,13 +1220,13 @@ services:
   warehouse-service:
     replicas: 2
     image: warehouse-service
-    port: 8090
+    port: 8092
     resources:
       requests: { cpu: 250m, memory: 384Mi }
       limits: { cpu: 500m, memory: 768Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8090"
+      SERVER_PORT: "8092"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///warehouse_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
     hpa:
       minReplicas: 2
@@ -1021,16 +1236,17 @@ services:
   rider-fleet-service:
     replicas: 2
     image: rider-fleet-service
-    port: 8091
+    port: 8093
     resources:
       requests: { cpu: 250m, memory: 384Mi }
       limits: { cpu: 500m, memory: 768Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8091"
+      SERVER_PORT: "8093"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///rider_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       SPRING_DATA_REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
       SPRING_DATA_REDIS_PORT: "6379"
+      RIDER_DISPATCH_OPTIMIZER_URL: "http://dispatch-optimizer-service:8102"
     hpa:
       minReplicas: 2
       maxReplicas: 8
@@ -1039,13 +1255,13 @@ services:
   routing-eta-service:
     replicas: 2
     image: routing-eta-service
-    port: 8092
+    port: 8094
     resources:
       requests: { cpu: 250m, memory: 384Mi }
       limits: { cpu: 500m, memory: 768Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8092"
+      SERVER_PORT: "8094"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///routing_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
     hpa:
       minReplicas: 2
@@ -1055,15 +1271,16 @@ services:
   wallet-loyalty-service:
     replicas: 2
     image: wallet-loyalty-service
-    port: 8093
+    port: 8095
     resources:
       requests: { cpu: 250m, memory: 384Mi }
       limits: { cpu: 500m, memory: 768Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8093"
+      SERVER_PORT: "8095"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///wallet_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
-      ORDER_SERVICE_URL: http://order-service:8080
+      ORDER_SERVICE_URL: http://order-service:8084
+      PAYMENT_SERVICE_URL: http://payment-service:8085
       INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
       WALLET_CONSUMER_PAYMENT_REFUND_ENABLED: "false"
     hpa:
@@ -1074,13 +1291,13 @@ services:
   audit-trail-service:
     replicas: 2
     image: audit-trail-service
-    port: 8094
+    port: 8096
     resources:
       requests: { cpu: 200m, memory: 256Mi }
       limits: { cpu: 400m, memory: 512Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8094"
+      SERVER_PORT: "8096"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///audit_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
     hpa:
       minReplicas: 2
@@ -1090,13 +1307,13 @@ services:
   fraud-detection-service:
     replicas: 2
     image: fraud-detection-service
-    port: 8095
+    port: 8097
     resources:
       requests: { cpu: 250m, memory: 384Mi }
       limits: { cpu: 500m, memory: 768Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8095"
+      SERVER_PORT: "8097"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///fraud_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
     hpa:
       minReplicas: 2
@@ -1106,13 +1323,13 @@ services:
   config-feature-flag-service:
     replicas: 2
     image: config-feature-flag-service
-    port: 8096
+    port: 8098
     resources:
       requests: { cpu: 200m, memory: 256Mi }
       limits: { cpu: 400m, memory: 512Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8096"
+      SERVER_PORT: "8098"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///config_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       REDIS_HOST: redis-cluster.default.svc.cluster.local
       REDIS_PORT: "6379"
@@ -1125,13 +1342,20 @@ services:
   mobile-bff-service:
     replicas: 2
     image: mobile-bff-service
-    port: 8097
+    port: 8080
     resources:
       requests: { cpu: 250m, memory: 384Mi }
       limits: { cpu: 500m, memory: 768Mi }
     env:
       SPRING_PROFILES_ACTIVE: gcp
-      SERVER_PORT: "8097"
+      SERVER_PORT: "8080"
+      CATALOG_SERVICE_URL: "http://catalog-service:8082"
+      SEARCH_SERVICE_URL: "http://search-service:8088"
+      FEATURE_FLAG_SERVICE_URL: "http://config-feature-flag-service:8098"
+      CART_SERVICE_URL: "http://cart-service:8090"
+      ORDER_SERVICE_URL: "http://order-service:8084"
+      IDENTITY_SERVICE_URL: "http://identity-service:8081"
+      WALLET_LOYALTY_SERVICE_URL: "http://wallet-loyalty-service:8095"
     hpa:
       minReplicas: 2
       maxReplicas: 8
@@ -1147,12 +1371,12 @@ services:
     env:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8099"
-      FEATURE_FLAG_SERVICE_URL: "http://config-feature-flag-service:8096"
+      FEATURE_FLAG_SERVICE_URL: "http://config-feature-flag-service:8098"
       RECONCILIATION_ENGINE_URL: "http://reconciliation-engine:8107"
-      AUDIT_TRAIL_SERVICE_URL: "http://audit-trail-service:8094"
-      ORDER_SERVICE_URL: "http://order-service:8080"
-      PAYMENT_SERVICE_URL: "http://payment-service:8080"
-      FULFILLMENT_SERVICE_URL: "http://fulfillment-service:8080"
+      AUDIT_TRAIL_SERVICE_URL: "http://audit-trail-service:8096"
+      ORDER_SERVICE_URL: "http://order-service:8084"
+      PAYMENT_SERVICE_URL: "http://payment-service:8085"
+      FULFILLMENT_SERVICE_URL: "http://fulfillment-service:8086"
     hpa:
       minReplicas: 2
       maxReplicas: 6

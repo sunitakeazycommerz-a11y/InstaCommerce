@@ -41,7 +41,7 @@ jobs:
       changed_python_services: ${{ steps.set-python-matrix.outputs.changed_python_services }}
       cloud_publish_configured: ${{ steps.check-cloud-creds.outputs.configured }}
       contracts_changed: ${{ steps.filter.outputs.contracts }}
-      data_platform_changed: ${{ steps.filter.outputs['data-platform'] == 'true' || steps.filter.outputs.data_platform == 'true' || steps.filter.outputs.contracts == 'true' || steps.filter.outputs.migrations == 'true' }}
+      data_platform_changed: ${{ steps.filter.outputs['data-platform'] == 'true' || steps.filter.outputs.contracts == 'true' || steps.filter.outputs.migrations == 'true' }}
       ml_changed: ${{ steps.filter.outputs.ml }}
     steps:
       - uses: actions/checkout@v6
@@ -411,9 +411,25 @@ jobs:
       - name: Build Docker image
         if: matrix.service != 'go-shared' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         run: |
-          docker build -t ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }} \
-            -f services/${{ matrix.service }}/Dockerfile \
-            services/${{ matrix.service }}
+          svc="${{ matrix.service }}"
+          if grep -q "\.\./go-shared" "services/${svc}/go.mod"; then
+            build_context="services"
+            dockerfile="/tmp/Dockerfile.${svc}"
+            awk -v svc="$svc" '
+              /^WORKDIR \/(src|app)$/ { print; print "COPY go-shared /go-shared"; next }
+              /^COPY go\.mod go\.sum \.\// { print "COPY " svc "/go.mod " svc "/go.sum ./"; next }
+              /^COPY go\.mod \.\// { print "COPY " svc "/go.mod ./"; next }
+              /^COPY go\.sum\*? \.\// { sub(/^COPY /, "COPY " svc "/"); print; next }
+              /^COPY \. \.$/ { print "COPY " svc "/ ."; next }
+              { print }
+            ' "services/${svc}/Dockerfile" > "$dockerfile"
+          else
+            build_context="services/${svc}"
+            dockerfile="services/${svc}/Dockerfile"
+          fi
+          docker build -t ${{ env.REGISTRY }}/${svc}:${{ github.sha }} \
+            -f "$dockerfile" \
+            "$build_context"
 
       - name: Trivy vulnerability scan
         if: matrix.service != 'go-shared' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
@@ -448,23 +464,47 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: |
-          cd services/${{ matrix.service }}
-          pip install -r requirements.txt
+          python3 -m pip install --upgrade pip
+          pip install -r services/${{ matrix.service }}/requirements.txt
+          pip install -r ml/requirements.txt
+          pip install -r data-platform/quality/requirements.txt
+          pip install -r data-platform/streaming/requirements.txt
+          pip install -r data-platform/airflow/requirements.txt
+          pip install -r data-platform-jobs/requirements.txt
           pip install pytest httpx pytest-asyncio ruff pyright
       - name: Lint with ruff
         run: |
+          ruff check .
           ruff check services/${{ matrix.service }}
       - name: Type check with pyright
         run: |
+          pyright
           pyright services/${{ matrix.service }}
       - name: Run tests
         run: |
-          cd services/${{ matrix.service }}
-          if [ -d "tests" ]; then
-            PYTHONPATH=../..:. pytest -v tests/
-          else
-            echo "No tests directory found, skipping"
-          fi
+          (
+            cd services/${{ matrix.service }}
+            if [ -d "tests" ]; then
+              PYTHONPATH=../..:. pytest -v tests/
+            else
+              echo "No tests directory found, skipping"
+            fi
+          )
+          for test_dir in \
+            ml/tests \
+            ml \
+            data-platform/quality/tests \
+            data-platform/quality \
+            data-platform/streaming/tests \
+            data-platform/airflow/tests \
+            data-platform-jobs/tests \
+            monitoring/synthetics/tests \
+            monitoring/synthetics \
+            scripts/lsp/tests; do
+            if [ -d "$test_dir" ] && find "$test_dir" -maxdepth 3 -name "test_*.py" | grep -q .; then
+              PYTHONPATH=. pytest -v "$test_dir"
+            fi
+          done
       - name: Docker build
         if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.detect-changes.outputs.cloud_publish_configured == 'true'
         run: |
@@ -682,6 +722,8 @@ jobs:
           pip install pyright
       - name: Type check ML code with pyright
         run: pyright ml
+      - name: Run ML tests
+        run: PYTHONPATH=. pytest -v ml
 
   helm-validation:
     name: Helm Chart Lint & Template Validation

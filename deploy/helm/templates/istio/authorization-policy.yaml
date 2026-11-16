@@ -18,6 +18,14 @@ spec:
   {{- if .rules }}
   rules:
     {{- toYaml .rules | nindent 4 }}
+  {{- else if .notPrincipals }}
+  rules:
+    - from:
+        - source:
+            notPrincipals:
+              {{- range .notPrincipals }}
+              - {{ tpl . $ | quote }}
+              {{- end }}
   {{- else if .principals }}
   rules:
     - from:

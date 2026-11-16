@@ -10,11 +10,16 @@ groups:
   - name: slo_fast_burn
     interval: 30s
     rules:
+      - record: slo:availability_target:ratio
+        labels:
+          service: order-service
+        expr: "0.995"
+
       - alert: FastBurnHighErrorRate
         expr: |
           (
-            sum(rate(http_requests_total{status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.10
         for: 1m
         labels:
@@ -28,7 +33,7 @@ groups:
 
       - alert: FastBurnHighLatency
         expr: |
-          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (service, le))
+          histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m])) by (service, le))
           > 5.0
         for: 1m
         labels:
@@ -60,8 +65,8 @@ groups:
       - alert: MediumBurnHighErrorRate
         expr: |
           (
-            sum(rate(http_requests_total{status=~"5.."}[30m])) by (service)
-            / sum(rate(http_requests_total[30m])) by (service)
+            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[30m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[30m])) by (service)
           ) > 0.05
         for: 5m
         labels:
@@ -73,7 +78,7 @@ groups:
 
       - alert: MediumBurnHighLatency
         expr: |
-          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[30m])) by (service, le))
+          histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[30m])) by (service, le))
           > 3.0
         for: 5m
         labels:
@@ -85,8 +90,8 @@ groups:
 
       - alert: MediumBurnLowThroughput
         expr: |
-          sum(rate(http_requests_total[30m])) by (service)
-          < (sum(rate(http_requests_total[1d] offset 1d)) by (service) * 0.5)
+          sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[30m])) by (service)
+          < (sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[1d] offset 1d)) by (service) * 0.5)
         for: 10m
         labels:
           severity: critical
@@ -105,8 +110,8 @@ groups:
       - alert: SlowBurnHighErrorRate
         expr: |
           (
-            sum(rate(http_requests_total{status=~"5.."}[6h])) by (service)
-            / sum(rate(http_requests_total[6h])) by (service)
+            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[6h])) by (service)
+            / sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[6h])) by (service)
           ) > 0.01
         for: 30m
         labels:
@@ -118,7 +123,7 @@ groups:
 
       - alert: SlowBurnHighLatency
         expr: |
-          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[6h])) by (service, le))
+          histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[6h])) by (service, le))
           > 2.0
         for: 30m
         labels:
@@ -136,11 +141,9 @@ groups:
       - alert: ErrorBudgetCritical
         expr: |
           (
-            1 - (
-              sum(increase(http_requests_total{status!~"5.."}[30d])) by (service)
-              / sum(increase(http_requests_total[30d])) by (service)
-            )
-          ) / 0.001 > 0.75
+            sum(increase(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[30d])) by (service)
+            / sum(increase(http_server_requests_seconds_count{uri!~"/actuator.*"}[30d])) by (service)
+          ) / 0.005 > 0.75
         for: 1h
         labels:
           severity: warning
@@ -151,11 +154,9 @@ groups:
       - alert: ErrorBudgetExhausted
         expr: |
           (
-            1 - (
-              sum(increase(http_requests_total{status!~"5.."}[30d])) by (service)
-              / sum(increase(http_requests_total[30d])) by (service)
-            )
-          ) / 0.001 > 1.0
+            sum(increase(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[30d])) by (service)
+            / sum(increase(http_server_requests_seconds_count{uri!~"/actuator.*"}[30d])) by (service)
+          ) / 0.005 > 1.0
         for: 1h
         labels:
           severity: critical

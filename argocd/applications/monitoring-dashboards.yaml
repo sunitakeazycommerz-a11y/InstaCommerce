@@ -1,16 +1,16 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: monitoring
+  name: monitoring-dashboards
   namespace: argocd
   labels:
     app.kubernetes.io/part-of: instacommerce-platform
 spec:
   project: default
   source:
-    repoURL: https://github.com/sunitakeazycommerz-a11y/InstaCommerce
-    targetRevision: master
-    path: monitoring
+    repoURL: https://github.com/omkarkumar/InstaCommerce.git
+    targetRevision: main
+    path: monitoring/grafana
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring

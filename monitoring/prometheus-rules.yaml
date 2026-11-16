@@ -12,91 +12,104 @@ groups:
       - record: sli:http_availability:rate5m
         expr: |
           1 - (
-            sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[5m])) by (service)
             /
-            sum(rate(http_server_requests_seconds_count[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[5m])) by (service)
           )
 
       - record: sli:http_availability:rate30m
         expr: |
           1 - (
-            sum(rate(http_server_requests_seconds_count{status=~"5.."}[30m])) by (service)
+            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[30m])) by (service)
             /
-            sum(rate(http_server_requests_seconds_count[30m])) by (service)
+            sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[30m])) by (service)
           )
 
       - record: sli:http_availability:rate1h
         expr: |
           1 - (
-            sum(rate(http_server_requests_seconds_count{status=~"5.."}[1h])) by (service)
+            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[1h])) by (service)
             /
-            sum(rate(http_server_requests_seconds_count[1h])) by (service)
+            sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[1h])) by (service)
           )
 
       - record: sli:http_availability:rate6h
         expr: |
           1 - (
-            sum(rate(http_server_requests_seconds_count{status=~"5.."}[6h])) by (service)
+            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[6h])) by (service)
             /
-            sum(rate(http_server_requests_seconds_count[6h])) by (service)
+            sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[6h])) by (service)
           )
 
       # Latency SLI: ratio of requests completing within threshold
       - record: sli:http_latency:rate5m
         expr: |
-          sum(rate(http_server_requests_seconds_bucket{le="0.5"}[5m])) by (service)
+          sum(rate(http_server_requests_seconds_bucket{le="0.5",uri!~"/actuator.*"}[5m])) by (service)
           /
-          sum(rate(http_server_requests_seconds_count[5m])) by (service)
+          sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[5m])) by (service)
 
       - record: sli:http_latency:rate1h
         expr: |
-          sum(rate(http_server_requests_seconds_bucket{le="0.5"}[1h])) by (service)
+          sum(rate(http_server_requests_seconds_bucket{le="0.5",uri!~"/actuator.*"}[1h])) by (service)
           /
-          sum(rate(http_server_requests_seconds_count[1h])) by (service)
+          sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[1h])) by (service)
 
-      # Checkout Journey Success SLI: ratio of successful (2xx) checkouts
+      # Checkout Journey Success SLI: ratio of successful (non-5xx) checkouts
       - record: sli:checkout_success:rate5m
         expr: |
-          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*",status=~"2.."}[5m]))
-          /
-          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*"}[5m]))
+          1 - (
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri!~"/actuator.*",status=~"5.."}[5m]))
+            /
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri!~"/actuator.*"}[5m]))
+          )
 
       - record: sli:checkout_success:rate30m
         expr: |
-          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*",status=~"2.."}[30m]))
-          /
-          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*"}[30m]))
+          1 - (
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri!~"/actuator.*",status=~"5.."}[30m]))
+            /
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri!~"/actuator.*"}[30m]))
+          )
 
       - record: sli:checkout_success:rate1h
         expr: |
-          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*",status=~"2.."}[1h]))
-          /
-          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*"}[1h]))
+          1 - (
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri!~"/actuator.*",status=~"5.."}[1h]))
+            /
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri!~"/actuator.*"}[1h]))
+          )
 
       - record: sli:checkout_success:rate6h
         expr: |
-          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*",status=~"2.."}[6h]))
-          /
-          sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri=~".*checkout.*"}[6h]))
+          1 - (
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri!~"/actuator.*",status=~"5.."}[6h]))
+            /
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service",uri!~"/actuator.*"}[6h]))
+          )
 
       # Pre-calculated P95 and P99 latency percentile recording rules (#645)
       - record: job:checkout_duration_seconds:p95
-        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{service="checkout-orchestrator-service"}[5m])) by (le, uri))
+        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{service="checkout-orchestrator-service",uri!~"/actuator.*"}[5m])) by (le, uri))
 
       - record: job:checkout_duration_seconds:p99
-        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="checkout-orchestrator-service"}[5m])) by (le, uri))
+        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="checkout-orchestrator-service",uri!~"/actuator.*"}[5m])) by (le, uri))
 
       - record: job:payment_duration_seconds:p95
-        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{service="payment-service"}[5m])) by (le, uri))
+        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{service="payment-service",uri!~"/actuator.*"}[5m])) by (le, uri))
 
       - record: job:payment_duration_seconds:p99
-        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="payment-service"}[5m])) by (le, uri))
+        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="payment-service",uri!~"/actuator.*"}[5m])) by (le, uri))
 
       - record: sli:http_latency_p95:rate5m
-        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket[5m])) by (le, service))
+        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m])) by (le, service))
 
       - record: sli:http_latency_p99:rate5m
-        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket[5m])) by (le, service))
+        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m])) by (le, service))
+
+      - record: slo:availability_target:ratio
+        labels:
+          service: order-service
+        expr: "0.995"
 
       # Kafka consumer lag SLI
       - record: sli:kafka_consumer_lag:max5m
@@ -311,9 +324,9 @@ groups:
     rules:
       - alert: HighErrorRate
         expr: |
-          sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) by (service)
+          sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[5m])) by (service)
           /
-          sum(rate(http_server_requests_seconds_count[5m])) by (service)
+          sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[5m])) by (service)
           > 0.01
         for: 5m
         labels:
@@ -326,7 +339,7 @@ groups:
       - alert: HighLatency
         expr: |
           histogram_quantile(0.99,
-            sum(rate(http_server_requests_seconds_bucket[5m])) by (le, service, uri)
+            sum(rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m])) by (le, service, uri)
           ) > 0.5
         for: 5m
         labels:
@@ -479,7 +492,7 @@ groups:
           severity: critical
         annotations:
           summary: "gRPC service {{ $labels.instance }} health check failed"
-          description: "Blackbox probe on gRPC port 9090 for {{ $labels.instance }} reported status not SERVING (probe_success == 0)."
+          description: "Blackbox probe on gRPC endpoint {{ $labels.instance }} reported status not SERVING (probe_success == 0)."
           runbook_url: "https://runbooks.instacommerce.internal/ops/grpc-health-check"
 
       - alert: SyntheticCheckFailing

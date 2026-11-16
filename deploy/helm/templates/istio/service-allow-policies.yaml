@@ -13,10 +13,19 @@ spec:
   action: ALLOW
   rules:
     {{- range $policy.allowFrom }}
+    {{- if eq . "istio-ingressgateway" }}
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"
+              - "cluster.local/ns/istio-system/sa/istio-ingressgateway"
+              - "cluster.local/ns/{{ $.Release.Namespace }}/sa/istio-ingressgateway"
+    {{- else }}
     - from:
         - source:
             principals:
               - "cluster.local/ns/{{ $.Release.Namespace }}/sa/{{ . }}"
+    {{- end }}
     {{- end }}
     {{- if $policy.allowPaths }}
     - to:

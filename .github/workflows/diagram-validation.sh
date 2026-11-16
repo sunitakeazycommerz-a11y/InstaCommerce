@@ -46,6 +46,7 @@ REQUIRED_SERVICES=(
 total_services=${#REQUIRED_SERVICES[@]}
 complete_services=0
 incomplete_services=()
+ERRORS=0
 
 echo "Checking diagram coverage for $total_services services..."
 echo ""
@@ -58,10 +59,11 @@ for service in "${REQUIRED_SERVICES[@]}"; do
 
   if [ "$diagram_count" -eq 7 ]; then
     echo "✅ $service: $diagram_count/7"
-    ((complete_services++))
+    complete_services=$((complete_services + 1))
   else
     echo "⏳ $service: $diagram_count/7"
     incomplete_services+=("$service")
+    ERRORS=$((ERRORS + 1))
   fi
 done
 
@@ -96,12 +98,14 @@ for service in "${REQUIRED_SERVICES[@]}"; do
     # Check for mermaid code block
     if grep -q "^\`\`\`mermaid" "$diagram"; then
       echo "✅ $diagram: Contains mermaid block"
-      ((checked++))
+      checked=$((checked + 1))
     else
       echo "⚠️  $diagram: Missing or malformed mermaid block"
+      ERRORS=$((ERRORS + 1))
     fi
   fi
 done
 
 echo ""
 echo "Validation complete!"
+if [ "$ERRORS" -gt 0 ]; then exit 1; fi

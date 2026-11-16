@@ -12,17 +12,17 @@ route:
 
   routes:
     # Critical and page severity alerts route to PagerDuty with auto-escalation
-    - match_re:
-        severity: ^(critical|page)$
+    - matchers:
+        - severity =~ "^(critical|page)$"
       receiver: 'pagerduty-tier0'
       continue: true
 
-    - match_re:
-        severity: ^(critical|page)$
+    - matchers:
+        - severity =~ "^(critical|page)$"
       receiver: 'slack-incidents'
 
-    - match:
-        severity: warning
+    - matchers:
+        - severity = "warning"
       receiver: 'slack-alerts'
 
 receivers:
@@ -64,8 +64,8 @@ receivers:
 
 inhibit_rules:
   # Inhibit warning alerts if a critical alert is already firing for the same service
-  - source_match:
-      severity: 'critical'
-    target_match:
-      severity: 'warning'
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
     equal: ['service']

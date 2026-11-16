@@ -16,8 +16,8 @@ groups:
       - alert: PaymentServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="payment-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="payment-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="payment-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="payment-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -27,7 +27,7 @@ groups:
           tier: tier-1
         annotations:
           summary: "Payment Service CRITICAL: Error rate >10% in 5min (SLO breach - SEV-1)"
-          description: "{{ $labels.service }} has error rate {{ $value | humanizePercentage }} (threshold 10%). Monthly error budget: 2.2 min. Expected status: {{ .GroupLabels.severity }}"
+          description: "{{ $labels.service }} has error rate {{ $value | humanizePercentage }} (threshold 10%). Monthly error budget: 2.2 min."
           runbook_url: "https://docs.instacommerce.dev/docs/runbooks/payment-service-errors"
           dashboard_url: "https://grafana.instacommerce.dev/d/slo-payment-service"
           pagerduty_severity: "critical"
@@ -36,8 +36,8 @@ groups:
       - alert: PaymentServiceMediumBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="payment-service", status=~"5.."}[30m])) by (service)
-            / sum(rate(http_requests_total{service="payment-service"}[30m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="payment-service", status=~"5..", uri!~"/actuator.*"}[30m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="payment-service", uri!~"/actuator.*"}[30m])) by (service)
           ) > 0.05
         for: 5m
         labels:
@@ -53,8 +53,8 @@ groups:
       - alert: PaymentServiceSlowBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="payment-service", status=~"5.."}[6h])) by (service)
-            / sum(rate(http_requests_total{service="payment-service"}[6h])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="payment-service", status=~"5..", uri!~"/actuator.*"}[6h])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="payment-service", uri!~"/actuator.*"}[6h])) by (service)
           ) > 0.01
         for: 30m
         labels:
@@ -69,7 +69,7 @@ groups:
 
       - alert: PaymentServiceLatencySLOBreach
         expr: |
-          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="payment-service"}[5m])) by (le))
+          histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="payment-service", uri!~"/actuator.*"}[5m])) by (le))
           > 0.3
         for: 5m
         labels:
@@ -99,57 +99,65 @@ groups:
           description: "Webhook delivery failure rate {{ $value | humanizePercentage }}. Risk: Lost payment confirmations."
           pagerduty_severity: "critical"
 
-      # Order Service: 99.9% SLO (8.6 min/month budget)
+      # Order Service: 99.5% SLO (0.995 target)
+      - record: slo:availability_target:ratio
+        labels:
+          service: order-service
+        expr: "0.995"
+
       - alert: OrderServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="order-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="order-service"}[5m])) by (service)
-          ) > 0.1
+            sum(rate(http_server_requests_seconds_count{service="order-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="order-service", uri!~"/actuator.*"}[5m])) by (service)
+          ) > (14.4 * (1 - 0.995))
         for: 1m
         labels:
           severity: critical
           service: order-service
+          slo: "0.995"
           slo_window: fast_burn
           tier: tier-1
         annotations:
-          summary: "Order Service CRITICAL: Error rate >10% in 5min (SEV-1)"
-          description: "{{ $labels.service }} error rate {{ $value | humanizePercentage }}. Budget: 8.6 min/month"
+          summary: "Order Service CRITICAL: Error rate >7.2% in 5min for 99.5% SLO (SEV-1)"
+          description: "{{ $labels.service }} error rate {{ $value | humanizePercentage }}. SLO target: 99.5% (0.995)"
           pagerduty_severity: "critical"
 
       - alert: OrderServiceMediumBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="order-service", status=~"5.."}[30m])) by (service)
-            / sum(rate(http_requests_total{service="order-service"}[30m])) by (service)
-          ) > 0.05
+            sum(rate(http_server_requests_seconds_count{service="order-service", status=~"5..", uri!~"/actuator.*"}[30m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="order-service", uri!~"/actuator.*"}[30m])) by (service)
+          ) > (6 * (1 - 0.995))
         for: 5m
         labels:
           severity: warning
           service: order-service
+          slo: "0.995"
           slo_window: medium_burn
           tier: tier-1
         annotations:
-          summary: "Order Service WARNING: Error rate >5% in 30min (SEV-2)"
+          summary: "Order Service WARNING: Error rate >3% in 30min for 99.5% SLO (SEV-2)"
 
       - alert: OrderServiceSlowBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="order-service", status=~"5.."}[6h])) by (service)
-            / sum(rate(http_requests_total{service="order-service"}[6h])) by (service)
-          ) > 0.01
+            sum(rate(http_server_requests_seconds_count{service="order-service", status=~"5..", uri!~"/actuator.*"}[6h])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="order-service", uri!~"/actuator.*"}[6h])) by (service)
+          ) > (2 * (1 - 0.995))
         for: 30m
         labels:
           severity: info
           service: order-service
+          slo: "0.995"
           slo_window: slow_burn
 
       # Checkout Orchestrator: 99.9% SLO
       - alert: CheckoutOrchestrationFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="checkout-orchestrator-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="checkout-orchestrator-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="checkout-orchestrator-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -164,7 +172,7 @@ groups:
 
       - alert: CheckoutLatencySLOBreach
         expr: |
-          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="checkout-orchestrator-service"}[5m])) by (le))
+          histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="checkout-orchestrator-service", uri!~"/actuator.*"}[5m])) by (le))
           > 2.0
         for: 5m
         labels:
@@ -180,8 +188,8 @@ groups:
       - alert: FulfillmentServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="fulfillment-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="fulfillment-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="fulfillment-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="fulfillment-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -195,7 +203,7 @@ groups:
 
       - alert: FulfillmentETAAccuracyDegraded
         expr: |
-          (100 - histogram_quantile(0.95, rate(eta_accuracy_percent_bucket[15m]))) > 15
+          (100 - histogram_quantile(0.95, sum(rate(eta_accuracy_percent_bucket[5m])) by (le))) > 15
         for: 10m
         labels:
           severity: warning
@@ -216,8 +224,8 @@ groups:
       - alert: SearchServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="search-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="search-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="search-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="search-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -242,8 +250,8 @@ groups:
       - alert: CatalogServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="catalog-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="catalog-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="catalog-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="catalog-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -257,8 +265,8 @@ groups:
       - alert: CartServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="cart-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="cart-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="cart-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="cart-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -272,8 +280,8 @@ groups:
       - alert: PricingServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="pricing-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="pricing-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="pricing-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="pricing-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -287,8 +295,8 @@ groups:
       - alert: InventoryServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="inventory-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="inventory-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="inventory-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="inventory-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -302,8 +310,8 @@ groups:
       - alert: FraudDetectionServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="fraud-detection-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="fraud-detection-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="fraud-detection-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="fraud-detection-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -324,8 +332,8 @@ groups:
       - alert: IdentityServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="identity-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="identity-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="identity-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="identity-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -354,8 +362,8 @@ groups:
       - alert: FeatureFlagServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="config-feature-flag-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="config-feature-flag-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="config-feature-flag-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="config-feature-flag-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -407,8 +415,8 @@ groups:
       - alert: AuditTrailServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="audit-trail-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="audit-trail-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="audit-trail-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="audit-trail-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -435,8 +443,8 @@ groups:
       - alert: StreamProcessorSlowBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="stream-processor-service", status=~"5.."}[6h])) by (service)
-            / sum(rate(http_requests_total{service="stream-processor-service"}[6h])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="stream-processor-service", status=~"5..", uri!~"/actuator.*"}[6h])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="stream-processor-service", uri!~"/actuator.*"}[6h])) by (service)
           ) > 0.01
         for: 30m
         labels:
@@ -455,8 +463,8 @@ groups:
       - alert: RoutingETAServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="routing-eta-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="routing-eta-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="routing-eta-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="routing-eta-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -470,8 +478,8 @@ groups:
       - alert: DispatchOptimizerFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="dispatch-optimizer-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="dispatch-optimizer-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="dispatch-optimizer-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="dispatch-optimizer-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -485,8 +493,8 @@ groups:
       - alert: RiderFleetServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="rider-fleet-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="rider-fleet-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="rider-fleet-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="rider-fleet-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -500,8 +508,8 @@ groups:
       - alert: WarehouseServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="warehouse-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="warehouse-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="warehouse-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="warehouse-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -521,8 +529,8 @@ groups:
       - alert: MobileBFFServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="mobile-bff-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="mobile-bff-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="mobile-bff-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="mobile-bff-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -536,8 +544,8 @@ groups:
       - alert: NotificationServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="notification-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="notification-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="notification-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="notification-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -551,8 +559,8 @@ groups:
       - alert: WalletLoyaltyServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="wallet-loyalty-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="wallet-loyalty-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="wallet-loyalty-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="wallet-loyalty-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -566,8 +574,8 @@ groups:
       - alert: AIOrchestratorServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="ai-orchestrator-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="ai-orchestrator-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="ai-orchestrator-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="ai-orchestrator-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -581,8 +589,8 @@ groups:
       - alert: AIInferenceServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="ai-inference-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="ai-inference-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="ai-inference-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="ai-inference-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -596,8 +604,8 @@ groups:
       - alert: LocationIngestionServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="location-ingestion-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="location-ingestion-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="location-ingestion-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="location-ingestion-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -617,8 +625,8 @@ groups:
       - alert: AdminGatewayServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="admin-gateway-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="admin-gateway-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="admin-gateway-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="admin-gateway-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -631,8 +639,8 @@ groups:
       - alert: OutboxRelayServiceFastBurn
         expr: |
           (
-            sum(rate(http_requests_total{service="outbox-relay-service", status=~"5.."}[5m])) by (service)
-            / sum(rate(http_requests_total{service="outbox-relay-service"}[5m])) by (service)
+            sum(rate(http_server_requests_seconds_count{service="outbox-relay-service", status=~"5..", uri!~"/actuator.*"}[5m])) by (service)
+            / sum(rate(http_server_requests_seconds_count{service="outbox-relay-service", uri!~"/actuator.*"}[5m])) by (service)
           ) > 0.1
         for: 1m
         labels:
@@ -651,10 +659,8 @@ groups:
       - alert: ErrorBudgetConsumption75Percent
         expr: |
           (
-            1 - (
-              sum(increase(http_requests_total{status!~"5.."}[30d])) by (service)
-              / sum(increase(http_requests_total[30d])) by (service)
-            )
+            sum(increase(http_server_requests_seconds_count{status=~"5..", uri!~"/actuator.*"}[30d])) by (service)
+            / sum(increase(http_server_requests_seconds_count{uri!~"/actuator.*"}[30d])) by (service)
           ) / (1 - on(service) group_left slo_target{slo_target > 0}) > 0.75
         for: 1h
         labels:
@@ -667,10 +673,8 @@ groups:
       - alert: ErrorBudgetExhausted
         expr: |
           (
-            1 - (
-              sum(increase(http_requests_total{status!~"5.."}[30d])) by (service)
-              / sum(increase(http_requests_total[30d])) by (service)
-            )
+            sum(increase(http_server_requests_seconds_count{status=~"5..", uri!~"/actuator.*"}[30d])) by (service)
+            / sum(increase(http_server_requests_seconds_count{uri!~"/actuator.*"}[30d])) by (service)
           ) / (1 - on(service) group_left slo_target{slo_target > 0}) >= 1.0
         for: 10m
         labels:
@@ -712,7 +716,7 @@ groups:
 
       - alert: HighCPUUsage
         expr: |
-          rate(container_cpu_usage_seconds_total[5m]) / container_spec_cpu_quota > 0.9
+          rate(container_cpu_usage_seconds_total[5m]) / (container_spec_cpu_quota / 100000) > 0.9
         for: 5m
         labels:
           severity: warning
@@ -796,38 +800,4 @@ groups:
           summary: "Service-to-service latency high for {{ $labels.upstream_service }}"
           description: "p99 latency: {{ $value | humanizeDuration }}"
 
-# Alert routing configuration
-# Maps alerts to PagerDuty escalation policies
-alert_routing:
-  tier-1-critical:
-    policy: "critical-path-oncall"
-    escalation: "5 min -> SRE lead -> Platform VP"
-    critical_window: "00:00-23:59 UTC"
-
-  tier-1-warning:
-    policy: "payment-team-oncall"
-    escalation: "15 min -> Team lead -> Payment manager"
-
-  tier-2-warning:
-    policy: "platform-oncall"
-    escalation: "30 min -> Platform lead"
-
-  tier-3-warning:
-    policy: "sre-team"
-    escalation: "1 hour -> SRE lead"
-
-  infrastructure-critical:
-    policy: "infra-oncall"
-    escalation: "5 min -> Infra lead -> VP Engineering"
-
-# Maintenance windows
-maintenance_windows:
-  deployment:
-    days: "Tuesday, Thursday"
-    time: "10:00-11:00 UTC"
-    silence_alerts: true
-
-  maintenance:
-    days: "Sunday"
-    time: "02:00-04:00 UTC"
-    silence_non_critical: true
+# Alert routing and maintenance window documentation moved to Alertmanager configuration (monitoring/alertmanager.yml).

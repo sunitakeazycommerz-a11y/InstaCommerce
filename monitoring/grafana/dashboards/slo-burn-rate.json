@@ -53,7 +53,7 @@
       "pluginVersion": "9.5.0",
       "targets": [
         {
-          "expr": "100 * (1 - (sum(rate(http_server_requests_seconds_count{service=\"payment-service\",status=~\"2..\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"payment-service\"}[30d])))) / (1 - 0.999)",
+          "expr": "100 * (sum(rate(http_server_requests_seconds_count{service=\"payment-service\",status=~\"5..\",uri!~\"/actuator.*\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"payment-service\",uri!~\"/actuator.*\"}[30d]))) / (1 - 0.999)",
           "refId": "A"
         }
       ],
@@ -90,7 +90,7 @@
       },
       "targets": [
         {
-          "expr": "100 * (1 - (sum(rate(http_server_requests_seconds_count{service=\"order-service\",status=~\"2..\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"order-service\"}[30d])))) / (1 - 0.999)",
+          "expr": "100 * (sum(rate(http_server_requests_seconds_count{service=\"order-service\",status=~\"5..\",uri!~\"/actuator.*\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"order-service\",uri!~\"/actuator.*\"}[30d]))) / (1 - 0.995)",
           "refId": "A"
         }
       ],
@@ -127,7 +127,7 @@
       },
       "targets": [
         {
-          "expr": "100 * (1 - (sum(rate(http_server_requests_seconds_count{service=\"fulfillment-service\",status=~\"2..\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"fulfillment-service\"}[30d])))) / (1 - 0.995)",
+          "expr": "100 * (sum(rate(http_server_requests_seconds_count{service=\"fulfillment-service\",status=~\"5..\",uri!~\"/actuator.*\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"fulfillment-service\",uri!~\"/actuator.*\"}[30d]))) / (1 - 0.995)",
           "refId": "A"
         }
       ],
@@ -164,7 +164,7 @@
       },
       "targets": [
         {
-          "expr": "100 * (1 - (sum(rate(http_server_requests_seconds_count{service=\"checkout-orchestrator-service\",status=~\"2..\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"checkout-orchestrator-service\"}[30d])))) / (1 - 0.999)",
+          "expr": "100 * (sum(rate(http_server_requests_seconds_count{service=\"checkout-orchestrator-service\",status=~\"5..\",uri!~\"/actuator.*\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"checkout-orchestrator-service\",uri!~\"/actuator.*\"}[30d]))) / (1 - 0.999)",
           "refId": "A"
         }
       ],
@@ -215,12 +215,12 @@
       },
       "targets": [
         {
-          "expr": "(1 - (sum(rate(http_server_requests_seconds_count{service=\"payment-service\",status=~\"2..\"}[1h])) / sum(rate(http_server_requests_seconds_count{service=\"payment-service\"}[1h])))) / (1 - 0.999) * 720",
+          "expr": "(sum(rate(http_server_requests_seconds_count{service=\"payment-service\",status=~\"5..\",uri!~\"/actuator.*\"}[1h])) / sum(rate(http_server_requests_seconds_count{service=\"payment-service\",uri!~\"/actuator.*\"}[1h]))) / (1 - 0.999) * 720",
           "legendFormat": "payment-service 1h",
           "refId": "A"
         },
         {
-          "expr": "(1 - (sum(rate(http_server_requests_seconds_count{service=\"payment-service\",status=~\"2..\"}[6h])) / sum(rate(http_server_requests_seconds_count{service=\"payment-service\"}[6h])))) / (1 - 0.999) * 720",
+          "expr": "(sum(rate(http_server_requests_seconds_count{service=\"payment-service\",status=~\"5..\",uri!~\"/actuator.*\"}[6h])) / sum(rate(http_server_requests_seconds_count{service=\"payment-service\",uri!~\"/actuator.*\"}[6h]))) / (1 - 0.999) * 720",
           "legendFormat": "payment-service 6h",
           "refId": "B"
         }
@@ -271,12 +271,12 @@
       },
       "targets": [
         {
-          "expr": "(1 - (sum(rate(http_server_requests_seconds_count{service=\"order-service\",status=~\"2..\"}[1h])) / sum(rate(http_server_requests_seconds_count{service=\"order-service\"}[1h])))) / (1 - 0.999) * 720",
+          "expr": "(sum(rate(http_server_requests_seconds_count{service=\"order-service\",status=~\"5..\",uri!~\"/actuator.*\"}[1h])) / sum(rate(http_server_requests_seconds_count{service=\"order-service\",uri!~\"/actuator.*\"}[1h]))) / (1 - 0.995) * 720",
           "legendFormat": "order-service 1h",
           "refId": "A"
         },
         {
-          "expr": "(1 - (sum(rate(http_server_requests_seconds_count{service=\"order-service\",status=~\"2..\"}[6h])) / sum(rate(http_server_requests_seconds_count{service=\"order-service\"}[6h])))) / (1 - 0.999) * 720",
+          "expr": "(sum(rate(http_server_requests_seconds_count{service=\"order-service\",status=~\"5..\",uri!~\"/actuator.*\"}[6h])) / sum(rate(http_server_requests_seconds_count{service=\"order-service\",uri!~\"/actuator.*\"}[6h]))) / (1 - 0.995) * 720",
           "legendFormat": "order-service 6h",
           "refId": "B"
         }
@@ -331,17 +331,17 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(http_server_requests_seconds_count{service=\"payment-service\",status=~\"2..\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"payment-service\"}[30d]))",
+          "expr": "1 - (sum(rate(http_server_requests_seconds_count{service=\"payment-service\",status=~\"5..\",uri!~\"/actuator.*\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"payment-service\",uri!~\"/actuator.*\"}[30d])))",
           "legendFormat": "payment-service (SLO: 99.9%)",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(http_server_requests_seconds_count{service=\"order-service\",status=~\"2..\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"order-service\"}[30d]))",
-          "legendFormat": "order-service (SLO: 99.9%)",
+          "expr": "1 - (sum(rate(http_server_requests_seconds_count{service=\"order-service\",status=~\"5..\",uri!~\"/actuator.*\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"order-service\",uri!~\"/actuator.*\"}[30d])))",
+          "legendFormat": "order-service (SLO: 99.5%)",
           "refId": "B"
         },
         {
-          "expr": "sum(rate(http_server_requests_seconds_count{service=\"fulfillment-service\",status=~\"2..\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"fulfillment-service\"}[30d]))",
+          "expr": "1 - (sum(rate(http_server_requests_seconds_count{service=\"fulfillment-service\",status=~\"5..\",uri!~\"/actuator.*\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"fulfillment-service\",uri!~\"/actuator.*\"}[30d])))",
           "legendFormat": "fulfillment-service (SLO: 99.5%)",
           "refId": "C"
         }

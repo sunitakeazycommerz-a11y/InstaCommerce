@@ -292,10 +292,12 @@ for svc_dir in services/*; do
 done
 
 # Verify service port synchronization with GLOSSARY.md (Issue #688)
-GLOSSARY_PORTS=$(grep -E '^\| `[a-z0-9-]+`' GLOSSARY.md | sed -E 's/^\| `([^`]+)` \| [^\|]+ \| ([0-9]+) \|.*/\1:\2/')
+GLOSSARY_PORTS=$(grep -E '^\| `[a-z0-9-]+`' GLOSSARY.md | sed -E 's/^\| `([^`]+)` \| [^\|]+ \| ([0-9]+) \|[^|]+\|[^|]+\| `([^`]+)`.*/\1:\2:\3/')
 for entry in $GLOSSARY_PORTS; do
     reg_svc="${entry%%:*}"
-    reg_port="${entry##*:}"
+    rest="${entry#*:}"
+    reg_port="${rest%%:*}"
+    helm_key="${rest##*:}"
 
     # 1. Assert port is documented in README.md
     if grep -q "$reg_port" "services/$reg_svc/README.md"; then
@@ -312,6 +314,18 @@ for entry in $GLOSSARY_PORTS; do
         else
             log_fail "Service '$reg_svc' application.yml port does NOT match $reg_port from GLOSSARY.md"
         fi
+    fi
+
+    # 3. Assert Helm values.yaml port matches GLOSSARY.md
+    helm_port=$(awk -v key="  ${helm_key}:" '
+        $0 == key { in_svc = 1; next }
+        in_svc && /^  [a-z0-9-]+:/ { in_svc = 0 }
+        in_svc && /^    port: / { print $2; exit }
+    ' "$HELM_VALUES")
+    if [ "$helm_port" = "$reg_port" ]; then
+        log_pass "Service '$reg_svc' Helm port ($helm_port) matches GLOSSARY.md ($reg_port)"
+    else
+        log_fail "Service '$reg_svc' Helm port ($helm_port) does NOT match GLOSSARY.md ($reg_port)"
     fi
 done
 
@@ -340,6 +354,55 @@ if grep -q 'partitions[[:space:]]*=[[:space:]]*12' infra/terraform/debezium-conn
     log_pass "Kafka reconciliation topic partitions standardized to 12"
 else
     log_fail "Kafka reconciliation topic partitions not standardized to 12 in Terraform"
+fi
+
+# Verify no tracked Mach-O/ELF binaries in services/
+TRACKED_BINARIES=$(git ls-files services/ | xargs file 2>/dev/null | grep -E "Mach-O|ELF" || true)
+if [ -z "$TRACKED_BINARIES" ]; then
+    log_pass "No tracked Mach-O/ELF binaries in services/"
+else
+    log_fail "Tracked Mach-O/ELF binaries found in services/: $TRACKED_BINARIES"
+fi
+
+# Verify contracts/build.gradle.kts protoc version matches root protobuf-java version
+PROTOC_VERSION=$(grep -E 'com\.google\.protobuf:protoc:[0-9.]+' contracts/build.gradle.kts | sed -E 's/.*com\.google\.protobuf:protoc:([0-9.]+).*/\1/' | head -1)
+PROTOBUF_JAVA_VERSION=$(grep -E 'com\.google\.protobuf:protobuf-java:[0-9.]+' build.gradle.kts | sed -E 's/.*com\.google\.protobuf:protobuf-java:([0-9.]+).*/\1/' | head -1)
+if [ -n "$PROTOC_VERSION" ] && [ "$PROTOC_VERSION" = "$PROTOBUF_JAVA_VERSION" ]; then
+    log_pass "contracts/build.gradle.kts protoc version ($PROTOC_VERSION) matches root protobuf-java version ($PROTOBUF_JAVA_VERSION)"
+else
+    log_fail "contracts/build.gradle.kts protoc version ($PROTOC_VERSION) does NOT match root protobuf-java version ($PROTOBUF_JAVA_VERSION)"
+fi
+
+# Verify no your-org placeholder in argocd/
+ARGOCD_YOUR_ORG=$(grep -rn "your-org" argocd/ 2>/dev/null || true)
+if [ -z "$ARGOCD_YOUR_ORG" ]; then
+    log_pass "No 'your-org' placeholder found in argocd/"
+else
+    log_fail "Placeholder 'your-org' found in argocd/: $ARGOCD_YOUR_ORG"
+fi
+
+# Verify no duplicate Application metadata.name in argocd/
+if command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" 2>/dev/null; then
+    DUP_ARGO=$(python3 -c '
+import glob, yaml
+seen = {}
+dups = []
+for p in sorted(set(glob.glob("argocd/**/*.yaml", recursive=True) + glob.glob("argocd/*.yaml"))):
+    with open(p) as f:
+        for d in yaml.safe_load_all(f):
+            if d and d.get("kind") == "Application":
+                n = d.get("metadata", {}).get("name")
+                if n in seen:
+                    dups.append(f"{n}: {seen[n]} vs {p}")
+                elif n:
+                    seen[n] = p
+print("\n".join(dups))
+')
+    if [ -z "$DUP_ARGO" ]; then
+        log_pass "No duplicate ArgoCD Application metadata.name in argocd/"
+    else
+        log_fail "Duplicate ArgoCD Application metadata.name found: $DUP_ARGO"
+    fi
 fi
 
 # ------------------------------------------------------------------------------

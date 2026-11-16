@@ -11,7 +11,9 @@ set -euo pipefail
 PRIMARY_INSTANCE="${PRIMARY_INSTANCE:-instacommerce-postgres-primary}"
 STANDBY_INSTANCE="${STANDBY_INSTANCE:-instacommerce-postgres-standby}"
 GCP_PROJECT="${GCP_PROJECT:-instacommerce-prod}"
+DB_HOST="${DB_HOST:-postgres.internal.instacommerce.net}"
 DRY_RUN="${DRY_RUN:-false}"
+ALLOW_MOCK="${ALLOW_MOCK:-false}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -34,14 +36,22 @@ echo "=================================================================="
 
 START_TIME=$(date +%s)
 
-if [[ "$DRY_RUN" == "true" ]] || ! command -v gcloud >/dev/null 2>&1; then
+if [[ "$DRY_RUN" == "true" || "$ALLOW_MOCK" == "true" ]]; then
     echo "[DRY-RUN] Simulating Cloud SQL replica promotion..."
-    sleep 2
+    sleep 1
     echo "[DRY-RUN] Simulating Cloud DNS private zone record update..."
     sleep 1
     echo "[DRY-RUN] Simulating HikariCP connection pool auto-reconnect..."
-    sleep 2
+    sleep 1
 else
+    if ! command -v gcloud >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1; then
+        echo "ERROR: gcloud or psql is not installed/reachable. Pass --dry-run or set ALLOW_MOCK=true for simulated drill." >&2
+        exit 1
+    fi
+    if ! psql "host=${DB_HOST} connect_timeout=5" -c "SELECT 1;" >/dev/null 2>&1; then
+        echo "ERROR: Database at ${DB_HOST} is unreachable via psql. Pass --dry-run or set ALLOW_MOCK=true for simulated drill." >&2
+        exit 1
+    fi
     echo "1. Promoting read-replica $STANDBY_INSTANCE in project $GCP_PROJECT..."
     gcloud sql instances promote-replica "$STANDBY_INSTANCE" --project="$GCP_PROJECT" --quiet
     

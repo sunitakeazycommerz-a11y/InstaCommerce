@@ -71,14 +71,15 @@ resource "debezium_connector" "reconciliation_runs_connector" {
     "include.unknown.datatypes" = "false"
 
     # Replication and sync settings
-    "replication.slot.name" = "reconciliation_cdc_slot"
+    "slot.name"             = "debezium_reconciliation_slot"
+    "replication.slot.name" = "debezium_reconciliation_slot"
 
     # Column include/exclude (optional - include all columns)
     "column.include.list" = "public.reconciliation_runs.run_id,public.reconciliation_runs.run_date,public.reconciliation_runs.status,public.reconciliation_runs.mismatch_count,public.reconciliation_runs.auto_fixed_count,public.reconciliation_runs.manual_review_count,public.reconciliation_runs.started_at,public.reconciliation_runs.completed_at,public.reconciliation_runs.created_at,public.reconciliation_mismatches.mismatch_id,public.reconciliation_mismatches.run_id,public.reconciliation_mismatches.transaction_id,public.reconciliation_mismatches.ledger_amount,public.reconciliation_mismatches.psp_amount"
 
     # Heartbeat settings to detect idle connections
     "heartbeat.interval.ms" = "15000"
-    "heartbeat.action.query" = "UPDATE reconciliation_outbox SET updated_at = NOW() WHERE id = -1" # No-op query
+    "heartbeat.action.query" = "UPDATE reconciliation_outbox SET published = published WHERE id = -1" # No-op query
 
     # Initial snapshot behavior
     "snapshot.mode" = "initial" # Take initial snapshot, then follow WAL
@@ -137,7 +138,8 @@ resource "debezium_connector" "reconciliation_mismatches_connector" {
     "transforms.unwrap.type" = "io.debezium.transforms.ExtractNewRecordState"
     "topic.prefix"          = "reconciliation"
     "decimal.handling.mode" = "string"
-    "replication.slot.name" = "reconciliation_cdc_slot"
+    "slot.name"             = "debezium_reconciliation_mismatches_slot"
+    "replication.slot.name" = "debezium_reconciliation_mismatches_slot"
     "snapshot.mode"         = "initial"
     "tasks.max"             = "1"
   }

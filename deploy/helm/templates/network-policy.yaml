@@ -21,6 +21,8 @@ spec:
     {{- end }}
     # Always allow Prometheus scraping and health probes
     - ports:
+        - port: http
+          protocol: TCP
         - port: metrics
           protocol: TCP
 {{- end }}

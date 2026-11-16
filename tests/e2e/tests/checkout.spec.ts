@@ -72,7 +72,7 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
 
     document.getElementById('search-btn').addEventListener('click', async () => {
       const q = document.getElementById('search-input').value;
-      const res = await fetch('/api/v1/search?q=' + encodeURIComponent(q));
+      const res = await fetch('/api/v1/search?query=' + encodeURIComponent(q) + '&q=' + encodeURIComponent(q));
       const data = await res.json();
       const resultsDiv = document.getElementById('product-results');
       resultsDiv.innerHTML = '';
@@ -88,10 +88,15 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
           const id = e.target.getAttribute('data-id');
           const name = e.target.getAttribute('data-name');
           const price = parseInt(e.target.getAttribute('data-price'), 10);
-          const cartRes = await fetch('/api/v1/cart', {
+          const cartRes = await fetch('/api/v1/cart/items', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ productId: id, quantity: 1 })
+            body: JSON.stringify({
+              productId: id,
+              productName: name,
+              unitPriceCents: price,
+              quantity: 1
+            })
           });
           const cartData = await cartRes.json();
           currentCart = cartData.items;
@@ -108,7 +113,8 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
       itemsList.innerHTML = '';
       currentCart.forEach(item => {
         const p = document.createElement('p');
-        p.innerText = item.name + ' x ' + item.quantity + ' - ₹' + (item.unitPriceCents / 100).toFixed(2);
+        const displayName = item.productName || item.name;
+        p.innerText = displayName + ' x ' + item.quantity + ' - ₹' + (item.unitPriceCents / 100).toFixed(2);
         itemsList.appendChild(p);
       });
       document.getElementById('cart-total-display').innerText = '₹' + (currentCart.reduce((acc, it) => acc + (it.unitPriceCents * it.quantity), 0) / 100).toFixed(2);
@@ -125,12 +131,19 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
       const res = await fetch('/api/v1/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: '${TEST_USER.id}', paymentMethodId: paymentMethodId, deliveryAddressId: 'addr-101' })
+        body: JSON.stringify({
+          userId: '${TEST_USER.id}',
+          paymentMethodId: paymentMethodId,
+          couponCode: null,
+          deliveryAddressId: 'addr-101',
+          dropoffLat: 12.9279,
+          dropoffLng: 77.6271
+        })
       });
       const data = await res.json();
-      if (!res.ok || data.status === 'FAILED') {
+      if (!res.ok || (typeof data.status === 'string' && data.status.startsWith('FAILED'))) {
         const banner = document.getElementById('alert-banner');
-        banner.innerText = data.message || 'Checkout failed. Please try again.';
+        banner.innerText = data.message || data.status || 'Checkout failed. Please try again.';
         banner.style.display = 'block';
       } else {
         document.getElementById('checkout-view').style.display = 'none';
@@ -158,11 +171,13 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
 
     // 2. Intercept API routes
     await page.route('**/api/v1/search*', async (route) => {
+      const url = new URL(route.request().url());
+      const searchQuery = url.searchParams.get('query') ?? url.searchParams.get('q') ?? 'milk';
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          query: 'milk',
+          query: searchQuery,
           total: 1,
           results: [
             {
@@ -177,20 +192,46 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
       });
     });
 
-    await page.route('**/api/v1/cart**', async (route) => {
+    await page.route('**/api/v1/cart/items', async (route) => {
+      const body = route.request().postDataJSON() as {
+        productId?: string;
+        productName?: string;
+        unitPriceCents?: number;
+        quantity?: number;
+      };
       await route.fulfill({
-        status: 200,
+        status: 201,
         contentType: 'application/json',
         body: JSON.stringify({
           userId: TEST_USER.id,
-          items: [{ productId: milk.id, name: milk.name, quantity: 1, unitPriceCents: milk.priceCents }],
+          items: [
+            {
+              productId: body?.productId ?? milk.id,
+              productName: body?.productName ?? milk.name,
+              name: body?.productName ?? milk.name,
+              quantity: body?.quantity ?? 1,
+              unitPriceCents: body?.unitPriceCents ?? milk.priceCents,
+              lineTotalCents: (body?.unitPriceCents ?? milk.priceCents) * (body?.quantity ?? 1),
+            },
+          ],
           subtotalCents: milk.priceCents,
           itemCount: 1,
+          version: 1,
         }),
       });
     });
 
     await page.route('**/api/v1/checkout', async (route) => {
+      const payload = route.request().postDataJSON() as {
+        userId: string;
+        paymentMethodId: string;
+        couponCode?: string | null;
+        deliveryAddressId: string;
+        dropoffLat?: number;
+        dropoffLng?: number;
+      };
+      expect(payload.userId).toBe(TEST_USER.id);
+      expect(payload.deliveryAddressId).toBe('addr-101');
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -249,25 +290,29 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
     });
 
     await page.route('**/api/v1/search*', async (route) => {
+      const url = new URL(route.request().url());
+      const searchQuery = url.searchParams.get('query') ?? url.searchParams.get('q') ?? 'milk';
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          query: 'milk',
+          query: searchQuery,
           total: 1,
           results: [{ id: milk.id, name: milk.name, sku: milk.sku, priceCents: milk.priceCents, formattedPrice: milk.formattedPrice }],
         }),
       });
     });
 
-    await page.route('**/api/v1/cart**', async (route) => {
+    await page.route('**/api/v1/cart/items', async (route) => {
       await route.fulfill({
-        status: 200,
+        status: 201,
         contentType: 'application/json',
         body: JSON.stringify({
           userId: TEST_USER.id,
-          items: [{ productId: milk.id, name: milk.name, quantity: 1, unitPriceCents: milk.priceCents }],
+          items: [{ productId: milk.id, productName: milk.name, name: milk.name, quantity: 1, unitPriceCents: milk.priceCents }],
+          subtotalCents: milk.priceCents,
           itemCount: 1,
+          version: 1,
         }),
       });
     });
@@ -334,25 +379,29 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
     });
 
     await page.route('**/api/v1/search*', async (route) => {
+      const url = new URL(route.request().url());
+      const searchQuery = url.searchParams.get('query') ?? url.searchParams.get('q') ?? 'milk';
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          query: 'milk',
+          query: searchQuery,
           total: 1,
           results: [{ id: milk.id, name: milk.name, sku: milk.sku, priceCents: milk.priceCents, formattedPrice: milk.formattedPrice }],
         }),
       });
     });
 
-    await page.route('**/api/v1/cart**', async (route) => {
+    await page.route('**/api/v1/cart/items', async (route) => {
       await route.fulfill({
-        status: 200,
+        status: 201,
         contentType: 'application/json',
         body: JSON.stringify({
           userId: TEST_USER.id,
-          items: [{ productId: milk.id, name: milk.name, quantity: 1, unitPriceCents: milk.priceCents }],
+          items: [{ productId: milk.id, productName: milk.name, name: milk.name, quantity: 1, unitPriceCents: milk.priceCents }],
+          subtotalCents: milk.priceCents,
           itemCount: 1,
+          version: 1,
         }),
       });
     });
@@ -363,7 +412,9 @@ test.describe('InstaCommerce Synthetic End-to-End Checkout Suite', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           orderId: null,
-          status: 'FAILED',
+          status: 'FAILED: INSUFFICIENT_INVENTORY',
+          totalCents: 0,
+          estimatedDeliveryMinutes: 0,
           message: 'Some items in your cart became out of stock during checkout.',
         }),
       });

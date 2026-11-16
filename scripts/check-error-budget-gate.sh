@@ -12,6 +12,8 @@ PROMETHEUS_URL="${PROMETHEUS_URL:-http://prometheus.monitoring:9090}"
 EMERGENCY_OVERRIDE="${EMERGENCY_OVERRIDE:-false}"
 VP_APPROVAL_TOKEN="${VP_APPROVAL_TOKEN:-}"
 SIMULATED_AVAILABILITY="${SIMULATED_AVAILABILITY:-}"
+DRY_RUN="${DRY_RUN:-false}"
+ALLOW_MOCK="${ALLOW_MOCK:-false}"
 
 usage() {
     cat <<EOF
@@ -23,6 +25,7 @@ Options:
   --emergency-override        Bypass deployment freeze with VP approval
   --vp-token <token>          VP Engineering approval token for emergency hotfix
   --simulated-availability <val> (Optional test override, e.g. 0.992)
+  --dry-run                   Simulate pass when Prometheus is unreachable
   -h, --help                  Show this help message
 EOF
     exit 1
@@ -49,6 +52,10 @@ while [[ $# -gt 0 ]]; do
         --simulated-availability)
             SIMULATED_AVAILABILITY="$2"
             shift 2
+            ;;
+        --dry-run)
+            DRY_RUN="true"
+            shift
             ;;
         -h|--help)
             usage
@@ -92,14 +99,27 @@ if [[ -n "$SIMULATED_AVAILABILITY" ]]; then
     AVAIL_30D="$SIMULATED_AVAILABILITY"
 else
     # Prometheus PromQL for 30-day availability SLI
-    QUERY="1 - (sum(rate(http_server_requests_seconds_count{service=\"$SERVICE\",status=~\"5..\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"$SERVICE\"}[30d])))"
+    QUERY="1 - (sum(rate(http_server_requests_seconds_count{service=\"$SERVICE\",status=~\"5..\",uri!~\"/actuator.*\"}[30d])) / sum(rate(http_server_requests_seconds_count{service=\"$SERVICE\",uri!~\"/actuator.*\"}[30d])))"
     HTTP_RES=$(curl -s -m 5 -G "${PROMETHEUS_URL}/api/v1/query" --data-urlencode "query=${QUERY}" 2>/dev/null || echo "")
     
     if [[ -z "$HTTP_RES" ]] || ! echo "$HTTP_RES" | grep -q '"status":"success"'; then
-        echo "WARNING: Prometheus unavailable or no 30d metric found. Defaulting to 100% availability."
-        AVAIL_30D=1.000
+        if [[ "$DRY_RUN" == "true" || "$ALLOW_MOCK" == "true" ]]; then
+            echo "WARNING: [DRY-RUN/MOCK] Prometheus unavailable or no 30d metric found. Simulating 100% availability."
+            AVAIL_30D=1.000
+        else
+            echo "ERROR: Prometheus unreachable at ${PROMETHEUS_URL} or returned invalid response. Pass --dry-run or set ALLOW_MOCK=true to simulate." >&2
+            exit 1
+        fi
     else
-        AVAIL_30D=$(echo "$HTTP_RES" | python3 -c 'import sys, json; data=json.load(sys.stdin); res=data["data"]["result"]; print(res[0]["value"][1] if res else 1.0)' 2>/dev/null || echo 1.0)
+        AVAIL_30D=$(echo "$HTTP_RES" | python3 -c 'import sys, json; data=json.load(sys.stdin); res=data["data"]["result"]; print(res[0]["value"][1] if res else "")' 2>/dev/null || echo "")
+        if [[ -z "$AVAIL_30D" ]]; then
+            if [[ "$DRY_RUN" == "true" || "$ALLOW_MOCK" == "true" ]]; then
+                AVAIL_30D=1.000
+            else
+                echo "ERROR: No 30d availability series found for service ${SERVICE}." >&2
+                exit 1
+            fi
+        fi
     fi
 fi
 

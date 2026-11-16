@@ -8,8 +8,8 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/sunitakeazycommerz-a11y/InstaCommerce
-    targetRevision: master
+    repoURL: https://github.com/omkarkumar/InstaCommerce.git
+    targetRevision: main
     path: monitoring
   destination:
     server: https://kubernetes.default.svc

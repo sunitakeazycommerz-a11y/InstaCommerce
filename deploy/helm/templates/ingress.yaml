@@ -15,5 +15,5 @@ spec:
               service:
                 name: identity-service
                 port:
-                  number: 8080
+                  number: {{ (index .Values.services "identity-service").port }}
 {{- end }}
