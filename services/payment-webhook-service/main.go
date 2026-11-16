@@ -32,14 +32,14 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
 	defaultPort               = "8106"
 	defaultSignatureHeader    = "Stripe-Signature"
-	defaultSignatureTolerance = 30
+	defaultSignatureTolerance = 300
 	defaultMaxBodyBytes       = 1 << 20
 	defaultDedupeTTLSeconds   = 86400
 	defaultCleanupSeconds     = 60
@@ -96,10 +96,11 @@ type DedupeStore interface {
 }
 
 type inMemoryDedupe struct {
-	ttl     time.Duration
-	entries map[string]time.Time
-	mu      sync.Mutex
-	stop    chan struct{}
+	ttl       time.Duration
+	entries   map[string]time.Time
+	mu        sync.Mutex
+	stop      chan struct{}
+	closeOnce sync.Once
 }
 
 type redisDedupe struct {
@@ -125,10 +126,10 @@ type webhookHandler struct {
 }
 
 type readiness struct {
-	secretSet      bool
+	secretSet       bool
 	kafkaConfigured bool
-	redisClient    *redis.Client
-	redisTimeout   time.Duration
+	redisClient     *redis.Client
+	redisTimeout    time.Duration
 }
 
 type errorResponse struct {
@@ -136,9 +137,9 @@ type errorResponse struct {
 }
 
 type statusResponse struct {
-	Status   string `json:"status"`
-	EventID  string `json:"event_id,omitempty"`
-	Duplicate bool  `json:"duplicate,omitempty"`
+	Status    string `json:"status"`
+	EventID   string `json:"event_id,omitempty"`
+	Duplicate bool   `json:"duplicate,omitempty"`
 }
 
 func main() {
@@ -191,10 +192,10 @@ func main() {
 	}
 
 	ready := readiness{
-		secretSet:      cfg.WebhookSecret != "",
+		secretSet:       cfg.WebhookSecret != "",
 		kafkaConfigured: writer != nil,
-		redisClient:    redisClient,
-		redisTimeout:   cfg.RedisTimeout,
+		redisClient:     redisClient,
+		redisTimeout:    cfg.RedisTimeout,
 	}
 
 	whHandler := &webhookHandler{
@@ -270,6 +271,9 @@ func main() {
 			logger.Error("server error", "error", err)
 		}
 	}
+
+	signal.Stop(quit)
+	healthHandler.SetReady(false)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
@@ -462,6 +466,12 @@ func initTracing(cfg Config, logger *slog.Logger) (func(context.Context) error, 
 }
 
 func newInMemoryDedupe(ttl, cleanupInterval time.Duration) *inMemoryDedupe {
+	if ttl <= 0 {
+		ttl = defaultDedupeTTLSeconds * time.Second
+	}
+	if cleanupInterval <= 0 {
+		cleanupInterval = defaultCleanupSeconds * time.Second
+	}
 	store := &inMemoryDedupe{
 		ttl:     ttl,
 		entries: make(map[string]time.Time),
@@ -507,7 +517,9 @@ func (d *inMemoryDedupe) Remove(_ context.Context, eventID string) error {
 }
 
 func (d *inMemoryDedupe) Close() error {
-	close(d.stop)
+	d.closeOnce.Do(func() {
+		close(d.stop)
+	})
 	return nil
 }
 
@@ -543,6 +555,7 @@ func newRedisDedupe(cfg Config) (*redisDedupe, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.RedisTimeout)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
+		_ = client.Close()
 		return nil, err
 	}
 	return &redisDedupe{
@@ -615,8 +628,15 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {
-		status = http.StatusRequestEntityTooLarge
-		writeError(w, status, "request body too large")
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			status = http.StatusRequestEntityTooLarge
+			writeError(w, status, "request body too large")
+			return
+		}
+		status = http.StatusBadRequest
+		h.metrics.payloadFailures.Inc()
+		writeError(w, status, "failed to read request body")
 		return
 	}
 	if len(payload) == 0 {
@@ -627,7 +647,7 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	signatureHeader := r.Header.Get(h.cfg.SignatureHeader)
 	if !verifySignature(payload, signatureHeader, h.cfg.WebhookSecret, h.cfg.SignatureTolerance) {
-		status = http.StatusBadRequest
+		status = http.StatusUnauthorized
 		h.metrics.signatureFailures.Inc()
 		writeError(w, status, "invalid signature")
 		return
@@ -677,8 +697,12 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	otel.GetTextMapPropagator().Inject(ctx, kafkaHeaderCarrier{headers: &headers})
 
+	kafkaKey := event.PaymentID
+	if kafkaKey == "" {
+		kafkaKey = event.ID
+	}
 	msg := kafka.Message{
-		Key:     []byte(event.ID),
+		Key:     []byte(kafkaKey),
 		Value:   envelopeBytes,
 		Time:    event.ReceivedAt,
 		Headers: headers,
@@ -697,7 +721,9 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	span.End()
 
 	if publishErr != nil {
-		_ = h.dedupe.Remove(ctx, event.ID)
+		removeCtx, removeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = h.dedupe.Remove(removeCtx, event.ID)
+		removeCancel()
 		h.metrics.publishErrors.Inc()
 		status = http.StatusServiceUnavailable
 		writeError(w, status, "failed to publish event")
@@ -710,7 +736,6 @@ func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, statusResponse{Status: "accepted", EventID: event.ID})
 	loggerWithTrace(ctx, h.logger).Info("webhook accepted", "event_id", event.ID, "event_type", event.EventType)
 }
-
 
 func verifySignature(payload []byte, signatureHeader, secret string, tolerance time.Duration) bool {
 	if secret == "" || signatureHeader == "" {
@@ -844,4 +869,3 @@ func (c kafkaHeaderCarrier) Keys() []string {
 	}
 	return keys
 }
-

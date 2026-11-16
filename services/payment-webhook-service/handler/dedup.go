@@ -12,11 +12,12 @@ import (
 // deduplication; this implementation is suitable for single-instance or
 // integration-test scenarios.
 type IdempotencyStore struct {
-	mu      sync.RWMutex
-	seen    map[string]time.Time
-	ttl     time.Duration
-	maxSize int
-	done    chan struct{}
+	mu        sync.RWMutex
+	seen      map[string]time.Time
+	ttl       time.Duration
+	maxSize   int
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewIdempotencyStore creates an IdempotencyStore that keeps event IDs for ttl
@@ -25,6 +26,15 @@ type IdempotencyStore struct {
 // cleanupInterval controls how often expired entries are reaped. A goroutine is
 // started for this purpose and can be stopped by calling Close.
 func NewIdempotencyStore(ttl time.Duration, maxSize int, cleanupInterval time.Duration) *IdempotencyStore {
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	if maxSize <= 0 {
+		maxSize = 10000
+	}
+	if cleanupInterval <= 0 {
+		cleanupInterval = time.Minute
+	}
 	s := &IdempotencyStore{
 		seen:    make(map[string]time.Time, maxSize),
 		ttl:     ttl,
@@ -92,12 +102,9 @@ func (s *IdempotencyStore) Remove(eventID string) {
 // Close stops the background cleanup goroutine. It is safe to call multiple
 // times.
 func (s *IdempotencyStore) Close() {
-	select {
-	case <-s.done:
-		// Already closed.
-	default:
+	s.closeOnce.Do(func() {
 		close(s.done)
-	}
+	})
 }
 
 // cleanupLoop periodically removes expired entries.

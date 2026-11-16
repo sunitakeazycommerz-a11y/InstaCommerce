@@ -299,14 +299,14 @@ func TestMismatchRecord_ShouldExtractTransactionDetails(t *testing.T) {
 	}
 
 	mismatchAfterImage := map[string]interface{}{
-		"mismatch_id":           1.0,
-		"run_id":                100.0,
-		"transaction_id":        "txn-123456",
-		"ledger_amount":         "1000.00",
-		"psp_amount":            "950.00",
-		"discrepancy_amount":    "50.00",
-		"discrepancy_reason":    "amount_mismatch",
-		"auto_fixed":            true,
+		"mismatch_id":            1.0,
+		"run_id":                 100.0,
+		"transaction_id":         "txn-123456",
+		"ledger_amount":          "1000.00",
+		"psp_amount":             "950.00",
+		"discrepancy_amount":     "50.00",
+		"discrepancy_reason":     "amount_mismatch",
+		"auto_fixed":             true,
 		"manual_review_required": false,
 	}
 

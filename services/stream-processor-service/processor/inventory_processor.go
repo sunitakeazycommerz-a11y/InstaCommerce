@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,12 +18,75 @@ import (
 )
 
 type InventoryEvent struct {
-	EventType   string    `json:"eventType"` // StockUpdated, StockDepleted, StockReplenished
-	SKUID       string    `json:"skuId"`
-	StoreID     string    `json:"storeId"`
-	Quantity    int       `json:"quantity"`
-	PrevQty     int       `json:"prevQty"`
-	Timestamp   time.Time `json:"timestamp"`
+	EventType string    `json:"eventType"` // StockReserved, StockConfirmed, StockReleased, LowStockAlert, StockUpdated, StockDepleted, StockReplenished
+	SKUID     string    `json:"skuId"`
+	StoreID   string    `json:"storeId"`
+	Quantity  int       `json:"quantity"`
+	PrevQty   int       `json:"prevQty"`
+	Threshold int       `json:"threshold,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+func (e *InventoryEvent) UnmarshalJSON(data []byte) error {
+	meta, body, err := unwrapEnvelope(data)
+	if err != nil {
+		return err
+	}
+	sources := []map[string]any{body, meta}
+
+	e.EventType = normalizeInventoryEventType(firstString(sources, "eventType", "event_type", "type"))
+	e.SKUID = firstString(sources, "skuId", "sku_id", "productId", "product_id", "sku")
+	e.StoreID = firstString(sources, "storeId", "store_id", "warehouseId", "warehouse_id")
+
+	if qty, ok := firstInt64(sources, "quantity", "currentQuantity", "current_quantity", "newOnHand", "new_on_hand", "available"); ok {
+		e.Quantity = int(qty)
+	}
+	if prev, ok := firstInt64(sources, "prevQty", "prev_qty", "previousQuantity", "previous_quantity"); ok {
+		e.PrevQty = int(prev)
+	}
+	if thresh, ok := firstInt64(sources, "threshold"); ok {
+		e.Threshold = int(thresh)
+	}
+	if ts, ok := firstTime(sources, "timestamp", "eventTime", "event_time", "createdAt", "created_at"); ok {
+		e.Timestamp = ts
+	}
+
+	// Support batch inventory events (StockReserved / StockConfirmed / StockReleased) with items[]
+	if e.SKUID == "" {
+		if items, ok := body["items"].([]any); ok && len(items) > 0 {
+			if firstItem, ok := items[0].(map[string]any); ok {
+				itemSources := []map[string]any{firstItem}
+				e.SKUID = firstString(itemSources, "skuId", "sku_id", "productId", "product_id", "sku")
+				if e.Quantity == 0 {
+					if q, ok := firstInt64(itemSources, "quantity", "currentQuantity", "current_quantity"); ok {
+						e.Quantity = int(q)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeInventoryEventType(raw string) string {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "STOCKRESERVED", "STOCK_RESERVED":
+		return "StockReserved"
+	case "STOCKCONFIRMED", "STOCK_CONFIRMED":
+		return "StockConfirmed"
+	case "STOCKRELEASED", "STOCK_RELEASED":
+		return "StockReleased"
+	case "LOWSTOCKALERT", "LOW_STOCK_ALERT":
+		return "LowStockAlert"
+	case "STOCKUPDATED", "STOCK_UPDATED":
+		return "StockUpdated"
+	case "STOCKDEPLETED", "STOCK_DEPLETED":
+		return "StockDepleted"
+	case "STOCKREPLENISHED", "STOCK_REPLENISHED":
+		return "StockReplenished"
+	default:
+		return strings.TrimSpace(raw)
+	}
 }
 
 type velocityRecord struct {
@@ -31,40 +95,48 @@ type velocityRecord struct {
 }
 
 type inventoryMetrics struct {
-	stockUpdatesTotal  *prometheus.CounterVec
-	stockoutsTotal     *prometheus.CounterVec
-	cascadeAlerts      *prometheus.CounterVec
-	velocityGauge      *prometheus.GaugeVec
-	processingErrors   prometheus.Counter
+	stockUpdatesTotal *prometheus.CounterVec
+	stockoutsTotal    *prometheus.CounterVec
+	cascadeAlerts     *prometheus.CounterVec
+	velocityGauge     *prometheus.GaugeVec
+	processingErrors  prometheus.Counter
 }
 
+var (
+	inventoryMetricsInstance *inventoryMetrics
+	inventoryMetricsOnce     sync.Once
+)
+
 func newInventoryMetrics() *inventoryMetrics {
-	return &inventoryMetrics{
-		stockUpdatesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "inventory_stock_updates_total",
-			Help: "Total stock update events by type",
-		}, []string{"event_type", "store_id"}),
+	inventoryMetricsOnce.Do(func() {
+		inventoryMetricsInstance = &inventoryMetrics{
+			stockUpdatesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "inventory_stock_updates_total",
+				Help: "Total stock update events by type",
+			}, []string{"event_type", "store_id"}),
 
-		stockoutsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "inventory_stockouts_total",
-			Help: "Total stockout events per store",
-		}, []string{"store_id"}),
+			stockoutsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "inventory_stockouts_total",
+				Help: "Total stockout events per store",
+			}, []string{"store_id"}),
 
-		cascadeAlerts: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "inventory_cascade_alerts_total",
-			Help: "Total stockout cascade alerts (>10 SKUs at zero in one store)",
-		}, []string{"store_id"}),
+			cascadeAlerts: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "inventory_cascade_alerts_total",
+				Help: "Total stockout cascade alerts (>10 SKUs at zero in one store)",
+			}, []string{"store_id"}),
 
-		velocityGauge: promauto.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "inventory_velocity_per_hour",
-			Help: "Inventory velocity (units change) per SKU per store over 1hr window",
-		}, []string{"sku_id", "store_id"}),
+			velocityGauge: promauto.NewGaugeVec(prometheus.GaugeOpts{
+				Name: "inventory_velocity_per_hour",
+				Help: "Inventory velocity (units change) per SKU per store over 1hr window",
+			}, []string{"sku_id", "store_id"}),
 
-		processingErrors: promauto.NewCounter(prometheus.CounterOpts{
-			Name: "inventory_processing_errors_total",
-			Help: "Total inventory processing errors",
-		}),
-	}
+			processingErrors: promauto.NewCounter(prometheus.CounterOpts{
+				Name: "inventory_processing_errors_total",
+				Help: "Total inventory processing errors",
+			}),
+		}
+	})
+	return inventoryMetricsInstance
 }
 
 type InventoryProcessor struct {
@@ -75,8 +147,11 @@ type InventoryProcessor struct {
 	// velocity tracking: store:sku -> records
 	velocity map[string][]velocityRecord
 	// stockout tracking: store -> set of SKUs at zero
-	stockouts map[string]map[string]struct{}
-	mu        sync.RWMutex
+	stockouts  map[string]map[string]struct{}
+	mu         sync.RWMutex
+	storeGuard *labelCardinalityGuard
+	skuGuard   *labelCardinalityGuard
+	eventGuard *labelCardinalityGuard
 }
 
 func NewInventoryProcessor(rdb *redis.Client, logger *slog.Logger) *InventoryProcessor {
@@ -84,15 +159,23 @@ func NewInventoryProcessor(rdb *redis.Client, logger *slog.Logger) *InventoryPro
 		logger = slog.Default()
 	}
 	return &InventoryProcessor{
-		redis:     rdb,
-		logger:    logger.With("processor", "inventory"),
-		metrics:   newInventoryMetrics(),
-		velocity:  make(map[string][]velocityRecord),
-		stockouts: make(map[string]map[string]struct{}),
+		redis:      rdb,
+		logger:     logger.With("processor", "inventory"),
+		metrics:    newInventoryMetrics(),
+		velocity:   make(map[string][]velocityRecord),
+		stockouts:  make(map[string]map[string]struct{}),
+		storeGuard: newLabelCardinalityGuard(maxBoundedLabelValues),
+		skuGuard:   newLabelCardinalityGuard(maxBoundedLabelValues),
+		eventGuard: newLabelCardinalityGuard(64),
 	}
 }
 
 func (p *InventoryProcessor) Process(ctx context.Context, event InventoryEvent) error {
+	event.EventType = normalizeInventoryEventType(event.EventType)
+	storeLabel := p.storeGuard.normalize(event.StoreID, "unknown")
+	skuLabel := p.skuGuard.normalize(event.SKUID, "unknown")
+	eventLabel := p.eventGuard.normalize(event.EventType, "unknown")
+
 	p.logger.Info("processing inventory event",
 		"eventType", event.EventType,
 		"skuId", event.SKUID,
@@ -100,33 +183,59 @@ func (p *InventoryProcessor) Process(ctx context.Context, event InventoryEvent) 
 		"quantity", event.Quantity,
 	)
 
-	p.metrics.stockUpdatesTotal.WithLabelValues(event.EventType, event.StoreID).Inc()
+	p.metrics.stockUpdatesTotal.WithLabelValues(eventLabel, storeLabel).Inc()
 
-	pipe := p.redis.Pipeline()
 	now := time.Now()
 
 	// Update velocity window
 	delta := event.Quantity - event.PrevQty
-	p.updateVelocity(event.StoreID, event.SKUID, delta, now)
+	if (event.EventType == "StockReserved" || event.EventType == "StockConfirmed") && event.PrevQty == 0 && event.Quantity > 0 {
+		delta = -event.Quantity
+	}
+	p.updateVelocity(storeLabel, skuLabel, delta, now)
 
 	switch event.EventType {
 	case "StockDepleted":
-		p.metrics.stockoutsTotal.WithLabelValues(event.StoreID).Inc()
-		p.trackStockout(event.StoreID, event.SKUID, true)
+		p.metrics.stockoutsTotal.WithLabelValues(storeLabel).Inc()
+		p.trackStockout(storeLabel, skuLabel, true)
+	case "LowStockAlert":
+		if event.Quantity <= 0 {
+			p.metrics.stockoutsTotal.WithLabelValues(storeLabel).Inc()
+			p.trackStockout(storeLabel, skuLabel, true)
+		}
+	case "StockReplenished", "StockReleased":
+		if event.Quantity > 0 {
+			p.trackStockout(storeLabel, skuLabel, false)
+		}
+	}
 
-		stockoutKey := fmt.Sprintf("stockout:%s:%s", event.StoreID, event.SKUID)
-		pipe.Set(ctx, stockoutKey, now.Unix(), 2*time.Hour)
+	if p.redis == nil {
+		return nil
+	}
 
-	case "StockReplenished":
-		p.trackStockout(event.StoreID, event.SKUID, false)
+	pipe := p.redis.Pipeline()
 
-		stockoutKey := fmt.Sprintf("stockout:%s:%s", event.StoreID, event.SKUID)
+	switch event.EventType {
+	case "StockDepleted":
+		stockoutKey := fmt.Sprintf("stockout:%s:%s", storeLabel, skuLabel)
+		pipe.Set(ctx, stockoutKey, now.Unix(), redisMetricsTTL)
+
+	case "LowStockAlert":
+		alertKey := fmt.Sprintf("low_stock:%s:%s", storeLabel, skuLabel)
+		pipe.Set(ctx, alertKey, event.Quantity, redisMetricsTTL)
+		if event.Quantity <= 0 {
+			stockoutKey := fmt.Sprintf("stockout:%s:%s", storeLabel, skuLabel)
+			pipe.Set(ctx, stockoutKey, now.Unix(), redisMetricsTTL)
+		}
+
+	case "StockReplenished", "StockReleased":
+		stockoutKey := fmt.Sprintf("stockout:%s:%s", storeLabel, skuLabel)
 		pipe.Del(ctx, stockoutKey)
 	}
 
-	// Store current quantity in Redis
-	qtyKey := fmt.Sprintf("inventory:%s:%s", event.StoreID, event.SKUID)
-	pipe.Set(ctx, qtyKey, event.Quantity, 0)
+	// Store current quantity in Redis with 24h TTL
+	qtyKey := fmt.Sprintf("inventory:%s:%s", storeLabel, skuLabel)
+	pipe.Set(ctx, qtyKey, event.Quantity, redisMetricsTTL)
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		p.metrics.processingErrors.Inc()
@@ -142,6 +251,16 @@ func (p *InventoryProcessor) updateVelocity(storeID, skuID string, delta int, no
 
 	key := storeID + ":" + skuID
 	cutoff := now.Add(-1 * time.Hour)
+
+	if len(p.velocity) >= maxBoundedLabelValues {
+		if _, exists := p.velocity[key]; !exists {
+			for k, recs := range p.velocity {
+				if len(recs) == 0 || recs[len(recs)-1].timestamp.Before(cutoff) {
+					delete(p.velocity, k)
+				}
+			}
+		}
+	}
 
 	records := p.velocity[key]
 
@@ -162,7 +281,15 @@ func (p *InventoryProcessor) updateVelocity(storeID, skuID string, delta int, no
 		totalDelta += r.delta
 	}
 
-	p.metrics.velocityGauge.WithLabelValues(skuID, storeID).Set(float64(totalDelta))
+	skuLabel := skuID
+	storeLabel := storeID
+	if p.skuGuard != nil {
+		skuLabel = p.skuGuard.normalize(skuID, "unknown")
+	}
+	if p.storeGuard != nil {
+		storeLabel = p.storeGuard.normalize(storeID, "unknown")
+	}
+	p.metrics.velocityGauge.WithLabelValues(skuLabel, storeLabel).Set(float64(totalDelta))
 }
 
 func (p *InventoryProcessor) trackStockout(storeID, skuID string, depleted bool) {
@@ -181,7 +308,11 @@ func (p *InventoryProcessor) trackStockout(storeID, skuID string, depleted bool)
 
 	// Cascade detection: >10 SKUs at zero in a single store
 	if len(p.stockouts[storeID]) > 10 {
-		p.metrics.cascadeAlerts.WithLabelValues(storeID).Inc()
+		storeLabel := storeID
+		if p.storeGuard != nil {
+			storeLabel = p.storeGuard.normalize(storeID, "unknown")
+		}
+		p.metrics.cascadeAlerts.WithLabelValues(storeLabel).Inc()
 		p.logger.Warn("stockout cascade detected",
 			"store_id", storeID,
 			"zero_sku_count", len(p.stockouts[storeID]),

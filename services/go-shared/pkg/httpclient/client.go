@@ -51,18 +51,19 @@ func (s CircuitState) String() string {
 	}
 }
 
-// CircuitBreaker implements a simple state-machine circuit breaker.
+// CircuitBreaker implements a thread-safe three-state circuit breaker.
 // When consecutive failures reach the threshold the circuit opens, rejecting
 // all requests for resetTimeout. After the timeout one probe request is
 // allowed through (half-open); if it succeeds the circuit closes, otherwise
 // it reopens.
 type CircuitBreaker struct {
-	failures     int
-	threshold    int
-	resetTimeout time.Duration
-	state        CircuitState
-	lastFailure  time.Time
-	mu           sync.Mutex
+	failures         int
+	threshold        int
+	resetTimeout     time.Duration
+	state            CircuitState
+	lastFailure      time.Time
+	halfOpenInFlight bool
+	mu               sync.Mutex
 }
 
 // newCircuitBreaker creates a CircuitBreaker with the given threshold and
@@ -87,11 +88,16 @@ func (cb *CircuitBreaker) allow() bool {
 	case Open:
 		if time.Since(cb.lastFailure) > cb.resetTimeout {
 			cb.state = HalfOpen
+			cb.halfOpenInFlight = true
 			return true
 		}
 		return false
 	case HalfOpen:
-		return true
+		if !cb.halfOpenInFlight {
+			cb.halfOpenInFlight = true
+			return true
+		}
+		return false
 	default:
 		return true
 	}
@@ -102,6 +108,7 @@ func (cb *CircuitBreaker) recordSuccess() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.failures = 0
+	cb.halfOpenInFlight = false
 	cb.state = Closed
 }
 
@@ -112,7 +119,8 @@ func (cb *CircuitBreaker) recordFailure() {
 	defer cb.mu.Unlock()
 	cb.failures++
 	cb.lastFailure = time.Now()
-	if cb.failures >= cb.threshold {
+	cb.halfOpenInFlight = false
+	if cb.state == HalfOpen || cb.failures >= cb.threshold {
 		cb.state = Open
 	}
 }
@@ -173,7 +181,6 @@ func WithCircuitBreakerResetTimeout(d time.Duration) Option {
 	}
 }
 
-// WithLogger sets a custom logger.
 // DNSCache caches DNS lookups with a configurable TTL to prevent indefinite DNS
 // caching while avoiding DNS resolution overhead on every HTTP request.
 type DNSCache struct {
@@ -197,6 +204,8 @@ func NewDNSCache(ttl time.Duration) *DNSCache {
 	}
 }
 
+const maxDNSCacheEntries = 1024
+
 // LookupHost resolves host to IP addresses, caching successful results for ttl.
 func (c *DNSCache) LookupHost(ctx context.Context, host string) ([]string, error) {
 	c.mu.RLock()
@@ -215,10 +224,18 @@ func (c *DNSCache) LookupHost(ctx context.Context, host string) ([]string, error
 		return nil, err
 	}
 
+	now := time.Now()
 	c.mu.Lock()
+	if len(c.entries) >= maxDNSCacheEntries {
+		for k, v := range c.entries {
+			if !now.Before(v.expiresAt) {
+				delete(c.entries, k)
+			}
+		}
+	}
 	c.entries[host] = dnsEntry{
 		ips:       ips,
-		expiresAt: time.Now().Add(c.ttl),
+		expiresAt: now.Add(c.ttl),
 	}
 	c.mu.Unlock()
 

@@ -314,13 +314,16 @@ func TestOutboxRelayDLQFallbackFlow(t *testing.T) {
 	producerConfig.Producer.Return.Successes = true
 	producer := mocks.NewSyncProducer(t, producerConfig)
 
-	// Primary send fails, but DLQ send succeeds
+	// Primary send fails across transient retry attempts (3 attempts), then DLQ send succeeds
+	producer.ExpectSendMessageAndFail(errors.New("kafka broker connection refused"))
+	producer.ExpectSendMessageAndFail(errors.New("kafka broker connection refused"))
 	producer.ExpectSendMessageAndFail(errors.New("kafka broker connection refused"))
 	producer.ExpectSendMessageAndSucceed()
 
 	cfg := Config{
 		OutboxTable:  table,
 		BatchSize:    10,
+		MaxRetries:   3,
 		KafkaTopic:   "",
 		DLQTopic:     "outbox.relay.dlq",
 		PollInterval: 100 * time.Millisecond,
@@ -337,8 +340,20 @@ func TestOutboxRelayDLQFallbackFlow(t *testing.T) {
 		t.Fatalf("Failed to create relayService: %v", err)
 	}
 
+	// Attempts 1 and 2 are transient errors: event should remain sent = false
+	_ = relay.relayBatch(ctx)
+	_ = relay.relayBatch(ctx)
+
+	var sentBeforeDLQ bool
+	if err := pool.QueryRow(ctx, fmt.Sprintf("SELECT sent FROM %s WHERE id = $1", table), eventID).Scan(&sentBeforeDLQ); err != nil {
+		t.Fatalf("Failed to query event sent status before DLQ: %v", err)
+	}
+	if sentBeforeDLQ {
+		t.Errorf("Expected event to remain sent=false during transient retries")
+	}
+
 	if err := relay.relayBatch(ctx); err != nil {
-		t.Fatalf("relayBatch failed unexpectedly: %v", err)
+		t.Fatalf("relayBatch failed unexpectedly on DLQ fallback: %v", err)
 	}
 
 	// Verify event was marked sent = true to avoid pipeline stall

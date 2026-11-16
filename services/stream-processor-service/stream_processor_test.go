@@ -244,9 +244,9 @@ func TestWindowEdgeCases(t *testing.T) {
 	windowStart := now.Truncate(windowSize)
 
 	testCases := []struct {
-		name               string
-		eventTime          time.Time
-		expectInWindow     bool
+		name           string
+		eventTime      time.Time
+		expectInWindow bool
 	}{
 		{
 			name:           "Event at window start",

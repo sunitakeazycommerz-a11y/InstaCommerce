@@ -21,9 +21,9 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/lib/pq"
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
+	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/robfig/cron/v3"
@@ -50,35 +50,35 @@ const (
 )
 
 type Config struct {
-	Port                   string
-	ServiceName            string
-	LogLevel               string
-	Schedule               string
-	RunOnStartup           bool
-	ReconciliationTimeout  time.Duration
-	PSPExportPath           string
-	LedgerPath              string
-	LedgerOutputPath        string
-	FixStatePath            string
-	KafkaBrokers            []string
-	KafkaTopic              string
-	KafkaClientID           string
-	CDCEnabled              bool        // Enable CDC consumer
-	CDCTopics               []string    // Topics to consume from (e.g., reconciliation.cdc)
-	CDCGroupID              string      // Consumer group for CDC
-	CDCMinBytes             int
-	CDCMaxBytes             int
-	CDCMaxWait              time.Duration
-	CDCCommitInterval       time.Duration
-	CDCBatchSize            int
-	CDCBatchTimeout         time.Duration
-	DBHost                  string
-	DBPort                  string
-	DBUser                  string
-	DBPassword              string
-	DBName                  string
-	DBMaxConnections        int
-	DBConnTimeout           time.Duration
+	Port                  string
+	ServiceName           string
+	LogLevel              string
+	Schedule              string
+	RunOnStartup          bool
+	ReconciliationTimeout time.Duration
+	PSPExportPath         string
+	LedgerPath            string
+	LedgerOutputPath      string
+	FixStatePath          string
+	KafkaBrokers          []string
+	KafkaTopic            string
+	KafkaClientID         string
+	CDCEnabled            bool     // Enable CDC consumer
+	CDCTopics             []string // Topics to consume from (e.g., reconciliation.cdc)
+	CDCGroupID            string   // Consumer group for CDC
+	CDCMinBytes           int
+	CDCMaxBytes           int
+	CDCMaxWait            time.Duration
+	CDCCommitInterval     time.Duration
+	CDCBatchSize          int
+	CDCBatchTimeout       time.Duration
+	DBHost                string
+	DBPort                string
+	DBUser                string
+	DBPassword            string
+	DBName                string
+	DBMaxConnections      int
+	DBConnTimeout         time.Duration
 }
 
 type Transaction struct {
@@ -163,15 +163,15 @@ type KafkaPublisher struct {
 }
 
 type Reconciler struct {
-	logger       *slog.Logger
-	tracer       trace.Tracer
-	metrics      *Metrics
-	pspSource    *PSPSource
-	ledgerStore  *LedgerStore
-	fixRegistry  *FixRegistry
-	publisher    *KafkaPublisher
-	timeout      time.Duration
-	running      atomic.Bool
+	logger      *slog.Logger
+	tracer      trace.Tracer
+	metrics     *Metrics
+	pspSource   *PSPSource
+	ledgerStore *LedgerStore
+	fixRegistry *FixRegistry
+	publisher   *KafkaPublisher
+	timeout     time.Duration
+	running     atomic.Bool
 }
 
 type Scheduler struct {
@@ -213,7 +213,7 @@ func main() {
 	dbReconciler := reconciliation.NewDBReconciler(db, logger, otel.Tracer(cfg.ServiceName), eventPub)
 
 	// Initialize daily scheduler
-	dailyScheduler := reconciliation.NewDailyScheduler(dbReconciler, logger, getenv("RECONCILIATION_SCHEDULE", "0 2 * * *"))
+	dailyScheduler := reconciliation.NewDailyScheduler(dbReconciler, logger, cfg.Schedule)
 
 	// Initialize CDC consumer for payment ledger change event processing
 	var cdcConsumer *cdc.CDCConsumer
@@ -253,6 +253,8 @@ func main() {
 
 	// Reconciliation API endpoints
 	mux.HandleFunc("/reconciliation/runs", reconciliationHandler.HandleListRuns)
+	mux.HandleFunc("/reconciliation/pending", reconciliationHandler.HandleGetPendingMismatches)
+	mux.HandleFunc("/pending", reconciliationHandler.HandleGetPendingMismatches)
 	mux.HandleFunc("/reconciliation/runs/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/mismatches") {
 			reconciliationHandler.HandleGetRunMismatches(w, r)

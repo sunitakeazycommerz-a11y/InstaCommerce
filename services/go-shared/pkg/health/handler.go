@@ -30,8 +30,8 @@ type checkResult struct {
 
 // healthResponse is serialised as the JSON body of health endpoints.
 type healthResponse struct {
-	Status  string        `json:"status"`
-	Checks  []checkResult `json:"checks,omitempty"`
+	Status string        `json:"status"`
+	Checks []checkResult `json:"checks,omitempty"`
 }
 
 // Handler exposes /health, /health/ready, and /health/live endpoints.

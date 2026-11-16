@@ -29,13 +29,17 @@ type RedisClient interface {
 }
 
 // UserFeatureRecord models customer lifetime value and affinity features synced to Redis.
+// Field names match ai-inference-service RedisFeatureStoreClient parity expectations.
 type UserFeatureRecord struct {
-	UserID           string             `json:"user_id"`
-	CLV              float64            `json:"clv"`
-	CategoryAffinity map[string]float64 `json:"category_affinity"`
-	LastPurchaseDays int                `json:"last_purchase_days"`
-	Segment          string             `json:"segment"`
-	UpdatedAt        time.Time          `json:"updated_at"`
+	UserID            string             `json:"user_id"`
+	CLV               float64            `json:"clv"`
+	CategoryAffinity  map[string]float64 `json:"category_affinity"`
+	LastPurchaseDays  int                `json:"last_purchase_days"`
+	OrderCount30d     int                `json:"order_count_30d"`
+	ConversionRate30d float64            `json:"conversion_rate_30d"`
+	AvgBasketCents    float64            `json:"avg_basket_cents"`
+	Segment           string             `json:"segment"`
+	UpdatedAt         time.Time          `json:"updated_at"`
 }
 
 // CustomerFraudScoreRecord models fraud risk scores synced from ml_models.customer_fraud_scores.
@@ -81,8 +85,9 @@ type SyncResult struct {
 
 // RateLimiter provides token-bucket rate limiting to prevent saturating Redis.
 type RateLimiter struct {
-	tokens chan struct{}
-	stop   chan struct{}
+	tokens   chan struct{}
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // NewRateLimiter creates a token bucket releasing up to rps tokens per second.
@@ -136,13 +141,11 @@ func (rl *RateLimiter) Acquire(ctx context.Context) error {
 	}
 }
 
-// Stop stops the rate limiter background ticker.
+// Stop stops the rate limiter background ticker safely once.
 func (rl *RateLimiter) Stop() {
-	select {
-	case <-rl.stop:
-	default:
+	rl.stopOnce.Do(func() {
 		close(rl.stop)
-	}
+	})
 }
 
 // WorkerMetrics tracks Prometheus operational metrics for reverse ETL workers.
@@ -275,11 +278,21 @@ func (wp *WorkerPool) SyncUserFeatures(ctx context.Context, jobID, subscriptionI
 		tempKey := fmt.Sprintf("user:features:temp:%s:%s", jobID, rec.UserID)
 		targetKey := fmt.Sprintf("user:features:%s", rec.UserID)
 
-		affinityJSON, _ := json.Marshal(rec.CategoryAffinity)
+		affinityJSON, err := json.Marshal(rec.CategoryAffinity)
+		if err != nil {
+			wp.metrics.SyncErrorsTotal.WithLabelValues("user_features", "marshal").Inc()
+			res.Status = "FAILED"
+			res.Error = fmt.Errorf("failed to marshal category affinity for user %s: %w", rec.UserID, err)
+			wp.recordAudit(ctx, jobID, subscriptionID, "user_features", syncedCount, "FAILED", time.Since(start), res.Error.Error())
+			return res, res.Error
+		}
 		hsetCmd := wp.redisClient.HSet(ctx, tempKey,
 			"clv", fmt.Sprintf("%.2f", rec.CLV),
 			"category_affinity", string(affinityJSON),
 			"last_purchase_days", rec.LastPurchaseDays,
+			"order_count_30d", rec.OrderCount30d,
+			"conversion_rate_30d", fmt.Sprintf("%.6f", rec.ConversionRate30d),
+			"avg_basket_cents", fmt.Sprintf("%.2f", rec.AvgBasketCents),
 			"segment", rec.Segment,
 			"updated_at", rec.UpdatedAt.Format(time.RFC3339),
 			"job_id", jobID,
@@ -295,6 +308,7 @@ func (wp *WorkerPool) SyncUserFeatures(ctx context.Context, jobID, subscriptionI
 		// Atomically swap temp key to production key
 		renameCmd := wp.redisClient.Rename(ctx, tempKey, targetKey)
 		if err := renameCmd.Err(); err != nil {
+			_ = wp.redisClient.Del(ctx, tempKey)
 			wp.metrics.SyncErrorsTotal.WithLabelValues("user_features", "redis_rename").Inc()
 			res.Status = "FAILED"
 			res.Error = fmt.Errorf("failed to atomically rename user features for user %s: %w", rec.UserID, err)
@@ -352,7 +366,7 @@ func (wp *WorkerPool) SyncCustomerFraudScores(ctx context.Context, jobID, subscr
 		tempKey := fmt.Sprintf("fraud:score:temp:%s:%s", jobID, sc.UserID)
 		targetKey := fmt.Sprintf("fraud:score:%s", sc.UserID)
 
-		scorePayload, _ := json.Marshal(map[string]any{
+		scorePayload, err := json.Marshal(map[string]any{
 			"user_id":          sc.UserID,
 			"fraud_risk_score": sc.FraudRiskScore,
 			"model_version":    sc.ModelVersion,
@@ -361,6 +375,13 @@ func (wp *WorkerPool) SyncCustomerFraudScores(ctx context.Context, jobID, subscr
 			"synced_at":        time.Now().Format(time.RFC3339),
 			"job_id":           jobID,
 		})
+		if err != nil {
+			wp.metrics.SyncErrorsTotal.WithLabelValues("fraud_risk_scores", "marshal").Inc()
+			res.Status = "FAILED"
+			res.Error = fmt.Errorf("failed to marshal fraud score for user %s: %w", sc.UserID, err)
+			wp.recordAudit(ctx, jobID, subscriptionID, "fraud_risk_scores", syncedCount, "FAILED", time.Since(start), res.Error.Error())
+			return res, res.Error
+		}
 
 		// Write to temporary key with TTL
 		setCmd := wp.redisClient.Set(ctx, tempKey, string(scorePayload), fraudScoreTTL)
@@ -375,6 +396,7 @@ func (wp *WorkerPool) SyncCustomerFraudScores(ctx context.Context, jobID, subscr
 		// Atomically rename to production key
 		renameCmd := wp.redisClient.Rename(ctx, tempKey, targetKey)
 		if err := renameCmd.Err(); err != nil {
+			_ = wp.redisClient.Del(ctx, tempKey)
 			wp.metrics.SyncErrorsTotal.WithLabelValues("fraud_risk_scores", "redis_rename").Inc()
 			res.Status = "FAILED"
 			res.Error = fmt.Errorf("failed to rename fraud score key for user %s: %w", sc.UserID, err)
@@ -383,7 +405,13 @@ func (wp *WorkerPool) SyncCustomerFraudScores(ctx context.Context, jobID, subscr
 		}
 
 		// Ensure 36-hour TTL persists on renamed key
-		_ = wp.redisClient.Expire(ctx, targetKey, fraudScoreTTL)
+		if err := wp.redisClient.Expire(ctx, targetKey, fraudScoreTTL).Err(); err != nil {
+			wp.metrics.SyncErrorsTotal.WithLabelValues("fraud_risk_scores", "redis_expire").Inc()
+			res.Status = "FAILED"
+			res.Error = fmt.Errorf("failed to set TTL on fraud score for user %s: %w", sc.UserID, err)
+			wp.recordAudit(ctx, jobID, subscriptionID, "fraud_risk_scores", syncedCount, "FAILED", time.Since(start), res.Error.Error())
+			return res, res.Error
+		}
 
 		syncedCount++
 	}
@@ -463,11 +491,21 @@ func (wp *WorkerPool) SyncDarkStoreInventoryParallel(
 
 				if len(items) > 0 {
 					var kvPairs []any
+					acquireErr := false
 					for _, item := range items {
 						if err := wp.rateLimiter.Acquire(ctx); err != nil {
-							return
+							mu.Lock()
+							if firstErr == nil {
+								firstErr = fmt.Errorf("rate limiter acquire cancelled for store %s: %w", job.storeID, err)
+							}
+							mu.Unlock()
+							acquireErr = true
+							break
 						}
 						kvPairs = append(kvPairs, item.SKU, fmt.Sprintf("%d:%d", item.Available, item.Reserved))
+					}
+					if acquireErr {
+						return
 					}
 
 					if err := wp.redisClient.HSet(ctx, tempKey, kvPairs...).Err(); err != nil {
@@ -481,10 +519,21 @@ func (wp *WorkerPool) SyncDarkStoreInventoryParallel(
 					}
 
 					if err := wp.redisClient.Rename(ctx, tempKey, targetKey).Err(); err != nil {
+						_ = wp.redisClient.Del(ctx, tempKey)
 						wp.metrics.SyncErrorsTotal.WithLabelValues("dark_store_inventory", "redis_rename").Inc()
 						mu.Lock()
 						if firstErr == nil {
 							firstErr = fmt.Errorf("failed to rename inventory for store %s: %w", job.storeID, err)
+						}
+						mu.Unlock()
+						continue
+					}
+
+					if err := wp.redisClient.Expire(ctx, targetKey, 24*time.Hour).Err(); err != nil {
+						wp.metrics.SyncErrorsTotal.WithLabelValues("dark_store_inventory", "redis_expire").Inc()
+						mu.Lock()
+						if firstErr == nil {
+							firstErr = fmt.Errorf("failed to set TTL on inventory for store %s: %w", job.storeID, err)
 						}
 						mu.Unlock()
 						continue

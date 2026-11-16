@@ -14,23 +14,23 @@ import (
 
 // TestEvent represents a test CDC event structure
 type TestEvent struct {
-	EventID    string                 `json:"event_id"`
-	EventType  string                 `json:"event_type"`
-	AggID      string                 `json:"aggregate_id"`
-	Timestamp  int64                  `json:"timestamp"`
-	Version    string                 `json:"version"`
-	Payload    map[string]interface{} `json:"payload"`
-	SourceDB   string                 `json:"source_db"`
+	EventID   string                 `json:"event_id"`
+	EventType string                 `json:"event_type"`
+	AggID     string                 `json:"aggregate_id"`
+	Timestamp int64                  `json:"timestamp"`
+	Version   string                 `json:"version"`
+	Payload   map[string]interface{} `json:"payload"`
+	SourceDB  string                 `json:"source_db"`
 }
 
 // TestDebeziumEnvelope represents a Debezium CDC envelope
 type TestDebeziumEnvelope struct {
-	Before    map[string]interface{} `json:"before"`
-	After     map[string]interface{} `json:"after"`
-	Source    map[string]interface{} `json:"source"`
-	Op        string                 `json:"op"`
-	TsMs      int64                  `json:"ts_ms"`
-	Transaction interface{}          `json:"transaction"`
+	Before      map[string]interface{} `json:"before"`
+	After       map[string]interface{} `json:"after"`
+	Source      map[string]interface{} `json:"source"`
+	Op          string                 `json:"op"`
+	TsMs        int64                  `json:"ts_ms"`
+	Transaction interface{}            `json:"transaction"`
 }
 
 func TestCDCEventConsumptionWithDebeziumEnvelope(t *testing.T) {
@@ -66,11 +66,11 @@ func TestCDCEventConsumptionWithDebeziumEnvelope(t *testing.T) {
 func TestEventDeduplicationWithIdempotencyKey(t *testing.T) {
 	// Test that events with the same idempotency key are deduplicated
 	event1 := map[string]interface{}{
-		"event_id":       "evt-001",
-		"aggregate_id":   "order-123",
-		"event_type":     "PaymentProcessed",
+		"event_id":        "evt-001",
+		"aggregate_id":    "order-123",
+		"event_type":      "PaymentProcessed",
 		"idempotency_key": "idp-key-abc",
-		"timestamp":      time.Now().Unix(),
+		"timestamp":       time.Now().Unix(),
 	}
 
 	event2 := map[string]interface{}{
@@ -90,10 +90,10 @@ func TestEventDeduplicationWithIdempotencyKey(t *testing.T) {
 func TestKafkaMessageEnvelopeValidation(t *testing.T) {
 	// Test that Kafka message headers and payload are properly structured
 	msg := kafka.Message{
-		Topic:   "payments.cdc",
+		Topic:     "payments.cdc",
 		Partition: 0,
-		Offset:  12345,
-		Key:     []byte("order-123"),
+		Offset:    12345,
+		Key:       []byte("order-123"),
 		Value: []byte(`{
 			"op": "c",
 			"after": {"order_id": "order-123", "amount": 5000},
@@ -192,8 +192,8 @@ func TestEventPayloadSerialization(t *testing.T) {
 				{"product_id": "prod-2", "quantity": 1, "price": 1000},
 			},
 			"total_amount": 2000,
-			"currency":    "INR",
-			"user_id":     "user-789",
+			"currency":     "INR",
+			"user_id":      "user-789",
 		},
 		SourceDB: "orders",
 	}
@@ -330,3 +330,17 @@ func TestSchemaEvolutionDetection(t *testing.T) {
 	assert.Equal(t, bigquery.JSONFieldType, InferBigQueryType(map[string]any{"nested": "val"}))
 }
 
+func TestCommitMessagesRespectsMarkReadyForCommit(t *testing.T) {
+	items := []batchItem{
+		{message: kafka.Message{Topic: "orders.cdc", Partition: 0, Offset: 1}},
+		{message: kafka.Message{Topic: "orders.cdc", Partition: 0, Offset: 2}},
+	}
+	for _, it := range items {
+		assert.False(t, it.readyCommit)
+	}
+	marked := markReadyForCommit(items)
+	require.Len(t, marked, 2)
+	for _, it := range marked {
+		assert.True(t, it.readyCommit)
+	}
+}

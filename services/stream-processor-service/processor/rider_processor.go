@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,12 +18,50 @@ import (
 )
 
 type RiderEvent struct {
-	EventType  string    `json:"eventType"` // RiderOnline, RiderOffline, RiderAssigned, RiderDelivered, RiderIdle
-	RiderID    string    `json:"riderId"`
-	ZoneID     string    `json:"zoneId"`
-	OrderID    string    `json:"orderId,omitempty"`
-	EarningsCents int64  `json:"earningsCents,omitempty"`
-	Timestamp  time.Time `json:"timestamp"`
+	EventType     string    `json:"eventType"` // RiderOnline, RiderOffline, RiderAssigned, RiderDelivered, RiderIdle
+	RiderID       string    `json:"riderId"`
+	ZoneID        string    `json:"zoneId"`
+	OrderID       string    `json:"orderId,omitempty"`
+	EarningsCents int64     `json:"earningsCents,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
+func (e *RiderEvent) UnmarshalJSON(data []byte) error {
+	meta, body, err := unwrapEnvelope(data)
+	if err != nil {
+		return err
+	}
+	sources := []map[string]any{body, meta}
+
+	e.EventType = normalizeRiderEventType(firstString(sources, "eventType", "event_type", "type"))
+	e.RiderID = firstString(sources, "riderId", "rider_id", "aggregateId", "aggregate_id", "id")
+	e.ZoneID = firstString(sources, "zoneId", "zone_id")
+	e.OrderID = firstString(sources, "orderId", "order_id")
+
+	if earnings, ok := firstInt64(sources, "earningsCents", "earnings_cents", "payoutCents", "payout_cents"); ok {
+		e.EarningsCents = earnings
+	}
+	if ts, ok := firstTime(sources, "timestamp", "timestamp_ms", "timestampMs", "assignedAt", "assigned_at", "eventTime", "event_time"); ok {
+		e.Timestamp = ts
+	}
+	return nil
+}
+
+func normalizeRiderEventType(raw string) string {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "RIDERONLINE", "RIDER_ONLINE", "RIDERACTIVATED", "RIDER_ACTIVATED":
+		return "RiderOnline"
+	case "RIDERIDLE", "RIDER_IDLE":
+		return "RiderIdle"
+	case "RIDERASSIGNED", "RIDER_ASSIGNED":
+		return "RiderAssigned"
+	case "RIDEROFFLINE", "RIDER_OFFLINE", "RIDERSUSPENDED", "RIDER_SUSPENDED":
+		return "RiderOffline"
+	case "RIDERDELIVERED", "RIDER_DELIVERED":
+		return "RiderDelivered"
+	default:
+		return strings.TrimSpace(raw)
+	}
 }
 
 type LocationUpdate struct {
@@ -32,6 +71,30 @@ type LocationUpdate struct {
 	ZoneID    string    `json:"zoneId"`
 	Speed     float64   `json:"speed"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+func (u *LocationUpdate) UnmarshalJSON(data []byte) error {
+	meta, body, err := unwrapEnvelope(data)
+	if err != nil {
+		return err
+	}
+	sources := []map[string]any{body, meta}
+
+	u.RiderID = firstString(sources, "riderId", "rider_id", "aggregateId", "aggregate_id")
+	u.ZoneID = firstString(sources, "zoneId", "zone_id", "h3Index", "h3_index")
+	if lat, ok := firstFloat64(sources, "latitude", "lat"); ok {
+		u.Latitude = lat
+	}
+	if lng, ok := firstFloat64(sources, "longitude", "lng", "lon"); ok {
+		u.Longitude = lng
+	}
+	if speed, ok := firstFloat64(sources, "speed", "speedKmh", "speed_kmh"); ok {
+		u.Speed = speed
+	}
+	if ts, ok := firstTime(sources, "timestamp", "timestamp_ms", "timestampMs", "eventTime", "event_time"); ok {
+		u.Timestamp = ts
+	}
+	return nil
 }
 
 type riderState struct {
@@ -48,41 +111,51 @@ type riderMetrics struct {
 	processingErrors prometheus.Counter
 }
 
+var (
+	riderMetricsInstance *riderMetrics
+	riderMetricsOnce     sync.Once
+)
+
 func newRiderMetrics() *riderMetrics {
-	return &riderMetrics{
-		ridersByStatus: promauto.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "riders_by_status",
-			Help: "Number of riders by status and zone",
-		}, []string{"status", "zone_id"}),
+	riderMetricsOnce.Do(func() {
+		riderMetricsInstance = &riderMetrics{
+			ridersByStatus: promauto.NewGaugeVec(prometheus.GaugeOpts{
+				Name: "riders_by_status",
+				Help: "Number of riders by status and zone",
+			}, []string{"status", "zone_id"}),
 
-		deliveriesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "rider_deliveries_total",
-			Help: "Total deliveries completed per rider",
-		}, []string{"rider_id", "zone_id"}),
+			deliveriesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "rider_deliveries_total",
+				Help: "Total deliveries completed per rider",
+			}, []string{"rider_id", "zone_id"}),
 
-		earningsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "rider_earnings_total_cents",
-			Help: "Total rider earnings in cents",
-		}, []string{"rider_id", "zone_id"}),
+			earningsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: "rider_earnings_total_cents",
+				Help: "Total rider earnings in cents",
+			}, []string{"rider_id", "zone_id"}),
 
-		locationUpdates: promauto.NewCounter(prometheus.CounterOpts{
-			Name: "rider_location_updates_total",
-			Help: "Total rider location updates processed",
-		}),
+			locationUpdates: promauto.NewCounter(prometheus.CounterOpts{
+				Name: "rider_location_updates_total",
+				Help: "Total rider location updates processed",
+			}),
 
-		processingErrors: promauto.NewCounter(prometheus.CounterOpts{
-			Name: "rider_processing_errors_total",
-			Help: "Total rider event processing errors",
-		}),
-	}
+			processingErrors: promauto.NewCounter(prometheus.CounterOpts{
+				Name: "rider_processing_errors_total",
+				Help: "Total rider event processing errors",
+			}),
+		}
+	})
+	return riderMetricsInstance
 }
 
 type RiderProcessor struct {
-	redis   *redis.Client
-	logger  *slog.Logger
-	metrics *riderMetrics
-	states  map[string]*riderState // riderId -> state
-	mu      sync.RWMutex
+	redis      *redis.Client
+	logger     *slog.Logger
+	metrics    *riderMetrics
+	states     map[string]*riderState // riderId -> state
+	mu         sync.RWMutex
+	riderGuard *labelCardinalityGuard
+	zoneGuard  *labelCardinalityGuard
 }
 
 func NewRiderProcessor(rdb *redis.Client, logger *slog.Logger) *RiderProcessor {
@@ -90,14 +163,23 @@ func NewRiderProcessor(rdb *redis.Client, logger *slog.Logger) *RiderProcessor {
 		logger = slog.Default()
 	}
 	return &RiderProcessor{
-		redis:   rdb,
-		logger:  logger.With("processor", "rider"),
-		metrics: newRiderMetrics(),
-		states:  make(map[string]*riderState),
+		redis:      rdb,
+		logger:     logger.With("processor", "rider"),
+		metrics:    newRiderMetrics(),
+		states:     make(map[string]*riderState),
+		riderGuard: newLabelCardinalityGuard(maxBoundedLabelValues),
+		zoneGuard:  newLabelCardinalityGuard(maxBoundedLabelValues),
 	}
 }
 
 func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent) error {
+	event.EventType = normalizeRiderEventType(event.EventType)
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	zoneLabel := p.zoneGuard.normalize(event.ZoneID, "unknown")
+	riderLabel := p.riderGuard.normalize(event.RiderID, "unknown")
+
 	p.logger.Info("processing rider event",
 		"eventType", event.EventType,
 		"riderId", event.RiderID,
@@ -128,14 +210,25 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 
 	p.states[event.RiderID] = &riderState{
 		Status:    status,
-		ZoneID:    event.ZoneID,
+		ZoneID:    zoneLabel,
 		UpdatedAt: event.Timestamp,
 	}
 
 	// Increment new status gauge
-	p.metrics.ridersByStatus.WithLabelValues(status, event.ZoneID).Inc()
+	p.metrics.ridersByStatus.WithLabelValues(status, zoneLabel).Inc()
 
 	p.mu.Unlock()
+
+	if event.EventType == "RiderDelivered" {
+		p.metrics.deliveriesTotal.WithLabelValues(riderLabel, zoneLabel).Inc()
+		if event.EarningsCents > 0 {
+			p.metrics.earningsTotal.WithLabelValues(riderLabel, zoneLabel).Add(float64(event.EarningsCents))
+		}
+	}
+
+	if p.redis == nil {
+		return nil
+	}
 
 	pipe := p.redis.Pipeline()
 
@@ -143,26 +236,20 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 	riderKey := fmt.Sprintf("rider:status:%s", event.RiderID)
 	pipe.HSet(ctx, riderKey, map[string]interface{}{
 		"status":  status,
-		"zone_id": event.ZoneID,
+		"zone_id": zoneLabel,
 		"updated": event.Timestamp.Unix(),
 	})
-	pipe.Expire(ctx, riderKey, 24*time.Hour)
+	pipe.Expire(ctx, riderKey, redisMetricsTTL)
 
 	// Zone-level rider counts
-	zoneKey := fmt.Sprintf("riders:zone:%s:%s", event.ZoneID, status)
+	zoneKey := fmt.Sprintf("riders:zone:%s:%s", zoneLabel, status)
 	pipe.Incr(ctx, zoneKey)
-	pipe.Expire(ctx, zoneKey, 2*time.Hour)
+	pipe.Expire(ctx, zoneKey, redisMetricsTTL)
 
-	if event.EventType == "RiderDelivered" {
-		p.metrics.deliveriesTotal.WithLabelValues(event.RiderID, event.ZoneID).Inc()
-
-		if event.EarningsCents > 0 {
-			p.metrics.earningsTotal.WithLabelValues(event.RiderID, event.ZoneID).Add(float64(event.EarningsCents))
-
-			earningsKey := fmt.Sprintf("rider:earnings:%s:%s", event.RiderID, time.Now().Format("2006-01-02"))
-			pipe.IncrBy(ctx, earningsKey, event.EarningsCents)
-			pipe.Expire(ctx, earningsKey, 48*time.Hour)
-		}
+	if event.EventType == "RiderDelivered" && event.EarningsCents > 0 {
+		earningsKey := fmt.Sprintf("rider:earnings:%s:%s", event.RiderID, time.Now().Format("2006-01-02"))
+		pipe.IncrBy(ctx, earningsKey, event.EarningsCents)
+		pipe.Expire(ctx, earningsKey, 48*time.Hour)
 	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -174,7 +261,15 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 }
 
 func (p *RiderProcessor) ProcessLocationUpdate(ctx context.Context, update LocationUpdate) error {
+	if update.Timestamp.IsZero() {
+		update.Timestamp = time.Now().UTC()
+	}
+	zoneLabel := p.zoneGuard.normalize(update.ZoneID, "unknown")
 	p.metrics.locationUpdates.Inc()
+
+	if p.redis == nil {
+		return nil
+	}
 
 	pipe := p.redis.Pipeline()
 
@@ -183,18 +278,20 @@ func (p *RiderProcessor) ProcessLocationUpdate(ctx context.Context, update Locat
 	pipe.HSet(ctx, locKey, map[string]interface{}{
 		"lat":       update.Latitude,
 		"lng":       update.Longitude,
-		"zone_id":   update.ZoneID,
+		"zone_id":   zoneLabel,
 		"speed":     update.Speed,
 		"timestamp": update.Timestamp.Unix(),
 	})
 	pipe.Expire(ctx, locKey, 10*time.Minute)
 
-	// Add to zone's active riders geo set
-	pipe.GeoAdd(ctx, fmt.Sprintf("riders:geo:%s", update.ZoneID), &redis.GeoLocation{
+	// Add to zone's active riders geo set with 24h TTL
+	geoKey := fmt.Sprintf("riders:geo:%s", zoneLabel)
+	pipe.GeoAdd(ctx, geoKey, &redis.GeoLocation{
 		Name:      update.RiderID,
 		Longitude: update.Longitude,
 		Latitude:  update.Latitude,
 	})
+	pipe.Expire(ctx, geoKey, redisMetricsTTL)
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		p.metrics.processingErrors.Inc()

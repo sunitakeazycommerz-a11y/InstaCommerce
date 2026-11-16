@@ -11,6 +11,16 @@ type Position struct {
 	Lng float64 `json:"lng"`
 }
 
+func clamp(val, min, max float64) float64 {
+	if val < min {
+		return min
+	}
+	if val > max {
+		return max
+	}
+	return val
+}
+
 // HaversineDistance returns the great-circle distance in kilometres between two
 // geographic positions using the Haversine formula.
 func HaversineDistance(a, b Position) float64 {
@@ -21,7 +31,7 @@ func HaversineDistance(a, b Position) float64 {
 
 	sinDLat := math.Sin(dLat / 2)
 	sinDLng := math.Sin(dLng / 2)
-	h := sinDLat*sinDLat + math.Cos(lat1)*math.Cos(lat2)*sinDLng*sinDLng
+	h := clamp(sinDLat*sinDLat+math.Cos(lat1)*math.Cos(lat2)*sinDLng*sinDLng, 0.0, 1.0)
 	return 2 * earthRadiusKm * math.Asin(math.Sqrt(h))
 }
 

@@ -4,6 +4,7 @@ package subscription
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,9 @@ import (
 
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/config"
 )
+
+// ErrSubscriptionNotFound indicates that the requested subscription does not exist.
+var ErrSubscriptionNotFound = errors.New("subscription not found")
 
 // State represents the subscription lifecycle state.
 type State string
@@ -92,6 +96,11 @@ func (s *Service) Close() error {
 // Ping checks database connectivity.
 func (s *Service) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
+}
+
+// DB exposes the underlying SQL database handle for worker audit persistence.
+func (s *Service) DB() *sql.DB {
+	return s.db
 }
 
 // Create creates a new subscription.
@@ -190,6 +199,9 @@ func (s *Service) List(ctx context.Context, sourceDomain, sinkType string, state
 		}
 		subs = append(subs, sub)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate subscriptions: %w", err)
+	}
 
 	return subs, nil
 }
@@ -221,9 +233,12 @@ func (s *Service) transition(ctx context.Context, id string, newState State) err
 		return fmt.Errorf("failed to transition subscription: %w", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for subscription transition: %w", err)
+	}
 	if rows == 0 {
-		return fmt.Errorf("subscription not found: %s", id)
+		return fmt.Errorf("%w: %s", ErrSubscriptionNotFound, id)
 	}
 
 	return nil

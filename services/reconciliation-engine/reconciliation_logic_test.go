@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
 	"github.com/instacommerce/reconciliation-engine/pkg/reconciliation"
+	_ "github.com/lib/pq"
 )
 
 // TestShouldAutoFix tests the auto-fix eligibility logic
@@ -19,12 +19,12 @@ func TestShouldAutoFix(t *testing.T) {
 		psp    string
 		want   bool
 	}{
-		{"1000", "1000", true},          // exact match
-		{"1000", "1050", true},          // 5% difference
-		{"1000", "1010", true},          // 1% difference
-		{"1000", "2000", false},         // 100% difference (too large)
-		{"1000", "1100", false},         // 10% difference is over 5% threshold
-		{"0", "0", true},                // zero amounts
+		{"1000", "1000", true},  // exact match
+		{"1000", "1050", true},  // 5% difference
+		{"1000", "1010", true},  // 1% difference
+		{"1000", "2000", false}, // 100% difference (too large)
+		{"1000", "1100", false}, // 10% difference is over 5% threshold
+		{"0", "0", true},        // zero amounts
 	}
 
 	for i, tt := range tests {
@@ -43,14 +43,14 @@ func TestAutoFixEdgeCasesWithPrecision(t *testing.T) {
 		psp    string
 		want   bool
 	}{
-		{"Penny difference", "1000", "1001", true},           // 0.1% difference
-		{"Max threshold", "1000", "1050", true},              // Exactly at 5% threshold
-		{"Just over threshold", "1000", "1051", false},       // 5.1% difference (over threshold)
+		{"Penny difference", "1000", "1001", true},             // 0.1% difference
+		{"Max threshold", "1000", "1050", true},                // Exactly at 5% threshold
+		{"Just over threshold", "1000", "1051", false},         // 5.1% difference (over threshold)
 		{"Large amounts penny diff", "100000", "100001", true}, // 0.001% difference
-		{"Absolute cap boundary", "100000", "100100", true},     // 100 cents diff within cap
-		{"Exceeds 100 cent cap", "100000", "100101", false},     // 101 cents exceeds cap despite <5%
-		{"Negative amounts equal", "-1000", "-1000", true},      // Equal negative amounts
-		{"Opposite sign amounts", "1000", "-1000", false},       // Opposite signs (full difference)
+		{"Absolute cap boundary", "100000", "100100", true},    // 100 cents diff within cap
+		{"Exceeds 100 cent cap", "100000", "100101", false},    // 101 cents exceeds cap despite <5%
+		{"Negative amounts equal", "-1000", "-1000", true},     // Equal negative amounts
+		{"Opposite sign amounts", "1000", "-1000", false},      // Opposite signs (full difference)
 	}
 
 	for _, tt := range tests {

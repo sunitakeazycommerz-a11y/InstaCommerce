@@ -169,3 +169,15 @@ func TestDailyScheduler_InMemoryFallbackWhenDBNil(t *testing.T) {
 	_, err := scheduler.RunOnce(context.Background(), time.Now())
 	assert.ErrorIs(t, err, ErrReconciliationAlreadyRunning)
 }
+
+func TestDailyScheduler_SupportsDurationAndHHMMSchedules(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	for _, spec := range []string{"5m", "24h", "02:30", "0 2 * * *"} {
+		sched := NewDailyScheduler(nil, logger, spec)
+		ctx, cancel := context.WithCancel(context.Background())
+		require.NoError(t, sched.Start(ctx))
+		require.NoError(t, sched.Stop(context.Background()))
+		cancel()
+	}
+}

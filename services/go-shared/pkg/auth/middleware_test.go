@@ -142,4 +142,5 @@ func TestInternalAuthMiddleware_SharedTokenFallback_RejectedInStrictMode(t *test
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }

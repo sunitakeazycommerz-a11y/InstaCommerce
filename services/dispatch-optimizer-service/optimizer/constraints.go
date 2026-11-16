@@ -2,6 +2,7 @@ package optimizer
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -64,7 +65,7 @@ func (c *ConstraintChecker) CheckAll(rider RiderState, order OrderRequest) (bool
 func (c *ConstraintChecker) checkCapacity(rider RiderState, order OrderRequest) *ConstraintViolation {
 	max := c.config.MaxOrdersPerRider
 	if max <= 0 {
-		max = 2
+		max = DefaultMaxOrdersPerRider
 	}
 	if rider.ActiveOrders >= max {
 		return &ConstraintViolation{
@@ -100,7 +101,8 @@ func (c *ConstraintChecker) checkZone(rider RiderState, order OrderRequest) *Con
 // and riders with < 20% battery are filtered from assignments exceeding 3 km (Issue #587).
 func (c *ConstraintChecker) checkBattery(rider RiderState, order OrderRequest) *ConstraintViolation {
 	if !isElectricVehicle(rider.VehicleType) {
-		// Non-electric vehicles are not battery-constrained.
+		// Non-electric vehicles (human-powered bicycles, petrol scooters/motorcycles, cars)
+		// are not battery-constrained.
 		return nil
 	}
 
@@ -132,9 +134,26 @@ func (c *ConstraintChecker) checkBattery(rider RiderState, order OrderRequest) *
 	return nil
 }
 
+func normalizeVehicleType(vType string) string {
+	s := strings.ToLower(strings.TrimSpace(vType))
+	s = strings.NewReplacer("-", "_", " ", "_").Replace(s)
+	return s
+}
+
 func isElectricVehicle(vType string) bool {
-	switch vType {
-	case "electric_scooter", "electric_bicycle", "ev_2w", "ev", "scooter", "bicycle":
+	switch normalizeVehicleType(vType) {
+	case "electric_scooter", "e_scooter", "escooter",
+		"electric_bicycle", "e_bike", "ebike", "electric_bike",
+		"ev_2w", "ev":
+		return true
+	default:
+		return false
+	}
+}
+
+func isBicycleVehicle(vType string) bool {
+	switch normalizeVehicleType(vType) {
+	case "bicycle", "bike", "cycle", "e_bike", "ebike", "electric_bicycle", "electric_bike":
 		return true
 	default:
 		return false
@@ -146,7 +165,7 @@ func isElectricVehicle(vType string) bool {
 func (c *ConstraintChecker) checkConsecutiveLimit(rider RiderState, order OrderRequest) *ConstraintViolation {
 	max := c.config.MaxConsecutive
 	if max <= 0 {
-		max = 8
+		max = DefaultMaxConsecutive
 	}
 	if rider.ConsecutiveDeliveries >= max {
 		breakDue := rider.LastBreakAt.Add(30 * time.Minute)
@@ -193,7 +212,7 @@ func (c *ConstraintChecker) checkNewRiderDistance(rider RiderState, order OrderR
 // to bicycle riders. Orders above 8 kg require a scooter or car.
 func (c *ConstraintChecker) checkVehicleSuitability(rider RiderState, order OrderRequest) *ConstraintViolation {
 	const maxBicycleWeightKg = 8.0
-	if rider.VehicleType == "bicycle" && order.Weight > maxBicycleWeightKg {
+	if isBicycleVehicle(rider.VehicleType) && order.Weight > maxBicycleWeightKg {
 		return &ConstraintViolation{
 			Constraint: "vehicle_suitability",
 			Rider:      rider.ID,

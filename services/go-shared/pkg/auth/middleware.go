@@ -87,7 +87,7 @@ func (m *InternalAuthMiddleware) Wrap(next http.Handler) http.Handler {
 				slog.String("remote_addr", r.RemoteAddr),
 				slog.String("calling_service", callingService),
 			)
-			http.Error(w, `{"error":"missing authentication headers"}`, http.StatusUnauthorized)
+			writeUnauthorized(w)
 			return
 		}
 
@@ -97,7 +97,7 @@ func (m *InternalAuthMiddleware) Wrap(next http.Handler) http.Handler {
 				slog.String("remote_addr", r.RemoteAddr),
 				slog.String("calling_service", callingService),
 			)
-			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			writeForbidden(w)
 			return
 		}
 
@@ -108,6 +108,18 @@ func (m *InternalAuthMiddleware) Wrap(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func writeUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"missing authentication headers"}`))
+}
+
+func writeForbidden(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"error":"forbidden"}`))
 }
 
 // isValidToken checks per-service tokens first, then falls back to the shared

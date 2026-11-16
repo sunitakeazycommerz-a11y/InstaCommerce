@@ -51,14 +51,14 @@ func InitTracer(ctx context.Context, serviceName string, logger *slog.Logger) (f
 
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName(serviceName),
 			semconv.ServiceVersion(version),
 			semconv.DeploymentEnvironment(environment),
 		),
 	)
 	if err != nil {
+		_ = exporter.Shutdown(ctx)
 		return nil, fmt.Errorf("creating OTel resource: %w", err)
 	}
 

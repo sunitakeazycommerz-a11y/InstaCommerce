@@ -41,27 +41,27 @@ import (
 const serviceName = "cdc-consumer-service"
 
 type Config struct {
-	Port               string
-	LogLevel           slog.Level
-	KafkaBrokers       []string
-	KafkaGroupID       string
-	KafkaTopics        []string
-	KafkaDLQTopic      string
+	Port                 string
+	LogLevel             slog.Level
+	KafkaBrokers         []string
+	KafkaGroupID         string
+	KafkaTopics          []string
+	KafkaDLQTopic        string
 	KafkaAutoOffsetReset string
-	KafkaMinBytes      int
-	KafkaMaxBytes      int
-	KafkaMaxWait       time.Duration
-	KafkaCommitTimeout time.Duration
-	BatchSize          int
-	BatchTimeout       time.Duration
-	BQProject          string
-	BQDataset          string
-	BQTable            string
-	BQInsertTimeout    time.Duration
-	BQMaxRetries       int
-	BQBaseBackoff      time.Duration
-	BQMaxBackoff       time.Duration
-	DLQWriteTimeout    time.Duration
+	KafkaMinBytes        int
+	KafkaMaxBytes        int
+	KafkaMaxWait         time.Duration
+	KafkaCommitTimeout   time.Duration
+	BatchSize            int
+	BatchTimeout         time.Duration
+	BQProject            string
+	BQDataset            string
+	BQTable              string
+	BQInsertTimeout      time.Duration
+	BQMaxRetries         int
+	BQBaseBackoff        time.Duration
+	BQMaxBackoff         time.Duration
+	DLQWriteTimeout      time.Duration
 }
 
 type Metrics struct {
@@ -71,9 +71,20 @@ type Metrics struct {
 }
 
 type batchItem struct {
-	reader  *kafka.Reader
-	message kafka.Message
-	row     bigquery.ValueSaver
+	reader       *kafka.Reader
+	message      kafka.Message
+	row          bigquery.ValueSaver
+	transformErr error
+	readyCommit  bool
+}
+
+func markReadyForCommit(items []batchItem) []batchItem {
+	marked := make([]batchItem, len(items))
+	for i := range items {
+		marked[i] = items[i]
+		marked[i].readyCommit = true
+	}
+	return marked
 }
 
 type bqRow struct {
@@ -321,12 +332,9 @@ func runConsumer(
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "transform failed")
 			span.End()
-			if dlqErr := sendToDLQ(msgCtx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, []batchItem{{reader: reader, message: msg}}, err); dlqErr != nil {
-				reportErr(dlqErr)
-				return
-			}
-			if commitErr := commitMessages(msgCtx, cfg.KafkaCommitTimeout, logger, []batchItem{{reader: reader, message: msg}}); commitErr != nil {
-				reportErr(commitErr)
+			select {
+			case batchCh <- batchItem{reader: reader, message: msg, transformErr: err}:
+			case <-ctx.Done():
 				return
 			}
 			continue
@@ -394,8 +402,19 @@ func flushBatch(
 	}
 
 	rows := make([]bigquery.ValueSaver, 0, len(items))
+	validItems := make([]batchItem, 0, len(items))
+	transformFailedItems := make([]batchItem, 0)
+	var firstTransformErr error
 	for _, item := range items {
+		if item.transformErr != nil {
+			transformFailedItems = append(transformFailedItems, item)
+			if firstTransformErr == nil {
+				firstTransformErr = item.transformErr
+			}
+			continue
+		}
 		rows = append(rows, item.row)
+		validItems = append(validItems, item)
 	}
 
 	ctx := context.Background()
@@ -408,33 +427,43 @@ func flushBatch(
 	)
 	defer span.End()
 
-	start := time.Now()
-	failedIndices, err := insertWithRetry(ctx, inserter, rows, cfg, logger)
-	metrics.batchLatency.Observe(time.Since(start).Seconds())
-
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "bigquery insert failed")
-		if dlqErr := sendToDLQ(ctx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, items, err); dlqErr != nil {
+	if len(transformFailedItems) > 0 {
+		if dlqErr := sendToDLQ(ctx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, transformFailedItems, firstTransformErr); dlqErr != nil {
 			return dlqErr
 		}
-		return commitMessages(ctx, cfg.KafkaCommitTimeout, logger, items)
 	}
 
-	if len(failedIndices) > 0 {
-		failedItems := make([]batchItem, 0, len(failedIndices))
-		for _, idx := range failedIndices {
-			if idx >= 0 && idx < len(items) {
-				failedItems = append(failedItems, items[idx])
+	if len(rows) > 0 {
+		start := time.Now()
+		failedIndices, err := insertWithRetry(ctx, inserter, rows, cfg, logger)
+		metrics.batchLatency.Observe(time.Since(start).Seconds())
+
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "bigquery insert failed")
+			if dlqErr := sendToDLQ(ctx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, validItems, err); dlqErr != nil {
+				return dlqErr
+			}
+			readyItems := markReadyForCommit(items)
+			return commitMessages(ctx, cfg.KafkaCommitTimeout, logger, readyItems)
+		}
+
+		if len(failedIndices) > 0 {
+			failedItems := make([]batchItem, 0, len(failedIndices))
+			for _, idx := range failedIndices {
+				if idx >= 0 && idx < len(validItems) {
+					failedItems = append(failedItems, validItems[idx])
+				}
+			}
+			dlqErr := sendToDLQ(ctx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, failedItems, errors.New("bigquery row insert failed"))
+			if dlqErr != nil {
+				return dlqErr
 			}
 		}
-		dlqErr := sendToDLQ(ctx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, failedItems, errors.New("bigquery row insert failed"))
-		if dlqErr != nil {
-			return dlqErr
-		}
 	}
 
-	return commitMessages(ctx, cfg.KafkaCommitTimeout, logger, items)
+	readyItems := markReadyForCommit(items)
+	return commitMessages(ctx, cfg.KafkaCommitTimeout, logger, readyItems)
 }
 
 func insertWithRetry(ctx context.Context, inserter *bigquery.Inserter, rows []bigquery.ValueSaver, cfg Config, logger *slog.Logger) ([]int, error) {
@@ -493,7 +522,13 @@ func sendToDLQ(
 	}
 
 	dlqReason := truncate(reason.Error(), 512)
-	traceID := trace.SpanFromContext(ctx).SpanContext().TraceID().String()
+	sc := trace.SpanFromContext(ctx).SpanContext()
+	traceID := ""
+	traceparent := ""
+	if sc.IsValid() {
+		traceID = sc.TraceID().String()
+		traceparent = fmt.Sprintf("00-%s-%s-%02x", sc.TraceID().String(), sc.SpanID().String(), byte(sc.TraceFlags()))
+	}
 	spanCtx, span := tracer.Start(ctx, "kafka.dlq.write",
 		trace.WithAttributes(
 			attribute.String("messaging.system", "kafka"),
@@ -512,7 +547,10 @@ func sendToDLQ(
 			kafka.Header{Key: "original_offset", Value: []byte(strconv.FormatInt(item.message.Offset, 10))},
 		)
 		if traceID != "" {
-			headers = append(headers, kafka.Header{Key: "trace_id", Value: []byte(traceID)})
+			headers = append(headers,
+				kafka.Header{Key: "trace_id", Value: []byte(traceID)},
+				kafka.Header{Key: "traceparent", Value: []byte(traceparent)},
+			)
 		}
 		messages = append(messages, kafka.Message{
 			Key:     item.message.Key,
@@ -540,6 +578,9 @@ func commitMessages(ctx context.Context, timeout time.Duration, logger *slog.Log
 	}
 	byReader := make(map[*kafka.Reader][]kafka.Message)
 	for _, item := range items {
+		if !item.readyCommit || item.reader == nil {
+			continue
+		}
 		byReader[item.reader] = append(byReader[item.reader], item.message)
 	}
 	for reader, messages := range byReader {

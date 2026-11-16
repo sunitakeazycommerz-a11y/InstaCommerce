@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/instacommerce/dispatch-optimizer-service/optimizer"
 	"go.opentelemetry.io/otel"
@@ -153,11 +152,6 @@ func validateV2Request(req V2AssignRequest) error {
 		}
 		if err := validatePos(order.Position); err != nil {
 			return fmt.Errorf("order %s: %w", order.ID, err)
-		}
-		// Provide a default SLA deadline if missing.
-		if order.SLADeadline.IsZero() && !order.CreatedAt.IsZero() {
-			// This is informational; the solver handles zero deadlines internally.
-			_ = order.CreatedAt.Add(10 * time.Minute)
 		}
 		orderIDs[order.ID] = struct{}{}
 	}

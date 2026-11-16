@@ -14,6 +14,7 @@ import (
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -84,9 +85,7 @@ func main() {
 	)
 	healthHandler.SetReady(true)
 
-	mux := http.NewServeMux()
-	healthHandler.RegisterRoutes(mux)
-	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
+	mux := newHTTPMux(service, healthHandler)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -152,4 +151,45 @@ func main() {
 	}
 
 	logger.Info("shutdown complete")
+}
+
+func newHTTPMux(service *relayService, healthHandler *health.Handler) *http.ServeMux {
+	readyFn := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if service.shuttingDown.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"not_ready"}`))
+			return
+		}
+		timeout := service.cfg.ReadyTimeout
+		if timeout <= 0 {
+			timeout = defaultReadyTimeout
+		}
+		checkCtx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		if service.db != nil {
+			if err := service.db.Ping(checkCtx); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"status":"not_ready","error":"database unavailable"}`))
+				return
+			}
+		}
+		if err := service.checkKafka(checkCtx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"not_ready","error":"kafka unavailable"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
+	}
+
+	mux := http.NewServeMux()
+	if healthHandler != nil {
+		mux.HandleFunc("/health", healthHandler.HealthHandler())
+		mux.HandleFunc("/health/live", healthHandler.LiveHandler())
+	}
+	mux.HandleFunc("/health/ready", readyFn)
+	mux.HandleFunc("/ready", readyFn)
+	mux.Handle("/metrics", promhttp.Handler())
+	return mux
 }

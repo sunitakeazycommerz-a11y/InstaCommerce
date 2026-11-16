@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,15 +18,21 @@ import (
 )
 
 type mockPublisher struct {
-	publishedTopic string
-	publishedKey   string
-	publishedEvent *RiderAssignedEvent
+	publishedTopic    string
+	publishedKey      string
+	publishedEnvelope *EventEnvelope
+	publishedEvent    *RiderAssignedEvent
 }
 
 func (m *mockPublisher) Publish(ctx context.Context, topic string, key string, payload any) error {
 	m.publishedTopic = topic
 	m.publishedKey = key
-	if ev, ok := payload.(*RiderAssignedEvent); ok {
+	if env, ok := payload.(*EventEnvelope); ok {
+		m.publishedEnvelope = env
+		if ev, ok := env.Payload.(*RiderAssignedEvent); ok {
+			m.publishedEvent = ev
+		}
+	} else if ev, ok := payload.(*RiderAssignedEvent); ok {
 		m.publishedEvent = ev
 	}
 	return nil
@@ -75,10 +82,18 @@ func TestHandleDispatchAssign_Success(t *testing.T) {
 	assert.Equal(t, "order-123", resp.Event.OrderID)
 	assert.Equal(t, "store-456", resp.Event.StoreID)
 
-	// Verify publisher was called with rider.events
+	// Verify publisher was called with rider.events and EventEnvelope containing coordinates
 	assert.Equal(t, "rider.events", pub.publishedTopic)
 	assert.Equal(t, "rider-007", pub.publishedKey)
+	require.NotNil(t, pub.publishedEnvelope)
+	assert.Equal(t, "RiderAssigned", pub.publishedEnvelope.EventType)
+	assert.Equal(t, "Rider", pub.publishedEnvelope.AggregateType)
+	assert.Equal(t, "rider-007", pub.publishedEnvelope.AggregateID)
 	require.NotNil(t, pub.publishedEvent)
+	assert.InDelta(t, 12.9720, pub.publishedEvent.PickupLat, 0.0001)
+	assert.InDelta(t, 77.5950, pub.publishedEvent.PickupLng, 0.0001)
+	assert.InDelta(t, 12.9716, pub.publishedEvent.DropoffLat, 0.0001)
+	assert.InDelta(t, 77.5946, pub.publishedEvent.DropoffLng, 0.0001)
 }
 
 func TestHandleDispatchAssign_EmptyRidersQueueForRetry(t *testing.T) {
@@ -352,3 +367,59 @@ func TestHandleDispatchAssign_EmptyAvailableRidersDoesNotPanic(t *testing.T) {
 	assert.Equal(t, "order-empty-riders", resp.OrderID)
 }
 
+type backendErrMutex struct {
+	err error
+}
+
+func (m *backendErrMutex) Lock(_ context.Context, _ string, _ time.Duration) (func() error, error) {
+	return nil, m.err
+}
+
+func TestHandleDispatchAssign_LockNormalReleaseAndLockErrorHandling(t *testing.T) {
+	matcher := optimizer.NewBipartiteMatcher(nil, nil)
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	t.Run("normal success path releases rider lock", func(t *testing.T) {
+		spy := &spyMutex{}
+		pub := &mockPublisher{}
+		h := HandleDispatchAssignWithLocker(matcher, pub, spy, logger)
+
+		reqPayload := DispatchAssignRequest{
+			OrderID:       "order-normal-unlock",
+			StoreID:       "store-1",
+			OrderPosition: optimizer.Position{Lat: 12.9716, Lng: 77.5946},
+			AvailableRiders: []optimizer.RiderState{
+				{ID: "rider-1", Position: optimizer.Position{Lat: 12.9720, Lng: 77.5950}, IsAvailable: true},
+			},
+		}
+		body, _ := json.Marshal(reqPayload)
+		req := httptest.NewRequest(http.MethodPost, "/dispatch/assign", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, 1, spy.lockCount)
+		assert.Equal(t, 1, spy.unlockCount)
+	})
+
+	t.Run("non-ErrRiderAlreadyLocked error aborts assignment", func(t *testing.T) {
+		pub := &mockPublisher{}
+		h := HandleDispatchAssignWithLocker(matcher, pub, &backendErrMutex{err: errors.New("redis connection refused")}, logger)
+
+		reqPayload := DispatchAssignRequest{
+			OrderID:       "order-lock-err",
+			StoreID:       "store-1",
+			OrderPosition: optimizer.Position{Lat: 12.9716, Lng: 77.5946},
+			AvailableRiders: []optimizer.RiderState{
+				{ID: "rider-1", Position: optimizer.Position{Lat: 12.9720, Lng: 77.5950}, IsAvailable: true},
+			},
+		}
+		body, _ := json.Marshal(reqPayload)
+		req := httptest.NewRequest(http.MethodPost, "/dispatch/assign", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		assert.Nil(t, pub.publishedEvent)
+	})
+}

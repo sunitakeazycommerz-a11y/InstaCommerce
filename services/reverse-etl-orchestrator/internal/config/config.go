@@ -17,7 +17,7 @@ type Config struct {
 	DatabaseURL string
 
 	// Kafka
-	KafkaBrokers      string
+	KafkaBrokers       string
 	KafkaConsumerGroup string
 
 	// Temporal

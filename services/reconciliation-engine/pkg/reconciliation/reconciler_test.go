@@ -62,7 +62,7 @@ func TestMissingPSPEntry(t *testing.T) {
 	r := &DBReconciler{}
 
 	ledger := map[string]string{
-		"txn-001": "1000",
+		"txn-001":       "1000",
 		"txn-unsettled": "7500",
 	}
 
@@ -282,4 +282,35 @@ func TestReconcileDailyRun_EnforcesManualReviewAndGeneratedColumn(t *testing.T) 
 			assert.NotContains(t, strings.ToLower(stmt.Query), "discrepancy_amount")
 		}
 	}
+}
+
+func TestApplyFix_ClearsManualReviewAndWritesAdjustment(t *testing.T) {
+	queryFn := func(_ int64, query string, _ []driver.NamedValue) (driver.Rows, error) {
+		if strings.Contains(query, "FROM reconciliation_mismatches") {
+			return &stubRows{
+				columns: []string{"run_id", "transaction_id", "psp_amount"},
+				data:    [][]driver.Value{{int64(77), "txn-adj-1", "25.50"}},
+			}, nil
+		}
+		return &stubRows{}, nil
+	}
+
+	db, state := newStubDB(queryFn, nil)
+	defer db.Close()
+
+	r := NewDBReconciler(db, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, r.ApplyFix(context.Background(), 99, "adjust_ledger", nil, nil))
+
+	var sawAdjustment, sawManualReviewClear bool
+	for _, stmt := range state.recorded() {
+		if strings.Contains(stmt.Query, "INSERT INTO payment_ledger") {
+			sawAdjustment = true
+		}
+		if strings.Contains(stmt.Query, "UPDATE reconciliation_mismatches") &&
+			strings.Contains(stmt.Query, "manual_review_required = false") {
+			sawManualReviewClear = true
+		}
+	}
+	assert.True(t, sawAdjustment, "ApplyFix must write adjustment row to payment_ledger")
+	assert.True(t, sawManualReviewClear, "ApplyFix must set manual_review_required = false")
 }

@@ -174,3 +174,54 @@ func TestHTTPClientWithDNSCacheAndIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestCircuitBreakerHalfOpenSingleProbe(t *testing.T) {
+	cb := newCircuitBreaker(1, 20*time.Millisecond)
+	cb.recordFailure()
+	if cb.state != Open {
+		t.Fatalf("expected state Open, got %v", cb.state)
+	}
+
+	time.Sleep(25 * time.Millisecond)
+
+	// First caller transitions Open -> HalfOpen and acquires the single probe slot
+	if !cb.allow() {
+		t.Fatal("expected first caller in HalfOpen window to be allowed")
+	}
+	// Second concurrent caller while probe is in-flight must be rejected
+	if cb.allow() {
+		t.Fatal("expected second concurrent caller in HalfOpen to be rejected")
+	}
+
+	// Probe fails -> back to Open, halfOpenInFlight reset
+	cb.recordFailure()
+	if cb.state != Open {
+		t.Fatalf("expected state Open after failed probe, got %v", cb.state)
+	}
+
+	time.Sleep(25 * time.Millisecond)
+	if !cb.allow() {
+		t.Fatal("expected next probe after resetTimeout to be allowed")
+	}
+	cb.recordSuccess()
+	if cb.state != Closed {
+		t.Fatalf("expected state Closed after successful probe, got %v", cb.state)
+	}
+}
+
+func TestDNSCacheEvictsExpiredOnCapacity(t *testing.T) {
+	cache := NewDNSCache(50 * time.Millisecond)
+	past := time.Now().Add(-time.Minute)
+	for i := 0; i < maxDNSCacheEntries; i++ {
+		cache.entries[http.StatusText(i)+string(rune(i))] = dnsEntry{
+			ips:       []string{"127.0.0.1"},
+			expiresAt: past,
+		}
+	}
+
+	if _, err := cache.LookupHost(context.Background(), "localhost"); err != nil {
+		t.Fatalf("LookupHost failed: %v", err)
+	}
+	if len(cache.entries) != 1 {
+		t.Fatalf("expected expired entries to be evicted leaving 1 entry, got %d", len(cache.entries))
+	}
+}

@@ -53,6 +53,34 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+func newHTTPMux(hHandler *health.Handler, readyFn func(context.Context) error) *http.ServeMux {
+	if hHandler == nil {
+		hHandler = health.NewHandler()
+		hHandler.SetReady(true)
+	}
+	mux := http.NewServeMux()
+	hHandler.RegisterRoutes(mux)
+
+	readyHandler := func(w http.ResponseWriter, r *http.Request) {
+		if readyFn != nil {
+			checkCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := readyFn(checkCtx); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"status":"not_ready"}`))
+				return
+			}
+		}
+		hHandler.ReadyHandler()(w, r)
+	}
+
+	mux.HandleFunc("/health/ready", readyHandler)
+	mux.HandleFunc("/ready", readyHandler)
+	mux.Handle("/metrics", promhttp.Handler())
+	return mux
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -67,12 +95,14 @@ func main() {
 	})
 	defer rdb.Close()
 
-	// Initialise deduplication checker
-	deduper := dedup.NewChecker(rdb, logger)
+	// Initialise deduplication checker with Bloom filter fast path
+	deduper := dedup.NewChecker(rdb, logger).WithBloomFilter(dedup.NewBloomFilter(100000, 0.01))
 
 	// Initialise processors
 	orderMetrics := processor.NewOrderMetrics()
 	slaMonitor := processor.NewSLAMonitor(0.90, logger)
+	defer slaMonitor.Close()
+
 	orderProc := processor.NewOrderProcessor(rdb, orderMetrics, slaMonitor, logger)
 	riderProc := processor.NewRiderProcessor(rdb, logger)
 	paymentProc := processor.NewPaymentProcessor(rdb, logger)
@@ -96,6 +126,16 @@ func main() {
 
 	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "order.events", deduper, handleOrderEvent)
 	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "orders.events", deduper, handleOrderEvent)
+	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "fulfillment.events", deduper, func(ctx context.Context, msg kafka.Message) error {
+		var event processor.OrderEvent
+		if err := json.Unmarshal(msg.Value, &event); err != nil {
+			return fmt.Errorf("unmarshal fulfillment event: %w", err)
+		}
+		if strings.HasPrefix(event.EventType, "Order") {
+			return orderProc.Process(ctx, event)
+		}
+		return nil
+	})
 
 	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "rider.events", deduper, func(ctx context.Context, msg kafka.Message) error {
 		var event processor.RiderEvent
@@ -133,13 +173,17 @@ func main() {
 	})
 
 	// HTTP server for health and metrics
-	hHandler := health.NewHandler()
+	hHandler := health.NewHandler(health.Check{
+		Name: "redis",
+		Check: func(checkCtx context.Context) error {
+			return rdb.Ping(checkCtx).Err()
+		},
+	})
 	hHandler.SetReady(true)
 
-	mux := http.NewServeMux()
-	hHandler.RegisterRoutes(mux)
-	mux.HandleFunc("/ready", hHandler.ReadyHandler())
-	mux.Handle("/metrics", promhttp.Handler())
+	mux := newHTTPMux(hHandler, func(checkCtx context.Context) error {
+		return rdb.Ping(checkCtx).Err()
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
@@ -160,6 +204,7 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
+	signal.Stop(sigCh)
 	logger.Info("shutdown signal received", "signal", sig.String())
 
 	hHandler.SetReady(false)
@@ -176,7 +221,7 @@ func main() {
 }
 
 // startConsumer launches a goroutine that reads from a Kafka topic and calls handler for each message.
-// Duplicate messages (identified by topic:partition:offset) are skipped but their offsets are still committed.
+// Duplicate messages (identified by event_id/id or topic:partition:offset) are skipped but their offsets are still committed.
 func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, brokers []string, groupID, topic string, deduper *dedup.Checker, handler func(context.Context, kafka.Message) error) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:           brokers,
@@ -209,12 +254,12 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer dispatcher.Stop()
 		defer func() {
 			if err := reader.Close(); err != nil {
 				logger.Error("kafka reader close error", "topic", topic, "error", err)
 			}
 		}()
+		defer dispatcher.Stop()
 
 		logger.Info("consumer started", "topic", topic)
 
@@ -246,7 +291,7 @@ func wrapHandlerWithDedup(deduper *dedup.Checker, logger *slog.Logger, handler f
 			return err
 		}
 		if deduper != nil {
-			if err := deduper.MarkProcessed(ctx, msg.Topic, msg.Partition, msg.Offset); err != nil && logger != nil {
+			if err := deduper.MarkProcessedPayload(ctx, msg.Topic, msg.Partition, msg.Offset, msg.Value); err != nil && logger != nil {
 				logger.Warn("dedup mark failed after processing",
 					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
 			}
@@ -257,7 +302,7 @@ func wrapHandlerWithDedup(deduper *dedup.Checker, logger *slog.Logger, handler f
 
 func dispatchMessage(ctx context.Context, logger *slog.Logger, deduper *dedup.Checker, dispatcher *processor.StreamDispatcher, msg kafka.Message) error {
 	if deduper != nil {
-		dup, err := deduper.CheckDuplicate(ctx, msg.Topic, msg.Partition, msg.Offset)
+		dup, err := deduper.CheckDuplicatePayload(ctx, msg.Topic, msg.Partition, msg.Offset, msg.Value)
 		if err != nil {
 			if logger != nil {
 				logger.Warn("dedup check failed, processing anyway",

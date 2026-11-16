@@ -42,7 +42,7 @@ type WebhookEvent struct {
 	// --- v1 fields (always present) ---
 	ID          string    `json:"id"`
 	PSP         PSPType   `json:"psp"`
-	EventType   string    `json:"event_type"`   // e.g. payment.captured, payment.failed, refund.processed
+	EventType   string    `json:"event_type"` // e.g. payment.captured, payment.failed, refund.processed
 	PaymentID   string    `json:"payment_id"`
 	OrderID     string    `json:"order_id"`
 	AmountCents int64     `json:"amount_cents"`
@@ -160,7 +160,12 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "read_body").Inc()
-		h.writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			h.writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		h.writeError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 
@@ -213,7 +218,11 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 		return
 	}
 
-	if err := h.producer.Publish(ctx, h.topic, []byte(event.ID), encoded); err != nil {
+	kafkaKey := event.PaymentID
+	if kafkaKey == "" {
+		kafkaKey = event.ID
+	}
+	if err := h.producer.Publish(ctx, h.topic, []byte(kafkaKey), encoded); err != nil {
 		h.deduper.Remove(event.ID)
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "publish").Inc()
 		h.logger.ErrorContext(ctx, "kafka publish failed",

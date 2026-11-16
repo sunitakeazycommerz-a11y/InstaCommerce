@@ -235,8 +235,13 @@ func (g *GeofenceChecker) Check(update LocationUpdate) []GeofenceEvent {
 		case zone.Type == ZoneRestricted && dist <= zone.RadiusKm:
 			eventType = "ENTERED_RESTRICTED"
 			isInside = true
-		case dist > zone.RadiusKm && dist <= zone.RadiusKm*1.5:
-			eventType = "EXITED_ZONE"
+		case dist > zone.RadiusKm:
+			if track.inside {
+				eventType = "EXITED_ZONE"
+			} else {
+				track.consecutiveInside = 0
+				continue
+			}
 		default:
 			track.consecutiveInside = 0
 			track.inside = false

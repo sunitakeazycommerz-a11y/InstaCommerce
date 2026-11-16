@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -40,26 +43,77 @@ func NewDailyScheduler(reconciler *DBReconciler, logger *slog.Logger, schedule s
 	}
 }
 
+func normalizeScheduleSpec(raw string) (time.Duration, string, bool) {
+	spec := strings.TrimSpace(raw)
+	if spec == "" {
+		return 0, "0 2 * * *", false
+	}
+	if d, err := time.ParseDuration(spec); err == nil && d > 0 {
+		return d, "", true
+	}
+	// Support "HH:MM" daily time format (e.g. "02:00", "14:30")
+	if !strings.ContainsAny(spec, " \t") && strings.Count(spec, ":") == 1 {
+		parts := strings.SplitN(spec, ":", 2)
+		hour, hErr := strconv.Atoi(parts[0])
+		min, mErr := strconv.Atoi(parts[1])
+		if hErr == nil && mErr == nil && hour >= 0 && hour <= 23 && min >= 0 && min <= 59 {
+			return 0, fmt.Sprintf("%d %d * * *", min, hour), false
+		}
+	}
+	return 0, spec, false
+}
+
 func (s *DailyScheduler) Start(ctx context.Context) error {
-	schedule := s.schedule
-	if schedule == "" {
-		schedule = "0 2 * * *" // 2 AM UTC daily
+	interval, cronSpec, isDuration := normalizeScheduleSpec(s.schedule)
+	if isDuration {
+		runCtx, cancel := context.WithCancel(ctx)
+		ticker := time.NewTicker(interval)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+					s.runReconciliation(runCtx)
+				}
+			}
+		}()
+		s.logger.Info("daily scheduler started with duration interval", "interval", interval.String())
+		s.stop = func(stopCtx context.Context) error {
+			cancel()
+			ticker.Stop()
+			select {
+			case <-done:
+				s.logger.Info("daily scheduler stopped")
+				return nil
+			case <-stopCtx.Done():
+				return stopCtx.Err()
+			}
+		}
+		return nil
 	}
 
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 	cronScheduler := cron.New(cron.WithParser(parser))
 
-	if _, err := cronScheduler.AddFunc(schedule, func() {
+	if _, err := cronScheduler.AddFunc(cronSpec, func() {
 		s.runReconciliation(ctx)
 	}); err != nil {
 		return err
 	}
 
 	cronScheduler.Start()
-	s.logger.Info("daily scheduler started", "schedule", schedule)
+	s.logger.Info("daily scheduler started", "schedule", cronSpec)
 
 	s.stop = func(stopCtx context.Context) error {
-		cronScheduler.Stop()
+		cronCtx := cronScheduler.Stop()
+		select {
+		case <-cronCtx.Done():
+		case <-stopCtx.Done():
+			return stopCtx.Err()
+		}
 		s.logger.Info("daily scheduler stopped")
 		return nil
 	}

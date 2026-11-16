@@ -45,15 +45,15 @@ type ListMismatchesResponse struct {
 }
 
 type MismatchDTO struct {
-	MismatchID          int64   `json:"mismatch_id"`
-	TransactionID       string  `json:"transaction_id"`
-	LedgerAmount        string  `json:"ledger_amount"`
-	PSPAmount           string  `json:"psp_amount"`
-	DiscrepancyAmount   string  `json:"discrepancy_amount"`
-	DiscrepancyReason   string  `json:"discrepancy_reason"`
-	AutoFixed           bool    `json:"auto_fixed"`
+	MismatchID           int64   `json:"mismatch_id"`
+	TransactionID        string  `json:"transaction_id"`
+	LedgerAmount         string  `json:"ledger_amount"`
+	PSPAmount            string  `json:"psp_amount"`
+	DiscrepancyAmount    string  `json:"discrepancy_amount"`
+	DiscrepancyReason    string  `json:"discrepancy_reason"`
+	AutoFixed            bool    `json:"auto_fixed"`
 	ManualReviewRequired bool    `json:"manual_review_required"`
-	FixAppliedAt        *string `json:"fix_applied_at,omitempty"`
+	FixAppliedAt         *string `json:"fix_applied_at,omitempty"`
 }
 
 type ErrorResponse struct {
@@ -143,15 +143,62 @@ func (h *ReconciliationHandler) HandleGetRunMismatches(w http.ResponseWriter, r 
 	dtos := make([]MismatchDTO, len(mismatches))
 	for i, m := range mismatches {
 		dtos[i] = MismatchDTO{
-			MismatchID:          m.MismatchID,
-			TransactionID:       m.TransactionID,
-			LedgerAmount:        m.LedgerAmount,
-			PSPAmount:           m.PSPAmount,
-			DiscrepancyAmount:   m.DiscrepancyAmount,
-			DiscrepancyReason:   m.DiscrepancyReason,
-			AutoFixed:           m.AutoFixed,
+			MismatchID:           m.MismatchID,
+			TransactionID:        m.TransactionID,
+			LedgerAmount:         m.LedgerAmount,
+			PSPAmount:            m.PSPAmount,
+			DiscrepancyAmount:    m.DiscrepancyAmount,
+			DiscrepancyReason:    m.DiscrepancyReason,
+			AutoFixed:            m.AutoFixed,
 			ManualReviewRequired: m.ManualReviewRequired,
-			FixAppliedAt:        formatTimestamp(m.FixAppliedAt),
+			FixAppliedAt:         formatTimestamp(m.FixAppliedAt),
+		}
+	}
+
+	h.writeJSON(w, http.StatusOK, ListMismatchesResponse{
+		Mismatches: dtos,
+		Count:      len(dtos),
+	})
+}
+
+func (h *ReconciliationHandler) HandleGetPendingMismatches(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	limit := 50
+	offset := 0
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+			limit = l
+		}
+	}
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	mismatches, err := h.reconciler.GetPendingMismatches(r.Context(), limit, offset)
+	if err != nil {
+		h.logger.Error("failed to get pending mismatches", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "failed to retrieve pending mismatches")
+		return
+	}
+
+	dtos := make([]MismatchDTO, len(mismatches))
+	for i, m := range mismatches {
+		dtos[i] = MismatchDTO{
+			MismatchID:           m.MismatchID,
+			TransactionID:        m.TransactionID,
+			LedgerAmount:         m.LedgerAmount,
+			PSPAmount:            m.PSPAmount,
+			DiscrepancyAmount:    m.DiscrepancyAmount,
+			DiscrepancyReason:    m.DiscrepancyReason,
+			AutoFixed:            m.AutoFixed,
+			ManualReviewRequired: m.ManualReviewRequired,
+			FixAppliedAt:         formatTimestamp(m.FixAppliedAt),
 		}
 	}
 

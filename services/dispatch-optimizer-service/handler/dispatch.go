@@ -3,6 +3,8 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,9 +12,11 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/instacommerce/dispatch-optimizer-service/optimizer"
+	"github.com/instacommerce/go-shared/pkg/correlation"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -29,37 +33,57 @@ const (
 	MaxDispatchAttemptsBeforeAlert = 3
 )
 
+// ErrRiderAlreadyLocked indicates a candidate rider is currently locked by a concurrent dispatch.
+var ErrRiderAlreadyLocked = errors.New("rider is already locked by concurrent dispatch")
+
 // RiderMutex defines locking and unlocking contracts for candidate rider assignments (Issue #594).
 type RiderMutex interface {
 	Lock(ctx context.Context, riderID string, ttl time.Duration) (func() error, error)
 }
 
+type lockEntry struct {
+	expiresAt time.Time
+	token     uint64
+}
+
 type inMemoryRiderMutex struct {
-	mu    sync.Mutex
-	locks map[string]time.Time
+	mu      sync.Mutex
+	locks   map[string]lockEntry
+	nextSeq atomic.Uint64
 }
 
 // NewInMemoryRiderMutex creates a thread-safe mutex tracker for rider assignments.
 func NewInMemoryRiderMutex() RiderMutex {
 	return &inMemoryRiderMutex{
-		locks: make(map[string]time.Time),
+		locks: make(map[string]lockEntry),
 	}
 }
 
-func (m *inMemoryRiderMutex) Lock(ctx context.Context, riderID string, ttl time.Duration) (func() error, error) {
+func (m *inMemoryRiderMutex) Lock(_ context.Context, riderID string, ttl time.Duration) (func() error, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	now := time.Now()
-	if exp, exists := m.locks[riderID]; exists && now.Before(exp) {
-		return nil, fmt.Errorf("rider %s is already locked by concurrent dispatch", riderID)
+	for id, entry := range m.locks {
+		if !now.Before(entry.expiresAt) {
+			delete(m.locks, id)
+		}
+	}
+	if existing, exists := m.locks[riderID]; exists && now.Before(existing.expiresAt) {
+		return nil, fmt.Errorf("rider %s: %w", riderID, ErrRiderAlreadyLocked)
 	}
 
-	m.locks[riderID] = now.Add(ttl)
+	token := m.nextSeq.Add(1)
+	m.locks[riderID] = lockEntry{expiresAt: now.Add(ttl), token: token}
+	var unlockOnce sync.Once
 	return func() error {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		delete(m.locks, riderID)
+		unlockOnce.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if cur, ok := m.locks[riderID]; ok && cur.token == token {
+				delete(m.locks, riderID)
+			}
+		})
 		return nil
 	}, nil
 }
@@ -70,6 +94,7 @@ type DispatchAssignRequest struct {
 	StoreID                  string                 `json:"store_id"`
 	UserID                   string                 `json:"user_id,omitempty"`
 	DeliveryAddress          string                 `json:"delivery_address,omitempty"`
+	StorePosition            *optimizer.Position    `json:"store_position,omitempty"`
 	OrderPosition            optimizer.Position     `json:"order_position"`
 	ItemCount                int                    `json:"item_count,omitempty"`
 	Weight                   float64                `json:"weight,omitempty"`
@@ -81,14 +106,31 @@ type DispatchAssignRequest struct {
 	AcceptanceTimeoutSeconds int                    `json:"acceptance_timeout_seconds,omitempty"`
 }
 
-// RiderAssignedEvent conforms strictly to schemas/rider/RiderAssigned.v1.json (Issue #571).
+// EventEnvelope conforms to contracts/src/main/resources/schemas/common/EventEnvelope.v1.json.
+type EventEnvelope struct {
+	ID            string    `json:"id"`
+	EventType     string    `json:"eventType"`
+	AggregateType string    `json:"aggregateType"`
+	AggregateID   string    `json:"aggregateId"`
+	EventTime     time.Time `json:"eventTime"`
+	SchemaVersion string    `json:"schemaVersion"`
+	SourceService string    `json:"source_service"`
+	CorrelationID string    `json:"correlation_id,omitempty"`
+	Payload       any       `json:"payload"`
+}
+
+// RiderAssignedEvent conforms to schemas/rider/RiderAssigned.v1.json (Issue #571).
 type RiderAssignedEvent struct {
-	RiderID    string `json:"riderId"`
-	OrderID    string `json:"orderId"`
-	StoreID    string `json:"storeId,omitempty"`
-	UserID     string `json:"userId,omitempty"`
-	RiderName  string `json:"riderName,omitempty"`
-	AssignedAt string `json:"assignedAt"`
+	RiderID    string  `json:"riderId"`
+	OrderID    string  `json:"orderId"`
+	StoreID    string  `json:"storeId,omitempty"`
+	UserID     string  `json:"userId,omitempty"`
+	RiderName  string  `json:"riderName,omitempty"`
+	PickupLat  float64 `json:"pickupLat"`
+	PickupLng  float64 `json:"pickupLng"`
+	DropoffLat float64 `json:"dropoffLat"`
+	DropoffLng float64 `json:"dropoffLng"`
+	AssignedAt string  `json:"assignedAt"`
 }
 
 // DispatchAssignResponse returns the dispatch decision and assignment event.
@@ -112,10 +154,17 @@ type DispatchAssignResponse struct {
 type RiderResponseRequest struct {
 	OrderID          string                 `json:"order_id"`
 	StoreID          string                 `json:"store_id"`
+	UserID           string                 `json:"user_id,omitempty"`
+	DeliveryAddress  string                 `json:"delivery_address,omitempty"`
 	RiderID          string                 `json:"rider_id"`
 	Accepted         bool                   `json:"accepted"`
 	Reason           string                 `json:"reason,omitempty"` // "TIMEOUT" or "REJECTED"
+	StorePosition    *optimizer.Position    `json:"store_position,omitempty"`
 	OrderPosition    optimizer.Position     `json:"order_position"`
+	ItemCount        int                    `json:"item_count,omitempty"`
+	Weight           float64                `json:"weight,omitempty"`
+	SLADeadline      time.Time              `json:"sla_deadline,omitempty"`
+	CreatedAt        time.Time              `json:"created_at,omitempty"`
 	AttemptCount     int                    `json:"attempt_count"`
 	ExcludedRiderIDs []string               `json:"excluded_rider_ids"`
 	AvailableRiders  []optimizer.RiderState `json:"available_riders"`
@@ -131,7 +180,7 @@ type NoopEventPublisher struct {
 	Logger *slog.Logger
 }
 
-func (p *NoopEventPublisher) Publish(ctx context.Context, topic string, key string, payload any) error {
+func (p *NoopEventPublisher) Publish(_ context.Context, topic string, key string, payload any) error {
 	if p.Logger != nil {
 		p.Logger.Info("published event", "topic", topic, "key", key, "payload", payload)
 	}
@@ -145,13 +194,23 @@ func HandleDispatchAssign(matcher *optimizer.BipartiteMatcher, publisher EventPu
 
 // HandleDispatchAssignWithLocker exposes POST /dispatch/assign with explicit rider locker and panic recovery (Issue #594).
 func HandleDispatchAssignWithLocker(matcher *optimizer.BipartiteMatcher, publisher EventPublisher, locker RiderMutex, logger *slog.Logger) http.HandlerFunc {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		var unlockFunc func() error
+		var locks []func() error
+		releaseAll := func() {
+			for i := len(locks) - 1; i >= 0; i-- {
+				if err := locks[i](); err != nil {
+					logger.Warn("dispatch: failed to release rider lock", "error", err)
+				}
+			}
+			locks = nil
+		}
+		defer releaseAll()
 		defer func() {
 			if rec := recover(); rec != nil {
-				if unlockFunc != nil {
-					_ = unlockFunc()
-				}
+				releaseAll()
 				optimizer.HandlerPanics.Inc()
 				logger.Error("dispatch: panic recovered in handler, released rider lock", "panic", rec)
 				writeV2Error(w, http.StatusInternalServerError, "internal dispatch error")
@@ -208,17 +267,9 @@ func HandleDispatchAssignWithLocker(matcher *optimizer.BipartiteMatcher, publish
 			)
 		}
 
-		// Filter out excluded riders (previously rejected or timed-out)
 		excludedSet := make(map[string]bool, len(req.ExcludedRiderIDs))
 		for _, id := range req.ExcludedRiderIDs {
 			excludedSet[id] = true
-		}
-
-		eligibleRiders := make([]optimizer.RiderState, 0, len(req.AvailableRiders))
-		for _, rider := range req.AvailableRiders {
-			if !excludedSet[rider.ID] {
-				eligibleRiders = append(eligibleRiders, rider)
-			}
 		}
 
 		orders := []optimizer.OrderRequest{
@@ -232,47 +283,79 @@ func HandleDispatchAssignWithLocker(matcher *optimizer.BipartiteMatcher, publish
 			},
 		}
 
-		matchRes, err := matcher.Match(ctx, eligibleRiders, orders)
-		if err != nil {
-			if errors.Is(err, optimizer.ErrNoRidersAvailable) {
-				logger.Warn("dispatch: no riders available within radius",
-					"order_id", req.OrderID,
-					"store_id", req.StoreID,
-					"escalated", matchRes != nil && matchRes.Escalated,
-				)
-				resp := DispatchAssignResponse{
-					Status:                   "QUEUED_NO_RIDERS",
-					OrderID:                  req.OrderID,
-					RetryAfterSeconds:        int(optimizer.DefaultReevaluationInterval.Seconds()),
-					Escalated:                (matchRes != nil && matchRes.Escalated) || leadDispatcherAlert,
-					EscalationReason:         buildEscalationReason(matchRes, leadDispatcherAlert, req.OrderID, currentAttempt),
-					AttemptCount:             currentAttempt,
-					AcceptanceTimeoutSeconds: DefaultRiderAcceptanceTimeoutSeconds,
-					ExcludedRiderIDs:         req.ExcludedRiderIDs,
-					LeadDispatcherAlert:      leadDispatcherAlert,
+		var selectedAssignment *optimizer.OptimalAssignment
+		var selectedRider *optimizer.RiderState
+		var lastMatchRes *optimizer.MatchResult
+
+		for {
+			eligibleRiders := make([]optimizer.RiderState, 0, len(req.AvailableRiders))
+			riderByID := make(map[string]optimizer.RiderState, len(req.AvailableRiders))
+			for _, rider := range req.AvailableRiders {
+				if !excludedSet[rider.ID] {
+					eligibleRiders = append(eligibleRiders, rider)
+					riderByID[rider.ID] = rider
 				}
-				if resp.Escalated {
-					resp.Status = "ESCALATED"
+			}
+
+			matchRes, err := matcher.Match(ctx, eligibleRiders, orders)
+			if err != nil {
+				if errors.Is(err, optimizer.ErrNoRidersAvailable) {
+					lastMatchRes = matchRes
+					break
 				}
-				writeV2JSON(w, http.StatusOK, resp)
+				logger.Error("dispatch: matching failed", "error", err)
+				writeV2Error(w, http.StatusInternalServerError, "dispatch matching failed")
 				return
 			}
-			logger.Error("dispatch: matching failed", "error", err)
-			writeV2Error(w, http.StatusInternalServerError, "dispatch matching failed")
-			return
+			lastMatchRes = matchRes
+
+			if matchRes == nil || len(matchRes.Assignments) == 0 || len(matchRes.Assignments[0].OrderIDs) == 0 {
+				break
+			}
+
+			candidate := matchRes.Assignments[0]
+			if locker != nil {
+				unlock, lockErr := locker.Lock(ctx, candidate.RiderID, DefaultRiderLockTTL)
+				if lockErr != nil {
+					if !errors.Is(lockErr, ErrRiderAlreadyLocked) {
+						logger.Error("dispatch: rider lock backend failure, aborting assignment",
+							"rider_id", candidate.RiderID, "error", lockErr)
+						writeV2Error(w, http.StatusServiceUnavailable, "failed to acquire rider lock")
+						return
+					}
+					logger.Warn("dispatch: candidate rider locked concurrently, trying next candidate",
+						"rider_id", candidate.RiderID, "error", lockErr)
+					excludedSet[candidate.RiderID] = true
+					continue
+				}
+				locks = append(locks, unlock)
+			}
+
+			selectedAssignment = &candidate
+			if rState, ok := riderByID[candidate.RiderID]; ok {
+				copyState := rState
+				selectedRider = &copyState
+			}
+			break
 		}
 
-		if matchRes == nil || len(matchRes.Assignments) == 0 || len(matchRes.Assignments[0].OrderIDs) == 0 {
-			isEscalated := leadDispatcherAlert
-			if matchRes != nil && matchRes.Escalated {
-				isEscalated = true
+		if selectedAssignment == nil {
+			logger.Warn("dispatch: no riders available within radius",
+				"order_id", req.OrderID,
+				"store_id", req.StoreID,
+				"escalated", lastMatchRes != nil && lastMatchRes.Escalated,
+			)
+			isEscalated := (lastMatchRes != nil && lastMatchRes.Escalated) || leadDispatcherAlert
+			status := "QUEUED_NO_RIDERS"
+			if isEscalated {
+				status = "ESCALATED"
 			}
 			writeV2JSON(w, http.StatusOK, DispatchAssignResponse{
-				Status:                   "QUEUED_NO_RIDERS",
+				Status:                   status,
 				OrderID:                  req.OrderID,
 				RetryAfterSeconds:        int(optimizer.DefaultReevaluationInterval.Seconds()),
 				Escalated:                isEscalated,
-				EscalationReason:         buildEscalationReason(matchRes, leadDispatcherAlert, req.OrderID, currentAttempt),
+				EscalationReason:         buildEscalationReason(lastMatchRes, leadDispatcherAlert, req.OrderID, currentAttempt),
 				AttemptCount:             currentAttempt,
 				AcceptanceTimeoutSeconds: DefaultRiderAcceptanceTimeoutSeconds,
 				ExcludedRiderIDs:         req.ExcludedRiderIDs,
@@ -281,47 +364,59 @@ func HandleDispatchAssignWithLocker(matcher *optimizer.BipartiteMatcher, publish
 			return
 		}
 
-		assignment := matchRes.Assignments[0]
-
-		// Lock candidate rider record with shortened 30s TTL (Issue #594)
-		if locker != nil {
-			unlock, lockErr := locker.Lock(ctx, assignment.RiderID, DefaultRiderLockTTL)
-			if lockErr != nil {
-				logger.Warn("dispatch: candidate rider locked concurrently", "rider_id", assignment.RiderID, "error", lockErr)
-			} else {
-				unlockFunc = unlock
-			}
+		pickupPos := req.OrderPosition
+		if req.StorePosition != nil {
+			pickupPos = *req.StorePosition
+		} else if selectedRider != nil {
+			pickupPos = selectedRider.Position
 		}
 
+		now := time.Now().UTC()
 		assignedEvent := &RiderAssignedEvent{
-			RiderID:    assignment.RiderID,
+			RiderID:    selectedAssignment.RiderID,
 			OrderID:    req.OrderID,
 			StoreID:    req.StoreID,
 			UserID:     req.UserID,
-			AssignedAt: time.Now().UTC().Format(time.RFC3339),
+			PickupLat:  pickupPos.Lat,
+			PickupLng:  pickupPos.Lng,
+			DropoffLat: req.OrderPosition.Lat,
+			DropoffLng: req.OrderPosition.Lng,
+			AssignedAt: now.Format(time.RFC3339),
 		}
 
-		// Emit canonical RiderAssigned event to rider.events topic
+		envelope := &EventEnvelope{
+			ID:            newEventID("evt"),
+			EventType:     "RiderAssigned",
+			AggregateType: "Rider",
+			AggregateID:   selectedAssignment.RiderID,
+			EventTime:     now,
+			SchemaVersion: "v1",
+			SourceService: serviceName,
+			CorrelationID: correlation.FromContext(ctx),
+			Payload:       assignedEvent,
+		}
+
+		// Emit canonical EventEnvelope to rider.events topic
 		if publisher != nil {
-			if pubErr := publisher.Publish(ctx, "rider.events", assignment.RiderID, assignedEvent); pubErr != nil {
+			if pubErr := publisher.Publish(ctx, "rider.events", selectedAssignment.RiderID, envelope); pubErr != nil {
 				logger.Error("dispatch: failed to publish RiderAssigned event", "error", pubErr)
 			}
 		}
 
 		logger.Info("dispatch: assigned rider to order",
 			"order_id", req.OrderID,
-			"rider_id", assignment.RiderID,
-			"eta_min", assignment.EstimatedETAMinutes,
-			"dist_km", assignment.TotalDistanceKm,
+			"rider_id", selectedAssignment.RiderID,
+			"eta_min", selectedAssignment.EstimatedETAMinutes,
+			"dist_km", selectedAssignment.TotalDistanceKm,
 			"attempt", currentAttempt,
 		)
 
 		writeV2JSON(w, http.StatusOK, DispatchAssignResponse{
 			Status:                   "ASSIGNED",
-			RiderID:                  assignment.RiderID,
+			RiderID:                  selectedAssignment.RiderID,
 			OrderID:                  req.OrderID,
-			EstimatedETAMinutes:      assignment.EstimatedETAMinutes,
-			DistanceKm:               assignment.TotalDistanceKm,
+			EstimatedETAMinutes:      selectedAssignment.EstimatedETAMinutes,
+			DistanceKm:               selectedAssignment.TotalDistanceKm,
 			Event:                    assignedEvent,
 			AttemptCount:             currentAttempt,
 			AcceptanceTimeoutSeconds: DefaultRiderAcceptanceTimeoutSeconds,
@@ -333,6 +428,9 @@ func HandleDispatchAssignWithLocker(matcher *optimizer.BipartiteMatcher, publish
 
 // HandleRiderResponse handles rider acceptance, timeout, and rejection with automated re-dispatch (Issue #581).
 func HandleRiderResponse(matcher *optimizer.BipartiteMatcher, publisher EventPublisher, locker RiderMutex, logger *slog.Logger) http.HandlerFunc {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
@@ -340,9 +438,17 @@ func HandleRiderResponse(matcher *optimizer.BipartiteMatcher, publisher EventPub
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+
 		var req RiderResponseRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decoder.Decode(&req); err != nil {
 			writeV2Error(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			writeV2Error(w, http.StatusBadRequest, "request body must contain a single JSON object")
 			return
 		}
 
@@ -369,11 +475,21 @@ func HandleRiderResponse(matcher *optimizer.BipartiteMatcher, publisher EventPub
 			"attempt", req.AttemptCount,
 		)
 
-		excluded := append(req.ExcludedRiderIDs, req.RiderID)
+		excluded := make([]string, len(req.ExcludedRiderIDs), len(req.ExcludedRiderIDs)+1)
+		copy(excluded, req.ExcludedRiderIDs)
+		excluded = append(excluded, req.RiderID)
+
 		assignReq := DispatchAssignRequest{
 			OrderID:                  req.OrderID,
 			StoreID:                  req.StoreID,
+			UserID:                   req.UserID,
+			DeliveryAddress:          req.DeliveryAddress,
+			StorePosition:            req.StorePosition,
 			OrderPosition:            req.OrderPosition,
+			ItemCount:                req.ItemCount,
+			Weight:                   req.Weight,
+			SLADeadline:              req.SLADeadline,
+			CreatedAt:                req.CreatedAt,
 			AvailableRiders:          req.AvailableRiders,
 			AttemptCount:             req.AttemptCount,
 			ExcludedRiderIDs:         excluded,
@@ -381,11 +497,25 @@ func HandleRiderResponse(matcher *optimizer.BipartiteMatcher, publisher EventPub
 		}
 
 		assignHandler := HandleDispatchAssignWithLocker(matcher, publisher, locker, logger)
-		bodyBytes, _ := json.Marshal(assignReq)
+		bodyBytes, err := json.Marshal(assignReq)
+		if err != nil {
+			logger.Error("dispatch: failed to marshal re-dispatch request", "error", err)
+			writeV2Error(w, http.StatusInternalServerError, "failed to prepare re-dispatch request")
+			return
+		}
 		rerouteReq := r.Clone(r.Context())
 		rerouteReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		rerouteReq.ContentLength = int64(len(bodyBytes))
 		assignHandler(w, rerouteReq)
 	}
+}
+
+func newEventID(prefix string) string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(b[:]))
 }
 
 func buildEscalationReason(matchRes *optimizer.MatchResult, leadAlert bool, orderID string, attempts int) string {

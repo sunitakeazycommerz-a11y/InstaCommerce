@@ -128,7 +128,7 @@ func (s *LatestPositionStore) Update(ctx context.Context, update LocationUpdate)
 func (s *LatestPositionStore) Get(ctx context.Context, riderID string) (*LocationUpdate, error) {
 	data, err := s.client.Get(ctx, keyFor(riderID)).Bytes()
 	if err != nil {
-		if err == redis.Nil {
+		if errors.Is(err, redis.Nil) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("store: get position for rider %s: %w", riderID, err)
@@ -163,7 +163,7 @@ func (s *LatestPositionStore) GetNearby(ctx context.Context, lat, lng, radiusKm 
 		for _, key := range keys {
 			data, err := s.client.Get(ctx, key).Bytes()
 			if err != nil {
-				if err == redis.Nil {
+				if errors.Is(err, redis.Nil) {
 					continue
 				}
 				return nil, fmt.Errorf("store: get key %s: %w", key, err)
@@ -292,6 +292,11 @@ func haversineKm(lat1, lng1, lat2, lng2 float64) float64 {
 	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
 		math.Cos(degToRad(lat1))*math.Cos(degToRad(lat2))*
 			math.Sin(dLng/2)*math.Sin(dLng/2)
+	if a < 0 {
+		a = 0
+	} else if a > 1 {
+		a = 1
+	}
 
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusKm * c

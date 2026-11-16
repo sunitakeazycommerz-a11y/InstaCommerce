@@ -4,8 +4,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 
@@ -88,11 +90,26 @@ func (h *Handler) ListSubscriptions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, subscription.ErrSubscriptionNotFound) ||
+		strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
 // CreateSubscription handles POST /api/v1/subscriptions.
 func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	defer r.Body.Close()
+
 	var req subscription.CreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON payload")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.SourceDomain) == "" || strings.TrimSpace(req.SinkType) == "" {
+		writeError(w, http.StatusBadRequest, "validation_error", "name, source_domain, and sink_type are required")
 		return
 	}
 
@@ -119,6 +136,10 @@ func (h *Handler) GetSubscription(w http.ResponseWriter, r *http.Request) {
 
 	sub, err := h.subscriptionSvc.Get(r.Context(), id)
 	if err != nil {
+		if isNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
+			return
+		}
 		slog.Error("failed to get subscription", "error", err, "id", id)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to get subscription")
 		return
@@ -138,6 +159,10 @@ func (h *Handler) DeleteSubscription(w http.ResponseWriter, r *http.Request) {
 	id := vars["id"]
 
 	if err := h.subscriptionSvc.Archive(r.Context(), id); err != nil {
+		if isNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
+			return
+		}
 		slog.Error("failed to archive subscription", "error", err, "id", id)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to archive subscription")
 		return
@@ -152,6 +177,10 @@ func (h *Handler) ActivateSubscription(w http.ResponseWriter, r *http.Request) {
 	id := vars["id"]
 
 	if err := h.subscriptionSvc.Activate(r.Context(), id); err != nil {
+		if isNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
+			return
+		}
 		slog.Error("failed to activate subscription", "error", err, "id", id)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to activate subscription")
 		return
@@ -169,6 +198,10 @@ func (h *Handler) PauseSubscription(w http.ResponseWriter, r *http.Request) {
 	id := vars["id"]
 
 	if err := h.subscriptionSvc.Pause(r.Context(), id); err != nil {
+		if isNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
+			return
+		}
 		slog.Error("failed to pause subscription", "error", err, "id", id)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to pause subscription")
 		return

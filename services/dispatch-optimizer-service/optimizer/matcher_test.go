@@ -146,4 +146,67 @@ func TestBatteryConstraint_FilterLowBatteryRidersOnLongDistance(t *testing.T) {
 	okGood, violationsGood := checker.CheckAll(healthyBatteryEVRider, order)
 	assert.True(t, okGood, "Healthy battery EV rider must be accepted")
 	assert.Empty(t, violationsGood)
+
+	// Non-electric bicycle and petrol scooter with 0 battery_percent must not be rejected as low-battery EVs
+	for _, vType := range []string{"bicycle", "scooter", "motorcycle"} {
+		nonEV := RiderState{
+			ID:              "rider-" + vType,
+			Position:        Position{Lat: 12.9720, Lng: 77.5950},
+			VehicleType:     vType,
+			BatteryPercent:  0.0,
+			IsAvailable:     true,
+			TotalDeliveries: 100,
+		}
+		ok, viol := checker.CheckAll(nonEV, order)
+		assert.True(t, ok, "non-EV %s must not fail battery constraint: %+v", vType, viol)
+	}
+
+	// E-bike variants with low battery must be rejected by battery constraint
+	for _, evType := range []string{"e-bike", "ebike", "electric_bicycle"} {
+		lowEBike := RiderState{
+			ID:              "rider-" + evType,
+			Position:        Position{Lat: 12.9720, Lng: 77.5950},
+			VehicleType:     evType,
+			BatteryPercent:  10.0,
+			IsAvailable:     true,
+			TotalDeliveries: 100,
+		}
+		ok, viol := checker.CheckAll(lowEBike, order)
+		assert.False(t, ok, "low battery %s should fail battery check", evType)
+		require.NotEmpty(t, viol)
+		assert.Equal(t, "battery", viol[0].Constraint)
+	}
+}
+
+func TestSolver_ActiveOrdersCapacityAndWeightZeroHandling(t *testing.T) {
+	cfg := SolverConfig{
+		MaxOrdersPerRider:  2,
+		WeightDeliveryTime: 1.0,
+		WeightIdleTime:     0.0,
+		WeightSLABreach:    0.0,
+	}
+	solver := NewSolver(cfg)
+	assert.Equal(t, 1.0, solver.cfg.WeightDeliveryTime)
+	assert.Equal(t, 0.0, solver.cfg.WeightIdleTime, "explicit zero weight must be preserved")
+	assert.Equal(t, 0.0, solver.cfg.WeightSLABreach, "explicit zero weight must be preserved")
+
+	riders := []RiderState{
+		{
+			ID:              "rider-busy",
+			Position:        Position{Lat: 12.9716, Lng: 77.5946},
+			ActiveOrders:    1, // already carrying 1 order -> can take at most 1 more (MaxOrdersPerRider=2)
+			IsAvailable:     true,
+			TotalDeliveries: 100,
+		},
+	}
+	orders := []OrderRequest{
+		{ID: "ord-1", Position: Position{Lat: 12.9717, Lng: 77.5947}},
+		{ID: "ord-2", Position: Position{Lat: 12.9718, Lng: 77.5948}},
+	}
+
+	res, err := solver.Solve(context.Background(), riders, orders)
+	require.NoError(t, err)
+	require.Len(t, res.Assignments, 1)
+	assert.Len(t, res.Assignments[0].OrderIDs, 1, "rider with ActiveOrders=1 and MaxOrdersPerRider=2 must only receive 1 new order")
+	assert.Len(t, res.UnassignedOrders, 1)
 }

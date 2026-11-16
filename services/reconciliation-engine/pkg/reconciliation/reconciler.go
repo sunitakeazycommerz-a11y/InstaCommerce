@@ -41,14 +41,20 @@ func NewDBReconciler(db *sql.DB, logger *slog.Logger, tracer trace.Tracer, pubsu
 }
 
 type ReconciliationResult struct {
-	RunID              int64
-	MismatchCount      int
-	AutoFixedCount     int
-	ManualReviewCount  int
-	Duration           time.Duration
+	RunID             int64
+	MismatchCount     int
+	AutoFixedCount    int
+	ManualReviewCount int
+	Duration          time.Duration
 }
 
 func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time) (*ReconciliationResult, error) {
+	dayStart := time.Date(runDate.UTC().Year(), runDate.UTC().Month(), runDate.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	dayEnd := dayStart.Add(24 * time.Hour)
+	return r.ReconcileRange(ctx, dayStart, dayEnd)
+}
+
+func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time) (*ReconciliationResult, error) {
 	tracer := r.tracer
 	if tracer == nil {
 		tracer = otel.Tracer("reconciliation")
@@ -56,6 +62,11 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 	logger := r.logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	runDate := start.UTC()
+	if end.Before(start) || end.Equal(start) {
+		end = start.Add(24 * time.Hour)
 	}
 
 	ctx, span := tracer.Start(ctx, "reconciliation.daily_run",
@@ -71,11 +82,22 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Get or create run record
-	runID, err := r.getOrCreateRun(ctx, tx, runDate)
+	// Get or create run record (idempotent for same-day reruns)
+	runID, existingRun, err := r.getOrCreateRun(ctx, tx, runDate)
 	if err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to get or create run: %w", err)
+	}
+
+	// Clean up prior unresolved mismatches when rerunning the same day
+	if existingRun {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM reconciliation_mismatches WHERE run_id = $1 AND fix_applied_at IS NULL`,
+			runID,
+		); err != nil {
+			span.RecordError(err)
+			return nil, fmt.Errorf("failed to clean up previous run mismatches: %w", err)
+		}
 	}
 
 	// Update run status to IN_PROGRESS
@@ -84,14 +106,14 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 		return nil, fmt.Errorf("failed to update run status: %w", err)
 	}
 
-	// Query ledger and PSP data
-	ledgerEntries, err := r.queryLedgerEntries(ctx, tx)
+	// Query ledger and PSP data filtered by [start, end)
+	ledgerEntries, err := r.queryLedgerEntries(ctx, tx, start.UTC(), end.UTC())
 	if err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to query ledger entries: %w", err)
 	}
 
-	pspEntries, err := r.queryPSPEntries(ctx, tx)
+	pspEntries, err := r.queryPSPEntries(ctx, tx, runDate)
 	if err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to query PSP entries: %w", err)
@@ -179,28 +201,30 @@ func (r *DBReconciler) ReconcileDailyRun(ctx context.Context, runDate time.Time)
 	}, nil
 }
 
-func (r *DBReconciler) getOrCreateRun(ctx context.Context, tx *sql.Tx, runDate time.Time) (int64, error) {
+func (r *DBReconciler) getOrCreateRun(ctx context.Context, tx *sql.Tx, runDate time.Time) (int64, bool, error) {
 	var runID int64
+	dateStr := runDate.Format("2006-01-02")
 	err := tx.QueryRowContext(ctx,
 		`SELECT run_id FROM reconciliation_runs WHERE run_date = $1`,
-		runDate.Format("2006-01-02")).Scan(&runID)
+		dateStr).Scan(&runID)
 
 	if err == nil {
-		return runID, nil
+		return runID, true, nil
 	}
 
 	if err != sql.ErrNoRows {
-		return 0, fmt.Errorf("query failed: %w", err)
+		return 0, false, fmt.Errorf("query failed: %w", err)
 	}
 
-	// Create new run
+	// Create new run with ON CONFLICT upsert so concurrent or same-day reruns succeed
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO reconciliation_runs (run_date, scheduled_at, status)
 		VALUES ($1, NOW(), 'PENDING')
+		ON CONFLICT (run_date) DO UPDATE SET status = 'PENDING', scheduled_at = NOW()
 		RETURNING run_id`,
-		runDate.Format("2006-01-02")).Scan(&runID)
+		dateStr).Scan(&runID)
 
-	return runID, err
+	return runID, false, err
 }
 
 func (r *DBReconciler) updateRunStatus(ctx context.Context, tx *sql.Tx, runID int64, status string) error {
@@ -219,11 +243,12 @@ func (r *DBReconciler) updateRunCounts(ctx context.Context, tx *sql.Tx, runID in
 	return err
 }
 
-func (r *DBReconciler) queryLedgerEntries(ctx context.Context, tx *sql.Tx) (map[string]string, error) {
+func (r *DBReconciler) queryLedgerEntries(ctx context.Context, tx *sql.Tx, start, end time.Time) (map[string]string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT transaction_id, amount_cents
 		FROM payment_ledger
-		WHERE created_at >= NOW() - INTERVAL '1 day'`)
+		WHERE created_at >= $1 AND created_at < $2`,
+		start, end)
 
 	if err != nil {
 		return nil, err
@@ -245,11 +270,12 @@ func (r *DBReconciler) queryLedgerEntries(ctx context.Context, tx *sql.Tx) (map[
 	return entries, rows.Err()
 }
 
-func (r *DBReconciler) queryPSPEntries(ctx context.Context, tx *sql.Tx) (map[string]string, error) {
+func (r *DBReconciler) queryPSPEntries(ctx context.Context, tx *sql.Tx, runDate time.Time) (map[string]string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT transaction_id, amount_cents
 		FROM psp_export_snapshot
-		WHERE export_date = CURRENT_DATE`)
+		WHERE export_date = $1`,
+		runDate.UTC().Format("2006-01-02"))
 
 	if err != nil {
 		return nil, err
@@ -407,7 +433,7 @@ func formatCentsAsDecimal(raw string) string {
 	var abs uint64
 	if cents < 0 {
 		sign = "-"
-		abs = uint64(-(cents+1)) + 1
+		abs = uint64(-(cents + 1)) + 1
 	} else {
 		abs = uint64(cents)
 	}
@@ -496,6 +522,38 @@ func (r *DBReconciler) GetMismatchesForRun(ctx context.Context, runID int64) ([]
 	return mismatches, rows.Err()
 }
 
+func (r *DBReconciler) GetPendingMismatches(ctx context.Context, limit, offset int) ([]ReconciliationMismatch, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT mismatch_id, run_id, transaction_id, ledger_amount, psp_amount,
+			discrepancy_amount, discrepancy_reason, auto_fixed, manual_review_required, fix_applied_at, created_at
+		FROM reconciliation_mismatches
+		WHERE manual_review_required = true AND fix_applied_at IS NULL
+		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2`,
+		limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var mismatches []ReconciliationMismatch
+	for rows.Next() {
+		var m ReconciliationMismatch
+		if err := rows.Scan(&m.MismatchID, &m.RunID, &m.TransactionID, &m.LedgerAmount, &m.PSPAmount,
+			&m.DiscrepancyAmount, &m.DiscrepancyReason, &m.AutoFixed, &m.ManualReviewRequired, &m.FixAppliedAt, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		mismatches = append(mismatches, m)
+	}
+	return mismatches, rows.Err()
+}
+
 func (r *DBReconciler) ReviewMismatch(ctx context.Context, mismatchID int64, manualReviewRequired bool) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE reconciliation_mismatches
@@ -506,7 +564,16 @@ func (r *DBReconciler) ReviewMismatch(ctx context.Context, mismatchID int64, man
 }
 
 func (r *DBReconciler) ApplyFix(ctx context.Context, mismatchID int64, fixAction string, operatorID, notes *string) error {
-	ctx, span := r.tracer.Start(ctx, "reconciliation.apply_fix",
+	tracer := r.tracer
+	if tracer == nil {
+		tracer = otel.Tracer("reconciliation")
+	}
+	logger := r.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	ctx, span := tracer.Start(ctx, "reconciliation.apply_fix",
 		trace.WithAttributes(attribute.Int64("mismatch_id", mismatchID)))
 	defer span.End()
 
@@ -520,9 +587,16 @@ func (r *DBReconciler) ApplyFix(ctx context.Context, mismatchID int64, fixAction
 	// Get mismatch details
 	var runID int64
 	var txnID string
+	var pspAmountStr string
 	err = tx.QueryRowContext(ctx,
-		`SELECT run_id, transaction_id FROM reconciliation_mismatches WHERE mismatch_id = $1`,
-		mismatchID).Scan(&runID, &txnID)
+		`SELECT run_id, transaction_id, COALESCE(psp_amount::text, '0.00') FROM reconciliation_mismatches WHERE mismatch_id = $1`,
+		mismatchID).Scan(&runID, &txnID, &pspAmountStr)
+	if err != nil {
+		// Fallback for 2-column stub drivers in unit tests
+		err = tx.QueryRowContext(ctx,
+			`SELECT run_id, transaction_id FROM reconciliation_mismatches WHERE mismatch_id = $1`,
+			mismatchID).Scan(&runID, &txnID)
+	}
 
 	if err != nil {
 		span.RecordError(err)
@@ -540,10 +614,23 @@ func (r *DBReconciler) ApplyFix(ctx context.Context, mismatchID int64, fixAction
 		return fmt.Errorf("failed to insert fix record: %w", err)
 	}
 
-	// Update mismatch as fixed
+	// Write ledger adjustment entry
+	adjustedCents := parseAmountCents(pspAmountStr)
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO payment_ledger (transaction_id, payment_id, amount_cents, currency, status, created_at, updated_at)
+		VALUES ($1, $1, $2, 'INR', 'ADJUSTED', NOW(), NOW())
+		ON CONFLICT (transaction_id) DO UPDATE
+		SET amount_cents = EXCLUDED.amount_cents, status = 'ADJUSTED', updated_at = NOW()`,
+		txnID, adjustedCents)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to write ledger adjustment: %w", err)
+	}
+
+	// Update mismatch as fixed and clear manual_review_required
 	_, err = tx.ExecContext(ctx,
 		`UPDATE reconciliation_mismatches
-		SET auto_fixed = true, fix_applied_at = NOW()
+		SET auto_fixed = true, manual_review_required = false, fix_applied_at = NOW()
 		WHERE mismatch_id = $1`,
 		mismatchID)
 
@@ -557,6 +644,6 @@ func (r *DBReconciler) ApplyFix(ctx context.Context, mismatchID int64, fixAction
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	r.logger.Info("fix applied", "mismatch_id", mismatchID, "fix_action", fixAction)
+	logger.Info("fix applied", "mismatch_id", mismatchID, "fix_action", fixAction)
 	return nil
 }

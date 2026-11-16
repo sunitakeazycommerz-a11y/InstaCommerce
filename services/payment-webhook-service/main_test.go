@@ -143,7 +143,7 @@ func TestLoadConfig_DefaultTolerance(t *testing.T) {
 	t.Setenv("KAFKA_BROKERS", "localhost:9092")
 
 	cfg := loadConfig()
-	expectedTolerance := 30 * time.Second
+	expectedTolerance := 300 * time.Second
 	if cfg.SignatureTolerance != expectedTolerance {
 		t.Errorf("expected default SignatureTolerance to be %v, got %v", expectedTolerance, cfg.SignatureTolerance)
 	}
@@ -166,8 +166,8 @@ func TestWebhookHandler_PublishesWebhookEventEnvelope(t *testing.T) {
 	}
 
 	msg := writer.messages[0]
-	if string(msg.Key) != "evt_envelope_1" {
-		t.Errorf("expected Kafka key evt_envelope_1, got %q", string(msg.Key))
+	if string(msg.Key) != "pi_123" {
+		t.Errorf("expected Kafka key pi_123, got %q", string(msg.Key))
 	}
 
 	var envelope handler.WebhookEvent
@@ -254,8 +254,8 @@ func TestWebhookHandler_GuardsAndFallbacks(t *testing.T) {
 		rawPayload := []byte(`{"id":"evt_stale","type":"payment_intent.succeeded"}`)
 		rec := sendSignedWebhook(t, h, secret, time.Now().Unix()-35, rawPayload)
 
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 Bad Request, got %d", rec.Code)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 Unauthorized, got %d", rec.Code)
 		}
 		if len(writer.messages) != 0 {
 			t.Errorf("expected 0 published messages, got %d", len(writer.messages))

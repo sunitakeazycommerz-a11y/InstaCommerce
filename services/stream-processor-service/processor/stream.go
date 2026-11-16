@@ -2,8 +2,11 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,11 +16,12 @@ import (
 
 // StreamConfig holds configuration for bounded channel stream processing with backpressure.
 type StreamConfig struct {
-	BufferSize     int           // Total capacity of bounded channel (e.g. 1000)
-	HighWatermark  int           // Capacity threshold to pause consumer (e.g. 800 or 80%)
-	LowWatermark   int           // Capacity threshold to resume consumer (e.g. 300 or 30%)
-	WorkerCount    int           // Number of concurrent workers (e.g. 10)
-	PauseCheckWait time.Duration // Interval to check queue depth when paused (e.g. 10ms)
+	BufferSize     int                                               // Total capacity of bounded channel (e.g. 1000)
+	HighWatermark  int                                               // Capacity threshold to pause consumer (e.g. 800 or 80%)
+	LowWatermark   int                                               // Capacity threshold to resume consumer (e.g. 300 or 30%)
+	WorkerCount    int                                               // Number of concurrent workers (e.g. 10)
+	PauseCheckWait time.Duration                                     // Interval to check queue depth when paused (e.g. 10ms)
+	DLQHandler     func(context.Context, kafka.Message, error) error // Optional DLQ handler for failed messages
 }
 
 // DefaultStreamConfig returns production defaults: 1000 buffer, pause at 80%, resume at 30%, 10 workers.
@@ -31,6 +35,25 @@ func DefaultStreamConfig() StreamConfig {
 	}
 }
 
+// ExtractMessageEventID extracts event_id / eventId / id from a Kafka message JSON envelope.
+func ExtractMessageEventID(msg kafka.Message) string {
+	if len(msg.Value) == 0 {
+		return ""
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(msg.Value, &raw); err != nil || raw == nil {
+		return ""
+	}
+	for _, k := range []string{"event_id", "eventId", "id"} {
+		if v, ok := raw[k].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
 // StreamDispatcher orchestrates bounded message queuing, worker concurrency, backpressure, and monotonic per-partition offset commits.
 type StreamDispatcher struct {
 	cfg         StreamConfig
@@ -42,6 +65,7 @@ type StreamDispatcher struct {
 	handler     func(context.Context, kafka.Message) error
 	committer   func(context.Context, kafka.Message) error
 	tracker     *offsetTracker
+	stopOnce    sync.Once
 	wg          sync.WaitGroup
 }
 
@@ -73,6 +97,7 @@ type partitionTracker struct {
 	mu            sync.Mutex
 	queue         []*trackedOffset
 	failedSeen    bool
+	failedOffset  int64
 	readyToCommit *kafka.Message
 	committing    bool
 }
@@ -105,11 +130,27 @@ func (ot *offsetTracker) enqueue(msg kafka.Message) *trackedOffset {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 	if pt.failedSeen {
-		return nil
+		if msg.Offset <= pt.failedOffset {
+			pt.resetFailedLocked()
+		} else {
+			return nil
+		}
 	}
 	entry := &trackedOffset{msg: msg, status: offsetPending}
 	pt.queue = append(pt.queue, entry)
 	return entry
+}
+
+func (pt *partitionTracker) resetFailedLocked() {
+	pt.failedSeen = false
+	pt.failedOffset = 0
+	for i := range pt.queue {
+		if pt.queue[i] != nil {
+			pt.queue[i].discarded = true
+			pt.queue[i] = nil
+		}
+	}
+	pt.queue = pt.queue[:0]
 }
 
 func (ot *offsetTracker) cancel(msg kafka.Message, entry *trackedOffset) {
@@ -152,6 +193,7 @@ func (ot *offsetTracker) resolve(
 	if !succeeded {
 		entry.status = offsetFailed
 		pt.failedSeen = true
+		pt.failedOffset = msg.Offset
 		for i, item := range pt.queue {
 			if item == entry {
 				for j := i + 1; j < len(pt.queue); j++ {
@@ -162,10 +204,37 @@ func (ot *offsetTracker) resolve(
 				break
 			}
 		}
-		pt.mu.Unlock()
-		return nil
+		return pt.commitReady(ctx, commitFn)
 	}
 	entry.status = offsetCompleted
+	return pt.commitReady(ctx, commitFn)
+}
+
+func (ot *offsetTracker) ackFailed(
+	ctx context.Context,
+	msg kafka.Message,
+	commitFn func(context.Context, kafka.Message) error,
+) error {
+	pt := ot.partition(msg)
+	pt.mu.Lock()
+	for _, item := range pt.queue {
+		if item != nil && item.msg.Offset == msg.Offset && item.status == offsetFailed {
+			item.status = offsetCompleted
+			break
+		}
+	}
+	hasFailed := false
+	for _, item := range pt.queue {
+		if item != nil && item.status == offsetFailed {
+			hasFailed = true
+			pt.failedOffset = item.msg.Offset
+			break
+		}
+	}
+	pt.failedSeen = hasFailed
+	if !hasFailed {
+		pt.failedOffset = 0
+	}
 	return pt.commitReady(ctx, commitFn)
 }
 
@@ -177,14 +246,19 @@ func (ot *offsetTracker) skip(
 	pt := ot.partition(msg)
 	pt.mu.Lock()
 	if pt.failedSeen {
-		pt.mu.Unlock()
-		return nil
+		if msg.Offset <= pt.failedOffset {
+			pt.resetFailedLocked()
+		} else {
+			pt.mu.Unlock()
+			return nil
+		}
 	}
 	entry := &trackedOffset{msg: msg, status: offsetCompleted}
 	pt.queue = append(pt.queue, entry)
 	return pt.commitReady(ctx, commitFn)
 }
 
+// commitReady expects pt.mu held on entry and always unlocks it before returning.
 func (pt *partitionTracker) commitReady(
 	ctx context.Context,
 	commitFn func(context.Context, kafka.Message) error,
@@ -247,6 +321,16 @@ func (pt *partitionTracker) takeReadyCommit() (kafka.Message, bool) {
 	return msg, true
 }
 
+func (pt *partitionTracker) restoreReadyCommit(msg kafka.Message) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if pt.readyToCommit == nil || pt.readyToCommit.Offset < msg.Offset {
+		cp := msg
+		pt.readyToCommit = &cp
+	}
+	pt.committing = false
+}
+
 func (pt *partitionTracker) flushCommits(ctx context.Context, commitFn func(context.Context, kafka.Message) error) error {
 	completed := false
 	defer func() {
@@ -264,7 +348,11 @@ func (pt *partitionTracker) flushCommits(ctx context.Context, commitFn func(cont
 			completed = true
 			return lastErr
 		}
-		lastErr = commitFn(ctx, msg)
+		if err := commitFn(ctx, msg); err != nil {
+			pt.restoreReadyCommit(msg)
+			completed = true
+			return err
+		}
 	}
 }
 
@@ -314,21 +402,23 @@ func (sd *StreamDispatcher) Start(ctx context.Context) {
 
 // Stop closes the message channel and waits for workers to drain remaining items.
 func (sd *StreamDispatcher) Stop() {
-	close(sd.ch)
+	sd.stopOnce.Do(func() {
+		close(sd.ch)
+	})
 	sd.wg.Wait()
 }
 
-func (sd *StreamDispatcher) worker(ctx context.Context, id int) {
+func (sd *StreamDispatcher) worker(ctx context.Context, _ int) {
 	defer sd.wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case qm, ok := <-sd.ch:
-			if !ok {
-				return
-			}
-			sd.processWithRecovery(ctx, qm)
+	for qm := range sd.ch {
+		workCtx := ctx
+		var cancel context.CancelFunc
+		if workCtx.Err() != nil {
+			workCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		}
+		sd.processWithRecovery(workCtx, qm)
+		if cancel != nil {
+			cancel()
 		}
 	}
 }
@@ -339,28 +429,48 @@ func (sd *StreamDispatcher) processWithRecovery(ctx context.Context, qm queuedMe
 }
 
 func (sd *StreamDispatcher) runHandlerSafely(ctx context.Context, msg kafka.Message) (succeeded bool) {
+	var handlerErr error
 	defer func() {
 		if r := recover(); r != nil {
-			succeeded = false
+			handlerErr = fmt.Errorf("panic: %v", r)
 			sd.logger.Error("recovered from panic in stream worker",
 				slog.Any("panic", r),
 				slog.String("topic", msg.Topic),
 				slog.Int("partition", msg.Partition),
 				slog.Int64("offset", msg.Offset),
 			)
+			if sd.cfg.DLQHandler != nil {
+				if dlqErr := sd.cfg.DLQHandler(ctx, msg, handlerErr); dlqErr == nil {
+					succeeded = true
+					return
+				}
+			}
+			succeeded = false
 		}
 	}()
 
 	if err := sd.handler(ctx, msg); err != nil {
+		handlerErr = err
 		sd.logger.Error("stream handler error",
 			slog.String("topic", msg.Topic),
 			slog.Int("partition", msg.Partition),
 			slog.Int64("offset", msg.Offset),
 			slog.String("error", err.Error()),
 		)
+		if sd.cfg.DLQHandler != nil {
+			if dlqErr := sd.cfg.DLQHandler(ctx, msg, err); dlqErr == nil {
+				return true
+			}
+		}
 		return false
 	}
 	return true
+}
+
+// AckFailedOffset marks a previously failed offset as handled (e.g., sent to DLQ)
+// so partition offset commits can advance past it.
+func (sd *StreamDispatcher) AckFailedOffset(ctx context.Context, msg kafka.Message) error {
+	return sd.tracker.ackFailed(ctx, msg, sd.commit)
 }
 
 func (sd *StreamDispatcher) commit(ctx context.Context, msg kafka.Message) error {

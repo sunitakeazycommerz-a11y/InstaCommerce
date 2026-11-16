@@ -14,10 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/instacommerce/go-shared/pkg/auth"
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/instacommerce/location-ingestion-service/handler"
@@ -31,8 +33,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.25.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -44,12 +46,15 @@ const (
 	defaultKafkaBuffer       = 2000
 	defaultRedisAddr         = "localhost:6379"
 	defaultRedisKeyPrefix    = "rider:location:"
-	defaultRedisTTL          = 60 * time.Second
+	defaultRedisTTL          = 10 * time.Minute
 	defaultMaxBodyBytes      = 1 << 20
 	defaultWebSocketRead     = 1 << 20
 	defaultShutdownTimeout   = 15 * time.Second
 	defaultProcessTimeout    = 3 * time.Second
 )
+
+// ErrOutOfOrderTimestamp is returned when an incoming GPS update has a timestamp <= stored timestamp.
+var ErrOutOfOrderTimestamp = errors.New("out of order timestamp")
 
 type Config struct {
 	Port              string
@@ -129,14 +134,11 @@ func (h H3Stub) Index(lat, lng float64) string {
 	if !h.enabled {
 		return ""
 	}
-	return handler.LatLngToH3Res8(lat, lng)
-}
-
-func (h H3Stub) GeofenceHit(lat, lng float64) bool {
-	if !h.enabled {
-		return false
+	idx := handler.LatLngToH3Res8(lat, lng)
+	if h.resolution > 0 && h.resolution != 8 {
+		return fmt.Sprintf("res%d:%s", h.resolution, idx)
 	}
-	return false
+	return idx
 }
 
 type KafkaBatcher struct {
@@ -149,15 +151,43 @@ type KafkaBatcher struct {
 	metrics      *Metrics
 }
 
+type kafkaWriterProducer struct {
+	writer *kafka.Writer
+}
+
+func (p *kafkaWriterProducer) PublishBatch(ctx context.Context, topic string, messages []handler.KafkaMessage) error {
+	if p == nil || p.writer == nil {
+		return errors.New("kafka disabled")
+	}
+	kafkaMsgs := make([]kafka.Message, 0, len(messages))
+	for _, m := range messages {
+		kafkaMsgs = append(kafkaMsgs, kafka.Message{
+			Key:   m.Key,
+			Value: m.Value,
+			Time:  time.Now().UTC(),
+		})
+	}
+	if len(kafkaMsgs) == 0 {
+		return nil
+	}
+	return p.writer.WriteMessages(ctx, kafkaMsgs...)
+}
+
 type IngestService struct {
-	cfg         Config
-	logger      *slog.Logger
-	metrics     *Metrics
-	redis       *redis.Client
-	batcher     *KafkaBatcher
-	tracer      trace.Tracer
-	h3          H3Stub
-	rateLimiter *handler.ConnectionRateLimiter
+	cfg          Config
+	logger       *slog.Logger
+	metrics      *Metrics
+	redis        *redis.Client
+	batcher      *KafkaBatcher
+	tracer       trace.Tracer
+	h3           H3Stub
+	rateLimiter  *handler.ConnectionRateLimiter
+	geofencer    *handler.GeofenceChecker
+	geofencePub  handler.GeofencePublisher
+	wsWG         sync.WaitGroup
+	wsMu         sync.Mutex
+	wsConns      map[*websocket.Conn]struct{}
+	shuttingDown atomic.Bool
 }
 
 func main() {
@@ -182,6 +212,8 @@ func main() {
 	})
 
 	var kafkaWriter *kafka.Writer
+	var geofenceWriter *kafka.Writer
+	var geofencePub handler.GeofencePublisher
 	if len(cfg.KafkaBrokers) > 0 {
 		kafkaWriter = &kafka.Writer{
 			Addr:                   kafka.TCP(cfg.KafkaBrokers...),
@@ -191,6 +223,19 @@ func main() {
 			AllowAutoTopicCreation: true,
 			WriteTimeout:           cfg.KafkaWriteTimeout,
 		}
+		geofenceWriter = &kafka.Writer{
+			Addr:                   kafka.TCP(cfg.KafkaBrokers...),
+			Topic:                  handler.DefaultGeofenceTopic,
+			Balancer:               &kafka.Hash{},
+			RequiredAcks:           kafka.RequireAll,
+			AllowAutoTopicCreation: true,
+			WriteTimeout:           cfg.KafkaWriteTimeout,
+		}
+		geofencePub = handler.NewKafkaGeofencePublisher(
+			&kafkaWriterProducer{writer: geofenceWriter},
+			handler.DefaultGeofenceTopic,
+			logger,
+		)
 	}
 
 	batcher := &KafkaBatcher{
@@ -202,6 +247,12 @@ func main() {
 		logger:       logger,
 		metrics:      metrics,
 	}
+
+	h3Res := cfg.H3Resolution
+	if h3Res <= 0 {
+		h3Res = 8
+	}
+	geofencer := handler.NewGeofenceChecker(h3Res)
 
 	service := &IngestService{
 		cfg:     cfg,
@@ -215,6 +266,9 @@ func main() {
 			resolution: cfg.H3Resolution,
 		},
 		rateLimiter: handler.NewConnectionRateLimiter(100.0, 200.0, 20000),
+		geofencer:   geofencer,
+		geofencePub: geofencePub,
+		wsConns:     make(map[*websocket.Conn]struct{}),
 	}
 	if cfg.H3Resolution > 0 {
 		logger.Info("h3 geofence stub enabled", "resolution", cfg.H3Resolution)
@@ -250,18 +304,13 @@ func main() {
 	)
 	healthHandler.SetReady(true)
 
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	healthHandler.RegisterRoutes(mux)
-	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
-	mux.HandleFunc("/ingest/location", service.handleHTTPIngest)
-	mux.HandleFunc("/ingest/ws", service.handleWSIngest)
+	mux := newHTTPMux(service, healthHandler, logger)
 
-	handler := otelhttp.NewHandler(correlation.Middleware(mux), "http.server")
+	wrappedHandler := otelhttp.NewHandler(correlation.Middleware(mux), "http.server")
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           handler,
+		Handler:           wrappedHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -292,15 +341,37 @@ func main() {
 
 	shutdownServer(server, healthHandler, cfg.ShutdownTimeout, logger)
 
+	// Close active WebSocket connections and wait for their goroutines BEFORE
+	// draining the Kafka batcher or closing Kafka/Redis clients.
+	service.CloseWebSockets()
+
 	cancel()
 	wg.Wait()
 
 	if kafkaWriter != nil {
 		_ = kafkaWriter.Close()
 	}
+	if geofenceWriter != nil {
+		_ = geofenceWriter.Close()
+	}
 	_ = redisClient.Close()
 
 	logger.Info("service stopped")
+}
+
+func newHTTPMux(service *IngestService, healthHandler *health.Handler, logger *slog.Logger) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	healthHandler.RegisterRoutes(mux)
+	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
+
+	authMiddleware := auth.NewInternalAuthMiddleware(logger)
+	mux.Handle("/ingest", authMiddleware.Wrap(http.HandlerFunc(service.handleHTTPIngest)))
+	mux.Handle("/ingest/location", authMiddleware.Wrap(http.HandlerFunc(service.handleHTTPIngest)))
+	mux.Handle("/ingest/batch", authMiddleware.Wrap(http.HandlerFunc(service.handleBatchIngest)))
+	mux.Handle("/batch", authMiddleware.Wrap(http.HandlerFunc(service.handleBatchIngest)))
+	mux.Handle("/ingest/ws", authMiddleware.Wrap(http.HandlerFunc(service.handleWSIngest)))
+	return mux
 }
 
 func loadConfig() Config {
@@ -310,6 +381,10 @@ func loadConfig() Config {
 	}
 	kafkaBatchSize := atLeast(envOrDefaultInt("KAFKA_BATCH_SIZE", defaultKafkaBatchSize), 1)
 	kafkaBuffer := atLeast(envOrDefaultInt("KAFKA_BUFFER", defaultKafkaBuffer), 1)
+	redisTTL := envOrDefaultDuration("REDIS_TTL", defaultRedisTTL)
+	if redisTTL <= 0 {
+		redisTTL = defaultRedisTTL
+	}
 	return Config{
 		Port:              port,
 		ServiceName:       "location-ingestion-service",
@@ -323,7 +398,7 @@ func loadConfig() Config {
 		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
 		RedisDB:           envOrDefaultInt("REDIS_DB", 0),
 		RedisKeyPrefix:    envOrDefault("REDIS_KEY_PREFIX", defaultRedisKeyPrefix),
-		RedisTTL:          envOrDefaultDuration("REDIS_TTL", defaultRedisTTL),
+		RedisTTL:          redisTTL,
 		MaxBodyBytes:      int64(envOrDefaultInt("MAX_BODY_BYTES", defaultMaxBodyBytes)),
 		WebSocketReadMax:  int64(envOrDefaultInt("WS_READ_LIMIT", defaultWebSocketRead)),
 		ShutdownTimeout:   envOrDefaultDuration("SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
@@ -334,8 +409,8 @@ func loadConfig() Config {
 }
 
 func newLogger(cfg Config) *slog.Logger {
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})
-	logger := slog.New(handler).With("service", cfg.ServiceName)
+	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})
+	logger := slog.New(h).With("service", cfg.ServiceName)
 	slog.SetDefault(logger)
 	return logger
 }
@@ -369,27 +444,85 @@ func initTracing(ctx context.Context, cfg Config, logger *slog.Logger) *sdktrace
 		propagation.Baggage{},
 	))
 
+	res, resErr := resource.Merge(
+		resource.Default(),
+		resource.NewSchemaless(semconv.ServiceName(cfg.ServiceName)),
+	)
+	if resErr != nil {
+		res = resource.NewSchemaless(semconv.ServiceName(cfg.ServiceName))
+	}
+
 	exporter, err := otlptracegrpc.New(ctx)
 	if err != nil {
 		logger.Warn("otel exporter init failed, tracing disabled", "error", err)
-		tp := sdktrace.NewTracerProvider(
-			sdktrace.WithResource(resource.NewWithAttributes(
-				semconv.SchemaURL,
-				semconv.ServiceName(cfg.ServiceName),
-			)),
-		)
+		tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res))
 		otel.SetTracerProvider(tp)
 		return tp
 	}
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(cfg.ServiceName),
-		)),
+		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(tp)
 	return tp
+}
+
+func (s *IngestService) recordDrop(source, reason string) {
+	if s != nil && s.metrics != nil && s.metrics.dropTotal != nil {
+		s.metrics.dropTotal.WithLabelValues(source, reason).Inc()
+	}
+}
+
+func (s *IngestService) recordIngest(source string, dur time.Duration) {
+	if s != nil && s.metrics != nil {
+		if s.metrics.ingestTotal != nil {
+			s.metrics.ingestTotal.WithLabelValues(source).Inc()
+		}
+		if s.metrics.latency != nil {
+			s.metrics.latency.WithLabelValues(source).Observe(dur.Seconds())
+		}
+	}
+}
+
+func (s *IngestService) registerWSConn(conn *websocket.Conn) bool {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	if s.shuttingDown.Load() {
+		return false
+	}
+	if s.wsConns == nil {
+		s.wsConns = make(map[*websocket.Conn]struct{})
+	}
+	s.wsConns[conn] = struct{}{}
+	return true
+}
+
+func (s *IngestService) unregisterWSConn(conn *websocket.Conn) {
+	s.wsMu.Lock()
+	delete(s.wsConns, conn)
+	s.wsMu.Unlock()
+}
+
+// CloseWebSockets closes all active WebSocket connections and blocks until all
+// WebSocket handler goroutines have exited.
+func (s *IngestService) CloseWebSockets() {
+	s.shuttingDown.Store(true)
+	s.wsMu.Lock()
+	conns := make([]*websocket.Conn, 0, len(s.wsConns))
+	for conn := range s.wsConns {
+		conns = append(conns, conn)
+	}
+	s.wsMu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}
+	s.wsWG.Wait()
 }
 
 func (s *IngestService) handleHTTPIngest(w http.ResponseWriter, r *http.Request) {
@@ -399,23 +532,39 @@ func (s *IngestService) handleHTTPIngest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
+	maxBytes := s.cfg.MaxBodyBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxBodyBytes
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
 	var input LocationInput
 	if err := decoder.Decode(&input); err != nil {
-		s.metrics.dropTotal.WithLabelValues("http", "decode").Inc()
+		s.recordDrop("http", "decode")
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid JSON payload")
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		s.metrics.dropTotal.WithLabelValues("http", "decode").Inc()
+		s.recordDrop("http", "decode")
 		writeError(w, http.StatusBadRequest, "payload must contain a single JSON object")
 		return
 	}
 
 	if err := s.processInput(r.Context(), input, "http"); err != nil {
+		if errors.Is(err, ErrOutOfOrderTimestamp) || errors.Is(err, handler.ErrOutOfOrderPing) {
+			writeJSON(w, http.StatusOK, map[string]string{
+				"status": "ignored",
+				"reason": "out_of_order_timestamp",
+			})
+			return
+		}
 		status := http.StatusServiceUnavailable
 		if errors.Is(err, errInvalidPayload) {
 			status = http.StatusBadRequest
@@ -427,15 +576,91 @@ func (s *IngestService) handleHTTPIngest(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
+func (s *IngestService) handleBatchIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	maxBytes := s.cfg.MaxBodyBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxBodyBytes
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.recordDrop("http", "decode")
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
+	var inputs []LocationInput
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		if err := json.Unmarshal(trimmed, &inputs); err != nil {
+			s.recordDrop("http", "decode")
+			writeError(w, http.StatusBadRequest, "invalid JSON array payload")
+			return
+		}
+	} else {
+		var wrapper struct {
+			Updates []LocationInput `json:"updates"`
+		}
+		if err := json.Unmarshal(trimmed, &wrapper); err != nil {
+			s.recordDrop("http", "decode")
+			writeError(w, http.StatusBadRequest, "invalid JSON batch payload")
+			return
+		}
+		inputs = wrapper.Updates
+	}
+
+	if len(inputs) == 0 {
+		writeError(w, http.StatusBadRequest, "batch must contain at least one update")
+		return
+	}
+
+	accepted := 0
+	ignored := 0
+	failed := 0
+	for _, input := range inputs {
+		if err := s.processInput(r.Context(), input, "http"); err != nil {
+			if errors.Is(err, ErrOutOfOrderTimestamp) || errors.Is(err, handler.ErrOutOfOrderPing) {
+				ignored++
+				continue
+			}
+			failed++
+			continue
+		}
+		accepted++
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":   "accepted",
+		"accepted": accepted,
+		"ignored":  ignored,
+		"failed":   failed,
+	})
+}
+
 func (s *IngestService) handleWSIngest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if s.shuttingDown.Load() {
+		writeError(w, http.StatusServiceUnavailable, "service shutting down")
+		return
+	}
 
 	if s.rateLimiter != nil && !s.rateLimiter.Allow() {
-		s.metrics.dropTotal.WithLabelValues("websocket", "rate_limit").Inc()
+		s.recordDrop("websocket", "rate_limit")
 		w.Header().Set("Retry-After", "5")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -456,23 +681,41 @@ func (s *IngestService) handleWSIngest(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		s.logger.Error("websocket upgrade failed", "error", err)
+		if s.logger != nil {
+			s.logger.Error("websocket upgrade failed", "error", err)
+		}
 		return
 	}
+	if !s.registerWSConn(conn) {
+		_ = conn.Close()
+		return
+	}
+
+	s.wsWG.Add(1)
+	defer s.wsWG.Done()
+	defer s.unregisterWSConn(conn)
 	defer conn.Close()
 
-	conn.SetReadLimit(s.cfg.WebSocketReadMax)
+	s.serveWSConn(r.Context(), conn)
+}
+
+func (s *IngestService) serveWSConn(ctx context.Context, conn *websocket.Conn) {
+	readMax := s.cfg.WebSocketReadMax
+	if readMax <= 0 {
+		readMax = defaultWebSocketRead
+	}
+	conn.SetReadLimit(readMax)
 	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
 
-	ctx := r.Context()
 	pingDone := make(chan struct{})
-	defer close(pingDone)
-
+	var pingWG sync.WaitGroup
+	pingWG.Add(1)
 	go func() {
+		defer pingWG.Done()
 		ticker := time.NewTicker(25 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -487,6 +730,10 @@ func (s *IngestService) handleWSIngest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+	defer func() {
+		close(pingDone)
+		pingWG.Wait()
+	}()
 
 	for {
 		select {
@@ -494,13 +741,18 @@ func (s *IngestService) handleWSIngest(w http.ResponseWriter, r *http.Request) {
 			return
 		default:
 		}
+		if s.shuttingDown.Load() {
+			return
+		}
 
 		messageType, payload, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				return
 			}
-			s.logger.Warn("websocket read failed", "error", err)
+			if !s.shuttingDown.Load() && s.logger != nil {
+				s.logger.Warn("websocket read failed", "error", err)
+			}
 			return
 		}
 		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
@@ -511,22 +763,24 @@ func (s *IngestService) handleWSIngest(w http.ResponseWriter, r *http.Request) {
 		decoder := json.NewDecoder(bytes.NewReader(payload))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&input); err != nil {
-			s.metrics.dropTotal.WithLabelValues("websocket", "decode").Inc()
+			s.recordDrop("websocket", "decode")
 			continue
 		}
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			s.metrics.dropTotal.WithLabelValues("websocket", "decode").Inc()
+			s.recordDrop("websocket", "decode")
 			continue
 		}
 
 		if err := s.processInput(ctx, input, "websocket"); err != nil {
-			if !errors.Is(err, errInvalidPayload) {
+			if !errors.Is(err, errInvalidPayload) &&
+				!errors.Is(err, ErrOutOfOrderTimestamp) &&
+				!errors.Is(err, handler.ErrOutOfOrderPing) &&
+				s.logger != nil {
 				s.logger.Warn("websocket ingestion failed", "error", err)
 			}
 		}
 	}
 }
-
 
 var errInvalidPayload = errors.New("invalid payload")
 
@@ -534,38 +788,94 @@ func (s *IngestService) processInput(ctx context.Context, input LocationInput, s
 	start := time.Now()
 	update, err := normalizeLocation(input)
 	if err != nil {
-		s.metrics.dropTotal.WithLabelValues(source, "validation").Inc()
+		s.recordDrop(source, "validation")
 		return err
 	}
 
-	processCtx, cancel := context.WithTimeout(ctx, s.cfg.ProcessTimeout)
+	timeout := s.cfg.ProcessTimeout
+	if timeout <= 0 {
+		timeout = defaultProcessTimeout
+	}
+	processCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	if s.h3.enabled {
 		update.H3Index = s.h3.Index(update.Lat, update.Lng)
-		update.Geofence = s.h3.GeofenceHit(update.Lat, update.Lng)
 	}
 	update.Source = source
 
-	processCtx, span := s.tracer.Start(processCtx, "ingest.process")
-	defer span.End()
-
-	if err := s.storeLatest(processCtx, update); err != nil {
-		s.metrics.dropTotal.WithLabelValues(source, "redis").Inc()
-		span.RecordError(err)
-		s.logger.Error("redis store failed", "error", err, "rider_id", update.RiderID)
-		return fmt.Errorf("redis store failed")
+	if s.geofencer != nil {
+		speedKmh := 0.0
+		if update.Speed != nil {
+			speedKmh = *update.Speed
+		}
+		headingDeg := 0.0
+		if update.Heading != nil {
+			headingDeg = *update.Heading
+		}
+		accuracyM := 0.0
+		if update.Accuracy != nil {
+			accuracyM = *update.Accuracy
+		}
+		handlerUpdate := handler.LocationUpdate{
+			RiderID:   update.RiderID,
+			Lat:       update.Lat,
+			Lng:       update.Lng,
+			Speed:     speedKmh,
+			Heading:   headingDeg,
+			Accuracy:  accuracyM,
+			Timestamp: update.Timestamp,
+			H3Index:   update.H3Index,
+		}
+		events := s.geofencer.Check(handlerUpdate)
+		if len(events) > 0 {
+			update.Geofence = true
+			if s.geofencePub != nil {
+				for _, ev := range events {
+					env := ev.ToEnvelope(update.Lat, update.Lng)
+					env.CorrelationID = correlation.FromContext(processCtx)
+					if pubErr := s.geofencePub.PublishGeofenceEvent(processCtx, env); pubErr != nil && s.logger != nil {
+						s.logger.Warn("failed to publish geofence event",
+							"rider_id", update.RiderID, "event_type", ev.EventType, "error", pubErr)
+					}
+				}
+			}
+		}
 	}
 
-	if err := s.batcher.Enqueue(update); err != nil {
-		s.metrics.dropTotal.WithLabelValues(source, "enqueue").Inc()
-		span.RecordError(err)
-		s.logger.Error("kafka enqueue failed", "error", err, "rider_id", update.RiderID)
-		return fmt.Errorf("kafka enqueue failed")
+	if s.tracer != nil {
+		var span trace.Span
+		processCtx, span = s.tracer.Start(processCtx, "ingest.process")
+		defer span.End()
 	}
 
-	s.metrics.ingestTotal.WithLabelValues(source).Inc()
-	s.metrics.latency.WithLabelValues(source).Observe(time.Since(start).Seconds())
+	if s.redis != nil {
+		if err := s.storeLatest(processCtx, update); err != nil {
+			if errors.Is(err, ErrOutOfOrderTimestamp) {
+				s.recordDrop(source, "out_of_order")
+				return err
+			}
+			s.recordDrop(source, "redis")
+			trace.SpanFromContext(processCtx).RecordError(err)
+			if s.logger != nil {
+				s.logger.Error("redis store failed", "error", err, "rider_id", update.RiderID)
+			}
+			return fmt.Errorf("redis store failed: %w", err)
+		}
+	}
+
+	if s.batcher != nil {
+		if err := s.batcher.Enqueue(update); err != nil {
+			s.recordDrop(source, "enqueue")
+			trace.SpanFromContext(processCtx).RecordError(err)
+			if s.logger != nil {
+				s.logger.Error("kafka enqueue failed", "error", err, "rider_id", update.RiderID)
+			}
+			return fmt.Errorf("kafka enqueue failed: %w", err)
+		}
+	}
+
+	s.recordIngest(source, time.Since(start))
 	return nil
 }
 
@@ -593,10 +903,14 @@ func normalizeLocation(input LocationInput) (LocationUpdate, error) {
 	}
 
 	var ts time.Time
+	now := time.Now().UTC()
 	if input.Timestamp == nil || *input.Timestamp <= 0 {
-		ts = time.Now().UTC()
+		ts = now
 	} else {
 		ts = time.UnixMilli(*input.Timestamp).UTC()
+		if ts.After(now.Add(1 * time.Minute)) {
+			return LocationUpdate{}, fmt.Errorf("%w: timestamp too far in the future", errInvalidPayload)
+		}
 	}
 
 	return LocationUpdate{
@@ -616,9 +930,13 @@ func (s *IngestService) storeLatest(ctx context.Context, update LocationUpdate) 
 	existingMs, err := s.redis.HGet(ctx, key, "timestamp_ms").Int64()
 	if err == nil && existingMs > 0 {
 		if update.Timestamp.UnixMilli() <= existingMs {
-			s.metrics.dropTotal.WithLabelValues(update.Source, "out_of_order").Inc()
-			return fmt.Errorf("out of order ping: %d <= %d", update.Timestamp.UnixMilli(), existingMs)
+			return fmt.Errorf("%w: %d <= %d", ErrOutOfOrderTimestamp, update.Timestamp.UnixMilli(), existingMs)
 		}
+	}
+
+	var oldH3 string
+	if update.H3Index != "" {
+		oldH3, _ = s.redis.HGet(ctx, key, "h3_index").Result()
 	}
 
 	fields := map[string]any{
@@ -639,20 +957,23 @@ func (s *IngestService) storeLatest(ctx context.Context, update LocationUpdate) 
 		fields["h3_index"] = update.H3Index
 	}
 
-	if err := s.redis.HSet(ctx, key, fields).Err(); err != nil {
-		return err
-	}
-	if s.cfg.RedisTTL > 0 {
-		if err := s.redis.Expire(ctx, key, s.cfg.RedisTTL).Err(); err != nil {
-			return err
-		}
+	ttl := s.cfg.RedisTTL
+	if ttl <= 0 {
+		ttl = defaultRedisTTL
 	}
 
+	pipe := s.redis.Pipeline()
+	pipe.HSet(ctx, key, fields)
+	pipe.Expire(ctx, key, ttl)
 	if update.H3Index != "" {
-		_ = s.redis.SAdd(ctx, "riders:h3:"+update.H3Index, update.RiderID).Err()
-		_ = s.redis.Expire(ctx, "riders:h3:"+update.H3Index, s.cfg.RedisTTL*2).Err()
+		if oldH3 != "" && oldH3 != update.H3Index {
+			pipe.SRem(ctx, "riders:h3:"+oldH3, update.RiderID)
+		}
+		pipe.SAdd(ctx, "riders:h3:"+update.H3Index, update.RiderID)
+		pipe.Expire(ctx, "riders:h3:"+update.H3Index, ttl*2)
 	}
-	return nil
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 func (b *KafkaBatcher) Enqueue(update LocationUpdate) error {
@@ -676,9 +997,28 @@ func (b *KafkaBatcher) Run(ctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
-		if err := b.writeBatch(ctx, batch); err != nil {
-			b.logger.Warn("kafka batch write failed", "error", err, "count", len(batch))
-			b.metrics.dropTotal.WithLabelValues("kafka", "write").Add(float64(len(batch)))
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			err = b.writeBatch(ctx, batch)
+			if err == nil {
+				break
+			}
+			if attempt < 2 {
+				select {
+				case <-ctx.Done():
+					// Best-effort bounded retry on final drain using short sleep.
+					time.Sleep(50 * time.Millisecond)
+				case <-time.After(time.Duration(50*(attempt+1)) * time.Millisecond):
+				}
+			}
+		}
+		if err != nil {
+			if b.logger != nil {
+				b.logger.Warn("kafka batch write failed after retries", "error", err, "count", len(batch))
+			}
+			if b.metrics != nil && b.metrics.dropTotal != nil {
+				b.metrics.dropTotal.WithLabelValues("kafka", "write").Add(float64(len(batch)))
+			}
 		}
 		batch = batch[:0]
 	}
@@ -731,7 +1071,9 @@ func (b *KafkaBatcher) writeBatch(ctx context.Context, updates []LocationUpdate)
 		}
 		payload, err := json.Marshal(event)
 		if err != nil {
-			b.metrics.dropTotal.WithLabelValues("kafka", "marshal").Inc()
+			if b.metrics != nil && b.metrics.dropTotal != nil {
+				b.metrics.dropTotal.WithLabelValues("kafka", "marshal").Inc()
+			}
 			continue
 		}
 		messages = append(messages, kafka.Message{

@@ -183,29 +183,29 @@ func TestLocationEventGeographicFiltering(t *testing.T) {
 func TestLocationEventTimestampHandling(t *testing.T) {
 	// Test that timestamp is properly normalized
 	testCases := []struct {
-		name          string
+		name           string
 		inputTimestamp *int64
-		expectedValid bool
+		expectedValid  bool
 	}{
 		{
-			name:            "Valid timestamp",
+			name:           "Valid timestamp",
 			inputTimestamp: func() *int64 { ts := time.Now().UnixMilli(); return &ts }(),
-			expectedValid:   true,
+			expectedValid:  true,
 		},
 		{
-			name:            "Nil timestamp uses current time",
+			name:           "Nil timestamp uses current time",
 			inputTimestamp: nil,
-			expectedValid:   true,
+			expectedValid:  true,
 		},
 		{
-			name:            "Zero timestamp uses current time",
+			name:           "Zero timestamp uses current time",
 			inputTimestamp: func() *int64 { var ts int64 = 0; return &ts }(),
-			expectedValid:   true,
+			expectedValid:  true,
 		},
 		{
-			name:            "Past timestamp is valid",
+			name:           "Past timestamp is valid",
 			inputTimestamp: func() *int64 { ts := time.Now().AddDate(-1, 0, 0).UnixMilli(); return &ts }(),
-			expectedValid:   true,
+			expectedValid:  true,
 		},
 	}
 
@@ -297,9 +297,9 @@ func TestLocationEventBoundaryValues(t *testing.T) {
 func TestLocationHeadingBoundaryValues(t *testing.T) {
 	// Test heading boundary values
 	tests := []struct {
-		name  string
+		name    string
 		heading float64
-		valid bool
+		valid   bool
 	}{
 		{"Heading 0", 0.0, true},
 		{"Heading 90", 90.0, true},

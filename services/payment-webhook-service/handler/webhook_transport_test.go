@@ -277,4 +277,3 @@ func TestIdempotencyStore_RemoveOnPublishFailure(t *testing.T) {
 		t.Fatalf("expected retry after removal to acquire, got duplicate")
 	}
 }
-

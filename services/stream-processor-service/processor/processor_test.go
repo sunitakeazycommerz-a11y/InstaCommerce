@@ -274,3 +274,85 @@ func TestRiderProcessorInternalStateTransitions(t *testing.T) {
 	assert.Equal(t, "zone-south", st.ZoneID)
 	proc.mu.RUnlock()
 }
+
+func TestEnvelopeUnwrappingAndFieldCasingAcrossProcessors(t *testing.T) {
+	// 1. OrderEvent nested envelope with OrderCreated / OrderPacked / OrderDispatched
+	orderEnv := []byte(`{
+		"id": "evt-ord-1",
+		"event_type": "OrderCreated",
+		"aggregate_id": "ord-env-100",
+		"timestamp": "2026-03-01T10:00:00Z",
+		"payload": {
+			"user_id": "usr-55",
+			"store_id": "store-koramangala",
+			"zone_id": "zone-1",
+			"total_cents": 7800,
+			"items": [{"sku": "a"}, {"sku": "b"}]
+		}
+	}`)
+	var ordEvt OrderEvent
+	require.NoError(t, json.Unmarshal(orderEnv, &ordEvt))
+	assert.Equal(t, "OrderCreated", ordEvt.EventType)
+	assert.Equal(t, "ord-env-100", ordEvt.OrderID)
+	assert.Equal(t, "store-koramangala", ordEvt.StoreID)
+	assert.Equal(t, int64(7800), ordEvt.TotalCents)
+	assert.Equal(t, 2, ordEvt.ItemCount)
+
+	// 2. PaymentEvent nested envelope with PaymentAuthorized / PaymentCaptured / PaymentRefunded
+	payEnv := []byte(`{
+		"eventId": "evt-pay-1",
+		"eventType": "PaymentCaptured",
+		"aggregateId": "pay-env-200",
+		"payload": {
+			"order_id": "ord-env-100",
+			"amount_cents": 7800,
+			"payment_method": "upi"
+		}
+	}`)
+	var payEvt PaymentEvent
+	require.NoError(t, json.Unmarshal(payEnv, &payEvt))
+	assert.Equal(t, "PaymentCaptured", payEvt.EventType)
+	assert.Equal(t, "pay-env-200", payEvt.PaymentID)
+	assert.Equal(t, int64(7800), payEvt.AmountCents)
+	assert.Equal(t, "upi", payEvt.Method)
+
+	// 3. InventoryEvent nested envelope with StockReserved / LowStockAlert
+	invEnv := []byte(`{
+		"event_type": "LowStockAlert",
+		"payload": {
+			"product_id": "sku-bread-1",
+			"warehouse_id": "wh-1",
+			"current_quantity": 0,
+			"threshold": 5
+		}
+	}`)
+	var invEvt InventoryEvent
+	require.NoError(t, json.Unmarshal(invEnv, &invEvt))
+	assert.Equal(t, "LowStockAlert", invEvt.EventType)
+	assert.Equal(t, "sku-bread-1", invEvt.SKUID)
+	assert.Equal(t, "wh-1", invEvt.StoreID)
+	assert.Equal(t, 0, invEvt.Quantity)
+	assert.Equal(t, 5, invEvt.Threshold)
+
+	// 4. LocationUpdate with snake_case lat/lng/rider_id/timestamp_ms
+	locSnake := []byte(`{
+		"rider_id": "rider-snake-1",
+		"lat": 12.9352,
+		"lng": 77.6245,
+		"zone_id": "zone-hsr",
+		"speed_kmh": 18.5,
+		"timestamp_ms": 1710000000000
+	}`)
+	var loc LocationUpdate
+	require.NoError(t, json.Unmarshal(locSnake, &loc))
+	assert.Equal(t, "rider-snake-1", loc.RiderID)
+	assert.InDelta(t, 12.9352, loc.Latitude, 0.0001)
+	assert.InDelta(t, 77.6245, loc.Longitude, 0.0001)
+	assert.Equal(t, "zone-hsr", loc.ZoneID)
+	assert.False(t, loc.Timestamp.IsZero())
+
+	// 5. SLAMonitor Close idempotency via sync.Once
+	mon := NewSLAMonitor(0.90, nil)
+	mon.Close()
+	mon.Close()
+}

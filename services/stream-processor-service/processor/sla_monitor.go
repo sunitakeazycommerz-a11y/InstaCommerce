@@ -42,15 +42,18 @@ type SLAMonitor struct {
 	windows   map[string]*SLAWindow // zone -> window
 	threshold float64               // 0.90
 	alertCh   chan SLAAlert
+	closeOnce sync.Once
+	closed    bool
 	mu        sync.RWMutex
 	logger    *slog.Logger
 	metrics   *slaMetrics
+	zoneGuard *labelCardinalityGuard
 }
 
 type slaMetrics struct {
-	slaPercent    *prometheus.GaugeVec
-	alertsTotal   *prometheus.CounterVec
-	windowOrders  *prometheus.GaugeVec
+	slaPercent   *prometheus.GaugeVec
+	alertsTotal  *prometheus.CounterVec
+	windowOrders *prometheus.GaugeVec
 }
 
 var (
@@ -90,12 +93,23 @@ func NewSLAMonitor(threshold float64, logger *slog.Logger) *SLAMonitor {
 		alertCh:   make(chan SLAAlert, 100),
 		logger:    logger.With("component", "sla_monitor"),
 		metrics:   newSLAMetrics(),
+		zoneGuard: newLabelCardinalityGuard(maxBoundedLabelValues),
 	}
 
 	// Drain alert channel in background to avoid blocking
 	go m.drainAlerts()
 
 	return m
+}
+
+// Close safely closes alertCh once.
+func (m *SLAMonitor) Close() {
+	m.closeOnce.Do(func() {
+		m.mu.Lock()
+		m.closed = true
+		close(m.alertCh)
+		m.mu.Unlock()
+	})
 }
 
 // AlertCh returns the channel on which SLA breach alerts are published.
@@ -107,6 +121,7 @@ func (m *SLAMonitor) RecordDelivery(zoneID string, deliveryTimeMinutes float64) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	zoneLabel := m.zoneGuard.normalize(zoneID, "unknown")
 	now := time.Now()
 
 	w, ok := m.windows[zoneID]
@@ -141,11 +156,11 @@ func (m *SLAMonitor) RecordDelivery(zoneID string, deliveryTimeMinutes float64) 
 	}
 
 	// Emit Prometheus metrics
-	m.metrics.slaPercent.WithLabelValues(zoneID).Set(w.SLAPercent)
-	m.metrics.windowOrders.WithLabelValues(zoneID).Set(float64(w.TotalOrders))
+	m.metrics.slaPercent.WithLabelValues(zoneLabel).Set(w.SLAPercent)
+	m.metrics.windowOrders.WithLabelValues(zoneLabel).Set(float64(w.TotalOrders))
 
 	// Check threshold breach
-	if w.SLAPercent < m.threshold && w.TotalOrders >= 5 {
+	if w.SLAPercent < m.threshold && w.TotalOrders >= 5 && !m.closed {
 		alert := SLAAlert{
 			ZoneID:     zoneID,
 			SLAPercent: w.SLAPercent,
@@ -155,7 +170,7 @@ func (m *SLAMonitor) RecordDelivery(zoneID string, deliveryTimeMinutes float64) 
 
 		select {
 		case m.alertCh <- alert:
-			m.metrics.alertsTotal.WithLabelValues(zoneID).Inc()
+			m.metrics.alertsTotal.WithLabelValues(zoneLabel).Inc()
 		default:
 			m.logger.Warn("sla alert channel full, dropping alert", "zone_id", zoneID)
 		}

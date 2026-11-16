@@ -20,56 +20,56 @@ import (
 type DebeziumChangeEvent struct {
 	// Envelope wrapper structure for Debezium events
 	Envelope struct {
-		Before    map[string]interface{} `json:"before"`    // Previous row state (for UPDATE/DELETE)
-		After     map[string]interface{} `json:"after"`     // Current row state (for INSERT/UPDATE)
-		Source    SourceMetadata         `json:"source"`    // Source database metadata
-		Op        string                 `json:"op"`        // Operation: i(INSERT), u(UPDATE), d(DELETE), t(TRUNCATE)
-		TsMs      int64                  `json:"ts_ms"`     // Timestamp in milliseconds
-		Txid      int64                  `json:"txid"`      // PostgreSQL transaction ID
-		LSN       int64                  `json:"lsn"`       // PostgreSQL log sequence number
-		Xmin      *int64                 `json:"xmin"`      // XMin (for TOAST handling)
-		Xmax      *int64                 `json:"xmax"`      // XMax (for TOAST handling)
-		XidXvid   *string                `json:"xid_xvid"`  // XID and XVID
-		Snapshot  []string               `json:"snapshot"`  // Snapshot isolation
+		Before   map[string]interface{} `json:"before"`   // Previous row state (for UPDATE/DELETE)
+		After    map[string]interface{} `json:"after"`    // Current row state (for INSERT/UPDATE)
+		Source   SourceMetadata         `json:"source"`   // Source database metadata
+		Op       string                 `json:"op"`       // Operation: i(INSERT), u(UPDATE), d(DELETE), t(TRUNCATE)
+		TsMs     int64                  `json:"ts_ms"`    // Timestamp in milliseconds
+		Txid     int64                  `json:"txid"`     // PostgreSQL transaction ID
+		LSN      int64                  `json:"lsn"`      // PostgreSQL log sequence number
+		Xmin     *int64                 `json:"xmin"`     // XMin (for TOAST handling)
+		Xmax     *int64                 `json:"xmax"`     // XMax (for TOAST handling)
+		XidXvid  *string                `json:"xid_xvid"` // XID and XVID
+		Snapshot []string               `json:"snapshot"` // Snapshot isolation
 	} `json:"payload"`
 }
 
 // SourceMetadata contains PostgreSQL source database metadata
 type SourceMetadata struct {
-	Version   string `json:"version"`
-	Connector string `json:"connector"`
-	Name      string `json:"name"`
-	TsMs      int64  `json:"ts_ms"`
-	Snapshot  string `json:"snapshot"`
-	Database  string `json:"database"`
-	Schema    string `json:"schema"`
-	Table     string `json:"table"`
-	TxID      int64  `json:"txId"`
-	LSN       int64  `json:"lsn"`
-	Xmin      *int64 `json:"xmin"`
-	Xmax      *int64 `json:"xmax"`
+	Version   string  `json:"version"`
+	Connector string  `json:"connector"`
+	Name      string  `json:"name"`
+	TsMs      int64   `json:"ts_ms"`
+	Snapshot  string  `json:"snapshot"`
+	Database  string  `json:"database"`
+	Schema    string  `json:"schema"`
+	Table     string  `json:"table"`
+	TxID      int64   `json:"txId"`
+	LSN       int64   `json:"lsn"`
+	Xmin      *int64  `json:"xmin"`
+	Xmax      *int64  `json:"xmax"`
 	XidXvid   *string `json:"xid_xvid"`
 }
 
 // ReconciliationLedgerEntry represents the reconciliation database row
 // extracted from a Debezium change event
 type ReconciliationLedgerEntry struct {
-	RunID              int64      `json:"run_id"`
-	RunDate            string     `json:"run_date"`
-	Status             string     `json:"status"`
-	MismatchCount      int        `json:"mismatch_count"`
-	AutoFixedCount     int        `json:"auto_fixed_count"`
-	ManualReviewCount  int        `json:"manual_review_count"`
-	StartedAt          *time.Time `json:"started_at"`
-	CompletedAt        *time.Time `json:"completed_at"`
-	CreatedAt          time.Time  `json:"created_at"`
-	TransactionID      string     `json:"transaction_id,omitempty"`
-	LedgerAmount       string     `json:"ledger_amount,omitempty"`
-	PSPAmount          string     `json:"psp_amount,omitempty"`
-	DiscrepancyAmount  string     `json:"discrepancy_amount,omitempty"`
-	DiscrepancyReason  string     `json:"discrepancy_reason,omitempty"`
-	AutoFixed          bool       `json:"auto_fixed,omitempty"`
-	ManualReviewRequired bool     `json:"manual_review_required,omitempty"`
+	RunID                int64      `json:"run_id"`
+	RunDate              string     `json:"run_date"`
+	Status               string     `json:"status"`
+	MismatchCount        int        `json:"mismatch_count"`
+	AutoFixedCount       int        `json:"auto_fixed_count"`
+	ManualReviewCount    int        `json:"manual_review_count"`
+	StartedAt            *time.Time `json:"started_at"`
+	CompletedAt          *time.Time `json:"completed_at"`
+	CreatedAt            time.Time  `json:"created_at"`
+	TransactionID        string     `json:"transaction_id,omitempty"`
+	LedgerAmount         string     `json:"ledger_amount,omitempty"`
+	PSPAmount            string     `json:"psp_amount,omitempty"`
+	DiscrepancyAmount    string     `json:"discrepancy_amount,omitempty"`
+	DiscrepancyReason    string     `json:"discrepancy_reason,omitempty"`
+	AutoFixed            bool       `json:"auto_fixed,omitempty"`
+	ManualReviewRequired bool       `json:"manual_review_required,omitempty"`
 }
 
 // CDCConsumerConfig holds configuration for the CDC consumer

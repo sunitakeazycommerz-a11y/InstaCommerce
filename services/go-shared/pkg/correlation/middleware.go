@@ -10,7 +10,7 @@ import (
 type contextKey string
 
 const (
-	Header     = "X-Correlation-ID"
+	Header                = "X-Correlation-ID"
 	ContextKey contextKey = "correlationId"
 )
 

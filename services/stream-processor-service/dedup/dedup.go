@@ -4,13 +4,16 @@ package dedup
 // Prevents replayed Kafka messages from causing duplicate side effects
 // (double-counting GMV, revenue, zone rider counts, etc.).
 //
-// Key format: dedup:{topic}:{partition}:{offset} with a 24-hour TTL.
+// Key format: dedup:{topic}:event:{event_id} when an envelope event ID is present,
+// falling back to dedup:{topic}:{partition}:{offset} with a 24-hour TTL.
 // Fail-open: on Redis errors, processing is allowed to preserve availability.
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,8 +93,43 @@ func (c *Checker) WithCustomTTL(ttl time.Duration) *Checker {
 	return c
 }
 
+// ExtractEventID extracts event_id / eventId / id from a JSON envelope if present.
+func ExtractEventID(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil || raw == nil {
+		return ""
+	}
+	for _, k := range []string{"event_id", "eventId", "id"} {
+		if v, ok := raw[k].(string); ok {
+			if trimmed := strings.TrimSpace(v); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	if nested, ok := raw["payload"].(map[string]any); ok {
+		for _, k := range []string{"event_id", "eventId", "id"} {
+			if v, ok := nested[k].(string); ok {
+				if trimmed := strings.TrimSpace(v); trimmed != "" {
+					return trimmed
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func dedupKey(topic string, partition int, offset int64) string {
 	return fmt.Sprintf("dedup:%s:%d:%d", topic, partition, offset)
+}
+
+func dedupKeyForPayload(topic string, partition int, offset int64, payload []byte) string {
+	if eventID := ExtractEventID(payload); eventID != "" {
+		return fmt.Sprintf("dedup:%s:event:%s", topic, eventID)
+	}
+	return dedupKey(topic, partition, offset)
 }
 
 func (c *Checker) effectiveTTL() time.Duration {
@@ -104,8 +142,17 @@ func (c *Checker) effectiveTTL() time.Duration {
 // CheckDuplicate performs a read-only check for whether (topic, partition, offset)
 // was already marked processed. On Redis failure it fails open and returns (false, err).
 func (c *Checker) CheckDuplicate(ctx context.Context, topic string, partition int, offset int64) (bool, error) {
-	key := dedupKey(topic, partition, offset)
+	return c.checkDuplicateKey(ctx, topic, partition, offset, dedupKey(topic, partition, offset))
+}
 
+// CheckDuplicatePayload keys deduplication by event_id / id from the JSON envelope
+// before falling back to topic:partition:offset.
+func (c *Checker) CheckDuplicatePayload(ctx context.Context, topic string, partition int, offset int64, payload []byte) (bool, error) {
+	key := dedupKeyForPayload(topic, partition, offset, payload)
+	return c.checkDuplicateKey(ctx, topic, partition, offset, key)
+}
+
+func (c *Checker) checkDuplicateKey(ctx context.Context, topic string, partition int, offset int64, key string) (bool, error) {
 	if c.redis == nil {
 		if c.bloom != nil && c.bloom.Contains(key) {
 			c.metrics.skippedTotal.WithLabelValues(topic).Inc()
@@ -137,8 +184,16 @@ func (c *Checker) CheckDuplicate(ctx context.Context, topic string, partition in
 
 // MarkProcessed records (topic, partition, offset) as processed after handler success.
 func (c *Checker) MarkProcessed(ctx context.Context, topic string, partition int, offset int64) error {
-	key := dedupKey(topic, partition, offset)
+	return c.markProcessedKey(ctx, topic, partition, offset, dedupKey(topic, partition, offset))
+}
 
+// MarkProcessedPayload records the message's event_id / id (or topic:partition:offset fallback) as processed.
+func (c *Checker) MarkProcessedPayload(ctx context.Context, topic string, partition int, offset int64, payload []byte) error {
+	key := dedupKeyForPayload(topic, partition, offset, payload)
+	return c.markProcessedKey(ctx, topic, partition, offset, key)
+}
+
+func (c *Checker) markProcessedKey(ctx context.Context, topic string, partition int, offset int64, key string) error {
 	if c.bloom != nil {
 		c.bloom.Add(key)
 	}
@@ -165,8 +220,17 @@ func (c *Checker) MarkProcessed(ctx context.Context, topic string, partition int
 // Prefer CheckDuplicate before processing followed by MarkProcessed on success so
 // failed messages can be replayed after consumer restarts.
 func (c *Checker) IsDuplicate(ctx context.Context, topic string, partition int, offset int64) (bool, error) {
-	key := dedupKey(topic, partition, offset)
+	return c.isDuplicateKey(ctx, topic, partition, offset, dedupKey(topic, partition, offset))
+}
 
+// IsDuplicatePayload checks and marks duplicates using event_id / id from the JSON envelope
+// before falling back to topic:partition:offset.
+func (c *Checker) IsDuplicatePayload(ctx context.Context, topic string, partition int, offset int64, payload []byte) (bool, error) {
+	key := dedupKeyForPayload(topic, partition, offset, payload)
+	return c.isDuplicateKey(ctx, topic, partition, offset, key)
+}
+
+func (c *Checker) isDuplicateKey(ctx context.Context, topic string, partition int, offset int64, key string) (bool, error) {
 	if c.redis == nil {
 		if c.bloom != nil {
 			if c.bloom.Contains(key) {
@@ -205,4 +269,3 @@ func (c *Checker) IsDuplicate(ctx context.Context, topic string, partition int, 
 
 	return false, nil
 }
-

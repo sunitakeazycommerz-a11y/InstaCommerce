@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -164,7 +165,14 @@ func (p *KafkaGeofencePublisher) PublishGeofenceEvent(ctx context.Context, envel
 		Key:   []byte(envelope.AggregateID),
 		Value: data,
 	}
-	return p.producer.PublishBatch(ctx, p.topic, []KafkaMessage{msg})
+	if err := p.producer.PublishBatch(ctx, p.topic, []KafkaMessage{msg}); err != nil {
+		if p.logger != nil {
+			p.logger.ErrorContext(ctx, "geofence publish failed",
+				"topic", p.topic, "rider_id", envelope.AggregateID, "error", err)
+		}
+		return err
+	}
+	return nil
 }
 
 // LocationHandlerOption configures optional behavior on LocationHandler.
@@ -222,6 +230,7 @@ type LocationHandler struct {
 	geofenceQueue     chan GeofenceEventEnvelope
 	synchronousGeo    bool
 	workerCancel      context.CancelFunc
+	wg                sync.WaitGroup
 	telemetrySmoother *RiderTelemetrySmoother
 	rateLimiter       *ConnectionRateLimiter
 }
@@ -264,7 +273,11 @@ func NewLocationHandler(
 	if h.geofencePublisher != nil && !h.synchronousGeo {
 		ctx, cancel := context.WithCancel(context.Background())
 		h.workerCancel = cancel
-		go h.geofenceWorker(ctx)
+		h.wg.Add(1)
+		go func() {
+			defer h.wg.Done()
+			h.geofenceWorker(ctx)
+		}()
 	}
 
 	return h, nil
@@ -275,6 +288,7 @@ func (h *LocationHandler) Close() {
 	if h.workerCancel != nil {
 		h.workerCancel()
 	}
+	h.wg.Wait()
 }
 
 func (h *LocationHandler) geofenceWorker(ctx context.Context) {
@@ -312,7 +326,12 @@ func (h *LocationHandler) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.metrics.UpdatesInvalid.WithLabelValues("http", "body_read").Inc()
-		h.writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			h.writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		h.writeError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 

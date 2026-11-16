@@ -132,7 +132,6 @@ func (h *SchemaEvolutionHandler) DetectAndEvolveSchema(ctx context.Context, fiel
 			filteredAdd = append(filteredAdd, f)
 			existing[f.Name] = true
 		}
-		h.knownFields.Store(f.Name, true)
 	}
 
 	if len(filteredAdd) == 0 {
@@ -156,7 +155,11 @@ func (h *SchemaEvolutionHandler) DetectAndEvolveSchema(ctx context.Context, fiel
 		if h.logger != nil {
 			h.logger.Warn("BigQuery schema update warning; continuing with tolerant inserter", "error", err)
 		}
-		return nil
+		return err
+	}
+
+	for _, f := range filteredAdd {
+		h.knownFields.Store(f.Name, true)
 	}
 
 	if h.logger != nil {

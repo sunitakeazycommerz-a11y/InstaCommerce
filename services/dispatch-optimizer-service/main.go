@@ -69,8 +69,8 @@ type Assignment struct {
 }
 
 type AssignResponse struct {
-	Assignments     []Assignment `json:"assignments"`
-	UnassignedOrders []string    `json:"unassigned_orders"`
+	Assignments      []Assignment `json:"assignments"`
+	UnassignedOrders []string     `json:"unassigned_orders"`
 }
 
 type errorResponse struct {
@@ -165,6 +165,10 @@ func (r *responseRecorder) Write(body []byte) (int, error) {
 	return written, err
 }
 
+func (r *responseRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 func main() {
 	logger := initLogger()
 	slog.SetDefault(logger)
@@ -195,6 +199,7 @@ func main() {
 	solver := optimizer.NewSolver(optimizer.SolverConfig{})
 	matcher := optimizer.NewBipartiteMatcher(nil, solver)
 	publisher := &handler.NoopEventPublisher{Logger: logger}
+	riderLocker := handler.NewInMemoryRiderMutex()
 
 	v2AssignHandler := handler.HandleAssignV2(solver, logger)
 	mux.Handle("/v2/optimize/assign", otelhttp.NewHandler(
@@ -202,13 +207,13 @@ func main() {
 		"OptimizeAssignV2",
 	))
 
-	dispatchAssignHandler := handler.HandleDispatchAssign(matcher, publisher, logger)
+	dispatchAssignHandler := handler.HandleDispatchAssignWithLocker(matcher, publisher, riderLocker, logger)
 	mux.Handle("/dispatch/assign", otelhttp.NewHandler(
 		instrumentHandler("dispatch_assign", logger, metrics, dispatchAssignHandler),
 		"DispatchAssign",
 	))
 
-	dispatchResponseHandler := handler.HandleRiderResponse(matcher, publisher, handler.NewInMemoryRiderMutex(), logger)
+	dispatchResponseHandler := handler.HandleRiderResponse(matcher, publisher, riderLocker, logger)
 	mux.Handle("/dispatch/response", otelhttp.NewHandler(
 		instrumentHandler("dispatch_response", logger, metrics, dispatchResponseHandler),
 		"DispatchResponse",
@@ -243,6 +248,7 @@ func main() {
 		exitCode = 1
 	}
 
+	hHandler.SetReady(false)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
@@ -260,7 +266,6 @@ func main() {
 		os.Exit(exitCode)
 	}
 }
-
 
 func handleAssign(w http.ResponseWriter, r *http.Request, logger *slog.Logger, metrics *serviceMetrics) {
 	if r.Method != http.MethodPost {
@@ -317,7 +322,7 @@ func handleAssign(w http.ResponseWriter, r *http.Request, logger *slog.Logger, m
 	)
 	span.End()
 	writeJSON(w, http.StatusOK, AssignResponse{
-		Assignments:     assignments,
+		Assignments:      assignments,
 		UnassignedOrders: unassigned,
 	})
 }
@@ -586,6 +591,11 @@ func distance(a, b Position) float64 {
 	sinDLat := math.Sin(dLat / 2)
 	sinDLng := math.Sin(dLng / 2)
 	h := sinDLat*sinDLat + math.Cos(lat1)*math.Cos(lat2)*sinDLng*sinDLng
+	if h < 0 {
+		h = 0
+	} else if h > 1 {
+		h = 1
+	}
 	return 2 * earthRadiusKm * math.Asin(math.Sqrt(h))
 }
 

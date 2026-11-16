@@ -1,17 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/instacommerce/go-shared/pkg/health"
+	"github.com/instacommerce/location-ingestion-service/handler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -237,4 +242,125 @@ func TestShutdownServer_MarksNotReadyBeforeDraining(t *testing.T) {
 	}
 
 	assert.ErrorIs(t, <-serveErr, http.ErrServerClosed)
+}
+
+type stubGeofencePublisher struct {
+	mu     sync.Mutex
+	events []handler.GeofenceEventEnvelope
+}
+
+func (s *stubGeofencePublisher) PublishGeofenceEvent(_ context.Context, env handler.GeofenceEventEnvelope) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, env)
+	return nil
+}
+
+func TestLoadConfig_RedisTTLDefault10MinutesWhenNonPositive(t *testing.T) {
+	t.Setenv("REDIS_TTL", "0s")
+	cfg := loadConfig()
+	assert.Equal(t, 10*time.Minute, cfg.RedisTTL)
+
+	t.Setenv("REDIS_TTL", "-5s")
+	cfg = loadConfig()
+	assert.Equal(t, 10*time.Minute, cfg.RedisTTL)
+}
+
+func TestNewHTTPMux_EnforcesInternalAuthOnIngestAndBatch(t *testing.T) {
+	t.Setenv("INTERNAL_SERVICE_TOKEN", "secret-loc-token")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service := &IngestService{
+		cfg:    Config{RedisTTL: 10 * time.Minute, MaxBodyBytes: defaultMaxBodyBytes, ProcessTimeout: time.Second},
+		logger: logger,
+	}
+	healthHandler := health.NewHandler()
+	healthHandler.SetReady(true)
+	mux := newHTTPMux(service, healthHandler, logger)
+
+	for _, path := range []string{"/ingest", "/ingest/location", "/ingest/batch", "/batch"} {
+		body := `{"rider_id":"r-1","lat":12.9716,"lng":77.5946}`
+		if strings.Contains(path, "batch") {
+			body = `[{"rider_id":"r-1","lat":12.9716,"lng":77.5946}]`
+		}
+		// Unauthenticated -> 401
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "path %s must require auth", path)
+
+		// Authenticated -> 202 Accepted
+		reqAuth := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
+		reqAuth.Header.Set("X-Internal-Service", "api-gateway")
+		reqAuth.Header.Set("X-Internal-Token", "secret-loc-token")
+		recAuth := httptest.NewRecorder()
+		mux.ServeHTTP(recAuth, reqAuth)
+		assert.Equal(t, http.StatusAccepted, recAuth.Code, "authenticated request to %s should succeed", path)
+	}
+}
+
+func TestProcessInput_PublishesGeofenceTransitions(t *testing.T) {
+	geofencer := handler.NewGeofenceChecker(8)
+	geofencer.AddZone(handler.Zone{
+		ID:        "store-1",
+		Type:      handler.ZoneStore,
+		CenterLat: 12.9716,
+		CenterLng: 77.5946,
+		RadiusKm:  0.2,
+	})
+	pub := &stubGeofencePublisher{}
+	service := &IngestService{
+		cfg:         Config{ProcessTimeout: time.Second},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		geofencer:   geofencer,
+		geofencePub: pub,
+	}
+
+	err := service.processInput(context.Background(), LocationInput{
+		RiderID: "rider-geo-1",
+		Lat:     12.9716,
+		Lng:     77.5946,
+	}, "http")
+	require.NoError(t, err)
+
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	require.Len(t, pub.events, 1)
+	assert.Equal(t, "RiderGeofenceTransition", pub.events[0].EventType)
+	assert.Equal(t, "store-1", pub.events[0].Payload.ZoneID)
+	assert.Equal(t, "ENTERED_STORE", pub.events[0].Payload.EventType)
+}
+
+func TestCloseWebSockets_WaitsForActiveConnectionGoroutines(t *testing.T) {
+	t.Setenv("INTERNAL_SERVICE_TOKEN", "ws-secret")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service := &IngestService{
+		cfg:     Config{WebSocketReadMax: 1 << 20, ProcessTimeout: time.Second},
+		logger:  logger,
+		wsConns: make(map[*websocket.Conn]struct{}),
+	}
+	hh := health.NewHandler()
+	hh.SetReady(true)
+	srv := httptest.NewServer(newHTTPMux(service, hh, logger))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ingest/ws"
+	hdr := http.Header{}
+	hdr.Set("X-Internal-Service", "mobile-bff")
+	hdr.Set("X-Internal-Token", "ws-secret")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	require.Eventually(t, func() bool {
+		service.wsMu.Lock()
+		defer service.wsMu.Unlock()
+		return len(service.wsConns) == 1
+	}, time.Second, 5*time.Millisecond)
+
+	service.CloseWebSockets()
+
+	service.wsMu.Lock()
+	remaining := len(service.wsConns)
+	service.wsMu.Unlock()
+	assert.Equal(t, 0, remaining)
 }

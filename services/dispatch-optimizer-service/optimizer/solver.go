@@ -44,8 +44,9 @@ type SolverConfig struct {
 	NewRiderMaxKm float64 `json:"new_rider_max_km"`
 }
 
-// withDefaults returns a copy of cfg with zero-valued fields replaced by their
-// defaults.
+// withDefaults returns a copy of cfg with unset fields replaced by their
+// production defaults while preserving explicit zero weights when at least one
+// weight is configured.
 func (cfg SolverConfig) withDefaults() SolverConfig {
 	if cfg.MaxIterations <= 0 {
 		cfg.MaxIterations = DefaultMaxIterations
@@ -53,14 +54,20 @@ func (cfg SolverConfig) withDefaults() SolverConfig {
 	if cfg.TimeoutMs <= 0 {
 		cfg.TimeoutMs = DefaultTimeoutMs
 	}
-	if cfg.WeightDeliveryTime <= 0 {
+	if cfg.WeightDeliveryTime <= 0 && cfg.WeightIdleTime <= 0 && cfg.WeightSLABreach <= 0 {
 		cfg.WeightDeliveryTime = DefaultWeightDeliveryTime
-	}
-	if cfg.WeightIdleTime <= 0 {
 		cfg.WeightIdleTime = DefaultWeightIdleTime
-	}
-	if cfg.WeightSLABreach <= 0 {
 		cfg.WeightSLABreach = DefaultWeightSLABreach
+	} else {
+		if cfg.WeightDeliveryTime < 0 {
+			cfg.WeightDeliveryTime = 0
+		}
+		if cfg.WeightIdleTime < 0 {
+			cfg.WeightIdleTime = 0
+		}
+		if cfg.WeightSLABreach < 0 {
+			cfg.WeightSLABreach = 0
+		}
 	}
 	if cfg.MaxOrdersPerRider <= 0 {
 		cfg.MaxOrdersPerRider = DefaultMaxOrdersPerRider
@@ -95,7 +102,7 @@ type RiderState struct {
 	IsAvailable bool `json:"is_available"`
 	// LastBreakAt records when the rider last took a mandatory break.
 	LastBreakAt time.Time `json:"last_break_at"`
-	// VehicleType is "bicycle", "scooter", or "car".
+	// VehicleType is "bicycle", "scooter", "electric_scooter", "e-bike", or "car".
 	VehicleType string `json:"vehicle_type"`
 	// BatteryPercent is the remaining charge for electric vehicles (0–100).
 	BatteryPercent float64 `json:"battery_percent"`
@@ -171,8 +178,8 @@ type Solver struct {
 	checker *ConstraintChecker
 }
 
-// NewSolver creates a Solver with the supplied configuration. Zero-valued
-// fields in cfg are replaced with production defaults.
+// NewSolver creates a Solver with the supplied configuration. Unset fields in
+// cfg are replaced with production defaults.
 func NewSolver(cfg SolverConfig) *Solver {
 	cfg = cfg.withDefaults()
 	return &Solver{
@@ -280,7 +287,7 @@ func (s *Solver) buildFeasibilityMask(riders []RiderState, orders []OrderRequest
 }
 
 // hungarianAssign performs a modified assignment using a greedy auction
-// approach on the cost matrix, respecting feasibility and batch groups.
+// approach on the cost matrix, respecting feasibility, active order capacity, and batch groups.
 // Returns a map: rider-index → list of order-indices.
 func (s *Solver) hungarianAssign(
 	ctx context.Context,
@@ -333,7 +340,8 @@ func (s *Solver) hungarianAssign(
 		if orderAssigned[e.order] {
 			continue
 		}
-		if riderLoad[e.rider] >= maxPerRider {
+		totalLoad := riders[e.rider].ActiveOrders + riderLoad[e.rider]
+		if totalLoad >= maxPerRider {
 			continue
 		}
 
@@ -353,7 +361,7 @@ func (s *Solver) hungarianAssign(
 				}
 				batchCount++
 			}
-			if canAssignBatch && riderLoad[e.rider]+batchCount <= maxPerRider {
+			if canAssignBatch && totalLoad+batchCount <= maxPerRider {
 				for _, oi := range batch {
 					if orderAssigned[oi] {
 						continue
@@ -375,12 +383,13 @@ func (s *Solver) hungarianAssign(
 	return assignments
 }
 
-// postOptimise performs iterative swap passes: for each pair of riders, it
-// checks whether swapping one order between them improves total cost.
+// postOptimise performs iterative swap passes: for each assigned rider and every
+// feasible rider (including currently unassigned riders), it checks whether
+// moving an order improves total cost while respecting active-order capacity.
 func (s *Solver) postOptimise(
 	ctx context.Context,
 	riders []RiderState,
-	orders []OrderRequest,
+	_ []OrderRequest,
 	assignments map[int][]int,
 	cost [][]float64,
 	feasible [][]bool,
@@ -407,17 +416,18 @@ func (s *Solver) postOptimise(
 		}
 		sort.Ints(riderIdxs)
 
-		for ai := 0; ai < len(riderIdxs); ai++ {
-			for bi := ai + 1; bi < len(riderIdxs); bi++ {
-				ra := riderIdxs[ai]
-				rb := riderIdxs[bi]
+		for _, ra := range riderIdxs {
+			for rb := 0; rb < len(riders); rb++ {
+				if ra == rb {
+					continue
+				}
+				if riders[rb].ActiveOrders+len(assignments[rb]) >= maxPerRider {
+					continue
+				}
 
 				for oa := 0; oa < len(assignments[ra]); oa++ {
 					oi := assignments[ra][oa]
 					if !feasible[rb][oi] {
-						continue
-					}
-					if len(assignments[rb]) >= maxPerRider {
 						continue
 					}
 
@@ -431,6 +441,12 @@ func (s *Solver) postOptimise(
 						break
 					}
 				}
+				if improved {
+					break
+				}
+			}
+			if improved {
+				break
 			}
 		}
 		if !improved {
@@ -442,7 +458,7 @@ func (s *Solver) postOptimise(
 }
 
 // buildResult converts internal assignment indices into the public SolverResult
-// including SLA breach risk, route waypoints and aggregate metrics.
+// including cumulative route ETA, SLA breach risk, route waypoints and aggregate metrics.
 func (s *Solver) buildResult(
 	riders []RiderState,
 	orders []OrderRequest,
@@ -453,7 +469,7 @@ func (s *Solver) buildResult(
 	result := &SolverResult{}
 	assignedSet := make(map[int]bool, len(orders))
 
-	var totalDist, totalETA float64
+	var totalDist, totalOrderETA float64
 	var totalAssigned int
 
 	for ri, orderIdxs := range assignments {
@@ -467,7 +483,7 @@ func (s *Solver) buildResult(
 		}
 
 		var dist float64
-		var maxETA float64
+		var cumETA float64
 		var maxRisk float64
 		orderIDs := make([]string, 0, len(orderIdxs))
 		waypoints := []Position{rider.Position}
@@ -477,11 +493,9 @@ func (s *Solver) buildResult(
 			order := orders[oi]
 			d := HaversineDistance(current, order.Position)
 			dist += d
-			eta := EstimateETAMinutes(d, speed, DefaultTrafficFactor)
-			if eta > maxETA {
-				maxETA = eta
-			}
-			risk := s.computeSLARisk(order, eta, now)
+			cumETA += EstimateETAMinutes(d, speed, DefaultTrafficFactor)
+			totalOrderETA += cumETA
+			risk := s.computeSLARisk(order, cumETA, now)
 			if risk > maxRisk {
 				maxRisk = risk
 			}
@@ -494,14 +508,13 @@ func (s *Solver) buildResult(
 		a := OptimalAssignment{
 			RiderID:             rider.ID,
 			OrderIDs:            orderIDs,
-			EstimatedETAMinutes: maxETA,
+			EstimatedETAMinutes: cumETA,
 			TotalDistanceKm:     dist,
 			SLABreachRisk:       maxRisk,
 			RouteWaypoints:      waypoints,
 		}
 		result.Assignments = append(result.Assignments, a)
 		totalDist += dist
-		totalETA += maxETA
 		totalAssigned += len(orderIDs)
 
 		if maxRisk > 0.5 {
@@ -528,9 +541,9 @@ func (s *Solver) buildResult(
 	// Aggregate metrics.
 	result.Metrics.TotalDistance = totalDist
 	if totalAssigned > 0 {
-		result.Metrics.AvgDeliveryTime = totalETA / float64(len(result.Assignments))
+		result.Metrics.AvgDeliveryTime = totalOrderETA / float64(totalAssigned)
 	}
-	result.TotalCost = s.cfg.WeightDeliveryTime*totalETA +
+	result.TotalCost = s.cfg.WeightDeliveryTime*totalOrderETA +
 		s.cfg.WeightSLABreach*float64(result.Metrics.SLABreachCount)*100
 	result.SolveDurationMs = time.Since(start).Milliseconds()
 
@@ -540,9 +553,13 @@ func (s *Solver) buildResult(
 // computeSLARisk returns a probability [0, 1] that the given order will breach
 // its SLA deadline given the estimated ETA in minutes.
 func (s *Solver) computeSLARisk(order OrderRequest, etaMin float64, now time.Time) float64 {
-	remaining := time.Until(order.SLADeadline).Minutes()
-	if order.SLADeadline.IsZero() {
-		remaining = time.Until(order.CreatedAt.Add(10 * time.Minute)).Minutes()
+	var remaining float64
+	if !order.SLADeadline.IsZero() {
+		remaining = order.SLADeadline.Sub(now).Minutes()
+	} else if !order.CreatedAt.IsZero() {
+		remaining = order.CreatedAt.Add(10 * time.Minute).Sub(now).Minutes()
+	} else {
+		remaining = 10.0
 	}
 	if remaining <= 0 {
 		return 1.0

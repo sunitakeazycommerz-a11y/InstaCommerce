@@ -193,3 +193,25 @@ func TestAPIActivateAndPauseSubscription(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recPause.Code)
 	assert.Equal(t, subscription.StatePaused, mgr.subscriptions["sub-456"].State)
 }
+
+func TestAPINotFoundReturns404(t *testing.T) {
+	mgr := newMockSubscriptionManager()
+	r := setupTestRouter(mgr)
+
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/v1/subscriptions/missing-id"},
+		{"DELETE", "/api/v1/subscriptions/missing-id"},
+		{"POST", "/api/v1/subscriptions/missing-id/activate"},
+		{"POST", "/api/v1/subscriptions/missing-id/pause"},
+	}
+
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNotFound, rec.Code, "%s %s must return 404 when not found", tc.method, tc.path)
+	}
+}

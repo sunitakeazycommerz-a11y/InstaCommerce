@@ -14,6 +14,7 @@ const (
 	defaultPort          = "8103"
 	defaultPollInterval  = 1 * time.Second
 	defaultBatchSize     = 100
+	defaultMaxRetries    = 3
 	defaultShutdownGrace = 20 * time.Second
 	defaultReadyTimeout  = 2 * time.Second
 )
@@ -23,6 +24,7 @@ type Config struct {
 	DatabaseURL     string
 	PollInterval    time.Duration
 	BatchSize       int
+	MaxRetries      int
 	OutboxTable     string
 	KafkaBrokers    []string
 	KafkaTopic      string
@@ -55,6 +57,14 @@ func loadConfig() (Config, error) {
 		return Config{}, errors.New("OUTBOX_BATCH_SIZE must be greater than 0")
 	}
 
+	maxRetries, err := intEnv("OUTBOX_MAX_RETRIES", defaultMaxRetries)
+	if err != nil {
+		return Config{}, err
+	}
+	if maxRetries <= 0 {
+		return Config{}, errors.New("OUTBOX_MAX_RETRIES must be greater than 0")
+	}
+
 	outboxTable := envOrDefault("OUTBOX_TABLE", "outbox_events")
 	if !isSafeIdentifier(outboxTable) {
 		return Config{}, fmt.Errorf("OUTBOX_TABLE %q contains invalid characters", outboxTable)
@@ -84,6 +94,7 @@ func loadConfig() (Config, error) {
 		DatabaseURL:     databaseURL,
 		PollInterval:    pollInterval,
 		BatchSize:       batchSize,
+		MaxRetries:      maxRetries,
 		OutboxTable:     outboxTable,
 		KafkaBrokers:    brokers,
 		KafkaTopic:      envOrDefault("OUTBOX_TOPIC", ""),

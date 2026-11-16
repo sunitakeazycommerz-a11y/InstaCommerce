@@ -9,13 +9,13 @@ import (
 
 // ConnectionRateLimiter implements a token bucket rate limiter for WebSocket connection accept loops (Issue #618).
 type ConnectionRateLimiter struct {
-	mu           sync.Mutex
-	rate         float64 // tokens per second
-	capacity     float64 // maximum burst capacity
-	tokens       float64
-	lastRefill   time.Time
-	activeConns  int64
-	maxConns     int64
+	mu          sync.Mutex
+	rate        float64 // tokens per second
+	capacity    float64 // maximum burst capacity
+	tokens      float64
+	lastRefill  time.Time
+	activeConns int64
+	maxConns    int64
 }
 
 // NewConnectionRateLimiter creates a token bucket limiter.
@@ -69,8 +69,14 @@ func (l *ConnectionRateLimiter) Allow() bool {
 
 // ReleaseConn decrements the active connection count when a WebSocket connection terminates.
 func (l *ConnectionRateLimiter) ReleaseConn() {
-	if atomic.LoadInt64(&l.activeConns) > 0 {
-		atomic.AddInt64(&l.activeConns, -1)
+	for {
+		cur := atomic.LoadInt64(&l.activeConns)
+		if cur <= 0 {
+			return
+		}
+		if atomic.CompareAndSwapInt64(&l.activeConns, cur, cur-1) {
+			return
+		}
 	}
 }
 

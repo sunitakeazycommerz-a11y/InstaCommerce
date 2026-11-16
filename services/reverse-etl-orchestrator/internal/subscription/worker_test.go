@@ -168,12 +168,15 @@ func TestSyncUserFeaturesIdempotencyAtomicRename(t *testing.T) {
 	ctx := context.Background()
 	records := []UserFeatureRecord{
 		{
-			UserID:           "user-456",
-			CLV:              12500.50,
-			CategoryAffinity: map[string]float64{"dairy": 0.85, "produce": 0.92},
-			LastPurchaseDays: 2,
-			Segment:          "HIGH_VALUE",
-			UpdatedAt:        time.Now(),
+			UserID:            "user-456",
+			CLV:               12500.50,
+			CategoryAffinity:  map[string]float64{"dairy": 0.85, "produce": 0.92},
+			LastPurchaseDays:  2,
+			OrderCount30d:     7,
+			ConversionRate30d: 0.25,
+			AvgBasketCents:    1950.5,
+			Segment:           "HIGH_VALUE",
+			UpdatedAt:         time.Now(),
 		},
 	}
 
@@ -192,6 +195,9 @@ func TestSyncUserFeaturesIdempotencyAtomicRename(t *testing.T) {
 	assert.Equal(t, "12500.50", prodHash["clv"])
 	assert.Equal(t, "HIGH_VALUE", prodHash["segment"])
 	assert.Equal(t, 2, prodHash["last_purchase_days"])
+	assert.Equal(t, 7, prodHash["order_count_30d"])
+	assert.Equal(t, "0.250000", prodHash["conversion_rate_30d"])
+	assert.Equal(t, "1950.50", prodHash["avg_basket_cents"])
 	assert.Contains(t, prodHash["category_affinity"], "dairy")
 }
 
@@ -294,7 +300,7 @@ func TestSyncDarkStoreInventoryParallelConcurrency(t *testing.T) {
 }
 
 func TestRateLimiter(t *testing.T) {
-	// Test rate limiter allows token consumption and stops cleanly
+	// Test rate limiter allows token consumption and stops idempotently across multiple callers
 	rl := NewRateLimiter(100)
 	ctx := context.Background()
 
@@ -302,6 +308,7 @@ func TestRateLimiter(t *testing.T) {
 		err := rl.Acquire(ctx)
 		require.NoError(t, err)
 	}
+	rl.Stop()
 	rl.Stop()
 }
 

@@ -367,3 +367,40 @@ func TestStreamDispatcherConcurrentOutOfOrderCompletionIsMonotonic(t *testing.T)
 		}
 	}
 }
+
+func TestStreamDispatcherDLQHandledFailureDoesNotWedgePartition(t *testing.T) {
+	var dlqOffsets []int64
+	cfg := StreamConfig{
+		BufferSize:     16,
+		HighWatermark:  12,
+		LowWatermark:   4,
+		WorkerCount:    1,
+		PauseCheckWait: 2 * time.Millisecond,
+		DLQHandler: func(_ context.Context, msg kafka.Message, _ error) error {
+			dlqOffsets = append(dlqOffsets, msg.Offset)
+			return nil
+		},
+	}
+
+	handler := func(_ context.Context, msg kafka.Message) error {
+		if msg.Offset == 10 {
+			return errors.New("poison pill")
+		}
+		return nil
+	}
+
+	rec := &commitRecorder{}
+	dispatcher := NewStreamDispatcher(cfg, nil, handler, rec.commit)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dispatcher.Start(ctx)
+
+	require.NoError(t, dispatcher.Submit(ctx, kafka.Message{Topic: "orders.events", Partition: 0, Offset: 10}))
+	require.NoError(t, dispatcher.Submit(ctx, kafka.Message{Topic: "orders.events", Partition: 0, Offset: 11}))
+	dispatcher.Stop()
+
+	assert.Equal(t, []int64{10}, dlqOffsets)
+	offsets := rec.offsetsFor("orders.events", 0)
+	require.NotEmpty(t, offsets)
+	assert.Equal(t, int64(11), offsets[len(offsets)-1])
+}

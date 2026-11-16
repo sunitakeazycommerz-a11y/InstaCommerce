@@ -9,6 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/instacommerce/go-shared v0.0.0
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/prometheus/client_golang v1.23.2
 	go.opentelemetry.io/otel v1.42.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.42.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.42.0

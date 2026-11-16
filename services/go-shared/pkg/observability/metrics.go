@@ -89,13 +89,21 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Unwrap returns the underlying http.ResponseWriter so standard library helpers
+// such as http.ResponseController can access optional interfaces (http.Flusher, http.Hijacker).
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 // InstrumentHandler returns an http.Handler that records request count,
 // duration, request size, and response size for the given handler name.
 func (m *HTTPMetrics) InstrumentHandler(name string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		m.RequestSize.WithLabelValues(r.Method, name).Observe(float64(r.ContentLength))
+		if r.ContentLength > 0 {
+			m.RequestSize.WithLabelValues(r.Method, name).Observe(float64(r.ContentLength))
+		}
 
 		rw := newResponseWriter(w)
 		next.ServeHTTP(rw, r)

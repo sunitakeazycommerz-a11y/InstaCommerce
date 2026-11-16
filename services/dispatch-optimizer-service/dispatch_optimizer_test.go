@@ -11,12 +11,12 @@ import (
 func TestDistanceCalculationWithHaversineFormula(t *testing.T) {
 	// Test distance calculation between two points on Earth
 	tests := []struct {
-		name           string
-		pos1           Position
-		pos2           Position
-		expectedMinKm  float64
-		expectedMaxKm  float64
-		description    string
+		name          string
+		pos1          Position
+		pos2          Position
+		expectedMinKm float64
+		expectedMaxKm float64
+		description   string
 	}{
 		{
 			name:          "Same location",

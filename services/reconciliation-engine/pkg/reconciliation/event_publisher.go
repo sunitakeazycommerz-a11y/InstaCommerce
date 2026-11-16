@@ -131,11 +131,19 @@ func (p *EventPublisher) PublishCompletionEvent(ctx context.Context, runID int64
 		return nil
 	}
 
+	now := time.Now().UTC()
 	payload := map[string]interface{}{
+		"runId":               fmt.Sprintf("run-%d", runID),
+		"run_id":              runID,
+		"runDate":             now.Format("2006-01-02"),
+		"mismatchCount":       totalMismatches,
+		"autoFixedCount":      autoFixed,
+		"manualReviewCount":   manualReview,
+		"completedAt":         now.Format(time.RFC3339),
 		"total_mismatches":    totalMismatches,
 		"auto_fixed_count":    autoFixed,
 		"manual_review_count": manualReview,
-		"completion_time":     time.Now().UTC().Unix(),
+		"completion_time":     now.Unix(),
 	}
 
 	envelope := p.newEnvelope(ctx, runID, "ReconciliationCompleted", payload)

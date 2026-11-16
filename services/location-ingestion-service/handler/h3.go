@@ -43,13 +43,13 @@ func KRingRes8(h3Index string) []string {
 
 	// 6 adjacent hexagonal directions in axial coordinates
 	directions := [][2]int{
-		{0, 0},   // center
-		{1, 0},   // east
-		{1, -1},  // northeast
-		{0, -1},  // northwest
-		{-1, 0},  // west
-		{-1, 1},  // southwest
-		{0, 1},   // southeast
+		{0, 0},  // center
+		{1, 0},  // east
+		{1, -1}, // northeast
+		{0, -1}, // northwest
+		{-1, 0}, // west
+		{-1, 1}, // southwest
+		{0, 1},  // southeast
 	}
 
 	result := make([]string, 0, len(directions))

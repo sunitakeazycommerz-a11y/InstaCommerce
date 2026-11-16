@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/instacommerce/go-shared/pkg/health"
 )
 
 func TestResolveKafkaTopic(t *testing.T) {
@@ -25,13 +28,43 @@ func TestResolveKafkaTopic(t *testing.T) {
 		{"", "orders", "orders.events"},
 		{"", "payment", "payments.events"},
 		{"", "payments", "payments.events"},
+		{"", "inventory", "inventory.events"},
+		{"", "StockItem", "inventory.events"},
+		{"", "Reservation", "inventory.events"},
+		{"", "CycleCountTask", "inventory.events"},
+		{"", "INBOUND_ASN", "inventory.events"},
+		{"", "STOCK_BATCH", "inventory.events"},
+		{"", "INVENTORY_SAFETY_STOCK", "inventory.events"},
+		{"", "fulfillment", "fulfillment.events"},
+		{"", "PickTask", "fulfillment.events"},
+		{"", "Substitution", "fulfillment.events"},
+		{"", "catalog", "catalog.events"},
+		{"", "Product", "catalog.events"},
+		{"", "Category", "catalog.events"},
+		{"", "pricing", "pricing.events"},
+		{"", "Coupon", "pricing.events"},
+		{"", "Promotion", "pricing.events"},
+		{"", "identity", "identity.events"},
+		{"", "User", "identity.events"},
+		{"", "rider", "rider.events"},
+		{"", "RiderFleet", "rider.events"},
+		{"", "warehouse", "warehouse.events"},
+		{"", "store", "warehouse.events"},
+		{"", "WarehouseBin", "warehouse.events"},
+		{"", "StoreCapacity", "warehouse.events"},
+		{"", "StagingBay", "warehouse.events"},
+		{"", "fraud", "fraud.events"},
+		{"", "FraudSignal", "fraud.events"},
+		{"", "wallet", "wallet.events"},
+		{"", "loyalty", "wallet.events"},
+		{"", "audit", "audit.events"},
+		{"", "notification", "notifications.events"},
+		{"", "config", "config.events"},
+		{"", "FeatureFlag", "config.events"},
 		{"", "cart", "cart.events"},
 		{"", "carts", "cart.events"},
 		{"", "delivery", "delivery.events"},
 		{"", "routing", "delivery.events"},
-		{"", "warehouse", "warehouse.events"},
-		{"", "store", "warehouse.events"},
-		{"", "inventory", "inventory.events"},
 		{"", "unknown_custom", "unknown_custom.events"},
 		{"", "", "unknown.events"},
 	}
@@ -252,5 +285,104 @@ func TestCheckKafkaHealthyMockBroker(t *testing.T) {
 
 	if err := svc.checkKafka(ctx); err != nil {
 		t.Fatalf("expected healthy mock broker to pass checkKafka, got %v", err)
+	}
+}
+
+func TestBuildSaramaHeadersAndPreservedPayloadFields(t *testing.T) {
+	evt := outboxEvent{
+		ID:            "evt-999",
+		AggregateType: "Rider",
+		AggregateID:   "rider-42",
+		EventType:     "RiderActivated",
+		Payload:       []byte(`{"id":"inner-id-42","timestamp":"2026-10-16T10:00:00Z","rider_id":"rider-42"}`),
+		CreatedAt:     time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC),
+		SourceService: "rider-fleet-service",
+		CorrelationID: "corr-123",
+		SchemaVersion: "v2",
+		Traceparent:   "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	}
+
+	raw := buildEventMessage(evt)
+	var env map[string]any
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if env["aggregate_id"] != "rider-42" {
+		t.Errorf("expected aggregate_id 'rider-42', got %v", env["aggregate_id"])
+	}
+	if env["schemaVersion"] != "v2" {
+		t.Errorf("expected schemaVersion 'v2', got %v", env["schemaVersion"])
+	}
+	if env["id"] != "inner-id-42" {
+		t.Errorf("expected inner payload id 'inner-id-42' not to be overwritten, got %v", env["id"])
+	}
+	if env["timestamp"] != "2026-10-16T10:00:00Z" {
+		t.Errorf("expected inner payload timestamp not to be overwritten, got %v", env["timestamp"])
+	}
+
+	headers := buildSaramaHeaders(evt, "")
+	headerMap := make(map[string]string, len(headers))
+	for _, h := range headers {
+		headerMap[string(h.Key)] = string(h.Value)
+	}
+	if headerMap["aggregate_id"] != "rider-42" {
+		t.Errorf("expected header aggregate_id 'rider-42', got %q", headerMap["aggregate_id"])
+	}
+	if headerMap["schema_version"] != "v2" {
+		t.Errorf("expected header schema_version 'v2', got %q", headerMap["schema_version"])
+	}
+	if headerMap["traceparent"] != evt.Traceparent {
+		t.Errorf("expected traceparent %q, got %q", evt.Traceparent, headerMap["traceparent"])
+	}
+}
+
+func TestPerEventRetryTrackingAndHTTPMux(t *testing.T) {
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+
+	metadata := sarama.NewMockMetadataResponse(t).
+		SetBroker(broker.Addr(), broker.BrokerID()).
+		SetController(broker.BrokerID())
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"ApiVersionsRequest": sarama.NewMockApiVersionsResponse(t),
+		"MetadataRequest":    metadata,
+	})
+
+	svc := newTestRelayService([]string{broker.Addr()})
+	if a1 := svc.recordRetryAttempt("evt-1"); a1 != 1 {
+		t.Fatalf("expected attempt 1, got %d", a1)
+	}
+	if a2 := svc.recordRetryAttempt("evt-1"); a2 != 2 {
+		t.Fatalf("expected attempt 2, got %d", a2)
+	}
+	svc.clearRetryAttempt("evt-1")
+	if a3 := svc.recordRetryAttempt("evt-1"); a3 != 1 {
+		t.Fatalf("expected attempt reset to 1 after clear, got %d", a3)
+	}
+
+	mux := newHTTPMux(svc, health.NewHandler())
+
+	// /metrics
+	reqMetrics := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	recMetrics := httptest.NewRecorder()
+	mux.ServeHTTP(recMetrics, reqMetrics)
+	if recMetrics.Code != http.StatusOK {
+		t.Fatalf("expected 200 on /metrics, got %d", recMetrics.Code)
+	}
+
+	// /health/ready when healthy
+	reqReady := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	recReady := httptest.NewRecorder()
+	mux.ServeHTTP(recReady, reqReady)
+	if recReady.Code != http.StatusOK {
+		t.Fatalf("expected 200 on /health/ready with healthy broker, got %d", recReady.Code)
+	}
+
+	// /health/ready when shutting down
+	svc.shuttingDown.Store(true)
+	recShutdown := httptest.NewRecorder()
+	mux.ServeHTTP(recShutdown, reqReady)
+	if recShutdown.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 on /health/ready when shuttingDown, got %d", recShutdown.Code)
 	}
 }
