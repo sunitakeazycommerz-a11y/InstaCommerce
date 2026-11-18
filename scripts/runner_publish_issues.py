@@ -47,11 +47,11 @@ def create_issue(issue, index, total):
         return None
 
 def main():
-    print(f"============================================================")
-    print(f"  InstaCommerce Staff-Grade Issue Generator")
+    print("============================================================")
+    print("  InstaCommerce Staff-Grade Issue Generator")
     print(f"  Total Issues to Publish: {len(ALL_ISSUES)}")
-    print(f"  Milestones: 17 to 24 (Waves 0 to 7)")
-    print(f"============================================================")
+    print("  Milestones: 17 to 24 (Waves 0 to 7)")
+    print("============================================================")
 
     created = []
     failed = []
@@ -66,11 +66,11 @@ def main():
         time.sleep(0.35)  # Respect GitHub secondary rate limit
 
     duration = time.time() - start_time
-    print(f"\n============================================================")
+    print("\n============================================================")
     print(f"  Publishing Complete in {duration:.1f}s")
     print(f"  Successfully Created: {len(created)}")
     print(f"  Failed: {len(failed)}")
-    print(f"============================================================")
+    print("============================================================")
 
 if __name__ == "__main__":
     main()

@@ -7,7 +7,6 @@ Simulates pod termination mid-checkout and verifies:
 """
 
 import uuid
-from unittest.mock import MagicMock
 
 
 class MockPaymentGateway:

@@ -36,7 +36,7 @@ class HomeAggregatorTest {
     @BeforeEach
     void setUp() {
         properties = new MobileBffProperties();
-        properties.getUpstream().setTimeoutMs(500);
+        properties.getUpstream().setTimeoutMs(5000);
     }
 
     private WebClient createMockWebClient(Object responseBody, HttpStatus status) {

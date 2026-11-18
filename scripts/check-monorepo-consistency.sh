@@ -374,7 +374,7 @@ else
 fi
 
 # Verify no your-org placeholder in argocd/
-ARGOCD_YOUR_ORG=$(grep -rn "your-org" argocd/ 2>/dev/null || true)
+ARGOCD_YOUR_ORG=$(git ls-files -- 'argocd/*.yaml' 'argocd/**/*.yaml' 'argocd/*.yml' 'argocd/**/*.yml' | xargs grep -n "your-org" 2>/dev/null || true)
 if [ -z "$ARGOCD_YOUR_ORG" ]; then
     log_pass "No 'your-org' placeholder found in argocd/"
 else
@@ -384,10 +384,11 @@ fi
 # Verify no duplicate Application metadata.name in argocd/
 if command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" 2>/dev/null; then
     DUP_ARGO=$(python3 -c '
-import glob, yaml
+import subprocess, yaml
 seen = {}
 dups = []
-for p in sorted(set(glob.glob("argocd/**/*.yaml", recursive=True) + glob.glob("argocd/*.yaml"))):
+paths = subprocess.check_output(["git", "ls-files", "--", "argocd/*.yaml", "argocd/**/*.yaml"], text=True).splitlines()
+for p in sorted(set(paths)):
     with open(p) as f:
         for d in yaml.safe_load_all(f):
             if d and d.get("kind") == "Application":

@@ -7,7 +7,7 @@ Extracts structural elements, annotations, routes, and events for Java, Python, 
 import ast
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 
 class JavaParser:
@@ -27,7 +27,6 @@ class JavaParser:
     def parse_file(cls, path: str) -> Dict[str, Any]:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-        content = "".join(lines)
 
         package = ""
         imports = []
