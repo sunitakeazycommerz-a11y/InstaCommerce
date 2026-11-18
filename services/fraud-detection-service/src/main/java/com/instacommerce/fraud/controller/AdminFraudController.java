@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/admin/fraud")
+@RequestMapping({"/admin/fraud", "/api/v1/admin/fraud"})
 public class AdminFraudController {
 
     private final FraudRuleRepository fraudRuleRepository;

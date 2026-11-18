@@ -26,5 +26,13 @@ CREATE INDEX idx_audit_created ON audit_events (created_at);
 CREATE INDEX idx_audit_event_type ON audit_events (event_type);
 CREATE INDEX idx_audit_correlation ON audit_events (correlation_id) WHERE correlation_id IS NOT NULL;
 
--- Revoke UPDATE and DELETE from the application role to enforce append-only semantics
-REVOKE UPDATE, DELETE ON audit_events FROM audit_app;
+-- Revoke UPDATE and DELETE from the application roles to enforce append-only semantics
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_app') THEN
+        REVOKE UPDATE, DELETE ON audit_events FROM audit_app;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader') THEN
+        REVOKE UPDATE, DELETE ON audit_events FROM audit_reader;
+    END IF;
+END $$;

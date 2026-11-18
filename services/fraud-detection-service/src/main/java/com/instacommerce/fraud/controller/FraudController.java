@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/fraud")
+@RequestMapping({"/fraud", "/api/v1/fraud"})
 public class FraudController {
 
     private final FraudScoringService fraudScoringService;
@@ -30,6 +30,6 @@ public class FraudController {
     @PostMapping("/report")
     public ResponseEntity<Map<String, String>> reportSuspiciousActivity(
             @Valid @RequestBody FraudReportRequest request) {
-        return ResponseEntity.ok(Map.of("status", "reported"));
+        return ResponseEntity.ok(fraudScoringService.reportFraud(request));
     }
 }

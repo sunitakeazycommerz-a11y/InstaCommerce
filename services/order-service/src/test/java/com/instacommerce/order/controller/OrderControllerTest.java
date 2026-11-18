@@ -101,6 +101,7 @@ class OrderControllerTest {
         CreateOrderCommand cmd = commandCaptor.getValue();
         assertThat(cmd.getUserId()).isEqualTo(userId);
         assertThat(cmd.getStoreId()).isEqualTo("store_1");
+        assertThat(cmd.getDeliveryFeeCents()).isEqualTo(50L);
         assertThat(cmd.getTotalCents()).isEqualTo(1050L);
         assertThat(cmd.getDeliveryAddress()).isEqualTo("123 Main St");
         assertThat(cmd.getCouponCode()).isEqualTo("SAVE10");

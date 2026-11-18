@@ -16,9 +16,9 @@ import org.mockito.ArgumentCaptor;
 class IdempotencyKeyCleanupJobTest {
 
     @Test
-    void cleanupExpiredKeysUsesSevenDayRetentionCutoff() {
+    void cleanupExpiredKeysPassesCurrentTimeToDeleteExpiredBefore() {
         CheckoutIdempotencyKeyRepository repository = mock(CheckoutIdempotencyKeyRepository.class);
-        when(repository.deleteExpiredKeys(any())).thenReturn(3);
+        when(repository.deleteExpiredBefore(any())).thenReturn(3);
         IdempotencyKeyCleanupJob job = new IdempotencyKeyCleanupJob(repository);
 
         Instant before = Instant.now();
@@ -26,11 +26,11 @@ class IdempotencyKeyCleanupJobTest {
         Instant after = Instant.now();
 
         ArgumentCaptor<Instant> cutoffCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(repository).deleteExpiredKeys(cutoffCaptor.capture());
+        verify(repository).deleteExpiredBefore(cutoffCaptor.capture());
         Instant cutoff = cutoffCaptor.getValue();
 
         assertThat(CheckoutIdempotencyKey.RETENTION_TTL).isEqualTo(Duration.ofDays(7));
-        assertThat(cutoff).isBetween(before.minus(Duration.ofDays(7)), after.minus(Duration.ofDays(7)));
+        assertThat(cutoff).isBetween(before, after);
     }
 
     @Test

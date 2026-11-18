@@ -66,7 +66,7 @@ public class PointsExpiryJob {
     }
 
     int expireAccountPoints(UUID accountId, Instant cutoff) {
-        LoyaltyAccount account = accountRepository.findById(accountId).orElse(null);
+        LoyaltyAccount account = accountRepository.findByIdForUpdate(accountId).orElse(null);
         if (account == null) {
             return 0;
         }
@@ -76,10 +76,17 @@ public class PointsExpiryJob {
             return 0;
         }
 
+        int earnedBeforeCutoff = transactionRepository.sumEarnedBefore(accountId, cutoff);
+        int redeemedOrExpired = transactionRepository.sumRedeemedOrExpired(accountId);
+        int expirableBudget = Math.min(remainingBalance, Math.max(0, earnedBeforeCutoff - redeemedOrExpired));
+        if (expirableBudget <= 0) {
+            return 0;
+        }
+
         int totalExpired = 0;
         int safetyLimit = 1000;
         int iterations = 0;
-        while (remainingBalance > 0 && iterations++ < safetyLimit) {
+        while (expirableBudget > 0 && remainingBalance > 0 && iterations++ < safetyLimit) {
             List<LoyaltyTransaction> expirable = transactionRepository.findExpirableEarnTransactions(
                 accountId, cutoff, PageRequest.of(0, TRANSACTION_BATCH_SIZE));
             if (expirable.isEmpty()) {
@@ -88,11 +95,11 @@ public class PointsExpiryJob {
 
             boolean madeProgress = false;
             for (LoyaltyTransaction earnTxn : expirable) {
-                if (remainingBalance <= 0) {
+                if (expirableBudget <= 0 || remainingBalance <= 0) {
                     break;
                 }
 
-                int pointsToExpire = Math.min(earnTxn.getPoints(), remainingBalance);
+                int pointsToExpire = Math.min(earnTxn.getPoints(), Math.min(expirableBudget, remainingBalance));
                 if (pointsToExpire <= 0) {
                     continue;
                 }
@@ -103,9 +110,10 @@ public class PointsExpiryJob {
                 expiryTxn.setPoints(pointsToExpire);
                 expiryTxn.setReferenceType("EXPIRY");
                 expiryTxn.setReferenceId(earnTxn.getId().toString());
-                transactionRepository.save(expiryTxn);
+                transactionRepository.saveAndFlush(expiryTxn);
 
                 remainingBalance -= pointsToExpire;
+                expirableBudget -= pointsToExpire;
                 totalExpired += pointsToExpire;
                 madeProgress = true;
             }

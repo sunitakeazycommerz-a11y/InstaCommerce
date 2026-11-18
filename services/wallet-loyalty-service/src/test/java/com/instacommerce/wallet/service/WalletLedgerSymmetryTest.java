@@ -42,7 +42,7 @@ class WalletLedgerSymmetryTest {
         ledgerRepository = mock(WalletLedgerEntryRepository.class);
         recordedEntries = new ArrayList<>();
 
-        when(transactionRepository.save(any(WalletTransaction.class))).thenAnswer(inv -> {
+        when(transactionRepository.saveAndFlush(any(WalletTransaction.class))).thenAnswer(inv -> {
             WalletTransaction txn = inv.getArgument(0);
             if (txn.getId() == null) {
                 txn.setId(UUID.randomUUID());

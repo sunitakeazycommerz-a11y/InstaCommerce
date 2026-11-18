@@ -44,6 +44,7 @@ public class CompensationReplayService {
                 targetId, parsePositiveAmountCents(entry.getPayload()), paymentKeysFor(entry).refund(targetId));
             case "cancelOrder" -> orderActivity.cancelOrder(targetId);
             case "rollbackUsage" -> replayRollbackUsage(targetId);
+            case "unredeemCoupon" -> replayUnredeemCoupon(targetId);
             default -> throw new IllegalArgumentException("Unsupported DLQ compensation activity: " + activityName);
         }
     }
@@ -73,6 +74,15 @@ public class CompensationReplayService {
                 "Invalid rollbackUsage targetId (expected couponCode:userId): " + targetId);
         }
         couponActivity.rollbackUsage(parts[0], parts[1]);
+    }
+
+    private void replayUnredeemCoupon(String targetId) {
+        String[] parts = targetId.split(":", 3);
+        if (parts.length != 3 || parts[0].isBlank() || parts[1].isBlank() || parts[2].isBlank()) {
+            throw new IllegalArgumentException(
+                "Invalid unredeemCoupon targetId (expected couponCode:userId:orderId): " + targetId);
+        }
+        couponActivity.unredeemCoupon(parts[0], parts[1], parts[2]);
     }
 
     private String requireNonBlank(String value, String field) {

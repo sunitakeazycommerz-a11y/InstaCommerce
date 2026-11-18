@@ -8,6 +8,9 @@ server:
 spring:
   application:
     name: order-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   config:
     import: optional:sm://
   lifecycle:
@@ -49,15 +52,11 @@ order:
     inventory:
       base-url: ${INVENTORY_SERVICE_URL:http://localhost:8083}
     cart:
-      base-url: ${CART_SERVICE_URL:http://localhost:8084}
+      base-url: ${CART_SERVICE_URL:http://localhost:8090}
     payment:
-      base-url: ${PAYMENT_SERVICE_URL:http://localhost:8086}
+      base-url: ${PAYMENT_SERVICE_URL:http://localhost:8085}
     pricing:
-      base-url: ${PRICING_SERVICE_URL:http://localhost:8087}
-
-resilience4j:
-  ratelimiter:
-    instances: {}
+      base-url: ${PRICING_SERVICE_URL:http://localhost:8089}
 
 management:
   tracing:
@@ -101,6 +100,8 @@ internal:
     token: ${INTERNAL_SERVICE_TOKEN}
 
 resilience4j:
+  ratelimiter:
+    instances: {}
   circuitbreaker:
     circuitBreakerAspectOrder: 2
     instances:

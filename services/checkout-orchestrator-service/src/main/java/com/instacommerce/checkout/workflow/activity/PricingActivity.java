@@ -10,4 +10,7 @@ public interface PricingActivity {
 
     @ActivityMethod
     PricingResult calculatePrice(PricingRequest request);
+
+    @ActivityMethod(name = "PricingUnredeemCoupon")
+    void unredeemCoupon(String code, String userId, String orderId);
 }

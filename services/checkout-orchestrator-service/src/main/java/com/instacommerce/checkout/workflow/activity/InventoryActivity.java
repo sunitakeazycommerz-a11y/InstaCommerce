@@ -1,16 +1,15 @@
 package com.instacommerce.checkout.workflow.activity;
 
-import com.instacommerce.checkout.dto.CartItem;
 import com.instacommerce.checkout.dto.InventoryReservationResult;
+import com.instacommerce.checkout.dto.InventoryReserveRequest;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
-import java.util.List;
 
 @ActivityInterface
 public interface InventoryActivity {
 
     @ActivityMethod
-    InventoryReservationResult reserveStock(List<CartItem> items);
+    InventoryReservationResult reserveStock(InventoryReserveRequest request);
 
     @ActivityMethod
     void releaseStock(String reservationId);

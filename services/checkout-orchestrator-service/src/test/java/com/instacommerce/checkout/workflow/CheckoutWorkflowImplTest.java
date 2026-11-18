@@ -18,6 +18,7 @@ import com.instacommerce.checkout.dto.CartValidationResult;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
 import com.instacommerce.checkout.dto.InventoryReservationResult;
+import com.instacommerce.checkout.dto.InventoryReserveRequest;
 import com.instacommerce.checkout.dto.OrderCreateRequest;
 import com.instacommerce.checkout.dto.OrderCreationResult;
 import com.instacommerce.checkout.dto.PaymentAuthResult;
@@ -29,15 +30,21 @@ import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
 import com.instacommerce.checkout.workflow.activity.PricingActivity;
+import io.temporal.workflow.Async;
+import io.temporal.workflow.Functions;
+import io.temporal.workflow.Promise;
 import io.temporal.workflow.Workflow;
 import io.temporal.workflow.WorkflowInfo;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -73,34 +80,37 @@ class CheckoutWorkflowImplTest {
     @Mock private CompensationDlqActivity dlqActivity;
 
     private MockedStatic<Workflow> workflowMock;
-    private MockedStatic<io.temporal.workflow.Async> asyncMock;
+    private MockedStatic<Async> asyncMock;
     private CheckoutWorkflowImpl workflow;
 
     @BeforeEach
     void setUp() {
         workflowMock = mockStatic(Workflow.class);
-        asyncMock = mockStatic(io.temporal.workflow.Async.class);
+        asyncMock = mockStatic(Async.class);
 
-        io.temporal.workflow.Promise<Void> donePromise = mock(io.temporal.workflow.Promise.class);
+        @SuppressWarnings("unchecked")
+        Promise<Void> donePromise = (Promise<Void>) mock(Promise.class);
         when(donePromise.get()).thenReturn(null);
         when(donePromise.isCompleted()).thenReturn(true);
 
-        asyncMock.when(() -> io.temporal.workflow.Async.procedure(any(io.temporal.workflow.Functions.Proc.class)))
+        asyncMock.when(() -> Async.procedure(any(Functions.Proc.class)))
             .thenAnswer(invocation -> {
-                io.temporal.workflow.Functions.Proc proc = invocation.getArgument(0);
+                Functions.Proc proc = invocation.getArgument(0);
                 proc.apply();
                 return donePromise;
             });
-        asyncMock.when(() -> io.temporal.workflow.Async.procedure(any(io.temporal.workflow.Functions.Proc1.class), any()))
+        asyncMock.when(() -> Async.procedure(ArgumentMatchers.<Functions.Proc1<Object>>any(), any()))
             .thenAnswer(invocation -> {
-                io.temporal.workflow.Functions.Proc1 proc = invocation.getArgument(0);
+                @SuppressWarnings("unchecked")
+                Functions.Proc1<Object> proc = invocation.getArgument(0);
                 Object arg = invocation.getArgument(1);
                 proc.apply(arg);
                 return donePromise;
             });
-        asyncMock.when(() -> io.temporal.workflow.Async.procedure(any(io.temporal.workflow.Functions.Proc2.class), any(), any()))
+        asyncMock.when(() -> Async.procedure(ArgumentMatchers.<Functions.Proc2<Object, Object>>any(), any(), any()))
             .thenAnswer(invocation -> {
-                io.temporal.workflow.Functions.Proc2 proc = invocation.getArgument(0);
+                @SuppressWarnings("unchecked")
+                Functions.Proc2<Object, Object> proc = invocation.getArgument(0);
                 Object arg1 = invocation.getArgument(1);
                 Object arg2 = invocation.getArgument(2);
                 proc.apply(arg1, arg2);
@@ -157,10 +167,10 @@ class CheckoutWorkflowImplTest {
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(15000L, 0L, 0L, 15000L, "INR", null, null));
 
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
 
-        when(paymentActivity.authorizePayment(eq(15000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(15000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
 
         when(orderActivity.createOrder(any()))
@@ -174,13 +184,17 @@ class CheckoutWorkflowImplTest {
         assertThat(response.totalCents()).isEqualTo(15000L);
         assertThat(response.estimatedDeliveryMinutes()).isEqualTo(15);
 
+        String expectedOrderId = UUID.nameUUIDFromBytes(("order-" + WORKFLOW_ID).getBytes(StandardCharsets.UTF_8)).toString();
+        InventoryReserveRequest expectedReserveRequest =
+            new InventoryReserveRequest(WORKFLOW_ID + ":inventory:reserve", STORE_ID, cartItems);
+
         // Verify activities were called in the correct order
         InOrder inOrder = inOrder(cartActivity, pricingActivity, inventoryActivity,
             paymentActivity, orderActivity);
         inOrder.verify(cartActivity).validateCart(USER_ID);
         inOrder.verify(pricingActivity).calculatePrice(any());
-        inOrder.verify(inventoryActivity).reserveStock(cartItems);
-        inOrder.verify(paymentActivity).authorizePayment(eq(15000L), eq(PAYMENT_METHOD_ID), anyString());
+        inOrder.verify(inventoryActivity).reserveStock(expectedReserveRequest);
+        inOrder.verify(paymentActivity).authorizePayment(eq(expectedOrderId), eq(15000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString());
         inOrder.verify(orderActivity).createOrder(any());
         inOrder.verify(inventoryActivity).confirmStock(RESERVATION_ID);
         inOrder.verify(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
@@ -206,10 +220,10 @@ class CheckoutWorkflowImplTest {
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
 
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
 
-        when(paymentActivity.authorizePayment(eq(8000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(8000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
 
         when(orderActivity.createOrder(any()))
@@ -238,11 +252,11 @@ class CheckoutWorkflowImplTest {
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(10000L, 0L, 0L, 10000L, "INR", null, null));
 
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
 
         // Payment authorization fails
-        when(paymentActivity.authorizePayment(eq(10000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(10000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(null, false, "Insufficient funds"));
 
         CheckoutResponse response = workflow.checkout(request);
@@ -275,9 +289,9 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(5000L, 0L, 0L, 5000L, "INR", null, null));
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(5000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(5000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(null, false, "TOKEN_EXPIRED"));
 
         CheckoutResponse response = workflow.checkout(request);
@@ -300,10 +314,10 @@ class CheckoutWorkflowImplTest {
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(5000L, 0L, 0L, 5000L, "INR", null, null));
 
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
 
-        when(paymentActivity.authorizePayment(eq(5000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(5000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
 
         // Order creation throws an exception
@@ -337,7 +351,7 @@ class CheckoutWorkflowImplTest {
         // Nothing else should be called after cart validation fails
         verify(pricingActivity, never()).calculatePrice(any());
         verify(inventoryActivity, never()).reserveStock(any());
-        verify(paymentActivity, never()).authorizePayment(anyLong(), any(), any());
+        verify(paymentActivity, never()).authorizePayment(any(), anyLong(), any(), any(), any());
         verify(orderActivity, never()).createOrder(any());
     }
 
@@ -354,7 +368,7 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new PricingResult(5000L, 0L, 0L, 5000L, "INR", null, null));
 
         // Stock reservation fails
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(null, false));
 
         CheckoutResponse response = workflow.checkout(request);
@@ -363,7 +377,7 @@ class CheckoutWorkflowImplTest {
         assertThat(response.status()).contains("out of stock");
 
         // No payment or order should be attempted
-        verify(paymentActivity, never()).authorizePayment(anyLong(), any(), any());
+        verify(paymentActivity, never()).authorizePayment(any(), anyLong(), any(), any(), any());
         verify(orderActivity, never()).createOrder(any());
 
         // No inventory release needed since reservation was never made
@@ -383,10 +397,10 @@ class CheckoutWorkflowImplTest {
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
 
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
 
-        when(paymentActivity.authorizePayment(eq(8000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(8000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
 
         when(orderActivity.createOrder(any()))
@@ -404,8 +418,8 @@ class CheckoutWorkflowImplTest {
         // Verify coupon was redeemed first
         verify(couponActivity).redeemCoupon(couponCode, USER_ID, ORDER_ID, 2000L);
 
-        // Verify saga compensation rollbacks in order: coupon rollback, order cancel, inventory release
-        verify(couponActivity).rollbackUsage(couponCode, USER_ID);
+        // Verify saga compensation rollbacks in order: coupon unredeem, order cancel, inventory release
+        verify(couponActivity).unredeemCoupon(couponCode, USER_ID, ORDER_ID);
         verify(orderActivity).cancelOrder(ORDER_ID);
         verify(inventoryActivity).releaseStock(RESERVATION_ID);
 
@@ -426,10 +440,10 @@ class CheckoutWorkflowImplTest {
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
 
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
 
-        when(paymentActivity.authorizePayment(eq(8000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(8000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
 
         when(orderActivity.createOrder(any()))
@@ -444,8 +458,8 @@ class CheckoutWorkflowImplTest {
         assertThat(response.status()).startsWith("FAILED");
         assertThat(response.status()).contains("Warehouse unreachable");
 
-        // Verify coupon rollback was triggered
-        verify(couponActivity).rollbackUsage(couponCode, USER_ID);
+        // Verify coupon unredeem was triggered
+        verify(couponActivity).unredeemCoupon(couponCode, USER_ID, ORDER_ID);
         verify(orderActivity).cancelOrder(ORDER_ID);
         verify(inventoryActivity).releaseStock(RESERVATION_ID);
         verify(paymentActivity).voidPayment(eq(PAYMENT_ID), anyString());
@@ -464,10 +478,10 @@ class CheckoutWorkflowImplTest {
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
 
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
 
-        when(paymentActivity.authorizePayment(eq(8000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(8000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
 
         when(orderActivity.createOrder(any()))
@@ -482,8 +496,8 @@ class CheckoutWorkflowImplTest {
         assertThat(response.status()).startsWith("FAILED");
         assertThat(response.status()).contains("Coupon already used");
 
-        // Rollback should NOT be invoked since redemption failed before compensation registration
-        verify(couponActivity, never()).rollbackUsage(any(), any());
+        // Unredeem should NOT be invoked since redemption failed before compensation registration
+        verify(couponActivity, never()).unredeemCoupon(any(), any(), any());
         verify(orderActivity).cancelOrder(ORDER_ID);
         verify(inventoryActivity).releaseStock(RESERVATION_ID);
     }
@@ -497,9 +511,9 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(10000L, 0L, 0L, 10000L, "INR", "quote-1", "token-1"));
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(10000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(10000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(null, false, "INSUFFICIENT_FUNDS"));
 
         // Poison pill: releaseStock throws unexpected error after retry exhaustion
@@ -538,21 +552,51 @@ class CheckoutWorkflowImplTest {
     }
 
     @Test
-    void shouldFailWhenPricingReturnsZeroOrNegativeTotal() {
+    void shouldFailWhenPricingReturnsNegativeTotal() {
         CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
         List<CartItem> cartItems = List.of(new CartItem("prod-1", 2, 1000L));
 
         when(cartActivity.validateCart(USER_ID))
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
         when(pricingActivity.calculatePrice(any()))
-            .thenReturn(new PricingResult(2000L, 2000L, 0L, 0L, "INR", "quote-1", "token-1"));
+            .thenReturn(new PricingResult(2000L, 2100L, 0L, -100L, "INR", "quote-1", "token-1"));
 
         CheckoutResponse response = workflow.checkout(request);
 
         assertThat(response.status()).startsWith("FAILED");
         assertThat(response.status()).contains("Pricing calculation failed");
         verify(inventoryActivity, never()).reserveStock(any());
-        verify(paymentActivity, never()).authorizePayment(anyLong(), anyString(), anyString());
+        verify(paymentActivity, never()).authorizePayment(any(), anyLong(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void shouldCompleteZeroTotalOrderWithoutPaymentAuthorizationOrCapture() {
+        String couponCode = "FREE100";
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, couponCode, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 2, 1000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(2000L, 2000L, 0L, 0L, "INR", "quote-1", "token-1"));
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 12));
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        assertThat(response.orderId()).isEqualTo(ORDER_ID);
+        assertThat(response.totalCents()).isZero();
+        verify(paymentActivity, never()).authorizePayment(any(), anyLong(), any(), any(), any());
+        verify(paymentActivity, never()).capturePayment(anyString(), anyString());
+
+        ArgumentCaptor<OrderCreateRequest> captor = ArgumentCaptor.forClass(OrderCreateRequest.class);
+        verify(orderActivity).createOrder(captor.capture());
+        String expectedOrderId = UUID.nameUUIDFromBytes(("order-" + WORKFLOW_ID).getBytes(StandardCharsets.UTF_8)).toString();
+        assertThat(captor.getValue().orderId()).isEqualTo(expectedOrderId);
+        assertThat(captor.getValue().paymentId()).isNull();
     }
 
     @Test
@@ -564,9 +608,9 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(10000L, 0L, 0L, 10000L, "INR", "quote-1", "token-1"));
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(10000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(10000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenReturn(new OrderCreationResult(ORDER_ID, 15));
@@ -587,9 +631,9 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(15000L, 0L, 0L, 15000L, "INR", "quote-1", "token-1"));
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(15000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(15000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenReturn(new OrderCreationResult(ORDER_ID, 15));
@@ -614,9 +658,9 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(15000L, 0L, 0L, 15000L, "INR", "quote-1", "token-1"));
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(15000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(15000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenReturn(new OrderCreationResult(ORDER_ID, 15));
@@ -641,9 +685,9 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
         when(pricingActivity.calculatePrice(any()))
             .thenReturn(new PricingResult(10000L, 0L, 0L, 10000L, "INR", "quote-1", "token-1"));
-        when(inventoryActivity.reserveStock(cartItems))
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(10000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(10000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenReturn(new OrderCreationResult(ORDER_ID, 15));

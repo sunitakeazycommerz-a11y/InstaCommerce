@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/wallet")
+@RequestMapping({"/wallet", "/api/v1/wallet"})
 public class WalletController {
     private static final Logger log = LoggerFactory.getLogger(WalletController.class);
 
@@ -96,7 +96,15 @@ public class WalletController {
     @PostMapping("/debit")
     public ResponseEntity<WalletTransactionResponse> debit(Authentication auth,
                                                             @Valid @RequestBody DebitRequest request) {
-        UUID userId = UUID.fromString(auth.getName());
+        UUID userId = request.userId();
+        if (userId == null) {
+            try {
+                userId = UUID.fromString(auth.getName());
+            } catch (IllegalArgumentException ex) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "MISSING_USER_ID",
+                    "userId is required for internal wallet debit");
+            }
+        }
         ReferenceType refType = ReferenceType.valueOf(request.referenceType());
         WalletTransactionResponse response = walletService.debit(
             userId,

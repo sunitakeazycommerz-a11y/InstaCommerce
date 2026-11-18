@@ -10,6 +10,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.client.HttpStatusCodeException;
 
 class PaymentClientTest {
 
@@ -21,7 +22,7 @@ class PaymentClientTest {
         mockServer = new MockWebServer();
         mockServer.start();
         String baseUrl = mockServer.url("/").toString();
-        client = new PaymentClient(baseUrl);
+        client = new PaymentClient(baseUrl, "wallet-loyalty-service", "internal-secret-token");
     }
 
     @AfterEach
@@ -30,7 +31,7 @@ class PaymentClientTest {
     }
 
     @Test
-    @DisplayName("Returns PaymentResponse and verifies CAPTURED status as completed")
+    @DisplayName("Returns PaymentResponse, attaches internal headers, and verifies CAPTURED status")
     void returnsPaymentResponseOnCaptured200() throws Exception {
         String body = """
             {
@@ -50,6 +51,8 @@ class PaymentClientTest {
 
         RecordedRequest request = mockServer.takeRequest();
         assertThat(request.getPath()).isEqualTo("/api/v1/payments/pay_xyz_987");
+        assertThat(request.getHeader("X-Internal-Service")).isEqualTo("wallet-loyalty-service");
+        assertThat(request.getHeader("X-Internal-Token")).isEqualTo("internal-secret-token");
         assertThat(response).isNotNull();
         assertThat(response.paymentReference()).isEqualTo("pay_xyz_987");
         assertThat(response.status()).isEqualTo("CAPTURED");
@@ -59,7 +62,7 @@ class PaymentClientTest {
     }
 
     @Test
-    @DisplayName("isCompleted returns true for COMPLETED and AUTHORIZED statuses")
+    @DisplayName("isCompleted returns true only for COMPLETED and CAPTURED statuses")
     void testIsCompletedVariants() {
         PaymentClient.PaymentResponse completed = new PaymentClient.PaymentResponse("ref-1", "COMPLETED", 1000, "INR");
         PaymentClient.PaymentResponse captured = new PaymentClient.PaymentResponse("ref-2", "CAPTURED", 1000, "INR");
@@ -68,7 +71,7 @@ class PaymentClientTest {
 
         assertThat(completed.isCompleted()).isTrue();
         assertThat(captured.isCompleted()).isTrue();
-        assertThat(authorized.isCompleted()).isTrue();
+        assertThat(authorized.isCompleted()).isFalse();
         assertThat(failed.isCompleted()).isFalse();
     }
 
@@ -78,6 +81,6 @@ class PaymentClientTest {
         mockServer.enqueue(new MockResponse().setResponseCode(500));
 
         assertThatThrownBy(() -> client.verifyPayment("ref-err"))
-            .isInstanceOf(org.springframework.web.client.HttpStatusCodeException.class);
+            .isInstanceOf(HttpStatusCodeException.class);
     }
 }

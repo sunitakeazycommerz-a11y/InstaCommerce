@@ -12,8 +12,10 @@ import com.instacommerce.payment.domain.model.Refund;
 import com.instacommerce.payment.domain.model.RefundStatus;
 import com.instacommerce.payment.dto.request.RefundRequest;
 import com.instacommerce.payment.dto.response.RefundResponse;
+import com.instacommerce.payment.exception.PaymentGatewayTransientException;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.RefundRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -38,7 +40,7 @@ class RefundServiceDuplicateKeyTest {
     @BeforeEach
     void setUp() {
         service = new RefundService(refundRepository, paymentGateway, txHelper,
-            new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+            new SimpleMeterRegistry());
     }
 
     private Refund existingRefund(UUID paymentId, String idempotencyKey) {
@@ -58,6 +60,7 @@ class RefundServiceDuplicateKeyTest {
 
         @Test
         @DisplayName("Concurrent insert race returns the race-winner refund instead of 500")
+        @SuppressWarnings("unchecked")
         void raceWinnerReturnedOnDuplicateKey() {
             UUID paymentId = UUID.randomUUID();
             String key = "dedup-key-abc";
@@ -91,6 +94,26 @@ class RefundServiceDuplicateKeyTest {
 
             assertThatThrownBy(() -> service.refund(paymentId, request))
                 .isSameAs(dive);
+        }
+
+        @Test
+        @DisplayName("Transient PSP timeout leaves refund PENDING without marking failed")
+        void transientTimeoutLeavesRefundPending() {
+            UUID paymentId = UUID.randomUUID();
+            UUID refundId = UUID.randomUUID();
+            String key = "transient-key";
+            RefundRequest request = new RefundRequest(3000, "timeout", key);
+
+            when(refundRepository.findByIdempotencyKey(key)).thenReturn(Optional.empty());
+            when(txHelper.savePendingRefund(eq(paymentId), eq(request), eq(key)))
+                .thenReturn(new RefundTransactionHelper.RefundPendingResult(refundId, "psp_ref"));
+            when(paymentGateway.refund(eq("psp_ref"), eq(3000L), eq(key), eq(refundId)))
+                .thenThrow(new PaymentGatewayTransientException("PSP timeout", new RuntimeException("socket timeout")));
+
+            assertThatThrownBy(() -> service.refund(paymentId, request))
+                .isInstanceOf(PaymentGatewayTransientException.class);
+
+            verify(txHelper, never()).markRefundFailed(any(), any());
         }
     }
 }

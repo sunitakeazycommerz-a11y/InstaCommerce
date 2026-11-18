@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -178,15 +179,15 @@ class RefundTransactionHelperOccTest {
 
             verify(auditLogService).logSafely(
                 any(), // userId
-                org.mockito.ArgumentMatchers.eq("RECOVERY_REFUND_FAILED"),
-                org.mockito.ArgumentMatchers.eq("Refund"),
-                org.mockito.ArgumentMatchers.eq(refundId.toString()),
-                org.mockito.ArgumentMatchers.eq(Map.of("paymentId", payment.getId(), "reason", "gateway timeout")));
+                eq("RECOVERY_REFUND_FAILED"),
+                eq("Refund"),
+                eq(refundId.toString()),
+                eq(Map.of("paymentId", payment.getId(), "reason", "gateway timeout")));
 
             verify(outboxService).publish(
-                org.mockito.ArgumentMatchers.eq("Payment"),
-                org.mockito.ArgumentMatchers.eq(payment.getId().toString()),
-                org.mockito.ArgumentMatchers.eq("PaymentRefundFailed"),
+                eq("Payment"),
+                eq(payment.getId().toString()),
+                eq("PaymentRefundFailed"),
                 any());
         }
     }
@@ -225,7 +226,7 @@ class RefundTransactionHelperOccTest {
             verifyNoInteractions(ledgerService, outboxService, auditLogService);
 
             // EntityManager.detach called on initial read AND after CAS=0
-            verify(entityManager, org.mockito.Mockito.times(2)).detach(pending);
+            verify(entityManager, times(2)).detach(pending);
 
             // Payment refundedCents must NOT be bumped (the concurrent writer already did that)
             assertThat(payment.getRefundedCents()).isEqualTo(0);
@@ -255,7 +256,7 @@ class RefundTransactionHelperOccTest {
                 .isInstanceOf(IllegalStateException.class);
 
             verifyNoInteractions(ledgerService, outboxService, auditLogService);
-            verify(entityManager, org.mockito.Mockito.times(2)).detach(pending);
+            verify(entityManager, times(2)).detach(pending);
             assertThat(payment.getRefundedCents()).isEqualTo(0);
         }
 
@@ -281,7 +282,7 @@ class RefundTransactionHelperOccTest {
                 .hasMessageContaining("Hibernate session invalidated");
 
             verifyNoInteractions(ledgerService, outboxService, auditLogService);
-            verify(entityManager, org.mockito.Mockito.times(2)).detach(pending);
+            verify(entityManager, times(2)).detach(pending);
         }
 
         @Test
@@ -319,28 +320,28 @@ class RefundTransactionHelperOccTest {
 
             // --- ledger double-entry emitted exactly once ---
             verify(ledgerService).recordDoubleEntry(
-                org.mockito.ArgumentMatchers.eq(payment.getId()),
-                org.mockito.ArgumentMatchers.eq((long) pending.getAmountCents()),
-                org.mockito.ArgumentMatchers.eq("merchant_payable"),
-                org.mockito.ArgumentMatchers.eq("customer_receivable"),
-                org.mockito.ArgumentMatchers.eq("REFUND"),
-                org.mockito.ArgumentMatchers.eq(pending.getId().toString()),
-                org.mockito.ArgumentMatchers.eq("Refund"));
+                eq(payment.getId()),
+                eq((long) pending.getAmountCents()),
+                eq("merchant_payable"),
+                eq("customer_receivable"),
+                eq("REFUND"),
+                eq(pending.getId().toString()),
+                eq("Refund"));
 
             // --- outbox event emitted exactly once with PaymentRefunded ---
             verify(outboxService).publish(
-                org.mockito.ArgumentMatchers.eq("Payment"),
-                org.mockito.ArgumentMatchers.eq(payment.getId().toString()),
-                org.mockito.ArgumentMatchers.eq("PaymentRefunded"),
+                eq("Payment"),
+                eq(payment.getId().toString()),
+                eq("PaymentRefunded"),
                 any());
 
             // --- audit log emitted exactly once for recovery completion ---
             verify(auditLogService).logSafely(
                 any(),
-                org.mockito.ArgumentMatchers.eq("RECOVERY_REFUND_COMPLETED"),
-                org.mockito.ArgumentMatchers.eq("Refund"),
-                org.mockito.ArgumentMatchers.eq(pending.getId().toString()),
-                org.mockito.ArgumentMatchers.eq(Map.of(
+                eq("RECOVERY_REFUND_COMPLETED"),
+                eq("Refund"),
+                eq(pending.getId().toString()),
+                eq(Map.of(
                     "paymentId", payment.getId(),
                     "amountCents", pending.getAmountCents())));
 

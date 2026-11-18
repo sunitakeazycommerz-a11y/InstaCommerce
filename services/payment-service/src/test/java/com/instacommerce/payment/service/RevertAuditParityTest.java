@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -134,7 +135,7 @@ class RevertAuditParityTest {
                 eq("CAPTURE_REVERTED"),
                 eq("Payment"),
                 eq(payment.getId().toString()),
-                any(Map.class));
+                ArgumentMatchers.<Map<String, Object>>any());
         }
 
         @Test
@@ -146,8 +147,8 @@ class RevertAuditParityTest {
 
             paymentHelper.revertToAuthorized(payment.getId());
 
-            verify(outboxService, never()).publish(any(), any(), any(), any(Map.class));
-            verify(auditLogService, never()).logSafely(any(), any(), any(), any(), any(Map.class));
+            verify(outboxService, never()).publish(any(), any(), any(), ArgumentMatchers.<Map<String, Object>>any());
+            verify(auditLogService, never()).logSafely(any(), any(), any(), any(), ArgumentMatchers.<Map<String, Object>>any());
         }
     }
 
@@ -174,7 +175,7 @@ class RevertAuditParityTest {
                 eq("Payment"),
                 eq(payment.getId().toString()),
                 eq("PaymentVoidReverted"),
-                any(Map.class));
+                ArgumentMatchers.<Map<String, Object>>any());
         }
 
         @Test
@@ -193,7 +194,7 @@ class RevertAuditParityTest {
                 eq("VOID_REVERTED"),
                 eq("Payment"),
                 eq(payment.getId().toString()),
-                any(Map.class));
+                ArgumentMatchers.<Map<String, Object>>any());
         }
 
         @Test
@@ -205,8 +206,8 @@ class RevertAuditParityTest {
 
             paymentHelper.revertVoidToAuthorized(payment.getId());
 
-            verify(outboxService, never()).publish(any(), any(), any(), any(Map.class));
-            verify(auditLogService, never()).logSafely(any(), any(), any(), any(), any(Map.class));
+            verify(outboxService, never()).publish(any(), any(), any(), ArgumentMatchers.<Map<String, Object>>any());
+            verify(auditLogService, never()).logSafely(any(), any(), any(), any(), ArgumentMatchers.<Map<String, Object>>any());
         }
     }
 
@@ -237,7 +238,7 @@ class RevertAuditParityTest {
                 eq("REFUND_GATEWAY_FAILED"),
                 eq("Refund"),
                 eq(refund.getId().toString()),
-                any(Map.class));
+                ArgumentMatchers.<Map<String, Object>>any());
         }
 
         @Test
@@ -252,7 +253,7 @@ class RevertAuditParityTest {
 
             refundHelper.markRefundFailed(refund.getId(), "gateway timeout");
 
-            verify(auditLogService, never()).logSafely(any(), any(), any(), any(), any(Map.class));
+            verify(auditLogService, never()).logSafely(any(), any(), any(), any(), ArgumentMatchers.<Map<String, Object>>any());
         }
 
         @Test
@@ -266,7 +267,7 @@ class RevertAuditParityTest {
 
             refundHelper.markRefundFailed(refund.getId(), "gateway timeout");
 
-            verify(auditLogService, never()).logSafely(any(), any(), any(), any(), any(Map.class));
+            verify(auditLogService, never()).logSafely(any(), any(), any(), any(), ArgumentMatchers.<Map<String, Object>>any());
         }
     }
 }

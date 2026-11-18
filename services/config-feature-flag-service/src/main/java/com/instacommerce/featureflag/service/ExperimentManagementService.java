@@ -13,8 +13,11 @@ import com.instacommerce.featureflag.repository.ExperimentRepository;
 import com.instacommerce.featureflag.repository.ExperimentVariantRepository;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -121,9 +124,7 @@ public class ExperimentManagementService {
         List<ExperimentVariant> variants;
         if (request.variants() != null) {
             validateVariants(request.variants());
-            variantRepository.deleteByExperimentId(experiment.getId());
-            variants = buildVariants(experiment.getId(), request.variants());
-            variantRepository.saveAll(variants);
+            variants = reconcileVariants(experiment.getId(), request.variants());
         } else {
             variants = variantRepository.findByExperimentIdOrderByName(experiment.getId());
         }
@@ -188,24 +189,63 @@ public class ExperimentManagementService {
         }
     }
 
+    private List<ExperimentVariant> reconcileVariants(UUID experimentId, List<ExperimentVariantRequest> requests) {
+        List<ExperimentVariant> existing = variantRepository.findByExperimentIdOrderByName(experimentId);
+        Map<String, ExperimentVariant> existingByKey = new HashMap<>();
+        for (ExperimentVariant variant : existing) {
+            if (variant.getName() != null) {
+                existingByKey.put(variant.getName().trim().toLowerCase(Locale.ROOT), variant);
+            }
+        }
+
+        List<ExperimentVariant> result = new ArrayList<>(requests.size());
+        Set<UUID> retainedIds = new HashSet<>();
+        for (ExperimentVariantRequest request : requests) {
+            String normalizedKey = request.name() == null ? "" : request.name().trim().toLowerCase(Locale.ROOT);
+            ExperimentVariant variant = existingByKey.get(normalizedKey);
+            if (variant == null) {
+                variant = new ExperimentVariant();
+                variant.setExperimentId(experimentId);
+            } else {
+                retainedIds.add(variant.getId());
+            }
+            applyVariantFields(variant, request);
+            result.add(variant);
+        }
+
+        List<ExperimentVariant> obsolete = existing.stream()
+                .filter(v -> !retainedIds.contains(v.getId()))
+                .toList();
+        if (!obsolete.isEmpty()) {
+            variantRepository.deleteAll(obsolete);
+            variantRepository.flush();
+        }
+
+        return variantRepository.saveAll(result);
+    }
+
     private List<ExperimentVariant> buildVariants(UUID experimentId, List<ExperimentVariantRequest> requests) {
         List<ExperimentVariant> variants = new ArrayList<>();
         for (ExperimentVariantRequest request : requests) {
             ExperimentVariant variant = new ExperimentVariant();
             variant.setExperimentId(experimentId);
-            variant.setName(request.name());
-            if (request.weight() != null) {
-                variant.setWeight(request.weight());
-            }
-            if (request.payload() != null) {
-                variant.setPayload(request.payload());
-            }
-            if (request.control() != null) {
-                variant.setControl(request.control());
-            }
+            applyVariantFields(variant, request);
             variants.add(variant);
         }
         return variants;
+    }
+
+    private void applyVariantFields(ExperimentVariant variant, ExperimentVariantRequest request) {
+        variant.setName(request.name());
+        if (request.weight() != null) {
+            variant.setWeight(request.weight());
+        }
+        if (request.payload() != null) {
+            variant.setPayload(request.payload());
+        }
+        if (request.control() != null) {
+            variant.setControl(request.control());
+        }
     }
 
     private ExperimentResponse toResponse(Experiment experiment, List<ExperimentVariant> variants) {

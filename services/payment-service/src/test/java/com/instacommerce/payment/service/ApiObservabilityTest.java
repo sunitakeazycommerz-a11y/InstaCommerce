@@ -9,9 +9,13 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.instacommerce.payment.controller.WebhookController;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
+import com.instacommerce.payment.domain.model.Refund;
+import com.instacommerce.payment.domain.model.RefundStatus;
 import com.instacommerce.payment.dto.request.AuthorizeRequest;
 import com.instacommerce.payment.dto.request.RefundRequest;
 import com.instacommerce.payment.exception.PaymentGatewayException;
@@ -39,6 +43,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
 
@@ -286,11 +291,10 @@ class ApiObservabilityTest {
             when(paymentGateway.refund(anyString(), anyLong(), anyString(), any()))
                 .thenReturn(GatewayRefundResult.success("psp_refund_1"));
 
-            com.instacommerce.payment.domain.model.Refund savedRefund =
-                new com.instacommerce.payment.domain.model.Refund();
+            Refund savedRefund = new Refund();
             savedRefund.setId(refundId);
             savedRefund.setAmountCents(3000);
-            savedRefund.setStatus(com.instacommerce.payment.domain.model.RefundStatus.COMPLETED);
+            savedRefund.setStatus(RefundStatus.COMPLETED);
             when(refundTxHelper.completeRefund(eq(refundId), eq(paymentId), eq(request), anyString()))
                 .thenReturn(savedRefund);
 
@@ -353,12 +357,12 @@ class ApiObservabilityTest {
             when(paymentRepository.findByPspReferenceForUpdate(pspRef))
                 .thenReturn(Optional.of(disputed));
 
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            com.fasterxml.jackson.databind.node.ObjectNode rootNode = mapper.createObjectNode();
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode rootNode = mapper.createObjectNode();
             rootNode.put("id", eventId);
             rootNode.put("type", "charge.dispute.updated");
-            com.fasterxml.jackson.databind.node.ObjectNode dataNode = rootNode.putObject("data");
-            com.fasterxml.jackson.databind.node.ObjectNode objectNode = dataNode.putObject("object");
+            ObjectNode dataNode = rootNode.putObject("data");
+            ObjectNode objectNode = dataNode.putObject("object");
             objectNode.put("payment_intent", pspRef);
             objectNode.put("status", "needs_response");
             objectNode.put("reason", "product_not_received");
@@ -402,7 +406,7 @@ class ApiObservabilityTest {
             WebhookController controller = new WebhookController(signatureVerifier, webhookEventHandler);
 
             when(signatureVerifier.verify(anyString(), anyString())).thenReturn(true);
-            org.mockito.Mockito.doThrow(new RuntimeException("DB connection lost"))
+            Mockito.doThrow(new RuntimeException("DB connection lost"))
                 .when(webhookEventHandler).handle(anyString());
 
             ResponseEntity<String> response = controller.handleWebhook("{}", "valid-sig");

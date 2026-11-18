@@ -1,8 +1,10 @@
 package com.instacommerce.featureflag.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -15,6 +17,16 @@ public class FlagChangeStreamController {
 
     private static final Logger log = LoggerFactory.getLogger(FlagChangeStreamController.class);
     private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
+    private final ObjectMapper objectMapper;
+
+    public FlagChangeStreamController() {
+        this(new ObjectMapper());
+    }
+
+    @Autowired
+    public FlagChangeStreamController(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream() {
@@ -28,7 +40,13 @@ public class FlagChangeStreamController {
     }
 
     public void broadcast(String flagKey, Object newValue) {
-        String data = String.format("{\"flag\":\"%s\",\"value\":%s}", flagKey, newValue);
+        String data;
+        try {
+            data = objectMapper.writeValueAsString(new FlagChangedEvent(flagKey, newValue));
+        } catch (Exception e) {
+            log.warn("Failed to serialize FlagChangedEvent for flag={}: {}", flagKey, e.getMessage());
+            return;
+        }
         for (SseEmitter emitter : emitters) {
             try {
                 emitter.send(SseEmitter.event()
@@ -39,4 +57,6 @@ public class FlagChangeStreamController {
             }
         }
     }
+
+    public record FlagChangedEvent(String flag, Object value) {}
 }

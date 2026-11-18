@@ -32,6 +32,7 @@ import com.instacommerce.payment.service.OutboxService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +44,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -272,8 +274,8 @@ class WebhookRefundHandlerTest {
                 objectMapper.createObjectNode().put("amount_refunded", 5000), null);
 
             @SuppressWarnings("unchecked")
-            ArgumentCaptor<java.util.Map<String, Object>> payloadCaptor =
-                ArgumentCaptor.forClass(java.util.Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor =
+                ArgumentCaptor.forClass(Map.class);
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentRefunded"), payloadCaptor.capture());
@@ -437,8 +439,8 @@ class WebhookRefundHandlerTest {
                 objectMapper.createObjectNode().put("amount_refunded", 4000), null);
 
             @SuppressWarnings("unchecked")
-            ArgumentCaptor<java.util.Map<String, Object>> payloadCaptor =
-                ArgumentCaptor.forClass(java.util.Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor =
+                ArgumentCaptor.forClass(Map.class);
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentRefunded"), payloadCaptor.capture());
@@ -480,14 +482,14 @@ class WebhookRefundHandlerTest {
                 objectMapper, processedWebhookEventRepository, mockProcessor);
 
             when(processedWebhookEventRepository.existsById("evt_lock")).thenReturn(false);
-            org.mockito.Mockito.doThrow(new PessimisticLockingFailureException("lock"))
+            Mockito.doThrow(new PessimisticLockingFailureException("lock"))
                 .doNothing()
                 .when(mockProcessor)
                 .processEvent(eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class), any(String.class));
 
             handler.handle(refundWebhookPayload("evt_lock", 5000));
 
-            verify(mockProcessor, org.mockito.Mockito.times(2)).processEvent(
+            verify(mockProcessor, Mockito.times(2)).processEvent(
                 eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class), any(String.class));
         }
 
@@ -562,8 +564,8 @@ class WebhookRefundHandlerTest {
 
             // Outbox uses internal refund ID
             @SuppressWarnings("unchecked")
-            ArgumentCaptor<java.util.Map<String, Object>> payloadCaptor =
-                ArgumentCaptor.forClass(java.util.Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor =
+                ArgumentCaptor.forClass(Map.class);
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentRefunded"), payloadCaptor.capture());
@@ -676,7 +678,7 @@ class WebhookRefundHandlerTest {
                 eq("REFUND"), eq("evt_mixed"), eq("Refund (webhook)"));
 
             // Two outbox calls
-            verify(outboxService, org.mockito.Mockito.times(2)).publish(
+            verify(outboxService, Mockito.times(2)).publish(
                 eq("Payment"), eq(p.getId().toString()), eq("PaymentRefunded"), any());
         }
 

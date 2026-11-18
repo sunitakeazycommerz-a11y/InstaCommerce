@@ -166,7 +166,7 @@ public class ExperimentEvaluationService {
     public static int computeBucketPercent(String assignmentKey, String experimentSalt) {
         String input = assignmentKey + ":" + experimentSalt;
         int hash = Hashing.murmur3_32_fixed().hashString(input, StandardCharsets.UTF_8).asInt();
-        return (hash & 0x7FFFFFFF) % 100;
+        return Math.floorMod(hash, 100);
     }
 
     private int computeBucket(String assignmentKey, String salt, Long switchbackWindow, int totalWeight) {
@@ -175,7 +175,7 @@ public class ExperimentEvaluationService {
             input += ":" + switchbackWindow;
         }
         int hash = Hashing.murmur3_32_fixed().hashString(input, StandardCharsets.UTF_8).asInt();
-        return (hash & 0x7FFFFFFF) % totalWeight;
+        return Math.floorMod(hash, totalWeight);
     }
 
     private UUID logExposure(Experiment experiment, ExperimentVariant variant, UUID userId,

@@ -80,9 +80,14 @@ public class FlagEvaluationService {
 
             case USER_LIST -> evaluateUserList(flag, key, userId);
 
-            case JSON -> new FlagEvaluationResponse(key,
-                    parseValue(flag.getDefaultValue()),
-                    FlagEvaluationResponse.SOURCE_DEFAULT);
+            case JSON -> {
+                if (!flag.isEnabled()) {
+                    yield new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
+                }
+                yield new FlagEvaluationResponse(key,
+                        parseValue(flag.getDefaultValue()),
+                        FlagEvaluationResponse.SOURCE_DEFAULT);
+            }
         };
     }
 

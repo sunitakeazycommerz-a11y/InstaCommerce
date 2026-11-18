@@ -28,6 +28,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPOutputStream;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -102,6 +103,7 @@ public class ArchiveExportPipelineService {
   }
 
   @Scheduled(cron = "0 0 2 * * *", zone = "UTC")
+  @SchedulerLock(name = "auditArchiveExport", lockAtLeastFor = "PT5M", lockAtMostFor = "PT1H")
   @Transactional
   public void exportAuditEventsToArchive() {
     log.info("Starting nightly audit archive export pipeline");
@@ -171,7 +173,7 @@ public class ArchiveExportPipelineService {
       uploadToGcsGlacier(archiveFile);
 
       AuditArchiveManifest manifest =
-          createManifest(events.size(), archiveFile, dateRangeStart, dateRangeEnd, creationMethod);
+          createManifest(events, archiveFile, dateRangeStart, dateRangeEnd, creationMethod);
       manifest = manifestRepository.save(manifest);
 
       return verifyArchiveIntegrity(manifest, gcsObjectPath);
@@ -272,17 +274,33 @@ public class ArchiveExportPipelineService {
   }
 
   private AuditArchiveManifest createManifest(
-      long rowCount,
+      List<AuditEvent> events,
       ArchiveFile archiveFile,
       Instant dateRangeStart,
       Instant dateRangeEnd,
       String creationMethod) {
+    Long firstSeq = null;
+    Long lastSeq = null;
+    String lastHash = null;
+    for (AuditEvent event : events) {
+      Long seq = event.getSequenceNumber();
+      if (seq != null) {
+        if (firstSeq == null || seq < firstSeq) {
+          firstSeq = seq;
+        }
+        if (lastSeq == null || seq > lastSeq) {
+          lastSeq = seq;
+          lastHash = event.getEventHash();
+        }
+      }
+    }
+
     Instant now = Instant.now();
     return AuditArchiveManifest.builder()
         .archiveYear(archiveFile.archiveYear())
         .archiveMonth(archiveFile.archiveMonth())
         .s3GlacierPath("gs://" + archiveBucketName + "/" + archiveFile.gcsPath())
-        .rowCount(rowCount)
+        .rowCount((long) events.size())
         .compressedSizeBytes(archiveFile.compressedSizeBytes())
         .checksumSha256(archiveFile.checksumSha256())
         .dateRangeStart(dateRangeStart)
@@ -291,6 +309,9 @@ public class ArchiveExportPipelineService {
         .retrievableUntil(now.plus(retentionDays, ChronoUnit.DAYS))
         .verificationStatus("PENDING")
         .creationMethod(creationMethod)
+        .firstSequence(firstSeq)
+        .lastSequence(lastSeq)
+        .lastEventHash(lastHash)
         .build();
   }
 
@@ -302,6 +323,22 @@ public class ArchiveExportPipelineService {
       if (blob == null || blob.getSize() <= 0) {
         throw new IllegalStateException(
             "Archive blob missing or empty after upload: " + manifest.getS3GlacierPath());
+      }
+
+      byte[] remoteBytes = blob.getContent();
+      if (remoteBytes == null || remoteBytes.length == 0) {
+        throw new IllegalStateException(
+            "Archive blob content empty or unreadable after upload: " + manifest.getS3GlacierPath());
+      }
+      String actualSha256 = sha256Hex(remoteBytes);
+      if (!actualSha256.equals(manifest.getChecksumSha256())) {
+        throw new IllegalStateException(
+            "Archive SHA-256 verification failed for "
+                + manifest.getS3GlacierPath()
+                + ": expected="
+                + manifest.getChecksumSha256()
+                + ", actual="
+                + actualSha256);
       }
 
       manifest.setVerificationStatus("VERIFIED");

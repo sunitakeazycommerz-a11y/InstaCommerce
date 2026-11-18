@@ -17,6 +17,7 @@ import com.instacommerce.checkout.dto.CartValidationResult;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
 import com.instacommerce.checkout.dto.InventoryReservationResult;
+import com.instacommerce.checkout.dto.InventoryReserveRequest;
 import com.instacommerce.checkout.dto.OrderCreateRequest;
 import com.instacommerce.checkout.dto.OrderCreationResult;
 import com.instacommerce.checkout.dto.PaymentAuthResult;
@@ -126,7 +127,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(13000L, 0L, 2000L, 15000L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(15000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(15000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenReturn(new OrderCreationResult(ORDER_ID, 15));
@@ -166,7 +167,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(45000L, 0L, 0L, 45000L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(45000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(45000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(null, false, "INSUFFICIENT_FUNDS"));
 
         CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
@@ -198,7 +199,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(18000L, 0L, 0L, 18000L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(18000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(18000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenThrow(new RuntimeException("Order database deadlock connection error"));
@@ -228,7 +229,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(4000L, 500L, 0L, 3500L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(3500L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(3500L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenReturn(new OrderCreationResult(ORDER_ID, 12));
@@ -260,7 +261,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(12000L, 0L, 0L, 12000L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(eq(12000L), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(12000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
             .thenReturn(new PaymentAuthResult(null, false, "CARD_EXPIRED"));
         doThrow(new RuntimeException("Inventory service connection refused"))
             .when(inventoryActivity).releaseStock(RESERVATION_ID);
@@ -294,12 +295,13 @@ class CheckoutSagaCompensationIntegrationTest {
         private final PricingActivity mock;
         TestPricingActivity(PricingActivity mock) { this.mock = mock; }
         @Override public PricingResult calculatePrice(PricingRequest request) { return mock.calculatePrice(request); }
+        @Override public void unredeemCoupon(String code, String userId, String orderId) { mock.unredeemCoupon(code, userId, orderId); }
     }
 
     static class TestInventoryActivity implements InventoryActivity {
         private final InventoryActivity mock;
         TestInventoryActivity(InventoryActivity mock) { this.mock = mock; }
-        @Override public InventoryReservationResult reserveStock(List<CartItem> items) { return mock.reserveStock(items); }
+        @Override public InventoryReservationResult reserveStock(InventoryReserveRequest request) { return mock.reserveStock(request); }
         @Override public void confirmStock(String reservationId) { mock.confirmStock(reservationId); }
         @Override public void releaseStock(String reservationId) { mock.releaseStock(reservationId); }
     }
@@ -307,8 +309,8 @@ class CheckoutSagaCompensationIntegrationTest {
     static class TestPaymentActivity implements PaymentActivity {
         private final PaymentActivity mock;
         TestPaymentActivity(PaymentActivity mock) { this.mock = mock; }
-        @Override public PaymentAuthResult authorizePayment(long amountCents, String paymentMethodId, String idempotencyKey) {
-            return mock.authorizePayment(amountCents, paymentMethodId, idempotencyKey);
+        @Override public PaymentAuthResult authorizePayment(String orderId, long amountCents, String currency, String paymentMethodId, String idempotencyKey) {
+            return mock.authorizePayment(orderId, amountCents, currency, paymentMethodId, idempotencyKey);
         }
         @Override public void capturePayment(String paymentId, String idempotencyKey) { mock.capturePayment(paymentId, idempotencyKey); }
         @Override public void voidPayment(String paymentId, String idempotencyKey) { mock.voidPayment(paymentId, idempotencyKey); }

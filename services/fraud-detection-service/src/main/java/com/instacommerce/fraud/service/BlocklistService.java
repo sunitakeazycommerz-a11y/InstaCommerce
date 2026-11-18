@@ -37,11 +37,11 @@ public class BlocklistService {
     @Transactional
     public BlockedEntity block(String entityType, String entityValue, String reason,
                                Instant expiresAt, String blockedBy) {
-        // Deactivate existing blocks first
+        // Deactivate existing blocks first and flush before inserting the new active row
         blockedEntityRepository.findActiveBlockByEntityTypeAndValue(entityType, entityValue)
                 .ifPresent(existing -> {
                     existing.setActive(false);
-                    blockedEntityRepository.save(existing);
+                    blockedEntityRepository.saveAndFlush(existing);
                 });
 
         BlockedEntity entity = new BlockedEntity();

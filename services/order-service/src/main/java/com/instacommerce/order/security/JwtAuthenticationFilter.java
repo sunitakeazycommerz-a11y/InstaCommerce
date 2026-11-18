@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
+import org.slf4j.MDC;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -55,24 +56,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             Jws<Claims> jws = jwtService.validateAccessToken(token);
             String subject = jws.getPayload().getSubject();
             if (subject != null) {
-                org.slf4j.MDC.put("userId", subject);
-                org.slf4j.MDC.put("user_id", subject);
+                MDC.put("userId", subject);
+                MDC.put("user_id", subject);
             }
             Object storeClaim = jws.getPayload().get("store_id");
             if (storeClaim == null) {
                 storeClaim = jws.getPayload().get("storeId");
             }
             if (storeClaim != null) {
-                org.slf4j.MDC.put("storeId", storeClaim.toString());
-                org.slf4j.MDC.put("store_id", storeClaim.toString());
+                MDC.put("storeId", storeClaim.toString());
+                MDC.put("store_id", storeClaim.toString());
             }
             Object tenantClaim = jws.getPayload().get("tenant_id");
             if (tenantClaim == null) {
                 tenantClaim = jws.getPayload().get("tenantId");
             }
             if (tenantClaim != null) {
-                org.slf4j.MDC.put("tenantId", tenantClaim.toString());
-                org.slf4j.MDC.put("tenant_id", tenantClaim.toString());
+                MDC.put("tenantId", tenantClaim.toString());
+                MDC.put("tenant_id", tenantClaim.toString());
             }
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                 subject,

@@ -21,6 +21,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -38,7 +39,7 @@ class LedgerServiceDedupTest {
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
         // Lenient: not all tests reach the TransactionTemplate code path
-        org.mockito.Mockito.lenient().when(transactionManager.getTransaction(any()))
+        Mockito.lenient().when(transactionManager.getTransaction(any()))
             .thenReturn(new SimpleTransactionStatus());
         service = new LedgerService(ledgerEntryRepository, meterRegistry, transactionManager);
     }

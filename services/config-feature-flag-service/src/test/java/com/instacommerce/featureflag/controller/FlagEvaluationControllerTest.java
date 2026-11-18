@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.featureflag.dto.request.BulkEvaluationRequest;
 import com.instacommerce.featureflag.dto.response.BulkEvaluationResponse;
 import com.instacommerce.featureflag.dto.response.FlagEvaluationResponse;
+import com.instacommerce.featureflag.exception.TraceIdProvider;
+import com.instacommerce.featureflag.security.JwtAuthenticationFilter;
+import com.instacommerce.featureflag.security.SecurityConfig;
 import com.instacommerce.featureflag.service.BulkEvaluationService;
 import com.instacommerce.featureflag.service.FlagEvaluationService;
 import java.util.List;
@@ -14,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.http.MediaType;
@@ -33,8 +37,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
     excludeFilters = @ComponentScan.Filter(
         type = FilterType.ASSIGNABLE_TYPE,
         classes = {
-            com.instacommerce.featureflag.security.SecurityConfig.class,
-            com.instacommerce.featureflag.security.JwtAuthenticationFilter.class
+            SecurityConfig.class,
+            JwtAuthenticationFilter.class
         }
     )
 )
@@ -53,10 +57,10 @@ class FlagEvaluationControllerTest {
     private BulkEvaluationService bulkEvaluationService;
 
     @MockitoBean
-    private com.instacommerce.featureflag.exception.TraceIdProvider traceIdProvider;
+    private TraceIdProvider traceIdProvider;
 
     @MockitoBean
-    private org.springframework.cache.CacheManager cacheManager;
+    private CacheManager cacheManager;
 
     @Test
     @DisplayName("GET /flags returns map of all evaluated flags")

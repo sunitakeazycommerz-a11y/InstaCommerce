@@ -1,5 +1,6 @@
 package com.instacommerce.wallet.config;
 
+import com.instacommerce.wallet.security.InternalServiceAuthFilter;
 import com.instacommerce.wallet.security.JwtAuthenticationFilter;
 import com.instacommerce.wallet.security.RestAccessDeniedHandler;
 import com.instacommerce.wallet.security.RestAuthenticationEntryPoint;
@@ -8,6 +9,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -42,6 +44,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
+                                                   InternalServiceAuthFilter internalServiceAuthFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler,
                                                    CorsConfigurationSource corsConfigurationSource) throws Exception {
@@ -50,10 +53,13 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error").permitAll()
+                .requestMatchers(HttpMethod.POST, "/wallet/debit", "/api/v1/wallet/debit")
+                    .hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)
                 .accessDeniedHandler(accessDeniedHandler))
+            .addFilterBefore(internalServiceAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

@@ -4,16 +4,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.dto.AuditSearchCriteria;
 import com.instacommerce.audit.repository.AuditEventRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -30,40 +38,127 @@ public class AuditExportService {
 
     private final AuditEventRepository repository;
     private final ObjectMapper objectMapper;
+    private final EntityManager entityManager;
 
     public AuditExportService(AuditEventRepository repository, ObjectMapper objectMapper) {
+        this(repository, objectMapper, null);
+    }
+
+    @Autowired
+    public AuditExportService(AuditEventRepository repository,
+                              ObjectMapper objectMapper,
+                              EntityManager entityManager) {
         this.repository = repository;
         this.objectMapper = objectMapper;
+        this.entityManager = entityManager;
     }
 
     @Transactional(readOnly = true)
     public void exportCsv(AuditSearchCriteria criteria, HttpServletResponse response) throws IOException {
-        response.setContentType("text/csv");
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setContentType("text/csv; charset=UTF-8");
         response.setHeader("Content-Disposition", "attachment; filename=audit_export.csv");
+
+        Specification<AuditEvent> baseSpec = buildSpecification(criteria);
+        long totalExported = 0;
 
         try (PrintWriter writer = response.getWriter()) {
             writer.println("id,event_type,source_service,actor_id,actor_type,resource_type," +
                     "resource_id,action,ip_address,user_agent,correlation_id,details,created_at");
 
-            Specification<AuditEvent> spec = buildSpecification(criteria);
-            int page = 0;
-            Page<AuditEvent> batch;
+            Instant lastCreatedAt = null;
+            UUID lastId = null;
 
-            do {
-                PageRequest pageRequest = PageRequest.of(page, EXPORT_BATCH_SIZE,
-                        Sort.by(Sort.Direction.ASC, "createdAt"));
-                batch = repository.findAll(spec, pageRequest);
+            while (true) {
+                List<AuditEvent> batch = fetchNextBatch(baseSpec, lastCreatedAt, lastId);
+                if (batch.isEmpty()) {
+                    break;
+                }
 
-                for (AuditEvent event : batch.getContent()) {
+                for (AuditEvent event : batch) {
                     writer.println(toCsvRow(event));
                 }
 
-                writer.flush();
-                page++;
-            } while (batch.hasNext());
+                AuditEvent last = batch.get(batch.size() - 1);
+                lastCreatedAt = last.getCreatedAt();
+                lastId = last.getId();
+                totalExported += batch.size();
 
-            log.info("Exported {} audit events to CSV", batch.getTotalElements());
+                writer.flush();
+                if (entityManager != null) {
+                    entityManager.clear();
+                }
+
+                if (batch.size() < EXPORT_BATCH_SIZE) {
+                    break;
+                }
+            }
+
+            log.info("Exported {} audit events to CSV", totalExported);
         }
+    }
+
+    private List<AuditEvent> fetchNextBatch(Specification<AuditEvent> baseSpec,
+                                            Instant lastCreatedAt,
+                                            UUID lastId) {
+        if (entityManager != null) {
+            CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+            CriteriaQuery<AuditEvent> query = cb.createQuery(AuditEvent.class);
+            Root<AuditEvent> root = query.from(AuditEvent.class);
+
+            List<Predicate> predicates = new ArrayList<>();
+            Predicate basePredicate = baseSpec.toPredicate(root, query, cb);
+            if (basePredicate != null) {
+                predicates.add(basePredicate);
+            }
+            Predicate cursorPredicate = buildCursorPredicate(root, cb, lastCreatedAt, lastId);
+            if (cursorPredicate != null) {
+                predicates.add(cursorPredicate);
+            }
+            if (!predicates.isEmpty()) {
+                query.where(predicates.toArray(new Predicate[0]));
+            }
+            query.orderBy(cb.asc(root.get("createdAt")), cb.asc(root.get("id")));
+            return entityManager.createQuery(query)
+                    .setMaxResults(EXPORT_BATCH_SIZE)
+                    .getResultList();
+        }
+
+        Specification<AuditEvent> cursorSpec = (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            Predicate basePredicate = baseSpec.toPredicate(root, query, cb);
+            if (basePredicate != null) {
+                predicates.add(basePredicate);
+            }
+            Predicate cursorPredicate = buildCursorPredicate(root, cb, lastCreatedAt, lastId);
+            if (cursorPredicate != null) {
+                predicates.add(cursorPredicate);
+            }
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+        PageRequest pageRequest = PageRequest.of(0, EXPORT_BATCH_SIZE,
+                Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
+        Page<AuditEvent> batch = repository.findAll(cursorSpec, pageRequest);
+        return batch.getContent();
+    }
+
+    private static Predicate buildCursorPredicate(Root<AuditEvent> root,
+                                                  CriteriaBuilder cb,
+                                                  Instant lastCreatedAt,
+                                                  UUID lastId) {
+        if (lastCreatedAt == null) {
+            return null;
+        }
+        if (lastId == null) {
+            return cb.greaterThan(root.get("createdAt"), lastCreatedAt);
+        }
+        return cb.or(
+                cb.greaterThan(root.get("createdAt"), lastCreatedAt),
+                cb.and(
+                        cb.equal(root.get("createdAt"), lastCreatedAt),
+                        cb.greaterThan(root.get("id"), lastId)
+                )
+        );
     }
 
     private String toCsvRow(AuditEvent event) {
@@ -96,14 +191,23 @@ public class AuditExportService {
         }
     }
 
-    private static String escapeCsv(String value) {
+    static String escapeCsv(String value) {
         if (value == null) {
             return "";
         }
-        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            return "\"" + value.replace("\"", "\"\"") + "\"";
+        String sanitized = value;
+        if (!sanitized.isEmpty()) {
+            char first = sanitized.charAt(0);
+            if (first == '=' || first == '+' || first == '-' || first == '@'
+                    || first == '\t' || first == '\r') {
+                sanitized = "'" + sanitized;
+            }
         }
-        return value;
+        if (sanitized.contains(",") || sanitized.contains("\"")
+                || sanitized.contains("\n") || sanitized.contains("\r")) {
+            return "\"" + sanitized.replace("\"", "\"\"") + "\"";
+        }
+        return sanitized;
     }
 
     private static String str(Object obj) {

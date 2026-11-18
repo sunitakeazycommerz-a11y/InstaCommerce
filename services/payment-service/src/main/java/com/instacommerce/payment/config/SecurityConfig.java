@@ -56,6 +56,9 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/metrics/**").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .requestMatchers("/actuator/**").hasRole("ADMIN")
                 .requestMatchers("/error", "/payments/webhook", "/api/payments/webhook", "/api/v1/payments/webhook").permitAll()
+                .requestMatchers(HttpMethod.POST, "/payments/authorize",
+                    "/api/payments/authorize",
+                    "/api/v1/payments/authorize").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .requestMatchers(HttpMethod.POST, "/payments/*/capture", "/payments/*/void",
                     "/api/payments/*/capture", "/api/payments/*/void",
                     "/api/v1/payments/*/capture", "/api/v1/payments/*/void").hasAnyRole("ADMIN", "INTERNAL_SERVICE")

@@ -143,7 +143,7 @@ class CheckoutSecurityConfigTest {
         doReturn(List.of(new SimpleGrantedAuthority("ROLE_USER"))).when(jwtService).extractAuthorities(claims);
 
         CheckoutWorkflow workflow = mock(CheckoutWorkflow.class);
-        when(idempotencyService.findValidResponse("idem-sec-1")).thenReturn(Optional.empty());
+        when(idempotencyService.findValidResponse("user-1:idem-sec-1")).thenReturn(Optional.empty());
         when(workflowClient.newWorkflowStub(eq(CheckoutWorkflow.class), any(WorkflowOptions.class))).thenReturn(workflow);
         when(workflow.checkout(any(CheckoutRequest.class))).thenReturn(CheckoutResponse.success("ord-sec-1", 1000, 10));
 
@@ -156,9 +156,14 @@ class CheckoutSecurityConfigTest {
             .andExpect(jsonPath("$.orderId").value("ord-sec-1"));
     }
 
+    @SuppressWarnings("unchecked")
+    private static Jws<Claims> mockJws() {
+        return mock(Jws.class);
+    }
+
     @Test
     void regularUserForbiddenFromCheckoutDlqEndpoints() throws Exception {
-        Jws<Claims> jws = mock(Jws.class);
+        Jws<Claims> jws = mockJws();
         Claims claims = mock(Claims.class);
         when(jwtService.validateAccessToken("user-jwt")).thenReturn(jws);
         when(jws.getPayload()).thenReturn(claims);
@@ -186,7 +191,7 @@ class CheckoutSecurityConfigTest {
 
     @Test
     void adminAndInternalServiceCanAccessCheckoutDlqEndpoints() throws Exception {
-        Jws<Claims> adminJws = mock(Jws.class);
+        Jws<Claims> adminJws = mockJws();
         Claims adminClaims = mock(Claims.class);
         when(jwtService.validateAccessToken("admin-jwt")).thenReturn(adminJws);
         when(adminJws.getPayload()).thenReturn(adminClaims);
@@ -198,7 +203,7 @@ class CheckoutSecurityConfigTest {
                 .header("Authorization", "Bearer admin-jwt"))
             .andExpect(status().isOk());
 
-        Jws<Claims> internalJws = mock(Jws.class);
+        Jws<Claims> internalJws = mockJws();
         Claims internalClaims = mock(Claims.class);
         when(jwtService.validateAccessToken("internal-jwt")).thenReturn(internalJws);
         when(internalJws.getPayload()).thenReturn(internalClaims);

@@ -6,6 +6,7 @@ import io.temporal.serviceclient.WorkflowServiceStubs;
 import io.temporal.serviceclient.WorkflowServiceStubsOptions;
 import io.temporal.worker.Worker;
 import io.temporal.worker.WorkerFactory;
+import com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor;
 import com.instacommerce.checkout.workflow.CheckoutWorkflowImpl;
 import com.instacommerce.checkout.workflow.activity.CartActivityImpl;
 import com.instacommerce.checkout.workflow.activity.CouponActivityImpl;
@@ -15,6 +16,7 @@ import com.instacommerce.checkout.workflow.activity.PaymentActivityImpl;
 import com.instacommerce.checkout.workflow.activity.OrderActivityImpl;
 import com.instacommerce.checkout.workflow.activity.CompensationDlqActivityImpl;
 import java.time.Duration;
+import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -38,7 +40,7 @@ public class TemporalConfig {
     public WorkflowClient workflowClient(WorkflowServiceStubs serviceStubs, TemporalProperties properties) {
         WorkflowClientOptions options = WorkflowClientOptions.newBuilder()
             .setNamespace(properties.getNamespace())
-            .setContextPropagators(java.util.List.of(new com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor()))
+            .setContextPropagators(List.of(new TemporalHeaderInterceptor()))
             .build();
         return WorkflowClient.newInstance(serviceStubs, options);
     }

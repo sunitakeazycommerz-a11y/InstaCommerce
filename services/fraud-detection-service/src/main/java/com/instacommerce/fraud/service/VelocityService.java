@@ -1,6 +1,5 @@
 package com.instacommerce.fraud.service;
 
-import com.instacommerce.fraud.domain.model.VelocityCounter;
 import com.instacommerce.fraud.repository.VelocityCounterRepository;
 import java.time.Duration;
 import java.time.Instant;
@@ -40,11 +39,8 @@ public class VelocityService {
     @Transactional(readOnly = true)
     public long getCount(String entityType, String entityId, String counterType) {
         Instant now = Instant.now();
-        return velocityCounterRepository
-                .findByEntityTypeAndEntityIdAndCounterTypeAndWindowContaining(
-                        entityType, entityId, counterType, now)
-                .map(VelocityCounter::getCounterValue)
-                .orElse(0L);
+        return velocityCounterRepository.sumCounterValueInWindow(
+                entityType, entityId, counterType, now);
     }
 
     private Duration windowDuration(String counterType) {

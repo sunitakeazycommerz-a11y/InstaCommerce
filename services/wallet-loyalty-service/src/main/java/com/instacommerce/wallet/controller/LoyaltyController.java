@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/loyalty")
+@RequestMapping({"/loyalty", "/api/v1/loyalty"})
 public class LoyaltyController {
     private final LoyaltyService loyaltyService;
 

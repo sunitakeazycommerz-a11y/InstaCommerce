@@ -5,6 +5,9 @@ server:
 spring:
   application:
     name: config-feature-flag-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   config:
     import: optional:sm://
   lifecycle:
@@ -29,14 +32,15 @@ spring:
     type: caffeine
     caffeine:
       spec: maximumSize=5000,expireAfterWrite=30s
-  redis:
-    host: ${REDIS_HOST:localhost}
-    port: ${REDIS_PORT:6379}
-    timeout: 2s
-    lettuce:
-      pool:
-        min-idle: 2
-        max-active: 8
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+      lettuce:
+        pool:
+          min-idle: 2
+          max-active: 8
 
 feature-flag:
   jwt:

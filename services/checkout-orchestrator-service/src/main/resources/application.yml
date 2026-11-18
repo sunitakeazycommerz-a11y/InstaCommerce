@@ -5,6 +5,9 @@ server:
 spring:
   application:
     name: checkout-orchestrator-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   lifecycle:
     timeout-per-shutdown-phase: 30s
   datasource:
@@ -30,11 +33,11 @@ checkout:
     public-key: ${sm://jwt-rsa-public-key:${CHECKOUT_JWT_PUBLIC_KEY}}
   clients:
     cart:
-      base-url: ${CART_SERVICE_URL:http://localhost:8084}
+      base-url: ${CART_SERVICE_URL:http://localhost:8090}
       connect-timeout: 5000
       read-timeout: 10000
     pricing:
-      base-url: ${PRICING_SERVICE_URL:http://localhost:8087}
+      base-url: ${PRICING_SERVICE_URL:http://localhost:8089}
       connect-timeout: 5000
       read-timeout: 10000
     inventory:
@@ -42,11 +45,11 @@ checkout:
       connect-timeout: 5000
       read-timeout: 10000
     payment:
-      base-url: ${PAYMENT_SERVICE_URL:http://localhost:8086}
+      base-url: ${PAYMENT_SERVICE_URL:http://localhost:8085}
       connect-timeout: 5000
       read-timeout: 10000
     order:
-      base-url: ${ORDER_SERVICE_URL:http://localhost:8085}
+      base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
       connect-timeout: 5000
       read-timeout: 10000
 

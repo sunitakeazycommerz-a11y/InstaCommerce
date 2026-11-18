@@ -80,10 +80,13 @@ class BlocklistServiceTest {
         existing.setActive(true);
 
         when(repository.findActiveBlockByEntityTypeAndValue("USER", "user-abc")).thenReturn(Optional.of(existing));
+        when(repository.saveAndFlush(any(BlockedEntity.class))).thenAnswer(i -> i.getArgument(0));
         when(repository.save(any(BlockedEntity.class))).thenAnswer(i -> i.getArgument(0));
 
         Instant expiresAt = Instant.now().plus(7, ChronoUnit.DAYS);
         BlockedEntity saved = blocklistService.block("USER", "user-abc", "Suspicious chargeback", expiresAt, "admin-1");
+
+        verify(repository).saveAndFlush(existing);
 
         assertThat(existing.isActive()).isFalse();
         assertThat(saved.getEntityType()).isEqualTo("USER");

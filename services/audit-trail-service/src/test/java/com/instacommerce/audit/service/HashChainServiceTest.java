@@ -9,7 +9,9 @@ import static org.mockito.Mockito.when;
 import com.instacommerce.audit.domain.model.AuditEvent;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -114,6 +116,82 @@ class HashChainServiceTest {
 
         String tamperedHash = hashChainService.computeEventHash(tamperedSeq);
         assertThat(tamperedHash).isNotEqualTo(hash1);
+    }
+
+    @Test
+    @DisplayName("computeEventHash truncates createdAt to microseconds and detects tampering of extended fields")
+    void computeEventHash_truncatesMicrosAndCoversAllAuditFields() {
+        UUID eventId = UUID.randomUUID();
+        UUID actorId = UUID.randomUUID();
+        Instant nanos = Instant.parse("2026-03-01T10:00:00.123456789Z");
+        Instant micros = Instant.parse("2026-03-01T10:00:00.123456000Z");
+
+        Map<String, Object> detailsA = new LinkedHashMap<>();
+        detailsA.put("b", 2);
+        detailsA.put("a", "alpha");
+
+        Map<String, Object> detailsB = new LinkedHashMap<>();
+        detailsB.put("a", "alpha");
+        detailsB.put("b", 2);
+
+        AuditEvent base = AuditEvent.builder()
+            .id(eventId)
+            .sequenceNumber(1L)
+            .eventType("ORDER_CREATED")
+            .sourceService("order-service")
+            .action("CREATE")
+            .actorId(actorId)
+            .actorType("USER")
+            .resourceType("ORDER")
+            .resourceId("order-100")
+            .details(detailsA)
+            .ipAddress("10.0.0.1")
+            .userAgent("Mozilla/5.0")
+            .correlationId("corr-123")
+            .createdAt(nanos)
+            .previousHash("0000000000000000000000000000000000000000000000000000000000000000")
+            .build();
+
+        AuditEvent reorderedSameMicros = AuditEvent.builder()
+            .id(eventId)
+            .sequenceNumber(1L)
+            .eventType("ORDER_CREATED")
+            .sourceService("order-service")
+            .action("CREATE")
+            .actorId(actorId)
+            .actorType("USER")
+            .resourceType("ORDER")
+            .resourceId("order-100")
+            .details(detailsB)
+            .ipAddress("10.0.0.1")
+            .userAgent("Mozilla/5.0")
+            .correlationId("corr-123")
+            .createdAt(micros)
+            .previousHash("0000000000000000000000000000000000000000000000000000000000000000")
+            .build();
+
+        String baseHash = hashChainService.computeEventHash(base);
+        assertThat(hashChainService.computeEventHash(reorderedSameMicros)).isEqualTo(baseHash);
+
+        AuditEvent tamperedIp = AuditEvent.builder()
+            .id(eventId)
+            .sequenceNumber(1L)
+            .eventType("ORDER_CREATED")
+            .sourceService("order-service")
+            .action("CREATE")
+            .actorId(actorId)
+            .actorType("USER")
+            .resourceType("ORDER")
+            .resourceId("order-100")
+            .details(detailsA)
+            .ipAddress("10.0.0.2")
+            .userAgent("Mozilla/5.0")
+            .correlationId("corr-123")
+            .createdAt(micros)
+            .previousHash("0000000000000000000000000000000000000000000000000000000000000000")
+            .build();
+
+        assertThat(hashChainService.computeEventHash(tamperedIp)).isNotEqualTo(baseHash);
     }
 
     @Test

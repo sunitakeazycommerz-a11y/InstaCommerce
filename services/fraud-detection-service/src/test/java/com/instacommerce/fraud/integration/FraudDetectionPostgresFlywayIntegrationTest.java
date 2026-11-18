@@ -77,14 +77,14 @@ class FraudDetectionPostgresFlywayIntegrationTest {
         String entityValue = "card-hash-test-" + UUID.randomUUID();
 
         jdbcTemplate.update("""
-            INSERT INTO blocked_entities (id, entity_type, entity_value, reason, blocked_at, is_active)
-            VALUES (?, 'PAYMENT_METHOD', ?, 'Stolen card reported', NOW(), true)
+            INSERT INTO blocked_entities (id, entity_type, entity_value, reason, blocked_at, active)
+            VALUES (?, 'DEVICE', ?, 'Stolen card reported', NOW(), true)
             """, id1, entityValue);
 
         // Duplicate entity_type + entity_value violates unique index/constraint
         assertThatThrownBy(() -> jdbcTemplate.update("""
-            INSERT INTO blocked_entities (id, entity_type, entity_value, reason, blocked_at, is_active)
-            VALUES (?, 'PAYMENT_METHOD', ?, 'Duplicate insert test', NOW(), true)
+            INSERT INTO blocked_entities (id, entity_type, entity_value, reason, blocked_at, active)
+            VALUES (?, 'DEVICE', ?, 'Duplicate insert test', NOW(), true)
             """, id2, entityValue))
             .isInstanceOf(Exception.class)
             .hasMessageContaining("duplicate key value violates unique constraint");

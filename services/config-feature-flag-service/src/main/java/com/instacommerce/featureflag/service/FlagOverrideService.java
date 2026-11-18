@@ -52,12 +52,12 @@ public class FlagOverrideService {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "FLAG_NOT_FOUND",
                         "Flag with key '" + flagKey + "' not found"));
 
-        // Upsert: remove existing override for this user if present
+        // Upsert in place so Hibernate never triggers an INSERT before a queued DELETE on the unique constraint.
         Optional<FlagOverride> existing = overrideRepository
                 .findByFlagIdAndUserId(flag.getId(), request.userId());
-        existing.ifPresent(overrideRepository::delete);
+        String oldValue = existing.map(FlagOverride::getOverrideValue).orElse(null);
 
-        FlagOverride override = new FlagOverride();
+        FlagOverride override = existing.orElseGet(FlagOverride::new);
         override.setFlagId(flag.getId());
         override.setUserId(request.userId());
         override.setOverrideValue(request.value());
@@ -68,7 +68,7 @@ public class FlagOverrideService {
         override = overrideRepository.save(override);
 
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "OVERRIDE_ADDED",
-                existing.map(FlagOverride::getOverrideValue).orElse(null),
+                oldValue,
                 request.value() + " (user=" + request.userId() + ")",
                 changedBy));
 

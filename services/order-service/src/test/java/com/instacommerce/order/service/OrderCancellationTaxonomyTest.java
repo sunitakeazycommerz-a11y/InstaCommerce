@@ -25,6 +25,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 
 @ExtendWith(MockitoExtension.class)
 class OrderCancellationTaxonomyTest {
@@ -70,6 +71,7 @@ class OrderCancellationTaxonomyTest {
 
         orderService.cancelOrderByUser(orderId, userId, "Customer changed their mind");
 
+        @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderCancelled"), payloadCaptor.capture());
 
@@ -87,6 +89,7 @@ class OrderCancellationTaxonomyTest {
 
         orderService.cancelOrder(orderId, "Dark store stock shortage for SKU-1234", "warehouse-service");
 
+        @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderCancelled"), payloadCaptor.capture());
 
@@ -121,7 +124,7 @@ class OrderCancellationTaxonomyTest {
             .isInstanceOf(OrderAmendmentForbiddenException.class)
             .satisfies(ex -> {
                 OrderAmendmentForbiddenException forbidden = (OrderAmendmentForbiddenException) ex;
-                assertThat(forbidden.getStatus()).isEqualTo(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY);
+                assertThat(forbidden.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
                 assertThat(forbidden.getCode()).isEqualTo("ORDER_ALREADY_PACKING");
             });
     }

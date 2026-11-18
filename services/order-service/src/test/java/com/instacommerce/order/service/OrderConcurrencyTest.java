@@ -14,6 +14,8 @@ import com.instacommerce.order.domain.model.OrderStatus;
 import com.instacommerce.order.exception.InvalidOrderStateException;
 import com.instacommerce.order.repository.OrderRepository;
 import com.instacommerce.order.repository.OrderStatusHistoryRepository;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -133,7 +135,7 @@ class OrderConcurrencyTest {
     @Test
     @DisplayName("measures lock contention duration via Micrometer timer")
     void measuresLockContentionDurationViaMicrometerTimer() {
-        io.micrometer.core.instrument.simple.SimpleMeterRegistry meterRegistry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
         OrderService serviceWithMetrics = new OrderService(
             orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient, meterRegistry);
 
@@ -142,7 +144,7 @@ class OrderConcurrencyTest {
 
         serviceWithMetrics.updateOrderStatus(orderId, OrderStatus.PACKING, "warehouse:robot", "Packing started");
 
-        io.micrometer.core.instrument.Timer timer = meterRegistry.find("order.lock.contention.duration").timer();
+        Timer timer = meterRegistry.find("order.lock.contention.duration").timer();
         assertThat(timer).isNotNull();
         assertThat(timer.count()).isGreaterThanOrEqualTo(1L);
     }

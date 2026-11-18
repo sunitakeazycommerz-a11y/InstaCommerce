@@ -31,6 +31,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -315,7 +316,7 @@ class WebhookEventProcessorOccTest {
             // Payment was saved (cumulative path), ledger was written for untracked delta
             verify(paymentRepository).save(any(Payment.class));
             verify(ledgerService).recordDoubleEntry(
-                any(), org.mockito.ArgumentMatchers.eq(5000L),
+                any(), ArgumentMatchers.eq(5000L),
                 any(), any(), any(), any(), any());
         }
     }

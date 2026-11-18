@@ -4,12 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.dto.request.AuthorizeRequest;
 import com.instacommerce.payment.dto.response.PaymentResponse;
+import com.instacommerce.payment.gateway.GatewayAuthRequest;
 import com.instacommerce.payment.gateway.GatewayAuthResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.PaymentRepository;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -97,5 +100,37 @@ class PaymentServiceCurrencyValidationTest {
         assertThat(response).isNotNull();
         assertThat(response.currency()).isEqualTo("INR");
         assertThat(response.status()).isEqualTo("AUTHORIZED");
+    }
+
+    @Test
+    @DisplayName("Falls back to paymentMethodId when paymentMethod is omitted")
+    void usesEffectivePaymentMethodFallback() {
+        UUID orderId = UUID.randomUUID();
+        AuthorizeRequest request = new AuthorizeRequest(orderId, 2500L, "INR", "idem-pm-fallback", null, "pm_from_checkout");
+
+        Payment pending = new Payment();
+        pending.setId(UUID.randomUUID());
+        pending.setOrderId(orderId);
+        pending.setAmountCents(2500L);
+        pending.setCurrency("INR");
+        pending.setStatus(PaymentStatus.AUTHORIZE_PENDING);
+
+        Payment authorized = new Payment();
+        authorized.setId(pending.getId());
+        authorized.setOrderId(orderId);
+        authorized.setAmountCents(2500L);
+        authorized.setCurrency("INR");
+        authorized.setStatus(PaymentStatus.AUTHORIZED);
+        authorized.setPspReference("psp-ref-456");
+
+        when(txHelper.savePendingAuthorization(any(), anyString())).thenReturn(pending);
+        when(paymentGateway.authorize(any())).thenReturn(GatewayAuthResult.success("psp-ref-456"));
+        when(txHelper.completeAuthorization(any(), anyString())).thenReturn(authorized);
+
+        paymentService.authorize(request);
+
+        ArgumentCaptor<GatewayAuthRequest> captor = ArgumentCaptor.forClass(GatewayAuthRequest.class);
+        verify(paymentGateway).authorize(captor.capture());
+        assertThat(captor.getValue().paymentMethod()).isEqualTo("pm_from_checkout");
     }
 }

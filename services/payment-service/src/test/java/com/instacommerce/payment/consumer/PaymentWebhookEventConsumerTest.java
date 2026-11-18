@@ -1,5 +1,6 @@
 package com.instacommerce.payment.consumer;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -109,12 +110,12 @@ class PaymentWebhookEventConsumerTest {
             verify(bridge).forward(captor.capture());
 
             WebhookTransportEvent forwarded = captor.getValue();
-            org.assertj.core.api.Assertions.assertThat(forwarded.id()).isEqualTo("wh_001");
-            org.assertj.core.api.Assertions.assertThat(forwarded.psp()).isEqualTo("stripe");
-            org.assertj.core.api.Assertions.assertThat(forwarded.eventType()).isEqualTo("payment_intent.succeeded");
-            org.assertj.core.api.Assertions.assertThat(forwarded.schemaVersion()).isEqualTo(2);
-            org.assertj.core.api.Assertions.assertThat(forwarded.rawPspPayload()).isNotNull();
-            org.assertj.core.api.Assertions.assertThat(forwarded.rawPspPayload().toString())
+            assertThat(forwarded.id()).isEqualTo("wh_001");
+            assertThat(forwarded.psp()).isEqualTo("stripe");
+            assertThat(forwarded.eventType()).isEqualTo("payment_intent.succeeded");
+            assertThat(forwarded.schemaVersion()).isEqualTo(2);
+            assertThat(forwarded.rawPspPayload()).isNotNull();
+            assertThat(forwarded.rawPspPayload().toString())
                 .contains("evt_stripe_1");
         }
 

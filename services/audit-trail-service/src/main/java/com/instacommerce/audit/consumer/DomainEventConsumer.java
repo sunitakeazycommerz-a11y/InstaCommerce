@@ -1,5 +1,6 @@
 package com.instacommerce.audit.consumer;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.audit.dto.AuditEventRequest;
@@ -10,6 +11,7 @@ import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.env.Environment;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Component;
 public class DomainEventConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(DomainEventConsumer.class);
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final AuditIngestionService ingestionService;
     private final ObjectMapper objectMapper;
@@ -27,7 +30,7 @@ public class DomainEventConsumer {
     public DomainEventConsumer(AuditIngestionService ingestionService,
                                ObjectMapper objectMapper,
                                KafkaTemplate<String, String> kafkaTemplate,
-                               org.springframework.core.env.Environment env) {
+                               Environment env) {
         this.ingestionService = ingestionService;
         this.objectMapper = objectMapper;
         this.kafkaTemplate = kafkaTemplate;
@@ -85,12 +88,9 @@ public class DomainEventConsumer {
             sourceService = deriveSourceService(topic);
         }
 
-        UUID actorId = null;
-        if (envelope.has("userId") && !envelope.get("userId").isNull()) {
-            try {
-                actorId = UUID.fromString(envelope.get("userId").asText());
-            } catch (IllegalArgumentException ignored) {
-            }
+        UUID actorId = extractUuidField(envelope, "userId");
+        if (actorId == null && envelope.has("payload") && envelope.get("payload").isObject()) {
+            actorId = extractUuidField(envelope.get("payload"), "userId");
         }
 
         String actorType = envelope.has("actorType") ? envelope.get("actorType").asText()
@@ -108,9 +108,9 @@ public class DomainEventConsumer {
 
         Map<String, Object> details = null;
         if (envelope.has("payload") && !envelope.get("payload").isNull()) {
-            details = objectMapper.convertValue(envelope.get("payload"), Map.class);
+            details = objectMapper.convertValue(envelope.get("payload"), MAP_TYPE);
         } else if (envelope.isObject()) {
-            details = objectMapper.convertValue(envelope, Map.class);
+            details = objectMapper.convertValue(envelope, MAP_TYPE);
         }
 
         return new AuditEventRequest(
@@ -126,6 +126,25 @@ public class DomainEventConsumer {
                 null,
                 correlationId
         );
+    }
+
+    private static UUID extractUuidField(JsonNode node, String fieldName) {
+        if (node == null || !node.has(fieldName)) {
+            return null;
+        }
+        JsonNode field = node.get(fieldName);
+        if (field == null || field.isNull()) {
+            return null;
+        }
+        String raw = field.asText(null);
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private String deriveSourceService(String topic) {

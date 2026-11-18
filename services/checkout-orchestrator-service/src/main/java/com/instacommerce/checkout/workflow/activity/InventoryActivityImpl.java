@@ -1,17 +1,15 @@
 package com.instacommerce.checkout.workflow.activity;
 
-import com.instacommerce.checkout.dto.CartItem;
 import com.instacommerce.checkout.dto.InventoryReservationResult;
+import com.instacommerce.checkout.dto.InventoryReserveRequest;
 import com.instacommerce.checkout.exception.ServiceUnavailableException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.temporal.activity.Activity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
-
-import java.util.List;
-import java.util.Map;
 
 @Component
 public class InventoryActivityImpl implements InventoryActivity {
@@ -24,10 +22,12 @@ public class InventoryActivityImpl implements InventoryActivity {
 
     @Override
     @CircuitBreaker(name = "inventoryService", fallbackMethod = "reserveStockFallback")
-    public InventoryReservationResult reserveStock(List<CartItem> items) {
-        log.info("Reserving stock for {} items", items.size());
-        return restTemplate.postForObject("/api/inventory/reservations",
-            Map.of("items", items), InventoryReservationResult.class);
+    public InventoryReservationResult reserveStock(InventoryReserveRequest request) {
+        String resolvedKey = resolveIdempotencyKey(request.idempotencyKey());
+        InventoryReserveRequest payload = new InventoryReserveRequest(resolvedKey, request.storeId(), request.items());
+        int itemCount = request.items() != null ? request.items().size() : 0;
+        log.info("Reserving stock for {} items storeId={} idempotencyKey={}", itemCount, request.storeId(), resolvedKey);
+        return restTemplate.postForObject("/api/inventory/reservations", payload, InventoryReservationResult.class);
     }
 
     @Override
@@ -46,10 +46,18 @@ public class InventoryActivityImpl implements InventoryActivity {
     }
 
     @SuppressWarnings("unused")
-    private InventoryReservationResult reserveStockFallback(List<CartItem> items, Exception e) {
-        log.warn("Circuit breaker fallback for inventoryService reserveStock items={}: {}", items.size(), e.getMessage());
+    private InventoryReservationResult reserveStockFallback(InventoryReserveRequest request, Exception e) {
+        int itemCount = request != null && request.items() != null ? request.items().size() : 0;
+        log.warn("Circuit breaker fallback for inventoryService reserveStock items={}: {}", itemCount, e.getMessage());
         throw new ServiceUnavailableException("inventoryService",
                 "Inventory service unavailable for reserveStock", e);
+    }
+
+    private String resolveIdempotencyKey(String providedKey) {
+        if (providedKey != null && !providedKey.isBlank()) {
+            return providedKey;
+        }
+        return Activity.getExecutionContext().getInfo().getActivityId();
     }
 
     @SuppressWarnings("unused")

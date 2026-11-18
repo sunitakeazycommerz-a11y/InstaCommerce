@@ -12,6 +12,7 @@ import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import java.time.Instant;
 import java.util.Currency;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -63,6 +64,9 @@ public class PaymentTransactionHelper {
         payment.setStatus(PaymentStatus.AUTHORIZE_PENDING);
         payment.setIdempotencyKey(normalizedKey);
         payment.setPaymentMethod(request.effectivePaymentMethod());
+        if (request.userId() != null) {
+            payment.setMetadata(Map.of("userId", request.userId().toString()));
+        }
         return paymentRepository.save(payment);
     }
 
@@ -115,10 +119,14 @@ public class PaymentTransactionHelper {
                     "authorization_hold", "customer_receivable", "FAILURE_RELEASE",
                     p.getId().toString(), "Authorization release on failure (sync)");
             }
-            outboxService.publish("Payment", p.getId().toString(), "PaymentFailed",
-                Map.of("orderId", p.getOrderId(),
-                    "paymentId", p.getId(),
-                    "reason", safeReason));
+            Map<String, Object> failedPayload = new LinkedHashMap<>();
+            failedPayload.put("orderId", p.getOrderId());
+            failedPayload.put("paymentId", p.getId());
+            failedPayload.put("reason", safeReason);
+            if (p.getMetadata() != null && p.getMetadata().get("userId") != null) {
+                failedPayload.put("userId", p.getMetadata().get("userId").toString());
+            }
+            outboxService.publish("Payment", p.getId().toString(), "PaymentFailed", failedPayload);
             auditLogService.logSafely(null,
                 "PAYMENT_AUTHORIZATION_FAILED",
                 "Payment",
@@ -338,11 +346,15 @@ public class PaymentTransactionHelper {
                     "authorization_hold", "customer_receivable", "FAILURE_RELEASE",
                     p.getId().toString(), "Authorization release on failure (recovery)");
             }
-            outboxService.publish("Payment", p.getId().toString(), "PaymentFailed",
-                Map.of("orderId", p.getOrderId(),
-                    "paymentId", p.getId(),
-                    "reason", reason,
-                    "resolvedBy", "stale-pending-recovery"));
+            Map<String, Object> recoveryPayload = new LinkedHashMap<>();
+            recoveryPayload.put("orderId", p.getOrderId());
+            recoveryPayload.put("paymentId", p.getId());
+            recoveryPayload.put("reason", reason);
+            recoveryPayload.put("resolvedBy", "stale-pending-recovery");
+            if (p.getMetadata() != null && p.getMetadata().get("userId") != null) {
+                recoveryPayload.put("userId", p.getMetadata().get("userId").toString());
+            }
+            outboxService.publish("Payment", p.getId().toString(), "PaymentFailed", recoveryPayload);
             auditLogService.logSafely(null,
                 "RECOVERY_AUTH_FAILED",
                 "Payment",

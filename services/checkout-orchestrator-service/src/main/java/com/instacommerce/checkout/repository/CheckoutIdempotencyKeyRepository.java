@@ -14,5 +14,5 @@ public interface CheckoutIdempotencyKeyRepository extends JpaRepository<Checkout
 
     @Modifying
     @Query("DELETE FROM CheckoutIdempotencyKey k WHERE k.expiresAt < :cutoff")
-    int deleteExpiredKeys(Instant cutoff);
+    int deleteExpiredBefore(Instant cutoff);
 }

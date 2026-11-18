@@ -123,6 +123,11 @@ public class FlagCacheInvalidator implements MessageListener {
                 overridesCache.clear();
             }
 
+            var bulkCache = cacheManager.getCache("flag-overrides-bulk");
+            if (bulkCache != null) {
+                bulkCache.clear();
+            }
+
             log.trace("Invalidated flag cache: key={}", flagKey);
         } catch (Exception e) {
             log.warn("Error invalidating flag cache for key={}", flagKey, e);

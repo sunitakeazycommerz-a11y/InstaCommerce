@@ -47,13 +47,17 @@ public class FulfillmentEventConsumer {
                 UUID orderId = (event != null && event.orderId() != null)
                     ? event.orderId()
                     : resolveOrderId(envelope);
-                if (orderId != null && event != null && event.productId() != null) {
-                    orderService.applyOrderModification(
+                if (orderId != null && event != null
+                        && (event.productId() != null || (event.itemDeltas() != null && !event.itemDeltas().isEmpty()))) {
+                    orderService.applyOrderModification(new FulfillmentOrderEvent(
                         orderId,
                         event.productId(),
-                        event.missingQty() != null ? event.missingQty() : 1,
-                        event.refundCents() != null ? event.refundCents() : 0L
-                    );
+                        event.missingQty(),
+                        event.refundCents(),
+                        event.newVersion(),
+                        event.priceDeltaCents(),
+                        event.itemDeltas()
+                    ));
                 } else {
                     logger.info("Ignoring OrderModified event missing fields for aggregateId={}", envelope.aggregateId());
                 }

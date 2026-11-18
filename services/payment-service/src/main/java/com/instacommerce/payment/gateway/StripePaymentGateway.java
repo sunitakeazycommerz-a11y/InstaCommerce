@@ -11,6 +11,8 @@ import com.stripe.net.RequestOptions;
 import com.stripe.param.PaymentIntentCaptureParams;
 import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.RefundCreateParams;
+import java.util.Collections;
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -82,7 +84,7 @@ public class StripePaymentGateway implements PaymentGateway {
         RequestOptions options = buildOptions(idempotencyKey);
         try {
             PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
-            intent.cancel(java.util.Collections.emptyMap(), options);
+            intent.cancel(Collections.emptyMap(), options);
             return GatewayVoidResult.ok();
         } catch (StripeException ex) {
             throw toGatewayException(ex);
@@ -116,7 +118,7 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey, java.util.UUID internalRefundId) {
+    public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey, UUID internalRefundId) {
         ensureApiKey();
         try {
             RefundCreateParams params = RefundCreateParams.builder()

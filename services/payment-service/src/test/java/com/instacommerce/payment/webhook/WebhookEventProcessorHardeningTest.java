@@ -428,6 +428,7 @@ class WebhookEventProcessorHardeningTest {
 
         @Test
         @DisplayName("AUTHORIZE_PENDING failure does NOT release auth hold (no hold recorded yet)")
+        @SuppressWarnings("unchecked")
         void failFromAuthorizePending_noLedgerRelease() {
             Payment p = paymentInStatus(PaymentStatus.AUTHORIZE_PENDING, 5000);
             stubPaymentLookupWithSave(p);
@@ -461,6 +462,7 @@ class WebhookEventProcessorHardeningTest {
         @EnumSource(value = PaymentStatus.class,
             names = {"AUTHORIZED", "CAPTURE_PENDING", "VOID_PENDING"})
         @DisplayName("post-authorization failure releases auth hold")
+        @SuppressWarnings("unchecked")
         void failFromPostAuthState_releasesAuthHold(PaymentStatus status) {
             Payment p = paymentInStatus(status, 7000);
             stubPaymentLookupWithSave(p);

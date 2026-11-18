@@ -19,5 +19,9 @@ public interface LoyaltyAccountRepository extends JpaRepository<LoyaltyAccount, 
     @Query("SELECT la FROM LoyaltyAccount la WHERE la.userId = :userId")
     Optional<LoyaltyAccount> findByUserIdForUpdate(@Param("userId") UUID userId);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT la FROM LoyaltyAccount la WHERE la.id = :id")
+    Optional<LoyaltyAccount> findByIdForUpdate(@Param("id") UUID id);
+
     Slice<LoyaltyAccount> findAllBy(Pageable pageable);
 }

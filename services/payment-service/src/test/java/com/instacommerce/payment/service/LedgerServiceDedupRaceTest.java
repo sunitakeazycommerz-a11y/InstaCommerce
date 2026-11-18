@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -37,7 +38,7 @@ class LedgerServiceDedupRaceTest {
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
         // Lenient: not all tests reach the TransactionTemplate code path
-        org.mockito.Mockito.lenient().when(transactionManager.getTransaction(any()))
+        Mockito.lenient().when(transactionManager.getTransaction(any()))
             .thenReturn(new SimpleTransactionStatus());
         service = new LedgerService(ledgerEntryRepository, meterRegistry, transactionManager);
     }

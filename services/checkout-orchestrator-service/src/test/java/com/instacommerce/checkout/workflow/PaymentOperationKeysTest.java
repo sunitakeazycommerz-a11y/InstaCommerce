@@ -3,6 +3,7 @@ package com.instacommerce.checkout.workflow;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -71,7 +72,7 @@ class PaymentOperationKeysTest {
             String refund = keys.refund(paymentId);
 
             // All four keys must be distinct
-            assertEquals(4, java.util.Set.of(auth, capture, voidKey, refund).size(),
+            assertEquals(4, Set.of(auth, capture, voidKey, refund).size(),
                 "All operation keys must be unique");
         }
 

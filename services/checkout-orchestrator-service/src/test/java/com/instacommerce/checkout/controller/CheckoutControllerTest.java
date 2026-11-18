@@ -31,6 +31,7 @@ import io.temporal.api.common.v1.WorkflowExecution;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowExecutionAlreadyStarted;
 import io.temporal.client.WorkflowOptions;
+import io.temporal.client.WorkflowServiceException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
@@ -83,11 +84,11 @@ class CheckoutControllerTest {
         CheckoutRequest request = request();
         CheckoutResponse cachedResponse = CheckoutResponse.success("order-123", 2599, 18);
         CheckoutIdempotencyKey cachedKey = new CheckoutIdempotencyKey(
-            "idem-123",
+            "user-123:idem-123",
             objectMapper.writeValueAsString(cachedResponse),
             Instant.now().plus(Duration.ofMinutes(5))
         );
-        when(idempotencyKeyRepository.findByIdempotencyKey("idem-123")).thenReturn(Optional.of(cachedKey));
+        when(idempotencyKeyRepository.findByIdempotencyKey("user-123:idem-123")).thenReturn(Optional.of(cachedKey));
 
         ResponseEntity<CheckoutResponse> response = controller.initiateCheckout(request, "user-123", "idem-123");
 
@@ -100,7 +101,7 @@ class CheckoutControllerTest {
     void returnsAcceptedWithStatusWhenWorkflowAlreadyExists() {
         CheckoutRequest request = request();
         String workflowId = "checkout-user-123-idem-123";
-        when(idempotencyKeyRepository.findByIdempotencyKey("idem-123")).thenReturn(Optional.empty());
+        when(idempotencyKeyRepository.findByIdempotencyKey("user-123:idem-123")).thenReturn(Optional.empty());
         when(workflowClient.newWorkflowStub(eq(CheckoutWorkflow.class), any(WorkflowOptions.class))).thenReturn(workflow);
         when(workflow.checkout(any(CheckoutRequest.class))).thenThrow(new WorkflowExecutionAlreadyStarted(
             WorkflowExecution.newBuilder().setWorkflowId(workflowId).setRunId("run-123").build(),
@@ -122,14 +123,14 @@ class CheckoutControllerTest {
     void returnsAcceptedWithStatusWhenWorkflowExceptionWrapsAlreadyStarted() {
         CheckoutRequest request = request();
         String workflowId = "checkout-user-123-idem-123";
-        when(idempotencyKeyRepository.findByIdempotencyKey("idem-123")).thenReturn(Optional.empty());
+        when(idempotencyKeyRepository.findByIdempotencyKey("user-123:idem-123")).thenReturn(Optional.empty());
         when(workflowClient.newWorkflowStub(eq(CheckoutWorkflow.class), any(WorkflowOptions.class))).thenReturn(workflow);
         WorkflowExecutionAlreadyStarted inner = new WorkflowExecutionAlreadyStarted(
             WorkflowExecution.newBuilder().setWorkflowId(workflowId).setRunId("run-123").build(),
             CheckoutWorkflow.class.getSimpleName(),
             null
         );
-        when(workflow.checkout(any(CheckoutRequest.class))).thenThrow(new io.temporal.client.WorkflowServiceException(
+        when(workflow.checkout(any(CheckoutRequest.class))).thenThrow(new WorkflowServiceException(
             WorkflowExecution.newBuilder().setWorkflowId(workflowId).setRunId("run-123").build(),
             CheckoutWorkflow.class.getSimpleName(),
             inner
@@ -150,11 +151,11 @@ class CheckoutControllerTest {
         CheckoutRequest request = request();
         CheckoutResponse freshResponse = CheckoutResponse.success("order-456", 3199, 14);
         CheckoutIdempotencyKey expiredKey = new CheckoutIdempotencyKey(
-            "idem-123",
+            "user-123:idem-123",
             objectMapper.writeValueAsString(CheckoutResponse.success("old-order", 2599, 18)),
             Instant.now().minus(Duration.ofMinutes(1))
         );
-        when(idempotencyKeyRepository.findByIdempotencyKey("idem-123")).thenReturn(Optional.of(expiredKey));
+        when(idempotencyKeyRepository.findByIdempotencyKey("user-123:idem-123")).thenReturn(Optional.of(expiredKey));
         when(workflowClient.newWorkflowStub(eq(CheckoutWorkflow.class), any(WorkflowOptions.class))).thenReturn(workflow);
         when(workflow.checkout(request)).thenReturn(freshResponse);
 
@@ -167,7 +168,7 @@ class CheckoutControllerTest {
         ArgumentCaptor<CheckoutIdempotencyKey> savedCaptor = ArgumentCaptor.forClass(CheckoutIdempotencyKey.class);
         verify(idempotencyKeyRepository).save(savedCaptor.capture());
         CheckoutIdempotencyKey savedKey = savedCaptor.getValue();
-        assertThat(savedKey.getIdempotencyKey()).isEqualTo("idem-123");
+        assertThat(savedKey.getIdempotencyKey()).isEqualTo("user-123:idem-123");
         assertThat(savedKey.getCheckoutResponse()).isEqualTo(objectMapper.writeValueAsString(freshResponse));
         assertThat(savedKey.getExpiresAt()).isAfter(Instant.now().plus(Duration.ofMinutes(29)));
     }
@@ -319,10 +320,10 @@ class CheckoutControllerTest {
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
             .build();
 
-        when(idempotencyKeyRepository.findByIdempotencyKey("idem-v1")).thenReturn(Optional.empty());
+        when(idempotencyKeyRepository.findByIdempotencyKey("user-123:idem-v1")).thenReturn(Optional.empty());
         when(workflowClient.newWorkflowStub(eq(CheckoutWorkflow.class), any(WorkflowOptions.class))).thenReturn(workflow);
         when(workflow.checkout(any(CheckoutRequest.class))).thenReturn(CheckoutResponse.success("ord-v1", 2599, 12));
-        when(workflowClient.newWorkflowStub(CheckoutWorkflow.class, "wf-status")).thenReturn(workflow);
+        when(workflowClient.newWorkflowStub(CheckoutWorkflow.class, "checkout-user-123-status")).thenReturn(workflow);
         when(workflow.getStatus()).thenReturn("COMPLETED");
 
         SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("user-123", null));
@@ -335,7 +336,7 @@ class CheckoutControllerTest {
                 .andExpect(jsonPath("$.orderId").value("ord-v1"))
                 .andExpect(jsonPath("$.status").value("COMPLETED"));
 
-            when(idempotencyKeyRepository.findByIdempotencyKey("idem-legacy")).thenReturn(Optional.empty());
+            when(idempotencyKeyRepository.findByIdempotencyKey("user-123:idem-legacy")).thenReturn(Optional.empty());
             mockMvc.perform(post("/checkout")
                     .header("Idempotency-Key", "idem-legacy")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -346,7 +347,18 @@ class CheckoutControllerTest {
             SecurityContextHolder.clearContext();
         }
 
-        mockMvc.perform(get("/api/v1/checkout/wf-status/status"))
+        mockMvc.perform(get("/api/v1/checkout/checkout-user-123-status/status")
+                .principal(new TestingAuthenticationToken("user-123", null, "ROLE_USER")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("COMPLETED"));
+
+        mockMvc.perform(get("/api/v1/checkout/checkout-other-user-status/status")
+                .principal(new TestingAuthenticationToken("user-123", null, "ROLE_USER")))
+            .andExpect(status().isForbidden());
+
+        when(workflowClient.newWorkflowStub(CheckoutWorkflow.class, "checkout-other-user-status")).thenReturn(workflow);
+        mockMvc.perform(get("/api/v1/checkout/checkout-other-user-status/status")
+                .principal(new TestingAuthenticationToken("admin-1", null, "ROLE_ADMIN")))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("COMPLETED"));
 

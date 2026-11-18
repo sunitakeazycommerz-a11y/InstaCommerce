@@ -9,6 +9,8 @@ import com.instacommerce.wallet.exception.ApiException;
 import com.instacommerce.wallet.exception.DuplicateTransactionException;
 import com.instacommerce.wallet.repository.LoyaltyAccountRepository;
 import com.instacommerce.wallet.repository.LoyaltyTransactionRepository;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,17 +43,16 @@ public class LoyaltyService {
 
     @Transactional(readOnly = true)
     public LoyaltyResponse getBalance(UUID userId) {
-        LoyaltyAccount account = accountRepository.findByUserId(userId)
-            .orElseGet(() -> createAccount(userId));
-        return toResponse(account);
+        return accountRepository.findByUserId(userId)
+            .map(this::toResponse)
+            .orElseGet(() -> new LoyaltyResponse(0, LoyaltyTier.BRONZE.name(), 0));
     }
 
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public LoyaltyResponse earnPoints(UUID userId, String orderId, long orderTotalCents) {
-        LoyaltyAccount account = accountRepository.findByUserIdForUpdate(userId)
-            .orElseGet(() -> createAccount(userId));
+        LoyaltyAccount account = findOrCreateAccount(userId);
 
         int pointsPerRupee = walletProperties.getLoyalty().getPointsPerRupee();
         int pointsEarned = (int) ((orderTotalCents * pointsPerRupee) / 100);
@@ -70,7 +71,7 @@ public class LoyaltyService {
         txn.setReferenceType("ORDER");
         txn.setReferenceId(orderId);
         try {
-            transactionRepository.save(txn);
+            txn = transactionRepository.saveAndFlush(txn);
         } catch (DataIntegrityViolationException ex) {
             throw new DuplicateTransactionException("Transaction already exists for ref=ORDER/" + orderId);
         }
@@ -78,7 +79,18 @@ public class LoyaltyService {
         checkTierUpgrade(account);
         log.info("Earned {} points for user={} order={}", pointsEarned, userId, orderId);
 
-        outboxService.publish("Loyalty", account.getId().toString(), "PointsEarned", txn.getId());
+        Map<String, Object> earnedPayload = new LinkedHashMap<>();
+        earnedPayload.put("transactionId", txn.getId().toString());
+        earnedPayload.put("accountId", account.getId().toString());
+        earnedPayload.put("userId", userId.toString());
+        earnedPayload.put("orderId", orderId);
+        earnedPayload.put("points", pointsEarned);
+        earnedPayload.put("tier", account.getTier().name());
+        earnedPayload.put("totalBalance", account.getPointsBalance());
+        earnedPayload.put("pointsBalance", account.getPointsBalance());
+        earnedPayload.put("referenceType", "ORDER");
+        earnedPayload.put("referenceId", orderId);
+        outboxService.publish("Loyalty", account.getId().toString(), "PointsEarned", earnedPayload);
         return toResponse(account);
     }
 
@@ -105,24 +117,49 @@ public class LoyaltyService {
         txn.setReferenceType("REDEMPTION");
         txn.setReferenceId(orderId);
         try {
-            transactionRepository.save(txn);
+            txn = transactionRepository.saveAndFlush(txn);
         } catch (DataIntegrityViolationException ex) {
             throw new DuplicateTransactionException("Transaction already exists for ref=REDEMPTION/" + orderId);
         }
 
         log.info("Redeemed {} points for user={}", points, userId);
-        outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed", txn.getId());
+        Map<String, Object> redeemedPayload = new LinkedHashMap<>();
+        redeemedPayload.put("transactionId", txn.getId().toString());
+        redeemedPayload.put("accountId", account.getId().toString());
+        redeemedPayload.put("userId", userId.toString());
+        redeemedPayload.put("orderId", orderId);
+        redeemedPayload.put("points", points);
+        redeemedPayload.put("tier", account.getTier().name());
+        redeemedPayload.put("totalBalance", account.getPointsBalance());
+        redeemedPayload.put("pointsBalance", account.getPointsBalance());
+        redeemedPayload.put("referenceType", "REDEMPTION");
+        redeemedPayload.put("referenceId", orderId);
+        outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed", redeemedPayload);
         return toResponse(account);
     }
 
     void checkTierUpgrade(LoyaltyAccount account) {
         LoyaltyTier newTier = LoyaltyTier.fromLifetimePoints(account.getLifetimePoints());
         if (newTier.ordinal() > account.getTier().ordinal()) {
-            log.info("Tier upgrade for user={}: {} -> {}", account.getUserId(), account.getTier(), newTier);
+            LoyaltyTier previousTier = account.getTier();
+            log.info("Tier upgrade for user={}: {} -> {}", account.getUserId(), previousTier, newTier);
             account.setTier(newTier);
             accountRepository.save(account);
-            outboxService.publish("Loyalty", account.getId().toString(), "TierUpgraded", newTier.name());
+            Map<String, Object> tierPayload = new LinkedHashMap<>();
+            tierPayload.put("accountId", account.getId().toString());
+            tierPayload.put("userId", account.getUserId().toString());
+            tierPayload.put("previousTier", previousTier.name());
+            tierPayload.put("tier", newTier.name());
+            tierPayload.put("points", account.getPointsBalance());
+            tierPayload.put("totalBalance", account.getPointsBalance());
+            tierPayload.put("lifetimePoints", account.getLifetimePoints());
+            outboxService.publish("Loyalty", account.getId().toString(), "TierUpgraded", tierPayload);
         }
+    }
+
+    private LoyaltyAccount findOrCreateAccount(UUID userId) {
+        return accountRepository.findByUserIdForUpdate(userId)
+            .orElseGet(() -> createAccount(userId));
     }
 
     private LoyaltyAccount createAccount(UUID userId) {

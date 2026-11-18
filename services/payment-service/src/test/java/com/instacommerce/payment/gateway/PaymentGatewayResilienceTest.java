@@ -14,6 +14,7 @@ import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowType;
+import io.github.resilience4j.core.functions.CheckedSupplier;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.timelimiter.TimeLimiter;
@@ -161,7 +162,7 @@ class PaymentGatewayResilienceTest {
     void retry_retriesOnTransientFailure() throws Throwable {
         AtomicInteger attempts = new AtomicInteger(0);
 
-        io.github.resilience4j.core.functions.CheckedSupplier<GatewayAuthResult> supplier = () -> {
+        CheckedSupplier<GatewayAuthResult> supplier = () -> {
             int attempt = attempts.incrementAndGet();
             if (attempt < 3) {
                 throw new IOException("Connection reset");
@@ -169,7 +170,7 @@ class PaymentGatewayResilienceTest {
             return GatewayAuthResult.success("pi_" + attempt);
         };
 
-        io.github.resilience4j.core.functions.CheckedSupplier<GatewayAuthResult> decorated =
+        CheckedSupplier<GatewayAuthResult> decorated =
             Retry.decorateCheckedSupplier(retry, supplier);
 
         GatewayAuthResult result = decorated.get();
@@ -182,7 +183,7 @@ class PaymentGatewayResilienceTest {
     void retry_retriesOnTransientPspException() throws Throwable {
         AtomicInteger attempts = new AtomicInteger(0);
 
-        io.github.resilience4j.core.functions.CheckedSupplier<GatewayAuthResult> supplier = () -> {
+        CheckedSupplier<GatewayAuthResult> supplier = () -> {
             int attempt = attempts.incrementAndGet();
             if (attempt < 3) {
                 throw new PaymentGatewayTransientException("Connection reset",
@@ -191,7 +192,7 @@ class PaymentGatewayResilienceTest {
             return GatewayAuthResult.success("pi_" + attempt);
         };
 
-        io.github.resilience4j.core.functions.CheckedSupplier<GatewayAuthResult> decorated =
+        CheckedSupplier<GatewayAuthResult> decorated =
             Retry.decorateCheckedSupplier(retry, supplier);
 
         GatewayAuthResult result = decorated.get();

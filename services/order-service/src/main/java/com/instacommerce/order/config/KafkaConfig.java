@@ -5,6 +5,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
@@ -22,12 +23,12 @@ public class KafkaConfig {
                 (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition()));
             DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3));
             errorHandler.addNotRetryableExceptions(JsonProcessingException.class, IllegalArgumentException.class);
-            errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+            errorHandler.setLogLevel(KafkaException.Level.WARN);
             return errorHandler;
         }
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(new FixedBackOff(1000L, 3));
         errorHandler.addNotRetryableExceptions(JsonProcessingException.class, IllegalArgumentException.class);
-        errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+        errorHandler.setLogLevel(KafkaException.Level.WARN);
         return errorHandler;
     }
 }

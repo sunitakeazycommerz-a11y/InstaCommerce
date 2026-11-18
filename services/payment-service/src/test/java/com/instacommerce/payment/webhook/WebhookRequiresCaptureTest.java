@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -160,7 +161,7 @@ class WebhookRequiresCaptureTest {
                 eq("WEBHOOK_AUTHORIZED"),
                 eq("Payment"),
                 eq(payment.getId().toString()),
-                any(Map.class));
+                ArgumentMatchers.<Map<String, Object>>any());
 
             assertThat(meterRegistry.counter("payment.webhook.requires_capture",
                 "outcome", "processed").count()).isEqualTo(1.0);
@@ -181,7 +182,7 @@ class WebhookRequiresCaptureTest {
                 eq("Payment"),
                 eq(payment.getId().toString()),
                 eq("PaymentAuthorized"),
-                any(Map.class));
+                ArgumentMatchers.<Map<String, Object>>any());
 
             assertThat(meterRegistry.counter("payment.webhook.requires_capture",
                 "outcome", "outbox_published").count()).isEqualTo(1.0);

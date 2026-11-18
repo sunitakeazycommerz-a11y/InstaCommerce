@@ -7,6 +7,7 @@ import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.PositiveOrZero;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -18,7 +19,7 @@ public record OrderCreateRequest(
     long subtotalCents,
     long discountCents,
     long deliveryFeeCents,
-    long totalCents,
+    @PositiveOrZero long totalCents,
     String currency,
     String couponCode,
     String reservationId,
@@ -34,7 +35,8 @@ public record OrderCreateRequest(
     BigDecimal dropoffLat,
     @DecimalMin(value = "-180.0", message = "dropoffLng must be >= -180.0")
     @DecimalMax(value = "180.0", message = "dropoffLng must be <= 180.0")
-    BigDecimal dropoffLng
+    BigDecimal dropoffLng,
+    String orderId
 ) {
     public OrderCreateRequest(
         String userId,
@@ -74,6 +76,52 @@ public record OrderCreateRequest(
             quoteToken,
             idempotencyKey,
             null,
+            null,
+            null
+        );
+    }
+
+    public OrderCreateRequest(
+        String userId,
+        String storeId,
+        List<CartItem> items,
+        long subtotalCents,
+        long discountCents,
+        long deliveryFeeCents,
+        long totalCents,
+        String currency,
+        String couponCode,
+        String reservationId,
+        String paymentId,
+        String deliveryAddressId,
+        String deliveryAddress,
+        String paymentMethodId,
+        String quoteId,
+        String quoteToken,
+        String idempotencyKey,
+        BigDecimal dropoffLat,
+        BigDecimal dropoffLng
+    ) {
+        this(
+            userId,
+            storeId,
+            items,
+            subtotalCents,
+            discountCents,
+            deliveryFeeCents,
+            totalCents,
+            currency,
+            couponCode,
+            reservationId,
+            paymentId,
+            deliveryAddressId,
+            deliveryAddress,
+            paymentMethodId,
+            quoteId,
+            quoteToken,
+            idempotencyKey,
+            dropoffLat,
+            dropoffLng,
             null
         );
     }

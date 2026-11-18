@@ -168,4 +168,59 @@ class OrderDiscountValidationTest {
         verify(orderRepository).save(any(Order.class));
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderCreated"), any());
     }
+
+    @Test
+    @DisplayName("Accepts zero-total 100%-discounted order with deliveryFeeCents validation")
+    void acceptsZeroTotalOrderAndDeliveryFee() {
+        UUID quoteId = UUID.randomUUID();
+        UUID preGeneratedOrderId = UUID.randomUUID();
+        CreateOrderCommand command = CreateOrderCommand.builder()
+            .orderId(preGeneratedOrderId)
+            .userId(userId)
+            .storeId("store-1")
+            .items(List.of(new CartItem(productId, 1, 1000L)))
+            .subtotalCents(1000L)
+            .discountCents(1000L)
+            .deliveryFeeCents(0L)
+            .totalCents(0L)
+            .quoteId(quoteId)
+            .quoteToken("valid-token")
+            .idempotencyKey("idem-zero")
+            .build();
+
+        when(pricingQuoteClient.validateQuote(quoteId, "valid-token", 0L, 1000L, 1000L)).thenReturn(true);
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        String createdId = orderService.createOrder(command);
+
+        assertThat(createdId).isEqualTo(preGeneratedOrderId.toString());
+    }
+
+    @Test
+    @DisplayName("Accepts order when max(0, subtotal - discount) + deliveryFee equals total")
+    void acceptsOrderWithDeliveryFee() {
+        UUID quoteId = UUID.randomUUID();
+        CreateOrderCommand command = CreateOrderCommand.builder()
+            .userId(userId)
+            .storeId("store-1")
+            .items(List.of(new CartItem(productId, 1, 1000L)))
+            .subtotalCents(1000L)
+            .discountCents(200L)
+            .deliveryFeeCents(50L)
+            .totalCents(850L)
+            .quoteId(quoteId)
+            .quoteToken("valid-token")
+            .idempotencyKey("idem-fee")
+            .build();
+
+        when(pricingQuoteClient.validateQuote(quoteId, "valid-token", 850L, 1000L, 200L)).thenReturn(true);
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
+            Order o = inv.getArgument(0);
+            o.setId(UUID.randomUUID());
+            return o;
+        });
+
+        String createdId = orderService.createOrder(command);
+        assertThat(createdId).isNotBlank();
+    }
 }

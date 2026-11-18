@@ -1,6 +1,7 @@
 package com.instacommerce.payment.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -199,7 +200,7 @@ class StalePendingRefundRecoveryJobTest {
             when(paymentGateway.getRefundStatus("re_test_err"))
                 .thenThrow(new RuntimeException("PSP timeout"));
 
-            org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
+            assertThrows(RuntimeException.class,
                 () -> job.recoverRefund(r));
         }
     }

@@ -8,7 +8,12 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.Map;
+import java.util.stream.Collectors;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -70,18 +75,51 @@ public class HashChainService {
     }
 
     public String computeEventHash(AuditEvent event) {
+        String createdAtStr = event.getCreatedAt() != null
+                ? event.getCreatedAt().truncatedTo(ChronoUnit.MICROS).toString()
+                : "";
         String canonical = String.join("|",
                 String.valueOf(event.getSequenceNumber()),
+                event.getId() != null ? event.getId().toString() : "",
                 nullSafe(event.getEventType()),
                 nullSafe(event.getSourceService()),
                 nullSafe(event.getAction()),
                 event.getActorId() != null ? event.getActorId().toString() : "",
+                nullSafe(event.getActorType()),
                 nullSafe(event.getResourceType()),
                 nullSafe(event.getResourceId()),
+                canonicalizeDetails(event.getDetails()),
+                nullSafe(event.getIpAddress()),
+                nullSafe(event.getUserAgent()),
                 nullSafe(event.getCorrelationId()),
-                event.getCreatedAt() != null ? event.getCreatedAt().toString() : "",
+                createdAtStr,
                 nullSafe(event.getPreviousHash()));
         return sha256(canonical);
+    }
+
+    private static String canonicalizeDetails(Map<String, Object> details) {
+        if (details == null) {
+            return "";
+        }
+        return canonicalizeValue(details);
+    }
+
+    private static String canonicalizeValue(Object value) {
+        if (value == null) {
+            return "null";
+        }
+        if (value instanceof Map<?, ?> map) {
+            return map.entrySet().stream()
+                    .sorted(Comparator.comparing(e -> String.valueOf(e.getKey())))
+                    .map(e -> String.valueOf(e.getKey()) + "=" + canonicalizeValue(e.getValue()))
+                    .collect(Collectors.joining(",", "{", "}"));
+        }
+        if (value instanceof Collection<?> collection) {
+            return collection.stream()
+                    .map(HashChainService::canonicalizeValue)
+                    .collect(Collectors.joining(",", "[", "]"));
+        }
+        return String.valueOf(value);
     }
 
     static String sha256(String input) {

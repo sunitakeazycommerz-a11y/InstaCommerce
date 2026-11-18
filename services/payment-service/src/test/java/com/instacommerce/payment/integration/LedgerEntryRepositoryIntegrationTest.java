@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -69,10 +71,10 @@ class LedgerEntryRepositoryIntegrationTest {
         registry.add("internal.service.token", () -> "test-internal-service-token");
     }
 
-    @org.junit.jupiter.api.BeforeAll
+    @BeforeAll
     static void runMigrations() {
         POSTGRES.start();
-        org.flywaydb.core.Flyway.configure()
+        Flyway.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration")
             .load()

@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/referral")
+@RequestMapping({"/referral", "/api/v1/referral"})
 public class ReferralController {
     private final ReferralService referralService;
 

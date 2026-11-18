@@ -12,10 +12,16 @@ public record AuthorizeRequest(
     String currency,
     @NotBlank String idempotencyKey,
     String paymentMethod,
-    String paymentMethodId
+    String paymentMethodId,
+    UUID userId
 ) {
     public AuthorizeRequest(UUID orderId, long amountCents, String currency, String idempotencyKey, String paymentMethod) {
-        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, null);
+        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, null, null);
+    }
+
+    public AuthorizeRequest(UUID orderId, long amountCents, String currency, String idempotencyKey,
+                            String paymentMethod, String paymentMethodId) {
+        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, paymentMethodId, null);
     }
 
     public String effectivePaymentMethod() {

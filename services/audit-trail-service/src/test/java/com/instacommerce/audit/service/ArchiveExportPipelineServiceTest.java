@@ -68,9 +68,15 @@ class ArchiveExportPipelineServiceTest {
         AuditEvent e2 = sampleEvent(2L, "PAYMENT_CAPTURED", START.plusSeconds(120));
         when(auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(START, END))
                 .thenReturn(List.of(e1, e2));
-        when(uploadedBlob.getSize()).thenReturn(256L);
+        byte[][] capturedContent = new byte[1][];
         when(storage.create(any(BlobInfo.class), any(byte[].class), any(Storage.BlobTargetOption[].class)))
-                .thenReturn(uploadedBlob);
+                .thenAnswer(inv -> {
+                    byte[] bytes = inv.getArgument(1);
+                    capturedContent[0] = bytes;
+                    when(uploadedBlob.getSize()).thenReturn((long) bytes.length);
+                    when(uploadedBlob.getContent()).thenReturn(bytes);
+                    return uploadedBlob;
+                });
         BlobId expectedBlobId = BlobId.of(BUCKET, "audit/partitions/2025/02/audit_events_2025_02.ndjson.gz");
         when(storage.get(expectedBlobId)).thenReturn(uploadedBlob);
         when(manifestRepository.save(any(AuditArchiveManifest.class)))
@@ -82,6 +88,9 @@ class ArchiveExportPipelineServiceTest {
         assertThat(manifest.getArchiveYear()).isEqualTo(2025);
         assertThat(manifest.getArchiveMonth()).isEqualTo(2);
         assertThat(manifest.getRowCount()).isEqualTo(2L);
+        assertThat(manifest.getFirstSequence()).isEqualTo(1L);
+        assertThat(manifest.getLastSequence()).isEqualTo(2L);
+        assertThat(manifest.getLastEventHash()).isEqualTo("hash-2");
         assertThat(manifest.getCompressedSizeBytes()).isPositive();
         assertThat(manifest.getChecksumSha256()).hasSize(64);
         assertThat(manifest.getCreationMethod()).isEqualTo("PARTITION_MAINTENANCE");
@@ -150,6 +159,30 @@ class ArchiveExportPipelineServiceTest {
 
         assertThatThrownBy(() -> service.exportPartition("audit_events_2025_02", START, END))
                 .isInstanceOf(RuntimeException.class);
+
+        ArgumentCaptor<AuditArchiveManifest> savedCaptor = ArgumentCaptor.forClass(AuditArchiveManifest.class);
+        verify(manifestRepository, atLeastOnce()).save(savedCaptor.capture());
+        List<AuditArchiveManifest> saved = savedCaptor.getAllValues();
+        assertThat(saved.get(saved.size() - 1).getVerificationStatus()).isEqualTo("FAILED");
+    }
+
+    @Test
+    void exportPartition_verificationChecksumMismatch_marksManifestFailedAndThrows() {
+        AuditEvent e1 = sampleEvent(1L, "ORDER_CREATED", START.plusSeconds(60));
+        when(auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(START, END))
+                .thenReturn(List.of(e1));
+        when(uploadedBlob.getSize()).thenReturn(128L);
+        when(uploadedBlob.getContent()).thenReturn("corrupted-bytes".getBytes(StandardCharsets.UTF_8));
+        when(storage.create(any(BlobInfo.class), any(byte[].class), any(Storage.BlobTargetOption[].class)))
+                .thenReturn(uploadedBlob);
+        BlobId expectedBlobId = BlobId.of(BUCKET, "audit/partitions/2025/02/audit_events_2025_02.ndjson.gz");
+        when(storage.get(expectedBlobId)).thenReturn(uploadedBlob);
+        when(manifestRepository.save(any(AuditArchiveManifest.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        assertThatThrownBy(() -> service.exportPartition("audit_events_2025_02", START, END))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SHA-256");
 
         ArgumentCaptor<AuditArchiveManifest> savedCaptor = ArgumentCaptor.forClass(AuditArchiveManifest.class);
         verify(manifestRepository, atLeastOnce()).save(savedCaptor.capture());

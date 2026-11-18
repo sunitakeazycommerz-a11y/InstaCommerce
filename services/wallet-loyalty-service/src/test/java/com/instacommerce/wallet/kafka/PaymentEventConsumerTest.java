@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
@@ -219,7 +220,7 @@ class PaymentEventConsumerTest {
             firePaymentRefundedEvent(refundId2, paymentId, orderId, 7000);
 
             ArgumentCaptor<String> refIdCaptor = ArgumentCaptor.forClass(String.class);
-            verify(walletService, org.mockito.Mockito.times(2))
+            verify(walletService, Mockito.times(2))
                 .credit(any(), anyLong(), any(), refIdCaptor.capture(), anyString());
 
             assertThat(refIdCaptor.getAllValues())

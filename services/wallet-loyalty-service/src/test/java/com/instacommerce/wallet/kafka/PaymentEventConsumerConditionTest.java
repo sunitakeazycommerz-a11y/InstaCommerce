@@ -8,6 +8,7 @@ import com.instacommerce.wallet.service.WalletService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -58,12 +59,12 @@ class PaymentEventConsumerConditionTest {
 
         @Bean
         WalletService walletService() {
-            return org.mockito.Mockito.mock(WalletService.class);
+            return Mockito.mock(WalletService.class);
         }
 
         @Bean
         OrderLookupClient orderLookupClient() {
-            return org.mockito.Mockito.mock(OrderLookupClient.class);
+            return Mockito.mock(OrderLookupClient.class);
         }
 
         @Bean

@@ -1,6 +1,5 @@
 package com.instacommerce.checkout.job;
 
-import com.instacommerce.checkout.domain.CheckoutIdempotencyKey;
 import com.instacommerce.checkout.repository.CheckoutIdempotencyKeyRepository;
 import java.time.Instant;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -25,8 +24,8 @@ public class IdempotencyKeyCleanupJob {
     @SchedulerLock(name = "idempotencyKeyCleanup", lockAtLeastFor = "PT5M", lockAtMostFor = "PT30M")
     @Transactional
     public void cleanupExpiredKeys() {
-        Instant cutoff = Instant.now().minus(CheckoutIdempotencyKey.RETENTION_TTL);
-        int deleted = repository.deleteExpiredKeys(cutoff);
+        Instant cutoff = Instant.now();
+        int deleted = repository.deleteExpiredBefore(cutoff);
         log.info("Cleaned up {} expired idempotency keys older than {}", deleted, cutoff);
     }
 }

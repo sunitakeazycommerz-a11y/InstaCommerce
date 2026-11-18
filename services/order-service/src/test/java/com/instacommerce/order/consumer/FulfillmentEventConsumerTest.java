@@ -85,4 +85,25 @@ class FulfillmentEventConsumerTest {
 
         verifyNoInteractions(orderService);
     }
+
+    @Test
+    void routesOrderModifiedWithProductOrItemDeltasToOrderService() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+        FulfillmentEventConsumer consumer = new FulfillmentEventConsumer(objectMapper, orderService);
+
+        ConsumerRecord<String, String> record = new ConsumerRecord<>(
+            "fulfillment.events",
+            0,
+            0L,
+            orderId.toString(),
+            """
+                {"eventType":"OrderModified","aggregateId":"%s","payload":{"orderId":"%s","productId":"%s","missingQty":1,"refundCents":500,"newVersion":2,"priceDeltaCents":-500}}
+                """.formatted(orderId, orderId, productId));
+
+        consumer.onFulfillmentEvent(record);
+
+        verify(orderService).applyOrderModification(new FulfillmentOrderEvent(
+            orderId, productId, 1, 500L, 2L, -500L, null));
+    }
 }

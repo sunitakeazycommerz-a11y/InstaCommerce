@@ -1,6 +1,7 @@
 package com.instacommerce.fraud.config;
 
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
@@ -17,7 +18,7 @@ public class KafkaConfig {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaOperations,
                 (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition()));
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3));
-        errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+        errorHandler.setLogLevel(KafkaException.Level.WARN);
         return errorHandler;
     }
 }

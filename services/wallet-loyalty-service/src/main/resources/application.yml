@@ -8,6 +8,9 @@ server:
 spring:
   application:
     name: wallet-loyalty-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   config:
     import: optional:sm://
   lifecycle:
@@ -58,10 +61,10 @@ wallet:
     reward-cents: 5000
 
 payment-service:
-  base-url: ${PAYMENT_SERVICE_URL:http://payment-service:8080}
+  base-url: ${PAYMENT_SERVICE_URL:http://localhost:8085}
 
 order-service:
-  base-url: ${ORDER_SERVICE_URL:http://order-service:8080}
+  base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
 
 resilience4j:
   circuitbreaker:

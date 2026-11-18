@@ -5,6 +5,7 @@ import com.instacommerce.checkout.dto.CartValidationResult;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
 import com.instacommerce.checkout.dto.InventoryReservationResult;
+import com.instacommerce.checkout.dto.InventoryReserveRequest;
 import com.instacommerce.checkout.dto.OrderCreateRequest;
 import com.instacommerce.checkout.dto.OrderCreationResult;
 import com.instacommerce.checkout.dto.PaymentAuthResult;
@@ -21,8 +22,10 @@ import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
 import io.temporal.workflow.Saga;
 import io.temporal.workflow.Workflow;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 public class CheckoutWorkflowImpl implements CheckoutWorkflow {
 
@@ -193,47 +196,60 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             PricingRequest pricingRequest = new PricingRequest(
                 request.userId(), items, storeId, request.couponCode(), request.deliveryAddressId());
             PricingResult pricingResult = pricingActivity.calculatePrice(pricingRequest);
-            if (pricingResult == null || pricingResult.totalCents() <= 0) {
+            if (pricingResult == null || pricingResult.totalCents() < 0) {
                 currentStatus = "FAILED";
                 return CheckoutResponse.failed("Pricing calculation failed: invalid total amount");
             }
             paymentAmountCents = pricingResult.totalCents();
+            String currency = (pricingResult.currency() != null && !pricingResult.currency().isBlank())
+                ? pricingResult.currency()
+                : PricingResult.DEFAULT_CURRENCY;
+            UUID deterministicOrderId = UUID.nameUUIDFromBytes(
+                ("order-" + workflowId).getBytes(StandardCharsets.UTF_8));
+            String expectedOrderId = deterministicOrderId.toString();
 
             // Step 3: Reserve inventory — register compensation BEFORE the activity
             currentStatus = "RESERVING_INVENTORY";
-            InventoryReservationResult reservationResult = inventoryActivity.reserveStock(items);
+            InventoryReservationResult reservationResult = inventoryActivity.reserveStock(
+                new InventoryReserveRequest(workflowId + ":inventory:reserve", storeId, items));
             if (!reservationResult.reserved()) {
                 currentStatus = "FAILED";
                 return CheckoutResponse.failed("Some items are out of stock");
             }
             saga.addCompensation(() -> safeReleaseStock(reservationResult.reservationId()));
 
-            // Step 4: Authorize payment with workflow-stable idempotency key
-            currentStatus = "AUTHORIZING_PAYMENT";
-            paymentResult = paymentActivity.authorizePayment(
-                paymentAmountCents, request.paymentMethodId(), paymentKeys.authorize());
-            if (paymentResult == null) {
-                throw new IllegalStateException("Payment authorization returned no result");
-            }
-            paymentAuthorized = paymentResult.authorized();
-            if (paymentAuthorized && (paymentResult.paymentId() == null || paymentResult.paymentId().isBlank())) {
-                throw new IllegalStateException("Payment authorization succeeded without a paymentId");
-            }
-
-            if (!paymentAuthorized) {
-                currentStatus = "COMPENSATING";
-                saga.compensate();
-                currentStatus = "FAILED";
-                if ("TOKEN_EXPIRED".equalsIgnoreCase(paymentResult.declineReason())) {
-                    return new CheckoutResponse(
-                        null,
-                        "PAYMENT_TOKEN_EXPIRED: Client re-authentication required",
-                        0,
-                        0
-                    );
+            // Step 4: Authorize payment with workflow-stable idempotency key (skip when total is 0)
+            if (paymentAmountCents > 0) {
+                currentStatus = "AUTHORIZING_PAYMENT";
+                paymentResult = paymentActivity.authorizePayment(
+                    expectedOrderId,
+                    paymentAmountCents,
+                    currency,
+                    request.paymentMethodId(),
+                    paymentKeys.authorize());
+                if (paymentResult == null) {
+                    throw new IllegalStateException("Payment authorization returned no result");
                 }
-                return CheckoutResponse.failed(
-                    "Payment declined: " + paymentResult.declineReason());
+                paymentAuthorized = paymentResult.authorized();
+                if (paymentAuthorized && (paymentResult.paymentId() == null || paymentResult.paymentId().isBlank())) {
+                    throw new IllegalStateException("Payment authorization succeeded without a paymentId");
+                }
+
+                if (!paymentAuthorized) {
+                    currentStatus = "COMPENSATING";
+                    saga.compensate();
+                    currentStatus = "FAILED";
+                    if ("TOKEN_EXPIRED".equalsIgnoreCase(paymentResult.declineReason())) {
+                        return new CheckoutResponse(
+                            null,
+                            "PAYMENT_TOKEN_EXPIRED: Client re-authentication required",
+                            0,
+                            0
+                        );
+                    }
+                    return CheckoutResponse.failed(
+                        "Payment declined: " + paymentResult.declineReason());
+                }
             }
 
             // Step 5: Create order
@@ -246,17 +262,18 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 pricingResult.discountCents(),
                 pricingResult.deliveryFeeCents(),
                 pricingResult.totalCents(),
-                pricingResult.currency(),
+                currency,
                 request.couponCode(),
                 reservationResult.reservationId(),
-                paymentResult.paymentId(),
+                paymentResult != null ? paymentResult.paymentId() : null,
                 request.deliveryAddressId(),
                 request.paymentMethodId(),
                 pricingResult.quoteId(),
                 pricingResult.quoteToken(),
                 workflowId + ":order:create",
                 request.dropoffLat(),
-                request.dropoffLng()
+                request.dropoffLng(),
+                expectedOrderId
             );
             OrderCreationResult orderResult = orderActivity.createOrder(orderRequest);
             saga.addCompensation(() -> safeCancelOrder(orderResult.orderId()));
@@ -270,17 +287,20 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                     request.userId(),
                     orderResult.orderId(),
                     pricingResult.discountCents());
-                saga.addCompensation(() -> safeRollbackCoupon(request.couponCode(), request.userId()));
+                saga.addCompensation(() -> safeRollbackCoupon(
+                    request.couponCode(), request.userId(), orderResult.orderId()));
             }
 
             // Step 6: Confirm inventory reservation + capture payment
             currentStatus = "CONFIRMING";
             inventoryActivity.confirmStock(reservationResult.reservationId());
-            paymentCaptureAttempted = true;
-            paymentActivity.capturePayment(
-                paymentResult.paymentId(),
-                paymentKeys.capture(paymentResult.paymentId()));
-            paymentCaptured = true;
+            if (paymentAmountCents > 0 && paymentResult != null) {
+                paymentCaptureAttempted = true;
+                paymentActivity.capturePayment(
+                    paymentResult.paymentId(),
+                    paymentKeys.capture(paymentResult.paymentId()));
+                paymentCaptured = true;
+            }
             orderActivity.confirmOrder(orderResult.orderId(), workflowId + ":order:confirm");
 
             // Step 7: Clear cart (best effort — don't fail checkout if this fails)
@@ -387,14 +407,22 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
         }
     }
 
-    private void safeRollbackCoupon(String couponCode, String userId) {
+    private void safeRollbackCoupon(String couponCode, String userId, String orderId) {
         try {
-            compensationCouponActivity.rollbackUsage(couponCode, userId);
+            if (orderId != null && !orderId.isBlank()) {
+                compensationCouponActivity.unredeemCoupon(couponCode, userId, orderId);
+            } else {
+                compensationCouponActivity.rollbackUsage(couponCode, userId);
+            }
         } catch (Exception e) {
             String workflowId = Workflow.getInfo().getWorkflowId();
             Workflow.getLogger(CheckoutWorkflowImpl.class)
                 .error("Failed to rollback coupon {} for user {}, routing to DLQ: {}", couponCode, userId, e.getMessage());
-            dlqActivity.recordFailedCompensation(workflowId, "rollbackUsage", couponCode + ":" + userId, e.getMessage(), null);
+            String step = (orderId != null && !orderId.isBlank()) ? "unredeemCoupon" : "rollbackUsage";
+            String targetId = (orderId != null && !orderId.isBlank())
+                ? couponCode + ":" + userId + ":" + orderId
+                : couponCode + ":" + userId;
+            dlqActivity.recordFailedCompensation(workflowId, step, targetId, e.getMessage(), null);
         }
     }
 }

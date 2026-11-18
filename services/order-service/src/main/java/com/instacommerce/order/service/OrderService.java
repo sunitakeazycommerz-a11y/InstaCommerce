@@ -2,6 +2,7 @@ package com.instacommerce.order.service;
 
 import com.instacommerce.contracts.orders.CancellationReason;
 import com.instacommerce.order.client.PricingQuoteClient;
+import com.instacommerce.order.consumer.FulfillmentOrderEvent;
 import com.instacommerce.order.domain.model.Order;
 import com.instacommerce.order.domain.model.OrderItem;
 import com.instacommerce.order.domain.model.OrderStatus;
@@ -21,12 +22,14 @@ import com.instacommerce.order.repository.OrderRepository;
 import com.instacommerce.order.repository.OrderStatusHistoryRepository;
 import com.instacommerce.order.workflow.model.CreateOrderCommand;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -45,7 +48,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
-import org.springframework.lang.Nullable;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
@@ -151,10 +153,25 @@ public class OrderService {
     }
 
     private void validateCreateOrderCommand(CreateOrderCommand command) {
-        if (command.getSubtotalCents() - command.getDiscountCents() != command.getTotalCents()) {
+        if (command.getTotalCents() < 0
+                || command.getSubtotalCents() < 0
+                || command.getDiscountCents() < 0
+                || command.getDeliveryFeeCents() < 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_TOTAL",
-                "Order total must equal subtotal minus discount: subtotal=" + command.getSubtotalCents()
-                + ", discount=" + command.getDiscountCents() + ", total=" + command.getTotalCents());
+                "Order monetary amounts must be non-negative: subtotal=" + command.getSubtotalCents()
+                + ", discount=" + command.getDiscountCents()
+                + ", deliveryFee=" + command.getDeliveryFeeCents()
+                + ", total=" + command.getTotalCents());
+        }
+        long netItemsCents = Math.max(0L, command.getSubtotalCents() - command.getDiscountCents());
+        long expectedTotal = netItemsCents + command.getDeliveryFeeCents();
+        if (expectedTotal != command.getTotalCents()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_TOTAL",
+                "Order total must equal max(0, subtotal - discount) + deliveryFee: subtotal="
+                + command.getSubtotalCents()
+                + ", discount=" + command.getDiscountCents()
+                + ", deliveryFee=" + command.getDeliveryFeeCents()
+                + ", total=" + command.getTotalCents());
         }
         if (command.getDiscountCents() > 0 || (command.getCouponCode() != null && !command.getCouponCode().isBlank())) {
             if (command.getQuoteId() == null || command.getQuoteToken() == null || command.getQuoteToken().isBlank()) {
@@ -170,6 +187,9 @@ public class OrderService {
             return existing.get().getId().toString();
         }
         Order order = new Order();
+        if (command.getOrderId() != null) {
+            order.setId(command.getOrderId());
+        }
         order.setUserId(command.getUserId());
         order.setStoreId(command.getStoreId());
         order.setStatus(OrderStatus.PENDING);
@@ -583,26 +603,108 @@ public class OrderService {
         backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
     @Transactional
     public void applyOrderModification(UUID orderId, UUID productId, int missingQty, long refundCents) {
+        applyOrderModification(new FulfillmentOrderEvent(orderId, productId, missingQty, refundCents, null, null, null));
+    }
+
+    @Retryable(
+        retryFor = {ObjectOptimisticLockingFailureException.class, OptimisticLockingFailureException.class},
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
+    @Transactional
+    public void applyOrderModification(FulfillmentOrderEvent event) {
+        UUID orderId = Objects.requireNonNull(event.orderId(), "orderId must not be null");
         Order order = lockOrder(orderId);
         if (order.getStatus().isTerminal()) {
             logger.warn("Ignoring OrderModified event for order {} in terminal state {}", orderId, order.getStatus());
             return;
         }
-        long newTotal = Math.max(0, order.getTotalCents() - refundCents);
+        if (event.newVersion() != null && order.getVersion() >= event.newVersion()) {
+            logger.info("Ignoring idempotent/stale OrderModified event for order {} currentVersion={} eventVersion={}",
+                orderId, order.getVersion(), event.newVersion());
+            return;
+        }
+
+        List<FulfillmentOrderEvent.OrderItemDelta> deltas = new ArrayList<>();
+        if (event.itemDeltas() != null && !event.itemDeltas().isEmpty()) {
+            deltas.addAll(event.itemDeltas());
+        } else if (event.productId() != null) {
+            int deltaQty = -(event.missingQty() != null && event.missingQty() > 0 ? event.missingQty() : 1);
+            long deltaPrice = event.priceDeltaCents() != null
+                ? event.priceDeltaCents()
+                : (event.refundCents() != null ? -event.refundCents() : 0L);
+            deltas.add(new FulfillmentOrderEvent.OrderItemDelta(event.productId(), deltaQty, deltaPrice));
+        }
+
+        for (FulfillmentOrderEvent.OrderItemDelta delta : deltas) {
+            if (delta.productId() == null) {
+                continue;
+            }
+            int qtyDelta = delta.quantityDelta() != null ? delta.quantityDelta() : 0;
+            Iterator<OrderItem> it = order.getItems().iterator();
+            while (it.hasNext()) {
+                OrderItem item = it.next();
+                if (delta.productId().equals(item.getProductId())) {
+                    int updatedQty = item.getQuantity() + qtyDelta;
+                    if (updatedQty <= 0) {
+                        it.remove();
+                    } else {
+                        item.setQuantity(updatedQty);
+                        item.setLineTotalCents(Math.max(0L, (long) updatedQty * item.getUnitPriceCents()));
+                    }
+                    break;
+                }
+            }
+        }
+
+        long priceDeltaCents = event.priceDeltaCents() != null
+            ? event.priceDeltaCents()
+            : (event.refundCents() != null && event.refundCents() > 0 ? -event.refundCents() : 0L);
+        long refundCents = priceDeltaCents < 0
+            ? -priceDeltaCents
+            : (event.refundCents() != null ? event.refundCents() : 0L);
+
+        long newTotal = Math.max(0L, order.getTotalCents() + priceDeltaCents);
         order.setTotalCents(newTotal);
         orderRepository.save(order);
 
+        Map<String, Object> auditDetails = new LinkedHashMap<>();
+        if (event.productId() != null) {
+            auditDetails.put("productId", event.productId().toString());
+        }
+        if (event.missingQty() != null) {
+            auditDetails.put("missingQty", event.missingQty());
+        }
+        auditDetails.put("refundCents", refundCents);
+        auditDetails.put("priceDeltaCents", priceDeltaCents);
         auditLogService.log(order.getUserId(),
             "ORDER_MODIFIED",
             "Order",
             orderId.toString(),
-            Map.of("productId", productId.toString(), "missingQty", missingQty, "refundCents", refundCents));
+            auditDetails);
 
         Map<String, Object> modifiedPayload = new LinkedHashMap<>();
         modifiedPayload.put("orderId", orderId.toString());
-        modifiedPayload.put("productId", productId.toString());
-        modifiedPayload.put("missingQty", missingQty);
+        if (event.productId() != null) {
+            modifiedPayload.put("productId", event.productId().toString());
+        }
+        if (event.missingQty() != null) {
+            modifiedPayload.put("missingQty", event.missingQty());
+        }
         modifiedPayload.put("refundCents", refundCents);
+        modifiedPayload.put("priceDeltaCents", priceDeltaCents);
+        modifiedPayload.put("newTotalCents", newTotal);
         outboxService.publish("Order", orderId.toString(), "OrderModified", modifiedPayload);
+
+        if (priceDeltaCents < 0) {
+            Map<String, Object> refundPayload = new LinkedHashMap<>();
+            refundPayload.put("orderId", orderId.toString());
+            if (order.getPaymentId() != null) {
+                refundPayload.put("paymentId", order.getPaymentId().toString());
+            }
+            refundPayload.put("refundCents", refundCents);
+            refundPayload.put("priceDeltaCents", priceDeltaCents);
+            refundPayload.put("reason", "ORDER_MODIFIED_PARTIAL_REFUND");
+            outboxService.publish("Order", orderId.toString(), "OrderPartiallyRefunded", refundPayload);
+        }
     }
 }

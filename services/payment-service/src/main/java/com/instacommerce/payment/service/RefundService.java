@@ -5,6 +5,7 @@ import com.instacommerce.payment.dto.mapper.RefundMapper;
 import com.instacommerce.payment.dto.request.RefundRequest;
 import com.instacommerce.payment.dto.response.RefundResponse;
 import com.instacommerce.payment.exception.PaymentGatewayException;
+import com.instacommerce.payment.exception.PaymentGatewayTransientException;
 import com.instacommerce.payment.gateway.GatewayRefundResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.RefundRepository;
@@ -71,6 +72,10 @@ public class RefundService {
             GatewayRefundResult gatewayResult;
             try {
                 gatewayResult = paymentGateway.refund(pending.pspReference(), request.amountCents(), appliedKey, pending.refundId());
+            } catch (PaymentGatewayTransientException ex) {
+                log.warn("Transient PSP refund timeout/error for refund {}: {}",
+                    pending.refundId(), ex.getMessage());
+                throw ex;
             } catch (Exception ex) {
                 String failureReason = (ex.getMessage() != null && !ex.getMessage().isBlank())
                     ? ex.getMessage() : "PSP refund call failed";

@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
@@ -26,7 +27,7 @@ public class KafkaConfig {
             (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition()));
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3L));
         errorHandler.addNotRetryableExceptions(JsonProcessingException.class, IllegalArgumentException.class);
-        errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+        errorHandler.setLogLevel(KafkaException.Level.WARN);
         log.info("Configured payment Kafka error handler with DLT recovery");
         return errorHandler;
     }

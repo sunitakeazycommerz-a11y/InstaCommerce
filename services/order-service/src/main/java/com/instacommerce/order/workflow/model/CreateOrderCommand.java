@@ -6,11 +6,13 @@ import java.util.List;
 import java.util.UUID;
 
 public final class CreateOrderCommand {
+    private final UUID orderId;
     private final UUID userId;
     private final String storeId;
     private final List<CartItem> items;
     private final long subtotalCents;
     private final long discountCents;
+    private final long deliveryFeeCents;
     private final long totalCents;
     private final String currency;
     private final String couponCode;
@@ -24,11 +26,13 @@ public final class CreateOrderCommand {
     private final String quoteToken;
 
     private CreateOrderCommand(Builder builder) {
+        this.orderId = builder.orderId;
         this.userId = builder.userId;
         this.storeId = builder.storeId;
         this.items = builder.items;
         this.subtotalCents = builder.subtotalCents;
         this.discountCents = builder.discountCents;
+        this.deliveryFeeCents = builder.deliveryFeeCents;
         this.totalCents = builder.totalCents;
         this.currency = builder.currency;
         this.couponCode = builder.couponCode;
@@ -44,6 +48,10 @@ public final class CreateOrderCommand {
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    public UUID getOrderId() {
+        return orderId;
     }
 
     public UUID getUserId() {
@@ -64,6 +72,10 @@ public final class CreateOrderCommand {
 
     public long getDiscountCents() {
         return discountCents;
+    }
+
+    public long getDeliveryFeeCents() {
+        return deliveryFeeCents;
     }
 
     public long getTotalCents() {
@@ -111,11 +123,13 @@ public final class CreateOrderCommand {
     }
 
     public static final class Builder {
+        private UUID orderId;
         private UUID userId;
         private String storeId;
         private List<CartItem> items;
         private long subtotalCents;
         private long discountCents;
+        private long deliveryFeeCents;
         private long totalCents;
         private String currency;
         private String couponCode;
@@ -127,6 +141,11 @@ public final class CreateOrderCommand {
         private BigDecimal dropoffLng;
         private UUID quoteId;
         private String quoteToken;
+
+        public Builder orderId(UUID orderId) {
+            this.orderId = orderId;
+            return this;
+        }
 
         public Builder userId(UUID userId) {
             this.userId = userId;
@@ -150,6 +169,11 @@ public final class CreateOrderCommand {
 
         public Builder discountCents(long discountCents) {
             this.discountCents = discountCents;
+            return this;
+        }
+
+        public Builder deliveryFeeCents(long deliveryFeeCents) {
+            this.deliveryFeeCents = deliveryFeeCents;
             return this;
         }
 

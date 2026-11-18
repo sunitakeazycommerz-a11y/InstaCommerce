@@ -8,6 +8,8 @@ import static org.mockito.Mockito.when;
 
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
+import com.instacommerce.payment.domain.model.Refund;
+import com.instacommerce.payment.domain.model.RefundStatus;
 import com.instacommerce.payment.dto.request.AuthorizeRequest;
 import com.instacommerce.payment.dto.request.RefundRequest;
 import com.instacommerce.payment.gateway.GatewayAuthRequest;
@@ -16,8 +18,11 @@ import com.instacommerce.payment.gateway.GatewayRefundResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.PaymentRepository;
 import com.instacommerce.payment.repository.RefundRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -53,11 +58,11 @@ class IdempotencyKeyNormalizationTest {
         @Mock private PaymentRepository paymentRepository;
         @Mock private PaymentGateway paymentGateway;
         @Mock private PaymentTransactionHelper txHelper;
-        private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
-            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        private final MeterRegistry meterRegistry =
+            new SimpleMeterRegistry();
         private PaymentService paymentService;
 
-        @org.junit.jupiter.api.BeforeEach
+        @BeforeEach
         void init() {
             paymentService = new PaymentService(paymentRepository, paymentGateway, txHelper, meterRegistry);
         }
@@ -118,11 +123,11 @@ class IdempotencyKeyNormalizationTest {
         @Mock private RefundRepository refundRepository;
         @Mock private PaymentGateway paymentGateway;
         @Mock private RefundTransactionHelper txHelper;
-        private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
-            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        private final MeterRegistry meterRegistry =
+            new SimpleMeterRegistry();
         private RefundService refundService;
 
-        @org.junit.jupiter.api.BeforeEach
+        @BeforeEach
         void init() {
             refundService = new RefundService(refundRepository, paymentGateway, txHelper, meterRegistry);
         }
@@ -141,10 +146,9 @@ class IdempotencyKeyNormalizationTest {
             when(paymentGateway.refund(eq("psp_ref_1"), eq(3000L), eq(NORMALIZED_LONG_KEY), any()))
                 .thenReturn(new GatewayRefundResult(true, "refund_1", null));
 
-            com.instacommerce.payment.domain.model.Refund refund =
-                new com.instacommerce.payment.domain.model.Refund();
+            Refund refund = new Refund();
             refund.setId(UUID.randomUUID());
-            refund.setStatus(com.instacommerce.payment.domain.model.RefundStatus.COMPLETED);
+            refund.setStatus(RefundStatus.COMPLETED);
             refund.setAmountCents(3000L);
             when(txHelper.completeRefund(any(), eq(paymentId), eq(request), eq("refund_1")))
                 .thenReturn(refund);
@@ -167,11 +171,11 @@ class IdempotencyKeyNormalizationTest {
         @Mock private PaymentRepository paymentRepository;
         @Mock private PaymentGateway paymentGateway;
         @Mock private PaymentTransactionHelper txHelper;
-        private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
-            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        private final MeterRegistry meterRegistry =
+            new SimpleMeterRegistry();
         private PaymentService paymentService;
 
-        @org.junit.jupiter.api.BeforeEach
+        @BeforeEach
         void init() {
             paymentService = new PaymentService(paymentRepository, paymentGateway, txHelper, meterRegistry);
         }

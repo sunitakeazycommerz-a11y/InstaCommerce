@@ -23,7 +23,7 @@ public class RestOrderLookupClient implements OrderLookupClient {
     private final RestClient restClient;
 
     public RestOrderLookupClient(
-            @Value("${order-service.base-url:http://order-service:8080}") String baseUrl,
+            @Value("${order-service.base-url:http://localhost:8084}") String baseUrl,
             @Value("${internal.service.name:${spring.application.name}}") String serviceName,
             @Value("${internal.service.token}") String serviceToken) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();

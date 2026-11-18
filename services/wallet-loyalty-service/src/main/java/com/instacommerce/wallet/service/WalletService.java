@@ -46,9 +46,9 @@ public class WalletService {
     @Transactional(readOnly = true)
     @Cacheable(value = "walletBalance", key = "#userId")
     public WalletResponse getBalance(UUID userId) {
-        Wallet wallet = walletRepository.findByUserId(userId)
-            .orElseGet(() -> createWallet(userId));
-        return new WalletResponse(wallet.getBalanceCents(), wallet.getCurrency());
+        return walletRepository.findByUserId(userId)
+            .map(wallet -> new WalletResponse(wallet.getBalanceCents(), wallet.getCurrency()))
+            .orElseGet(() -> new WalletResponse(0L, "INR"));
     }
 
     @Transactional
@@ -58,8 +58,7 @@ public class WalletService {
         if (amountCents <= 0) {
             throw new IllegalArgumentException("amountCents must be positive");
         }
-        Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
-            .orElseGet(() -> createWallet(userId));
+        Wallet wallet = findOrCreateWallet(userId);
 
         wallet.setBalanceCents(wallet.getBalanceCents() + amountCents);
         walletRepository.save(wallet);
@@ -122,6 +121,11 @@ public class WalletService {
             .map(this::toResponse);
     }
 
+    private Wallet findOrCreateWallet(UUID userId) {
+        return walletRepository.findByUserIdForUpdate(userId)
+            .orElseGet(() -> createWallet(userId));
+    }
+
     private Wallet createWallet(UUID userId) {
         Wallet wallet = new Wallet();
         wallet.setUserId(userId);
@@ -139,7 +143,7 @@ public class WalletService {
         txn.setReferenceId(refId);
         txn.setDescription(description);
         try {
-            return transactionRepository.save(txn);
+            return transactionRepository.saveAndFlush(txn);
         } catch (DataIntegrityViolationException ex) {
             throw new DuplicateTransactionException(
                 "Transaction already exists for ref=" + refType + "/" + refId);

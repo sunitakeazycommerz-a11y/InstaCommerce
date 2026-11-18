@@ -50,11 +50,13 @@ public class OrderController {
             ? request.idempotencyKey()
             : UUID.randomUUID().toString();
         CreateOrderCommand command = CreateOrderCommand.builder()
+            .orderId(parseOptionalUuid(request.orderId()))
             .userId(UUID.fromString(request.userId()))
             .storeId(request.storeId())
             .items(request.items())
             .subtotalCents(request.subtotalCents())
             .discountCents(request.discountCents())
+            .deliveryFeeCents(request.deliveryFeeCents())
             .totalCents(request.totalCents())
             .currency(request.currency())
             .couponCode(request.couponCode())

@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -184,7 +185,7 @@ class WebhookKafkaBridgeTest {
             var event = stripeEvent(3, rawPayloadNode(rawStripeJson));
 
             assertThat(bridge.forward(event)).isEqualTo(Result.PROCESSED);
-            verify(webhookEventHandler).handle(org.mockito.ArgumentMatchers.contains("evt_456"));
+            verify(webhookEventHandler).handle(ArgumentMatchers.contains("evt_456"));
         }
     }
 
@@ -215,6 +216,6 @@ class WebhookKafkaBridgeTest {
         assertThat(event.rawPspPayload().toString()).contains("evt_rt");
 
         assertThat(bridge.forward(event)).isEqualTo(Result.PROCESSED);
-        verify(webhookEventHandler).handle(org.mockito.ArgumentMatchers.contains("evt_rt"));
+        verify(webhookEventHandler).handle(ArgumentMatchers.contains("evt_rt"));
     }
 }

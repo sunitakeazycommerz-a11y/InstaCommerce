@@ -60,6 +60,15 @@ public class AuditArchiveManifest {
     @Column(name = "verification_attempt_count")
     private Integer verificationAttemptCount;
 
+    @Column(name = "first_sequence")
+    private Long firstSequence;
+
+    @Column(name = "last_sequence")
+    private Long lastSequence;
+
+    @Column(name = "last_event_hash", length = 64)
+    private String lastEventHash;
+
     public AuditArchiveManifest() {}
 
     public static Builder builder() {
@@ -186,6 +195,30 @@ public class AuditArchiveManifest {
         this.verificationAttemptCount = verificationAttemptCount;
     }
 
+    public Long getFirstSequence() {
+        return firstSequence;
+    }
+
+    public void setFirstSequence(Long firstSequence) {
+        this.firstSequence = firstSequence;
+    }
+
+    public Long getLastSequence() {
+        return lastSequence;
+    }
+
+    public void setLastSequence(Long lastSequence) {
+        this.lastSequence = lastSequence;
+    }
+
+    public String getLastEventHash() {
+        return lastEventHash;
+    }
+
+    public void setLastEventHash(String lastEventHash) {
+        this.lastEventHash = lastEventHash;
+    }
+
     public static class Builder {
         private final AuditArchiveManifest manifest = new AuditArchiveManifest();
 
@@ -246,6 +279,21 @@ public class AuditArchiveManifest {
 
         public Builder creationMethod(String creationMethod) {
             manifest.setCreationMethod(creationMethod);
+            return this;
+        }
+
+        public Builder firstSequence(Long firstSequence) {
+            manifest.setFirstSequence(firstSequence);
+            return this;
+        }
+
+        public Builder lastSequence(Long lastSequence) {
+            manifest.setLastSequence(lastSequence);
+            return this;
+        }
+
+        public Builder lastEventHash(String lastEventHash) {
+            manifest.setLastEventHash(lastEventHash);
             return this;
         }
 

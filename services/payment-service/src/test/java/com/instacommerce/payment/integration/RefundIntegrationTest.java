@@ -31,7 +31,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -82,10 +84,10 @@ class RefundIntegrationTest {
         registry.add("internal.service.token", () -> "test-internal-service-token");
     }
 
-    @org.junit.jupiter.api.BeforeAll
+    @BeforeAll
     static void runMigrations() {
         POSTGRES.start();
-        org.flywaydb.core.Flyway.configure()
+        Flyway.configure()
             .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration")
             .load()

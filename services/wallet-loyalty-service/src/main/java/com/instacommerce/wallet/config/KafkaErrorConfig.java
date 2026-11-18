@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
@@ -56,7 +57,7 @@ public class KafkaErrorConfig {
                 OrderNotFoundException.class       // order-service 404: order genuinely absent
             );
 
-            errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+            errorHandler.setLogLevel(KafkaException.Level.WARN);
             return errorHandler;
         }
 
@@ -66,7 +67,7 @@ public class KafkaErrorConfig {
             IllegalArgumentException.class,
             OrderNotFoundException.class
         );
-        errorHandler.setLogLevel(org.springframework.kafka.KafkaException.Level.WARN);
+        errorHandler.setLogLevel(KafkaException.Level.WARN);
         return errorHandler;
     }
 }

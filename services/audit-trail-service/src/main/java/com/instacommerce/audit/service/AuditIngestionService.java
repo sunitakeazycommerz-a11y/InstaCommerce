@@ -6,8 +6,10 @@ import com.instacommerce.audit.dto.AuditEventRequest;
 import com.instacommerce.audit.dto.AuditEventResponse;
 import com.instacommerce.audit.repository.AuditEventRepository;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -27,7 +29,7 @@ public class AuditIngestionService {
 
     @Transactional
     public AuditEventResponse ingest(AuditEventRequest request) {
-        Instant createdAt = Instant.now();
+        Instant createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
         hashChainService.acquireChainLock();
 
         String previousHash = hashChainService.getLatestHash();
@@ -45,7 +47,7 @@ public class AuditIngestionService {
         if (requests == null || requests.isEmpty()) {
             return;
         }
-        Instant createdAt = Instant.now();
+        Instant createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
         hashChainService.acquireChainLock();
 
         String previousHash = hashChainService.getLatestHash();
@@ -64,7 +66,9 @@ public class AuditIngestionService {
 
     private AuditEvent buildChainedEvent(AuditEventRequest request, long seqNum,
                                          String previousHash, Instant createdAt) {
+        UUID eventId = UUID.randomUUID();
         AuditEventBuilder builder = AuditEvent.builder()
+                .id(eventId)
                 .eventType(request.eventType())
                 .sourceService(request.sourceService())
                 .actorId(request.actorId())

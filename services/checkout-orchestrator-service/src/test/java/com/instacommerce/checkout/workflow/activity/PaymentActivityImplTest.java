@@ -47,7 +47,7 @@ class PaymentActivityImplTest {
                 when(restTemplate.postForObject(eq("/payments/authorize"), any(), eq(PaymentAuthResult.class)))
                     .thenReturn(new PaymentAuthResult("pay_1", true, null));
 
-                activity.authorizePayment(5000L, "pm_abc", stableKey);
+                activity.authorizePayment("order-1", 5000L, "INR", "pm_abc", stableKey);
 
                 @SuppressWarnings("unchecked")
                 ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
@@ -56,13 +56,15 @@ class PaymentActivityImplTest {
                 Map<String, Object> body = bodyCaptor.getValue();
                 assertEquals(stableKey, body.get("idempotencyKey"),
                     "Provided key must be passed through unchanged — no activityId suffix");
+                assertEquals("order-1", body.get("orderId"));
+                assertEquals("INR", body.get("currency"));
                 assertFalse(body.get("idempotencyKey").toString().contains("activity-id"),
                     "Key must NOT contain activityId");
             }
         }
 
         @Test
-        @DisplayName("null key falls back to activityId")
+        @DisplayName("null key falls back to activityId and defaults blank currency to INR")
         void nullKeyFallsBackToActivityId() {
             String activityId = "activity-fallback-789";
 
@@ -76,7 +78,7 @@ class PaymentActivityImplTest {
                 when(restTemplate.postForObject(eq("/payments/authorize"), any(), eq(PaymentAuthResult.class)))
                     .thenReturn(new PaymentAuthResult("pay_2", true, null));
 
-                activity.authorizePayment(3000L, "pm_xyz", null);
+                activity.authorizePayment("order-2", 3000L, null, "pm_xyz", null);
 
                 @SuppressWarnings("unchecked")
                 ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
@@ -84,6 +86,8 @@ class PaymentActivityImplTest {
 
                 assertEquals(activityId, bodyCaptor.getValue().get("idempotencyKey"),
                     "Null key should fall back to activityId");
+                assertEquals("INR", bodyCaptor.getValue().get("currency"),
+                    "Null currency should default to INR");
             }
         }
 
@@ -102,7 +106,7 @@ class PaymentActivityImplTest {
                 when(restTemplate.postForObject(eq("/payments/authorize"), any(), eq(PaymentAuthResult.class)))
                     .thenReturn(new PaymentAuthResult("pay_3", true, null));
 
-                activity.authorizePayment(1000L, "pm_blank", "   ");
+                activity.authorizePayment("order-3", 1000L, " ", "pm_blank", "   ");
 
                 @SuppressWarnings("unchecked")
                 ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);

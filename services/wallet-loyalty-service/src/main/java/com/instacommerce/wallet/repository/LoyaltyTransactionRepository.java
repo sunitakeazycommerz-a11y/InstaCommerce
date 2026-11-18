@@ -17,6 +17,14 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
            "AND e.type = 'EXPIRE' AND e.referenceId = CAST(t.id AS string))")
     int sumExpirablePoints(@Param("accountId") UUID accountId, @Param("cutoff") Instant cutoff);
 
+    @Query("SELECT COALESCE(SUM(t.points), 0) FROM LoyaltyTransaction t " +
+           "WHERE t.account.id = :accountId AND t.type = 'EARN' AND t.createdAt < :cutoff")
+    int sumEarnedBefore(@Param("accountId") UUID accountId, @Param("cutoff") Instant cutoff);
+
+    @Query("SELECT COALESCE(SUM(t.points), 0) FROM LoyaltyTransaction t " +
+           "WHERE t.account.id = :accountId AND t.type IN ('REDEEM', 'EXPIRE')")
+    int sumRedeemedOrExpired(@Param("accountId") UUID accountId);
+
     @Query("SELECT t FROM LoyaltyTransaction t " +
            "WHERE t.account.id = :accountId AND t.type = 'EARN' AND t.createdAt < :cutoff " +
            "AND NOT EXISTS (SELECT 1 FROM LoyaltyTransaction e WHERE e.account.id = :accountId " +

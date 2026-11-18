@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.audit.controller.AuditIntegrityController.IntegrityReport;
+import com.instacommerce.audit.domain.model.AuditArchiveManifest;
 import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.repository.AuditArchiveManifestRepository;
 import com.instacommerce.audit.repository.AuditEventRepository;
@@ -272,7 +273,8 @@ class AuditIntegrityServiceTest {
         when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e10, e11))
                 .thenReturn(List.of());
-        when(manifestRepository.existsByVerificationStatus("VERIFIED")).thenReturn(false);
+        when(manifestRepository.findByVerificationStatusOrderByDateRangeStartAsc("VERIFIED"))
+                .thenReturn(List.of());
 
         IntegrityReport report = integrityService.verifyChain(null, null, 10);
 
@@ -287,10 +289,23 @@ class AuditIntegrityServiceTest {
         AuditEvent e10 = buildChainedEvent(10L, "archived-partition-hash", BASE_TIME);
         AuditEvent e11 = buildChainedEvent(11L, e10.getEventHash(), BASE_TIME.plusSeconds(10));
 
+        AuditArchiveManifest verifiedManifest = AuditArchiveManifest.builder()
+                .archiveYear(2026)
+                .archiveMonth(1)
+                .rowCount(9L)
+                .dateRangeStart(BASE_TIME.minusSeconds(3600))
+                .dateRangeEnd(BASE_TIME)
+                .firstSequence(1L)
+                .lastSequence(9L)
+                .lastEventHash("archived-partition-hash")
+                .verificationStatus("VERIFIED")
+                .build();
+
         when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e10, e11))
                 .thenReturn(List.of());
-        when(manifestRepository.existsByVerificationStatus("VERIFIED")).thenReturn(true);
+        when(manifestRepository.findByVerificationStatusOrderByDateRangeStartAsc("VERIFIED"))
+                .thenReturn(List.of(verifiedManifest));
 
         IntegrityReport report = integrityService.verifyChain(null, null, 10);
 
@@ -300,8 +315,38 @@ class AuditIntegrityServiceTest {
         assertThat(report.firstBreakSequence()).isNull();
     }
 
+    @Test
+    void verifyChain_archiveManifestSequenceGap_detectsBreak() {
+        AuditEvent e10 = buildChainedEvent(10L, "archived-partition-hash", BASE_TIME);
+
+        AuditArchiveManifest partialManifest = AuditArchiveManifest.builder()
+                .archiveYear(2026)
+                .archiveMonth(1)
+                .rowCount(5L)
+                .dateRangeStart(BASE_TIME.minusSeconds(3600))
+                .dateRangeEnd(BASE_TIME)
+                .firstSequence(1L)
+                .lastSequence(5L)
+                .verificationStatus("VERIFIED")
+                .build();
+
+        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(e10))
+                .thenReturn(List.of());
+        when(manifestRepository.findByVerificationStatusOrderByDateRangeStartAsc("VERIFIED"))
+                .thenReturn(List.of(partialManifest));
+
+        IntegrityReport report = integrityService.verifyChain(null, null, 10);
+
+        assertThat(report.intact()).isFalse();
+        assertThat(report.chainBreaks()).isEqualTo(1);
+        assertThat(report.firstBreakSequence()).isEqualTo("10");
+    }
+
     private AuditEvent buildChainedEvent(long seq, String previousHash, Instant createdAt) {
+        UUID eventId = new UUID(0L, seq);
         AuditEvent unsigned = AuditEvent.builder()
+                .id(eventId)
                 .eventType("ORDER_CREATED")
                 .sourceService("order-service")
                 .action("CREATE")
@@ -319,6 +364,7 @@ class AuditIntegrityServiceTest {
 
     private AuditEvent buildEventWithExplicitHash(long seq, String previousHash, String eventHash, Instant createdAt) {
         return AuditEvent.builder()
+                .id(new UUID(0L, seq))
                 .eventType("ORDER_CREATED")
                 .sourceService("order-service")
                 .action("CREATE")

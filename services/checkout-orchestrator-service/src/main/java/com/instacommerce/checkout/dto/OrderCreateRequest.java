@@ -21,7 +21,8 @@ public record OrderCreateRequest(
     String quoteToken,
     String idempotencyKey,
     BigDecimal dropoffLat,
-    BigDecimal dropoffLng
+    BigDecimal dropoffLng,
+    String orderId
 ) {
     public OrderCreateRequest(
         String userId,
@@ -56,6 +57,7 @@ public record OrderCreateRequest(
             paymentMethodId,
             quoteId,
             quoteToken,
+            null,
             null,
             null,
             null
@@ -98,6 +100,50 @@ public record OrderCreateRequest(
             quoteToken,
             idempotencyKey,
             null,
+            null,
+            null
+        );
+    }
+
+    public OrderCreateRequest(
+        String userId,
+        String storeId,
+        List<CartItem> items,
+        long subtotalCents,
+        long discountCents,
+        long deliveryFeeCents,
+        long totalCents,
+        String currency,
+        String couponCode,
+        String reservationId,
+        String paymentId,
+        String deliveryAddressId,
+        String paymentMethodId,
+        String quoteId,
+        String quoteToken,
+        String idempotencyKey,
+        BigDecimal dropoffLat,
+        BigDecimal dropoffLng
+    ) {
+        this(
+            userId,
+            storeId,
+            items,
+            subtotalCents,
+            discountCents,
+            deliveryFeeCents,
+            totalCents,
+            currency,
+            couponCode,
+            reservationId,
+            paymentId,
+            deliveryAddressId,
+            paymentMethodId,
+            quoteId,
+            quoteToken,
+            idempotencyKey,
+            dropoffLat,
+            dropoffLng,
             null
         );
     }
@@ -121,7 +167,8 @@ public record OrderCreateRequest(
             quoteToken,
             idempotencyKey,
             dropoffLat,
-            dropoffLng
+            dropoffLng,
+            orderId
         );
     }
 }

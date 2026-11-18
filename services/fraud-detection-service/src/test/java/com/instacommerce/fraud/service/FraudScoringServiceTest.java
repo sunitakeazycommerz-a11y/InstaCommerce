@@ -6,6 +6,7 @@ import com.instacommerce.fraud.domain.model.FraudRule;
 import com.instacommerce.fraud.domain.model.RiskLevel;
 import com.instacommerce.fraud.domain.model.FraudSignal;
 import com.instacommerce.fraud.dto.request.FraudCheckRequest;
+import com.instacommerce.fraud.dto.request.FraudReportRequest;
 import com.instacommerce.fraud.dto.response.FraudCheckResponse;
 import com.instacommerce.fraud.repository.FraudRuleRepository;
 import com.instacommerce.fraud.repository.FraudSignalRepository;
@@ -232,7 +233,7 @@ class FraudScoringServiceTest {
         ArgumentCaptor<FraudSignal> signalCaptor = ArgumentCaptor.forClass(FraudSignal.class);
         verify(fraudSignalRepository).save(signalCaptor.capture());
         assertThat(signalCaptor.getValue().getActionTaken()).isEqualTo(FraudAction.REVIEW.name());
-        verify(outboxService).publish(eq("FraudSignal"), anyString(), eq("FraudDetected"), anyMap());
+        verify(outboxService).publish(eq("Fraud"), anyString(), eq("FraudDetected"), anyMap());
 
         double errorCount = meterRegistry.counter("fraud.scoring.errors",
                 "stage", "rule_evaluation",
@@ -258,7 +259,7 @@ class FraudScoringServiceTest {
         assertThat(response.riskLevel()).isEqualTo(RiskLevel.CRITICAL.name());
         assertThat(response.score()).isGreaterThanOrEqualTo(RiskLevel.CRITICAL.getMinScore());
         assertThat(response.rulesTriggered()).contains("RULE_EVALUATION_ERROR:high-risk-rule");
-        verify(outboxService).publish(eq("FraudSignal"), anyString(), eq("FraudDetected"), anyMap());
+        verify(outboxService).publish(eq("Fraud"), anyString(), eq("FraudDetected"), anyMap());
 
         double errorCount = meterRegistry.counter("fraud.scoring.errors",
                 "stage", "rule_evaluation",
@@ -303,7 +304,7 @@ class FraudScoringServiceTest {
         assertThat(response.score()).isEqualTo(100);
         assertThat(response.rulesTriggered()).contains("BLOCKLIST_EVALUATION_ERROR");
         assertThat(response.signalId()).isNotNull();
-        verify(outboxService).publish(eq("FraudSignal"), anyString(), eq("FraudDetected"), anyMap());
+        verify(outboxService).publish(eq("Fraud"), anyString(), eq("FraudDetected"), anyMap());
 
         double errorCount = meterRegistry.counter("fraud.scoring.errors",
                 "stage", "blocklist",
@@ -326,7 +327,7 @@ class FraudScoringServiceTest {
         assertThat(response.riskLevel()).isEqualTo(RiskLevel.CRITICAL.name());
         assertThat(response.score()).isEqualTo(100);
         assertThat(response.rulesTriggered()).contains("RULE_LOAD_ERROR");
-        verify(outboxService).publish(eq("FraudSignal"), anyString(), eq("FraudDetected"), anyMap());
+        verify(outboxService).publish(eq("Fraud"), anyString(), eq("FraudDetected"), anyMap());
 
         double errorCount = meterRegistry.counter("fraud.scoring.errors",
                 "stage", "rule_load",
@@ -430,6 +431,45 @@ class FraudScoringServiceTest {
         assertThat(response.score()).isZero();
         assertThat(response.signalId()).isNull();
         verifyNoInteractions(blocklistService, fraudRuleRepository, ruleEvaluationService);
+    }
+
+    @Test
+    @DisplayName("Respects SHADOW and MANUAL_REVIEW operating modes on blocklist and cached score hits")
+    void shouldRespectOperationalModesOnBlocklistAndCachedScoreHits() {
+        FraudCheckRequest request = sampleRequest();
+        when(blocklistService.isBlocked("USER", request.userId().toString())).thenReturn(true);
+
+        FraudScoringService shadowService = serviceWithMode(FraudOperationalMode.SHADOW);
+        FraudCheckResponse shadowBlocked = shadowService.scoreTransaction(request);
+        assertThat(shadowBlocked.action()).isEqualTo(FraudAction.ALLOW.name());
+
+        FraudScoringService manualService = serviceWithMode(FraudOperationalMode.MANUAL_REVIEW);
+        FraudCheckResponse manualBlocked = manualService.scoreTransaction(request);
+        assertThat(manualBlocked.action()).isEqualTo(FraudAction.REVIEW.name());
+
+        when(blocklistService.isBlocked(anyString(), anyString())).thenReturn(false);
+        when(valueOperations.get("fraud:score:" + request.userId())).thenReturn("0.92");
+
+        assertThat(shadowService.scoreTransaction(request).action()).isEqualTo(FraudAction.ALLOW.name());
+        assertThat(manualService.scoreTransaction(request).action()).isEqualTo(FraudAction.REVIEW.name());
+    }
+
+    @Test
+    @DisplayName("reportFraud persists FraudSignal and returns signalId")
+    void shouldPersistFraudReportSignal() {
+        UUID userId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        FraudReportRequest report = new FraudReportRequest(userId, orderId, "dev-report", "192.0.2.10", "account takeover");
+
+        var result = fraudScoringService.reportFraud(report);
+
+        assertThat(result).containsEntry("status", "reported");
+        assertThat(result.get("signalId")).isNotBlank();
+        ArgumentCaptor<FraudSignal> captor = ArgumentCaptor.forClass(FraudSignal.class);
+        verify(fraudSignalRepository).save(captor.capture());
+        assertThat(captor.getValue().getUserId()).isEqualTo(userId);
+        assertThat(captor.getValue().getOrderId()).isEqualTo(orderId);
+        assertThat(captor.getValue().getRulesTriggered()).containsExactly("USER_REPORT:account takeover");
     }
 
     private static FraudCheckRequest sampleRequest() {

@@ -20,6 +20,7 @@ import com.instacommerce.payment.gateway.GatewayAuthResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -63,7 +64,7 @@ class SyncAuthorizationFailureTest {
             paymentRepository, ledgerService, ledgerEntryRepository, outboxService, auditLogService);
         // PaymentService depends on the helper; stub savePendingAuthorization later per test
         service = new PaymentService(paymentRepository, paymentGateway, helper,
-            new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+            new SimpleMeterRegistry());
     }
 
     private Payment authPendingPayment() {
@@ -114,6 +115,28 @@ class SyncAuthorizationFailureTest {
             assertThat(payload).containsEntry("paymentId", payment.getId());
             assertThat(payload).containsEntry("reason", "Insufficient funds");
             assertThat(payload).doesNotContainKey("resolvedBy");
+        }
+
+        @Test
+        @DisplayName("publishes PaymentFailed outbox event including userId when metadata contains userId")
+        void publishesPaymentFailedOutboxEventWithUserId() {
+            UUID userId = UUID.randomUUID();
+            Payment payment = authPendingPayment();
+            payment.setMetadata(Map.of("userId", userId.toString()));
+            stubForUpdate(payment);
+
+            helper.markAuthorizationFailed(payment.getId(), "Insufficient funds");
+
+            verify(outboxService).publish(
+                eq("Payment"),
+                eq(payment.getId().toString()),
+                eq("PaymentFailed"),
+                outboxPayloadCaptor.capture());
+
+            assertThat(outboxPayloadCaptor.getValue())
+                .containsEntry("userId", userId.toString())
+                .containsEntry("orderId", payment.getOrderId())
+                .containsEntry("paymentId", payment.getId());
         }
 
         @Test

@@ -907,6 +907,9 @@ public class WebhookEventProcessor {
         payload.put("orderId", payment.getOrderId());
         payload.put("paymentId", payment.getId());
         payload.put("reason", reason);
+        if (payment.getMetadata() != null && payment.getMetadata().get("userId") != null) {
+            payload.put("userId", payment.getMetadata().get("userId").toString());
+        }
         outboxService.publish("Payment", payment.getId().toString(), "PaymentFailed", payload);
     }
 

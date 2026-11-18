@@ -8,6 +8,7 @@ import com.instacommerce.fraud.domain.model.FraudRule;
 import com.instacommerce.fraud.domain.model.FraudSignal;
 import com.instacommerce.fraud.domain.model.RiskLevel;
 import com.instacommerce.fraud.dto.request.FraudCheckRequest;
+import com.instacommerce.fraud.dto.request.FraudReportRequest;
 import com.instacommerce.fraud.dto.response.FraudCheckResponse;
 import com.instacommerce.fraud.repository.FraudRuleRepository;
 import com.instacommerce.fraud.repository.FraudSignalRepository;
@@ -202,7 +203,14 @@ public class FraudScoringService {
 
         try {
             if (isAnyEntityBlocked(request)) {
-                return persistAndRespond(request, 100, RiskLevel.CRITICAL, FraudAction.BLOCK,
+                if (mode == FraudOperationalMode.SHADOW) {
+                    log.info("fraud.shadow_mode blocklist_hit order={}", request.orderId());
+                    return allowResponse();
+                }
+                FraudAction blockAction = mode == FraudOperationalMode.MANUAL_REVIEW
+                        ? FraudAction.REVIEW
+                        : FraudAction.BLOCK;
+                return persistAndRespond(request, 100, RiskLevel.CRITICAL, blockAction,
                         List.of("BLOCKLIST_HIT"));
             }
         } catch (Exception ex) {
@@ -213,11 +221,18 @@ public class FraudScoringService {
 
         Double cachedFraudScore = getCachedFraudRiskScore(request.userId(), mode);
         if (cachedFraudScore != null && cachedFraudScore > 0.85) {
-            log.warn("Blocking checkout: customer fraud risk score {} exceeds threshold 0.85 for user {}",
-                    cachedFraudScore, request.userId());
+            if (mode == FraudOperationalMode.SHADOW) {
+                log.info("fraud.shadow_mode high_cached_score={} order={}", cachedFraudScore, request.orderId());
+                return allowResponse();
+            }
+            FraudAction scoreAction = mode == FraudOperationalMode.MANUAL_REVIEW
+                    ? FraudAction.REVIEW
+                    : FraudAction.BLOCK;
+            log.warn("Flagging checkout ({}): customer fraud risk score {} exceeds threshold 0.85 for user {}",
+                    scoreAction, cachedFraudScore, request.userId());
             int score = (int) Math.round(cachedFraudScore * 100);
             return persistAndRespond(request, Math.min(100, Math.max(0, score)),
-                    RiskLevel.CRITICAL, FraudAction.BLOCK, List.of("HIGH_FRAUD_RISK_SCORE"));
+                    RiskLevel.CRITICAL, scoreAction, List.of("HIGH_FRAUD_RISK_SCORE"));
         }
 
         List<FraudRule> rules;
@@ -427,7 +442,7 @@ public class FraudScoringService {
         FraudSignal saved = fraudSignalRepository.save(signal);
 
         if (action != FraudAction.ALLOW) {
-            outboxService.publish("FraudSignal", saved.getId().toString(), "FraudDetected",
+            outboxService.publish("Fraud", saved.getId().toString(), "FraudDetected",
                     Map.of(
                             "signalId", saved.getId(),
                             "userId", request.userId(),
@@ -440,5 +455,28 @@ public class FraudScoringService {
         }
 
         return saved;
+    }
+
+    public Map<String, String> reportFraud(FraudReportRequest request) {
+        FraudSignal signal = new FraudSignal();
+        signal.setUserId(request.userId());
+        signal.setOrderId(request.orderId() != null ? request.orderId() : UUID.randomUUID());
+        signal.setDeviceFingerprint(request.deviceFingerprint());
+        signal.setIpAddress(request.ipAddress());
+        signal.setScore(RiskLevel.HIGH.getMinScore());
+        signal.setRiskLevel(RiskLevel.HIGH.name());
+        String ruleTag = (request.reason() != null && !request.reason().isBlank())
+                ? "USER_REPORT:" + request.reason()
+                : "USER_REPORT";
+        signal.setRulesTriggered(List.of(ruleTag));
+        signal.setActionTaken(FraudAction.FLAG.name());
+
+        FraudSignal saved = persistenceTxTemplate != null
+                ? persistenceTxTemplate.execute(status -> fraudSignalRepository.save(signal))
+                : fraudSignalRepository.save(signal);
+        return Map.of(
+                "status", "reported",
+                "signalId", saved != null && saved.getId() != null ? saved.getId().toString() : ""
+        );
     }
 }

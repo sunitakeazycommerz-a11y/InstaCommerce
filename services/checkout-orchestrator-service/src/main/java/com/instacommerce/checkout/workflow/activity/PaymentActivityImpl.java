@@ -10,10 +10,12 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Component
 public class PaymentActivityImpl implements PaymentActivity {
+    private static final String DEFAULT_CURRENCY = "INR";
     private static final Logger log = LoggerFactory.getLogger(PaymentActivityImpl.class);
     private final RestTemplate restTemplate;
 
@@ -23,12 +25,21 @@ public class PaymentActivityImpl implements PaymentActivity {
 
     @Override
     @CircuitBreaker(name = "paymentService", fallbackMethod = "authorizePaymentFallback")
-    public PaymentAuthResult authorizePayment(long amountCents, String paymentMethodId, String idempotencyKey) {
+    public PaymentAuthResult authorizePayment(String orderId, long amountCents, String currency,
+                                              String paymentMethodId, String idempotencyKey) {
         String resolvedKey = resolveIdempotencyKey(idempotencyKey);
-        log.info("Authorizing payment amount={} paymentMethod={} idempotencyKey={}", amountCents, paymentMethodId, resolvedKey);
-        return restTemplate.postForObject("/payments/authorize",
-            Map.of("amountCents", amountCents, "paymentMethodId", paymentMethodId, "idempotencyKey", resolvedKey),
-            PaymentAuthResult.class);
+        String resolvedCurrency = (currency != null && !currency.isBlank()) ? currency : DEFAULT_CURRENCY;
+        log.info("Authorizing payment orderId={} amount={} currency={} paymentMethod={} idempotencyKey={}",
+            orderId, amountCents, resolvedCurrency, paymentMethodId, resolvedKey);
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (orderId != null && !orderId.isBlank()) {
+            body.put("orderId", orderId);
+        }
+        body.put("amountCents", amountCents);
+        body.put("currency", resolvedCurrency);
+        body.put("paymentMethodId", paymentMethodId);
+        body.put("idempotencyKey", resolvedKey);
+        return restTemplate.postForObject("/payments/authorize", body, PaymentAuthResult.class);
     }
 
     @Override
@@ -63,10 +74,10 @@ public class PaymentActivityImpl implements PaymentActivity {
     }
 
     @SuppressWarnings("unused")
-    private PaymentAuthResult authorizePaymentFallback(long amountCents, String paymentMethodId,
-                                                        String idempotencyKey, Exception e) {
-        log.warn("Circuit breaker fallback for paymentService authorizePayment amount={}: {}",
-                amountCents, e.getMessage());
+    private PaymentAuthResult authorizePaymentFallback(String orderId, long amountCents, String currency,
+                                                        String paymentMethodId, String idempotencyKey, Exception e) {
+        log.warn("Circuit breaker fallback for paymentService authorizePayment orderId={} amount={}: {}",
+                orderId, amountCents, e.getMessage());
         throw new ServiceUnavailableException("paymentService",
                 "Payment service unavailable for authorizePayment", e);
     }

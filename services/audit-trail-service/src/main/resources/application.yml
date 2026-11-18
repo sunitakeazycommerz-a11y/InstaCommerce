@@ -5,6 +5,9 @@ server:
 spring:
   application:
     name: audit-trail-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   config:
     import: optional:sm://
   lifecycle:

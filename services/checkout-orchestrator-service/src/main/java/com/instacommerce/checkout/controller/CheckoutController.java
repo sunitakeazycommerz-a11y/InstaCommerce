@@ -15,6 +15,7 @@ import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowException;
 import io.temporal.client.WorkflowExecutionAlreadyStarted;
 import io.temporal.client.WorkflowOptions;
+import jakarta.annotation.Nullable;
 import jakarta.validation.Valid;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -29,8 +30,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.lang.Nullable;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -132,10 +133,11 @@ public class CheckoutController {
             if (idempotencyKey == null || idempotencyKey.isBlank()) {
                 idempotencyKey = UUID.randomUUID().toString();
             }
+            String scopedIdempotencyKey = principal + ":" + idempotencyKey;
 
             // DB-backed idempotency check committed in its own short TX;
             // the DB connection is returned to the pool before the workflow call below.
-            Optional<CheckoutResponse> cached = idempotencyService.findValidResponse(idempotencyKey);
+            Optional<CheckoutResponse> cached = idempotencyService.findValidResponse(scopedIdempotencyKey);
             if (cached.isPresent()) {
                 log.info("Duplicate checkout detected idempotencyKey={}, returning cached response", idempotencyKey);
                 return ResponseEntity.ok(cached.get());
@@ -166,7 +168,7 @@ public class CheckoutController {
             }
 
             // Persist idempotency key + response in its own short TX (connection returned immediately)
-            idempotencyService.recordResponse(idempotencyKey, result);
+            idempotencyService.recordResponse(scopedIdempotencyKey, result);
 
             return ResponseEntity.ok(result);
         } finally {
@@ -183,10 +185,29 @@ public class CheckoutController {
     }
 
     @GetMapping("/{workflowId}/status")
-    public ResponseEntity<Map<String, String>> getCheckoutStatus(@PathVariable String workflowId) {
+    public ResponseEntity<Map<String, String>> getCheckoutStatus(
+            @PathVariable String workflowId,
+            Authentication authentication) {
+        if (!isAuthorizedForWorkflow(authentication, workflowId)) {
+            throw new CheckoutException("FORBIDDEN", "Cannot access another user's checkout status", HttpStatus.FORBIDDEN);
+        }
         CheckoutWorkflow workflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
         String status = workflow.getStatus();
         return ResponseEntity.ok(Map.of("workflowId", workflowId, "status", status));
+    }
+
+    private boolean isAuthorizedForWorkflow(Authentication authentication, String workflowId) {
+        if (authentication == null) {
+            return false;
+        }
+        boolean isPrivileged = authentication.getAuthorities().stream()
+            .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()) || "ROLE_INTERNAL_SERVICE".equals(a.getAuthority()));
+        if (isPrivileged) {
+            return true;
+        }
+        String principal = authentication.getName();
+        return principal != null && !principal.isBlank()
+            && workflowId != null && workflowId.startsWith("checkout-" + principal + "-");
     }
 
     private ResponseEntity<CheckoutResponse> handleAlreadyStarted(String workflowId) {

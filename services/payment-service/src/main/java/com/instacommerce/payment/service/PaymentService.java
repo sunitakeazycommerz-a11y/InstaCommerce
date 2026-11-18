@@ -76,7 +76,7 @@ public class PaymentService {
                     request.amountCents(),
                     pending.getCurrency(),
                     normalizedKey,
-                    request.paymentMethod()
+                    request.effectivePaymentMethod()
                 ));
             } catch (PaymentGatewayTransientException ex) {
                 log.warn("Transient PSP authorization timeout/error for payment {}: {}",
