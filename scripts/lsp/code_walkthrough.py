@@ -258,6 +258,10 @@ def _resolve_gradle_project(abs_path: str) -> Optional[str]:
         svc_root = os.path.join(REPO_ROOT, "services", parts[1])
         if os.path.isfile(os.path.join(svc_root, "build.gradle.kts")):
             return f":services:{parts[1]}"
+    if len(parts) >= 2 and parts[0] == "libs":
+        lib_root = os.path.join(REPO_ROOT, "libs", parts[1])
+        if os.path.isfile(os.path.join(lib_root, "build.gradle.kts")):
+            return f":libs:{parts[1]}"
     if len(parts) >= 1 and parts[0] == "contracts":
         if os.path.isfile(os.path.join(REPO_ROOT, "contracts", "build.gradle.kts")):
             return ":contracts"
