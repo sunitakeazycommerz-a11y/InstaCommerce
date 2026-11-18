@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/omkarkumar/InstaCommerce.git
+    repoURL: https://github.com/sunitakeazycommerz-a11y/InstaCommerce.git
     targetRevision: main
     path: deploy/helm
     helm:
