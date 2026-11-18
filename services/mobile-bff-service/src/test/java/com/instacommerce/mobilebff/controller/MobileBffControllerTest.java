@@ -1,5 +1,6 @@
 package com.instacommerce.mobilebff.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -171,5 +172,27 @@ class MobileBffControllerTest {
             .expectNextCount(1)
             .verifyComplete();
         verify(homeAggregator).aggregate(null, "store_1");
+    }
+
+    @Test
+    @DisplayName("profile delegates authenticated userId and bearer credentials to HomeAggregator")
+    void profileDelegatesToHomeAggregator() {
+        when(homeAggregator.aggregateProfile("usr_123", "token-xyz"))
+            .thenReturn(Mono.just(Map.of(
+                "userId", "usr_123",
+                "status", "authenticated",
+                "profile", Map.of("email", "u@example.com")
+            )));
+
+        Authentication auth = new UsernamePasswordAuthenticationToken(
+            "usr_123", "token-xyz", List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")));
+
+        StepVerifier.create(controller.profile(auth))
+            .assertNext(body -> {
+                assertThat(body).containsEntry("userId", "usr_123");
+                assertThat(body).containsEntry("status", "authenticated");
+            })
+            .verifyComplete();
+        verify(homeAggregator).aggregateProfile("usr_123", "token-xyz");
     }
 }

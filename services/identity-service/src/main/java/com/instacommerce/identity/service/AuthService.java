@@ -18,6 +18,7 @@ import com.instacommerce.identity.exception.UserInactiveException;
 import com.instacommerce.identity.infrastructure.metrics.AuthMetrics;
 import com.instacommerce.identity.repository.RefreshTokenRepository;
 import com.instacommerce.identity.repository.UserRepository;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,6 +26,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -45,9 +49,9 @@ public class AuthService {
     private final AuthMetrics authMetrics;
     private final UserService userService;
     private final OutboxService outboxService;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final StringRedisTemplate redisTemplate;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public AuthService(UserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
                        PasswordEncoder passwordEncoder,
@@ -57,7 +61,7 @@ public class AuthService {
                        AuthMetrics authMetrics,
                        UserService userService,
                        OutboxService outboxService,
-                       org.springframework.beans.factory.ObjectProvider<org.springframework.data.redis.core.StringRedisTemplate> redisTemplateProvider) {
+                       ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordEncoder = passwordEncoder;
@@ -157,17 +161,21 @@ public class AuthService {
             Optional<User> userOptional = userRepository.findByEmailIgnoreCase(email);
             if (userOptional.isPresent()) {
                 User u = userOptional.get();
-                if (u.getLockedUntil() != null && u.getLockedUntil().isAfter(Instant.now())) {
-                    authMetrics.incrementLoginFailure();
-                    auditService.logAction(u.getId(),
-                        "USER_LOGIN_LOCKED",
-                        TARGET_TYPE_USER,
-                        u.getId().toString(),
-                        Map.of("lockedUntil", u.getLockedUntil().toString()),
-                        ipAddress,
-                        userAgent,
-                        traceId);
-                    throw new UserInactiveException();
+                if (u.getLockedUntil() != null) {
+                    if (u.getLockedUntil().isAfter(Instant.now())) {
+                        authMetrics.incrementLoginFailure();
+                        auditService.logAction(u.getId(),
+                            "USER_LOGIN_LOCKED",
+                            TARGET_TYPE_USER,
+                            u.getId().toString(),
+                            Map.of("lockedUntil", u.getLockedUntil().toString()),
+                            ipAddress,
+                            userAgent,
+                            traceId);
+                        throw new UserInactiveException();
+                    }
+                    u.setFailedAttempts(0);
+                    u.setLockedUntil(null);
                 }
             }
             if (userOptional.isEmpty() || !passwordEncoder.matches(request.password(), userOptional.get().getPasswordHash())) {
@@ -175,7 +183,7 @@ public class AuthService {
                     try {
                         Long count = redisTemplate.opsForValue().increment(lockoutKey);
                         if (count != null && count == 1) {
-                            redisTemplate.expire(lockoutKey, java.time.Duration.ofMinutes(LOCKOUT_DURATION_MINUTES));
+                            redisTemplate.expire(lockoutKey, Duration.ofMinutes(LOCKOUT_DURATION_MINUTES));
                         }
                     } catch (Exception e) {
                         // Ignore redis error
@@ -256,42 +264,60 @@ public class AuthService {
         });
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = TokenRevokedException.class)
     public AuthResponse refresh(RefreshRequest request, String ipAddress, String userAgent, String traceId) {
         String refreshHash = tokenService.hashRefreshToken(request.refreshToken());
         RefreshToken existing = refreshTokenRepository.findByTokenHash(refreshHash)
             .orElseThrow(TokenInvalidException::new);
+        User user = existing.getUser();
+        UUID userId = user.getId();
         if (existing.isRevoked()) {
+            handleTokenReuseDetected(userId, existing.getId(), ipAddress, userAgent, traceId);
             throw new TokenRevokedException();
         }
         if (existing.getExpiresAt().isBefore(Instant.now())) {
             throw new TokenExpiredException();
         }
-        if (existing.getUser().getStatus() != UserStatus.ACTIVE) {
+        if (user.getStatus() != UserStatus.ACTIVE) {
             throw new UserInactiveException();
         }
-        existing.setRevoked(true);
-        refreshTokenRepository.save(existing);
+        int updated = refreshTokenRepository.revokeIfNotRevoked(existing.getId());
+        if (updated == 0) {
+            handleTokenReuseDetected(userId, existing.getId(), ipAddress, userAgent, traceId);
+            throw new TokenRevokedException();
+        }
         String newRefresh = tokenService.generateRefreshToken();
         String newRefreshHash = tokenService.hashRefreshToken(newRefresh);
         RefreshToken rotated = new RefreshToken();
-        rotated.setUser(existing.getUser());
+        rotated.setUser(user);
         rotated.setTokenHash(newRefreshHash);
         rotated.setDeviceInfo(existing.getDeviceInfo());
         rotated.setExpiresAt(tokenService.refreshTokenExpiresAt());
         refreshTokenRepository.save(rotated);
-        enforceMaxRefreshTokens(existing.getUser().getId());
-        auditService.logAction(existing.getUser().getId(),
+        enforceMaxRefreshTokens(userId);
+        auditService.logAction(userId,
             "TOKEN_REFRESH",
             TARGET_TYPE_USER,
-            existing.getUser().getId().toString(),
+            userId.toString(),
             Map.of("refreshTokenId", existing.getId().toString()),
             ipAddress,
             userAgent,
             traceId);
-        String accessToken = tokenService.generateAccessToken(existing.getUser());
+        String accessToken = tokenService.generateAccessToken(user);
         authMetrics.incrementRefresh();
         return new AuthResponse(accessToken, newRefresh, tokenService.accessTokenTtlSeconds(), "Bearer");
+    }
+
+    private void handleTokenReuseDetected(UUID userId, UUID tokenId, String ipAddress, String userAgent, String traceId) {
+        int revokedCount = refreshTokenRepository.revokeAllByUserId(userId);
+        auditService.logAction(userId,
+            "TOKEN_REUSE_DETECTED",
+            TARGET_TYPE_USER,
+            userId.toString(),
+            Map.of("reusedTokenId", tokenId.toString(), "revokedTokens", revokedCount),
+            ipAddress,
+            userAgent,
+            traceId);
     }
 
     @Transactional

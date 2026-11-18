@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
@@ -58,6 +59,9 @@ public class PricingClient {
                         "Pricing service returned null for product: " + productId);
             }
             return response;
+        } catch (ResourceAccessException ex) {
+            log.warn("Pricing service network/timeout failure for product {}: {}", productId, ex.getMessage());
+            throw ex;
         } catch (RestClientException ex) {
             log.warn("Pricing service call failed for product {}: {}", productId, ex.getMessage());
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",

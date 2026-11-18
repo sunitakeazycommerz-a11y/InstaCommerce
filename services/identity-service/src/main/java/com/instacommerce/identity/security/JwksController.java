@@ -5,8 +5,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -20,7 +22,7 @@ public class JwksController {
 
     @GetMapping("/jwks.json")
     public Map<String, Object> jwks() {
-        java.util.List<Map<String, Object>> keys = new java.util.ArrayList<>();
+        List<Map<String, Object>> keys = new ArrayList<>();
         for (JwtKeyLoader.KeyEntry entry : keyLoader.getAllPublicKeys()) {
             Map<String, Object> jwk = new LinkedHashMap<>();
             jwk.put("kty", "RSA");

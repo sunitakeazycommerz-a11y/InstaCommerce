@@ -12,20 +12,28 @@ import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 @Service
 public class CartService {
     private static final Logger log = LoggerFactory.getLogger(CartService.class);
+    private static final int MAX_ADD_RETRIES = 3;
 
     private final CartStore cartStore;
     private final CartProperties cartProperties;
     private final PricingClient pricingClient;
     private final CartSyncPublisher cartSyncPublisher;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public CartService(CartStore cartStore, CartProperties cartProperties, PricingClient pricingClient,
-                       org.springframework.beans.factory.ObjectProvider<CartSyncPublisher> cartSyncPublisherProvider) {
+                       ObjectProvider<CartSyncPublisher> cartSyncPublisherProvider) {
         this.cartStore = cartStore;
         this.cartProperties = cartProperties;
         this.pricingClient = pricingClient;
@@ -36,6 +44,7 @@ public class CartService {
         this(cartStore, cartProperties, pricingClient, null);
     }
 
+    @Cacheable(value = "carts", key = "#userId", unless = "#result == null || #result.cartId() == null")
     public CartResponse getCart(UUID userId) {
         return cartStore.getCart(userId)
             .map(this::toResponse)
@@ -47,10 +56,10 @@ public class CartService {
      * pricing-service to prevent client-side price manipulation. If the pricing-service
      * is unavailable, the request is rejected (fail-closed).
      */
+    @CacheEvict(value = "carts", key = "#userId")
     public CartResponse addItem(UUID userId, AddItemRequest request) {
         validateBusinessRules(userId, request);
 
-        // Server-side price validation: always use pricing-service as source of truth
         PricingClient.PriceResponse priceResponse = pricingClient.getPrice(request.productId());
         long serverPrice = priceResponse.unitPriceCents();
 
@@ -59,17 +68,31 @@ public class CartService {
                     userId, request.productId(), request.unitPriceCents(), serverPrice);
         }
 
-        // Override client-supplied price with server-authoritative price
         AddItemRequest validatedRequest = new AddItemRequest(
                 request.productId(), request.productName(), serverPrice, request.quantity());
 
-        Cart cart = cartStore.addItem(userId, validatedRequest);
+        Cart cart = executeAddWithRetry(userId, validatedRequest);
         log.info("Item added to cart for user={}, product={}, serverPrice={}", userId, request.productId(), serverPrice);
         CartResponse response = toResponse(cart);
         notifyCartUpdated(userId, response);
         return response;
     }
 
+    private Cart executeAddWithRetry(UUID userId, AddItemRequest validatedRequest) {
+        RuntimeException lastException = null;
+        for (int attempt = 1; attempt <= MAX_ADD_RETRIES; attempt++) {
+            try {
+                return cartStore.addItem(userId, validatedRequest);
+            } catch (DataIntegrityViolationException | ObjectOptimisticLockingFailureException ex) {
+                lastException = ex;
+                log.debug("Concurrent addItem conflict on attempt {} for user={}, product={}",
+                        attempt, userId, validatedRequest.productId());
+            }
+        }
+        throw lastException;
+    }
+
+    @CacheEvict(value = "carts", key = "#userId")
     public CartResponse updateQuantity(UUID userId, UUID productId, int quantity) {
         if (quantity > cartProperties.getMaxQuantityPerItem()) {
             throw new IllegalArgumentException(
@@ -82,6 +105,7 @@ public class CartService {
         return response;
     }
 
+    @CacheEvict(value = "carts", key = "#userId")
     public CartResponse removeItem(UUID userId, UUID productId) {
         Cart cart = cartStore.removeItem(userId, productId);
         log.info("Item removed from cart for user={}, product={}", userId, productId);
@@ -90,6 +114,7 @@ public class CartService {
         return response;
     }
 
+    @CacheEvict(value = "carts", key = "#userId")
     public void clearCart(UUID userId) {
         cartStore.clearCart(userId);
         log.info("Cart cleared for user={}", userId);
@@ -102,6 +127,10 @@ public class CartService {
         return toResponse(cart);
     }
 
+    @Caching(evict = {
+        @CacheEvict(value = "carts", key = "#targetUserId"),
+        @CacheEvict(value = "carts", key = "#sourceGuestUserId", condition = "#sourceGuestUserId != null")
+    })
     public CartResponse mergeCart(UUID targetUserId, UUID sourceGuestUserId) {
         if (sourceGuestUserId == null || targetUserId.equals(sourceGuestUserId)) {
             return getCart(targetUserId);
@@ -121,7 +150,6 @@ public class CartService {
 
     private void validateBusinessRules(UUID userId, AddItemRequest request) {
         cartStore.getCart(userId).ifPresent(cart -> {
-            // Check max items per cart
             boolean productExists = cart.getItems().stream()
                 .anyMatch(item -> item.getProductId().equals(request.productId()));
             if (!productExists && cart.getItems().size() >= cartProperties.getMaxItemsPerCart()) {
@@ -129,7 +157,6 @@ public class CartService {
                     "Cart cannot exceed " + cartProperties.getMaxItemsPerCart() + " distinct items");
             }
 
-            // Check max quantity per item
             cart.getItems().stream()
                 .filter(item -> item.getProductId().equals(request.productId()))
                 .findFirst()

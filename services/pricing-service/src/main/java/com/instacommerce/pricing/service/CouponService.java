@@ -12,11 +12,14 @@ import com.instacommerce.pricing.repository.CouponRedemptionRepository;
 import com.instacommerce.pricing.repository.CouponRepository;
 import com.instacommerce.pricing.repository.PromotionRepository;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
@@ -35,7 +38,7 @@ public class CouponService {
     private final OutboxService outboxService;
     private final PromoReservationService promoReservationService;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public CouponService(CouponRepository couponRepository,
                          CouponRedemptionRepository couponRedemptionRepository,
                          PromotionRepository promotionRepository,
@@ -78,7 +81,9 @@ public class CouponService {
 
         Promotion promotion = coupon.getPromotion();
         Instant now = Instant.now();
-        if (!promotion.isActive() || now.isBefore(promotion.getStartAt()) || now.isAfter(promotion.getEndAt())) {
+        if (!promotion.isActive()
+                || now.isBefore(promotion.getStartAt())
+                || (promotion.getEndAt() != null && now.isAfter(promotion.getEndAt()))) {
             throw new InvalidCouponException("Coupon promotion has expired or is inactive");
         }
 
@@ -113,6 +118,13 @@ public class CouponService {
             Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)
                     .orElseThrow(() -> new CouponNotFoundException(code));
 
+            if (orderId != null
+                    && couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(coupon.getId(), userId, orderId)
+                            .isPresent()) {
+                log.info("Idempotent coupon redemption replay for code={} userId={} orderId={}", code, userId, orderId);
+                return;
+            }
+
             // Thread-safe redemption: lock coupon row and check limits inside transaction
             if (coupon.getTotalLimit() != null && coupon.getTotalRedeemed() >= coupon.getTotalLimit()) {
                 throw new InvalidCouponException("Coupon has reached its total redemption limit");
@@ -133,6 +145,13 @@ public class CouponService {
             try {
                 couponRedemptionRepository.save(redemption);
             } catch (DataIntegrityViolationException ex) {
+                if (orderId != null
+                        && couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(coupon.getId(), userId, orderId)
+                                .isPresent()) {
+                    log.info("Idempotent concurrent coupon redemption replay for code={} userId={} orderId={}",
+                            code, userId, orderId);
+                    return;
+                }
                 // Constraint violation for single-use coupon redemptions
                 throw new InvalidCouponException("Coupon has already been used");
             }
@@ -142,7 +161,7 @@ public class CouponService {
             couponRepository.save(coupon);
             promotionService.recordPromotionUsage(coupon.getPromotion().getId());
 
-            java.util.Map<String, Object> eventPayload = new java.util.LinkedHashMap<>();
+            Map<String, Object> eventPayload = new LinkedHashMap<>();
             eventPayload.put("couponId", coupon.getId().toString());
             eventPayload.put("couponCode", code);
             eventPayload.put("userId", userId.toString());
@@ -153,15 +172,14 @@ public class CouponService {
             eventPayload.put("redeemedAt", Instant.now().toString());
 
             if (outboxService != null) {
-                outboxService.recordEvent("Coupon", coupon.getId().toString(), "CouponRedeemed", eventPayload);
+                outboxService.recordEvent("pricing", coupon.getId().toString(), "CouponRedeemed", eventPayload);
             }
 
             log.info("Redeemed coupon code={} userId={} orderId={} discount={}", code, userId, orderId, discountCents);
-        } catch (Exception ex) {
+        } finally {
             if (promoReservationService != null) {
                 promoReservationService.release(code, userId);
             }
-            throw ex;
         }
     }
 

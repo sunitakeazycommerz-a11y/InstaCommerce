@@ -21,7 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/admin/promotions")
+@RequestMapping({"/admin/promotions", "/api/v1/admin/promotions"})
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminPromotionController {
 

@@ -46,10 +46,15 @@ class RateLimitServiceTest {
         redisTemplate = mock(StringRedisTemplate.class);
     }
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static RedisScript<Long> anyLongScript() {
+        return any(RedisScript.class);
+    }
+
     @Test
     @DisplayName("Allows requests when Redis count is under the limit")
     void shouldAllowRequestsUnderLimitWithRedis() {
-        when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString()))
+        when(redisTemplate.execute(anyLongScript(), anyList(), anyString()))
             .thenReturn(1L, 2L, 3L, 4L, 5L);
 
         RateLimitService service = new RateLimitService(registry, redisTemplate);
@@ -64,7 +69,7 @@ class RateLimitServiceTest {
     void shouldBlockRequestsAcrossSimulatedNodesWhenLimitExceeded() {
         AtomicLong sharedRedisCounter = new AtomicLong(0);
 
-        when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString()))
+        when(redisTemplate.execute(anyLongScript(), anyList(), anyString()))
             .thenAnswer(invocation -> sharedRedisCounter.incrementAndGet());
 
         // 5 simulated node instances sharing the same distributed Redis template
@@ -87,7 +92,7 @@ class RateLimitServiceTest {
     @Test
     @DisplayName("Gracefully falls back to local Caffeine limiter when Redis throws connection error")
     void shouldFallbackToLocalLimiterWhenRedisFails() {
-        when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString()))
+        when(redisTemplate.execute(anyLongScript(), anyList(), anyString()))
             .thenThrow(new RedisConnectionFailureException("Redis server unreachable"));
 
         RateLimitService service = new RateLimitService(registry, redisTemplate);

@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -20,7 +21,7 @@ public class CartSyncPublisher {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public CartSyncPublisher(ObjectProvider<StringRedisTemplate> redisTemplateProvider, ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;
         this.objectMapper = objectMapper;

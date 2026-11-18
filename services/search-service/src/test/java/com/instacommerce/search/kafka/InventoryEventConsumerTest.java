@@ -4,6 +4,7 @@ import static org.mockito.Mockito.*;
 
 import com.instacommerce.search.service.SearchIndexService;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -114,7 +115,7 @@ class InventoryEventConsumerTest {
 
         Map<String, Object> payload = Map.of(
             "reservationId", UUID.randomUUID().toString(),
-            "items", java.util.List.of(item1, item2)
+            "items", List.of(item1, item2)
         );
 
         Map<String, Object> event = Map.of(
@@ -139,7 +140,7 @@ class InventoryEventConsumerTest {
         Map<String, Object> payload = Map.of(
             "reservationId", UUID.randomUUID().toString(),
             "reason", "CANCELLED",
-            "items", java.util.List.of(item1, item2)
+            "items", List.of(item1, item2)
         );
 
         Map<String, Object> event = Map.of(

@@ -87,6 +87,9 @@ public class SearchService {
     @Cacheable(value = "autocomplete", key = "#prefix + '_' + #limit",
                condition = "#prefix != null && #prefix.length() >= 2")
     public List<AutocompleteResult> autocomplete(String prefix, int limit) {
+        if (prefix == null || prefix.isBlank()) {
+            return List.of();
+        }
         log.debug("Autocomplete prefix='{}' limit={}", prefix, limit);
         String safePrefix = escapeLikePattern(prefix);
         return searchDocumentRepository.autocomplete(safePrefix, limit).stream()

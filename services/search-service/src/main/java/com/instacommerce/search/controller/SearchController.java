@@ -11,12 +11,10 @@ import java.util.List;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/search")
 @Validated
 public class SearchController {
 
@@ -28,7 +26,7 @@ public class SearchController {
         this.trendingService = trendingService;
     }
 
-    @GetMapping
+    @GetMapping({"/search", "/api/v1/search"})
     public ResponseEntity<SearchResponse> search(
             @RequestParam @Size(min = 1, max = 256, message = "Query must be between 1 and 256 characters") String query,
             @RequestParam(required = false) String brand,
@@ -41,7 +39,7 @@ public class SearchController {
         return ResponseEntity.ok(response);
     }
 
-    @GetMapping("/autocomplete")
+    @GetMapping({"/search/autocomplete", "/api/v1/search/autocomplete", "/autocomplete", "/api/v1/autocomplete"})
     public ResponseEntity<List<AutocompleteResult>> autocomplete(
             @RequestParam @Size(min = 1, max = 128, message = "Prefix must be between 1 and 128 characters") String prefix,
             @RequestParam(defaultValue = "10") @Min(1) @Max(50) int limit) {
@@ -49,7 +47,7 @@ public class SearchController {
         return ResponseEntity.ok(results);
     }
 
-    @GetMapping("/trending")
+    @GetMapping({"/search/trending", "/api/v1/search/trending"})
     public ResponseEntity<List<String>> trending(
             @RequestParam(defaultValue = "10") @Min(1) @Max(50) int limit) {
         List<String> trending = trendingService.getTrending(limit);

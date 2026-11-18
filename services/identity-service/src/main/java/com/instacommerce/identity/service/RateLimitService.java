@@ -11,6 +11,7 @@ import java.util.Collections;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -33,6 +34,7 @@ public class RateLimitService {
     private final Cache<String, RateLimiter> limiters;
     private final StringRedisTemplate redisTemplate;
 
+    @Autowired
     public RateLimitService(RateLimiterRegistry rateLimiterRegistry, ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
         this.rateLimiterRegistry = rateLimiterRegistry;
         this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;

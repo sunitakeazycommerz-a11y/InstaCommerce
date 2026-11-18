@@ -22,12 +22,15 @@ public record HomeResponse(
     }
 
     public static HomeResponse fallback(String reason) {
+        String sanitizedReason = (reason != null && reason.matches("[a-zA-Z0-9_.-]{1,64}"))
+            ? reason
+            : "upstream_unavailable";
         return new HomeResponse(
             "ok",
             List.of(),
             List.of(),
             Map.of(),
-            Map.of("degraded", true, "reason", reason != null ? reason : "unknown")
+            Map.of("degraded", true, "reason", sanitizedReason)
         );
     }
 }

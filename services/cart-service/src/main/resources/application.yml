@@ -8,6 +8,9 @@ server:
 spring:
   application:
     name: cart-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   config:
     import: optional:sm://
   lifecycle:
@@ -90,7 +93,7 @@ management:
 
 resilience4j:
   circuitbreaker:
-    circuitBreakerAspectOrder: 2
+    circuitBreakerAspectOrder: 1
     instances:
       pricingService:
         slidingWindowType: COUNT_BASED
@@ -105,7 +108,7 @@ resilience4j:
           - java.net.SocketTimeoutException
           - org.springframework.web.client.RestClientException
   retry:
-    retryAspectOrder: 1
+    retryAspectOrder: 2
     instances:
       pricingService:
         maxAttempts: 3
@@ -113,6 +116,7 @@ resilience4j:
         retryExceptions:
           - java.io.IOException
           - java.net.SocketTimeoutException
+          - org.springframework.web.client.ResourceAccessException
 
 internal:
   service:

@@ -11,6 +11,7 @@ import com.instacommerce.catalog.dto.request.CreateProductRequest;
 import com.instacommerce.catalog.repository.CategoryRepository;
 import com.instacommerce.catalog.repository.OutboxEventRepository;
 import com.instacommerce.catalog.repository.ProductRepository;
+import java.math.BigDecimal;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -146,7 +147,7 @@ class CatalogServiceIntegrationTest {
         1999L,
         "INR",
         "piece",
-        java.math.BigDecimal.ONE,
+        BigDecimal.ONE,
         100,
         null
     );

@@ -3,6 +3,8 @@ package com.instacommerce.pricing.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -196,5 +198,67 @@ class CouponServiceTest {
 
         verify(couponRedemptionRepository, never()).delete(any());
         verify(couponRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("redeemCoupon is idempotent for same (coupon, user, order) and always releases reservation lock")
+    void redeemCouponIdempotentAndReleasesLock() {
+        PromoReservationService reservationService = new PromoReservationService();
+        OutboxService outboxService = mock(OutboxService.class);
+        CouponService wiredService = new CouponService(
+                couponRepository,
+                couponRedemptionRepository,
+                promotionRepository,
+                promotionService,
+                outboxService,
+                reservationService);
+
+        Coupon coupon = createSampleCoupon(true, 1, 10, 1);
+        CouponRedemption existing = new CouponRedemption();
+        existing.setCoupon(coupon);
+        existing.setUserId(USER_ID);
+        existing.setOrderId(ORDER_ID);
+
+        when(couponRepository.findByCodeIgnoreCaseForUpdate(CODE)).thenReturn(Optional.of(coupon));
+        when(couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(COUPON_ID, USER_ID, ORDER_ID))
+                .thenReturn(Optional.of(existing));
+
+        wiredService.redeemCoupon(CODE, USER_ID, ORDER_ID, 500L);
+
+        verify(couponRedemptionRepository, never()).save(any());
+        verify(couponRepository, never()).save(any());
+        assertThat(coupon.getTotalRedeemed()).isEqualTo(1);
+        assertThat(reservationService.tryAcquire(CODE, USER_ID)).isTrue();
+        reservationService.release(CODE, USER_ID);
+    }
+
+    @Test
+    @DisplayName("redeemCoupon uses aggregateType 'pricing' in outbox event and releases lock on success")
+    void redeemCouponEmitsPricingOutboxAndReleasesLock() {
+        PromoReservationService reservationService = new PromoReservationService();
+        OutboxService outboxService = mock(OutboxService.class);
+        CouponService wiredService = new CouponService(
+                couponRepository,
+                couponRedemptionRepository,
+                promotionRepository,
+                promotionService,
+                outboxService,
+                reservationService);
+
+        Coupon coupon = createSampleCoupon(true, 0, 10, 2);
+        when(couponRepository.findByCodeIgnoreCaseForUpdate(CODE)).thenReturn(Optional.of(coupon));
+        when(couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(COUPON_ID, USER_ID, ORDER_ID))
+                .thenReturn(Optional.empty());
+        when(couponRedemptionRepository.countByCouponIdAndUserId(COUPON_ID, USER_ID)).thenReturn(0L);
+
+        wiredService.redeemCoupon(CODE, USER_ID, ORDER_ID, 500L);
+
+        verify(outboxService).recordEvent(
+                eq("pricing"),
+                eq(COUPON_ID.toString()),
+                eq("CouponRedeemed"),
+                any());
+        assertThat(reservationService.tryAcquire(CODE, USER_ID)).isTrue();
+        reservationService.release(CODE, USER_ID);
     }
 }

@@ -1,6 +1,9 @@
 package com.instacommerce.catalog.config;
 
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collection;
@@ -61,7 +64,7 @@ public class CacheConfig {
                         .prefixCacheNameWith("catalog:")
                         .entryTtl(Duration.ofMinutes(5))
                         .serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
-                        .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(new GenericJackson2JsonRedisSerializer()));
+                        .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(jsonRedisSerializer()));
 
                 Map<String, RedisCacheConfiguration> initialConfigs = new HashMap<>();
                 initialConfigs.put("products", defaultConfig.entryTtl(Duration.ofMinutes(5)));
@@ -79,6 +82,14 @@ public class CacheConfig {
         }
 
         return new TwoLevelCacheManager(redisCacheManager, redisTemplate, redisEnabled ? connectionFactory : null);
+    }
+
+    @SuppressWarnings({"deprecation", "removal"})
+    static GenericJackson2JsonRedisSerializer jsonRedisSerializer() {
+        return new GenericJackson2JsonRedisSerializer().configure(objectMapper -> {
+            objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        });
     }
 
     public static class TwoLevelCacheManager implements CacheManager, MessageListener, DisposableBean {
@@ -177,10 +188,10 @@ public class CacheConfig {
                     case "search" -> 10;
                     default -> 15;
                 };
-                com.github.benmanes.caffeine.cache.Cache<Object, Object> l1 = Caffeine.newBuilder()
+                LoadingCache<Object, Object> l1 = Caffeine.newBuilder()
                         .maximumSize(5000)
                         .expireAfterWrite(l1TtlSeconds, TimeUnit.SECONDS)
-                        .build();
+                        .build(key -> null);
                 return new TwoLevelCache(n, l1, redisCache, redisTemplate, instanceId);
             });
         }
@@ -195,20 +206,20 @@ public class CacheConfig {
         private static final Logger logger = LoggerFactory.getLogger(TwoLevelCache.class);
 
         private final String name;
-        private final com.github.benmanes.caffeine.cache.Cache<Object, Object> l1Cache;
+        private final LoadingCache<Object, Object> l1Cache;
         private final RedisCache l2RedisCache;
         private final StringRedisTemplate redisTemplate;
         private final String instanceId;
 
         public TwoLevelCache(String name,
-                             com.github.benmanes.caffeine.cache.Cache<Object, Object> l1Cache,
+                             LoadingCache<Object, Object> l1Cache,
                              RedisCache l2RedisCache,
                              StringRedisTemplate redisTemplate) {
             this(name, l1Cache, l2RedisCache, redisTemplate, null);
         }
 
         public TwoLevelCache(String name,
-                             com.github.benmanes.caffeine.cache.Cache<Object, Object> l1Cache,
+                             LoadingCache<Object, Object> l1Cache,
                              RedisCache l2RedisCache,
                              StringRedisTemplate redisTemplate,
                              String instanceId) {
@@ -292,7 +303,6 @@ public class CacheConfig {
                     logger.debug("Redis cache put error for key {}: {}", key, e.getMessage());
                 }
             }
-            publishInvalidation(key != null ? key.toString() : "*");
         }
 
         void evictLocal(String keyPattern) {

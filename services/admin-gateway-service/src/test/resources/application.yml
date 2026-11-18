@@ -1,6 +1,9 @@
 spring:
   application:
     name: admin-gateway-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   cloud:
     gcp:
       secretmanager:

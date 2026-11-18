@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/admin/coupons")
+@RequestMapping({"/admin/coupons", "/api/v1/admin/coupons"})
 @PreAuthorize("hasRole('ADMIN')")
 public class AdminCouponController {
 

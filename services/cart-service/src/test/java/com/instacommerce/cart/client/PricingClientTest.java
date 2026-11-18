@@ -14,6 +14,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
@@ -69,5 +70,20 @@ class PricingClientTest {
                     assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
                     assertThat(apiEx.getCode()).isEqualTo("PRICING_UNAVAILABLE");
                 });
+    }
+
+    @Test
+    void getPriceRethrowsResourceAccessExceptionForRetry() {
+        UUID productId = UUID.randomUUID();
+
+        when(restTemplate.getForObject(
+                eq(BASE_URL + "/pricing/products/{productId}"),
+                eq(PricingClient.PriceResponse.class),
+                eq(productId)))
+                .thenThrow(new ResourceAccessException("Read timed out"));
+
+        assertThatThrownBy(() -> pricingClient.getPrice(productId))
+                .isInstanceOf(ResourceAccessException.class)
+                .hasMessageContaining("Read timed out");
     }
 }

@@ -58,4 +58,22 @@ class CartSyncServiceTest {
     CartSyncService service = new CartSyncService(objectMapper, provider);
     assertDoesNotThrow(service::destroy);
   }
+
+  @Test
+  @DisplayName("Cancelling SSE subscription removes dead sink from userSinks")
+  void shouldRemoveSinkWhenSubscriberCancels() {
+    CartSyncService service = new CartSyncService(objectMapper);
+    String userId = "user-cleanup";
+
+    StepVerifier.create(service.subscribeToCartUpdates(userId))
+        .then(() -> {
+          assertThat(service.activeSinkCount()).isEqualTo(1);
+          service.dispatchToUser(userId, Map.of("itemCount", 1));
+        })
+        .expectNextCount(1)
+        .thenCancel()
+        .verify(Duration.ofSeconds(2));
+
+    assertThat(service.activeSinkCount()).isZero();
+  }
 }

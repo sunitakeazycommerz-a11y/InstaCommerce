@@ -1,9 +1,11 @@
 package com.instacommerce.pricing.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.pricing.domain.Coupon;
+import com.instacommerce.pricing.domain.CouponRedemption;
 import com.instacommerce.pricing.domain.Promotion;
 import com.instacommerce.pricing.exception.InvalidCouponException;
 import com.instacommerce.pricing.repository.CouponRedemptionRepository;
@@ -20,6 +22,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -115,8 +118,14 @@ class CouponConcurrencyTest {
         coupon.setTotalLimit(100);
         coupon.setPerUserLimit(1);
 
+        AtomicLong savedRedemptions = new AtomicLong(0);
         when(couponRepository.findByCodeIgnoreCaseForUpdate(code)).thenReturn(Optional.of(coupon));
-        when(couponRedemptionRepository.countByCouponIdAndUserId(couponId, userId)).thenReturn(0L);
+        when(couponRedemptionRepository.countByCouponIdAndUserId(couponId, userId))
+                .thenAnswer(inv -> savedRedemptions.get());
+        when(couponRedemptionRepository.save(any(CouponRedemption.class))).thenAnswer(inv -> {
+            savedRedemptions.incrementAndGet();
+            return inv.getArgument(0);
+        });
 
         int threadCount = 10;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);

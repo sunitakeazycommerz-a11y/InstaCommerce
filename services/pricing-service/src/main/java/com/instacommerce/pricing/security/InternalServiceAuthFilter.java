@@ -30,9 +30,9 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
     private final Map<String, String> allowedCallers;
 
     public InternalServiceAuthFilter(
-            @Value("${internal.service.token}") String sharedToken,
-            @Value("#{${internal.service.allowed-callers:{}}}") Map<String, String> allowedCallers) {
-        this.sharedToken = sharedToken;
+            @Value("${internal.service.token:}") String sharedToken,
+            @Value("#{${internal.service.allowed-callers:{:}}}") Map<String, String> allowedCallers) {
+        this.sharedToken = sharedToken != null ? sharedToken : "";
         this.allowedCallers = allowedCallers != null ? allowedCallers : Collections.emptyMap();
     }
 
@@ -41,7 +41,9 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
             FilterChain filterChain) throws ServletException, IOException {
         String serviceName = request.getHeader("X-Internal-Service");
         String token = request.getHeader("X-Internal-Token");
-        if (serviceName != null && token != null && isValidToken(serviceName, token)) {
+        if (serviceName != null && !serviceName.isBlank()
+                && token != null && !token.isBlank()
+                && isValidToken(serviceName, token)) {
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                     serviceName, null,
                     List.of(new SimpleGrantedAuthority("ROLE_INTERNAL_SERVICE")));
@@ -51,14 +53,18 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
     }
 
     private boolean isValidToken(String serviceName, String token) {
-        // Per-service token takes precedence
         String perServiceToken = allowedCallers.get(serviceName);
         if (perServiceToken != null) {
+            if (perServiceToken.isBlank()) {
+                return false;
+            }
             return MessageDigest.isEqual(
                     perServiceToken.getBytes(StandardCharsets.UTF_8),
                     token.getBytes(StandardCharsets.UTF_8));
         }
-        // Fall back to shared token during migration
+        if (sharedToken == null || sharedToken.isBlank()) {
+            return false;
+        }
         return MessageDigest.isEqual(
                 sharedToken.getBytes(StandardCharsets.UTF_8),
                 token.getBytes(StandardCharsets.UTF_8));

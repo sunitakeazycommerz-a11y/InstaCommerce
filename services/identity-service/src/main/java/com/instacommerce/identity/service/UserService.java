@@ -3,15 +3,22 @@ package com.instacommerce.identity.service;
 import com.instacommerce.identity.domain.model.User;
 import com.instacommerce.identity.dto.mapper.UserMapper;
 import com.instacommerce.identity.dto.request.ChangePasswordRequest;
+import com.instacommerce.identity.dto.request.UpdateProfileRequest;
 import com.instacommerce.identity.dto.response.UserResponse;
 import com.instacommerce.identity.exception.InvalidCredentialsException;
 import com.instacommerce.identity.exception.UserNotFoundException;
 import com.instacommerce.identity.repository.RefreshTokenRepository;
 import com.instacommerce.identity.repository.UserRepository;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -27,16 +34,16 @@ public class UserService {
     private final AuditService auditService;
     private final RefreshTokenRepository refreshTokenRepository;
     private final OutboxService outboxService;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final StringRedisTemplate redisTemplate;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public UserService(UserRepository userRepository,
                        UserMapper userMapper,
                        PasswordEncoder passwordEncoder,
                        AuditService auditService,
                        RefreshTokenRepository refreshTokenRepository,
                        OutboxService outboxService,
-                       org.springframework.beans.factory.ObjectProvider<org.springframework.data.redis.core.StringRedisTemplate> redisTemplateProvider) {
+                       ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
         this.userRepository = userRepository;
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
@@ -93,6 +100,30 @@ public class UserService {
     }
 
     @Transactional
+    public UserResponse updateProfile(UpdateProfileRequest request, String ipAddress, String userAgent, String traceId) {
+        User user = findCurrentUserEntity();
+        if (request.firstName() != null) {
+            user.setFirstName(request.firstName().trim());
+        }
+        if (request.lastName() != null) {
+            user.setLastName(request.lastName().trim());
+        }
+        if (request.phone() != null) {
+            user.setPhone(request.phone().trim());
+        }
+        User saved = userRepository.save(user);
+        auditService.logAction(saved.getId(),
+            "PROFILE_UPDATED",
+            "User",
+            saved.getId().toString(),
+            Map.of(),
+            ipAddress,
+            userAgent,
+            traceId);
+        return userMapper.toResponse(saved);
+    }
+
+    @Transactional
     public void changePassword(ChangePasswordRequest request, String ipAddress, String userAgent, String traceId) {
         User user = findCurrentUserEntity();
         if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
@@ -120,7 +151,7 @@ public class UserService {
 
         if (redisTemplate != null) {
             try {
-                java.util.Set<String> keys = redisTemplate.keys("identity:failed_logins:" + user.getEmail() + ":*");
+                Set<String> keys = redisTemplate.keys("identity:failed_logins:" + user.getEmail() + ":*");
                 if (keys != null && !keys.isEmpty()) {
                     redisTemplate.delete(keys);
                 }
@@ -139,10 +170,10 @@ public class UserService {
             traceId);
 
         if (outboxService != null) {
-            java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("userId", user.getId().toString());
             payload.put("email", user.getEmail());
-            payload.put("unlockedAt", java.time.Instant.now().toString());
+            payload.put("unlockedAt", Instant.now().toString());
             payload.put("action", "ADMIN_UNLOCK");
             outboxService.publish("User", user.getId().toString(), "AccountUnlocked", payload, traceId);
         }

@@ -25,6 +25,10 @@ public class UserContextPropagationFilter implements WebFilter {
 
     private static final Logger log = LoggerFactory.getLogger(UserContextPropagationFilter.class);
     private static final String BEARER_PREFIX = "Bearer ";
+    private static final String HEADER_USER_ID = "X-User-Id";
+    private static final String HEADER_USER_ROLES = "X-User-Roles";
+    private static final String HEADER_INTERNAL_SERVICE = "X-Internal-Service";
+    private static final String HEADER_INTERNAL_TOKEN = "X-Internal-Token";
 
     private final JwtService jwtService;
     private final JwtKeyLoader keyLoader;
@@ -39,7 +43,7 @@ public class UserContextPropagationFilter implements WebFilter {
         String authHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
 
         if (authHeader == null || !authHeader.startsWith(BEARER_PREFIX) || !keyLoader.hasKey()) {
-            return chain.filter(exchange);
+            return chain.filter(stripUntrustedHeaders(exchange));
         }
 
         String token = authHeader.substring(BEARER_PREFIX.length()).trim();
@@ -78,14 +82,24 @@ public class UserContextPropagationFilter implements WebFilter {
                 .put("order_value_bracket", orderValueBracket)
                 .build();
 
-            String baggageHeader = "customer_tier=" + customerTier + ",order_value_bracket=" + orderValueBracket;
+            final String resolvedCustomerTier = customerTier;
+            final String resolvedOrderValueBracket = orderValueBracket;
+            String baggageHeader = "customer_tier=" + resolvedCustomerTier + ",order_value_bracket=" + resolvedOrderValueBracket;
+            String roles = authorities.stream()
+                .map(GrantedAuthority::getAuthority)
+                .reduce((a, b) -> a + "," + b)
+                .orElse("");
 
             ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
-                .header("X-User-Id", userId != null ? userId : "")
-                .header("X-User-Roles", authorities.stream().map(GrantedAuthority::getAuthority).reduce((a, b) -> a + "," + b).orElse(""))
-                .header("X-Customer-Tier", customerTier)
-                .header("X-Order-Value-Bracket", orderValueBracket)
-                .header("baggage", baggageHeader)
+                .headers(headers -> {
+                    headers.remove(HEADER_INTERNAL_SERVICE);
+                    headers.remove(HEADER_INTERNAL_TOKEN);
+                    headers.set(HEADER_USER_ID, userId != null ? userId : "");
+                    headers.set(HEADER_USER_ROLES, roles);
+                    headers.set("X-Customer-Tier", resolvedCustomerTier);
+                    headers.set("X-Order-Value-Bracket", resolvedOrderValueBracket);
+                    headers.set("baggage", baggageHeader);
+                })
                 .build();
 
             ServerWebExchange mutatedExchange = exchange.mutate().request(mutatedRequest).build();
@@ -96,7 +110,19 @@ public class UserContextPropagationFilter implements WebFilter {
             }
         } catch (JwtException | IllegalArgumentException ex) {
             log.debug("JWT validation failed: {}", ex.getMessage());
-            return chain.filter(exchange);
+            return chain.filter(stripUntrustedHeaders(exchange));
         }
+    }
+
+    private ServerWebExchange stripUntrustedHeaders(ServerWebExchange exchange) {
+        ServerHttpRequest sanitizedRequest = exchange.getRequest().mutate()
+            .headers(headers -> {
+                headers.remove(HEADER_USER_ID);
+                headers.remove(HEADER_USER_ROLES);
+                headers.remove(HEADER_INTERNAL_SERVICE);
+                headers.remove(HEADER_INTERNAL_TOKEN);
+            })
+            .build();
+        return exchange.mutate().request(sanitizedRequest).build();
     }
 }

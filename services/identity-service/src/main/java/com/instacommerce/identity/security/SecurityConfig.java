@@ -36,8 +36,9 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/login", "/auth/register", "/auth/refresh").permitAll()
+                        .requestMatchers("/api/v1/auth/login", "/api/v1/auth/register", "/api/v1/auth/refresh").permitAll()
                         .requestMatchers("/.well-known/**", "/actuator/**", "/error").permitAll()
-                        .requestMatchers("/auth/revoke", "/auth/logout").authenticated()
+                        .requestMatchers("/auth/revoke", "/auth/logout", "/api/v1/auth/revoke", "/api/v1/auth/logout").authenticated()
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                     .authenticationEntryPoint(authenticationEntryPoint)

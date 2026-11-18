@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,6 +42,8 @@ public class HomeAggregator {
     private final CircuitBreaker catalogCircuitBreaker;
     private final CircuitBreaker searchCircuitBreaker;
     private final CircuitBreaker featureFlagCircuitBreaker;
+    private final CircuitBreaker identityCircuitBreaker;
+    private final CircuitBreaker walletLoyaltyCircuitBreaker;
 
     public HomeAggregator(UpstreamClientFactory clientFactory, MobileBffProperties properties) {
         this(clientFactory, properties, CircuitBreakerRegistry.ofDefaults());
@@ -58,6 +61,8 @@ public class HomeAggregator {
         this.catalogCircuitBreaker = registry.circuitBreaker("catalogService");
         this.searchCircuitBreaker = registry.circuitBreaker("searchService");
         this.featureFlagCircuitBreaker = registry.circuitBreaker("featureFlagService");
+        this.identityCircuitBreaker = registry.circuitBreaker("identityService");
+        this.walletLoyaltyCircuitBreaker = registry.circuitBreaker("walletLoyaltyService");
     }
 
     @Autowired
@@ -82,7 +87,7 @@ public class HomeAggregator {
             clientFactory.catalogClient()
                 .get()
                 .uri("/categories")
-                .headers(headers -> applyUserHeader(headers, userId, hasUserId))
+                .headers(headers -> applyRequestHeaders(headers, userId, hasUserId))
                 .retrieve()
                 .bodyToMono(LIST_MAP_TYPE),
             List.of());
@@ -93,7 +98,7 @@ public class HomeAggregator {
             clientFactory.searchClient()
                 .get()
                 .uri("/search/trending")
-                .headers(headers -> applyUserHeader(headers, userId, hasUserId))
+                .headers(headers -> applyRequestHeaders(headers, userId, hasUserId))
                 .retrieve()
                 .bodyToMono(LIST_STRING_TYPE),
             List.of());
@@ -104,7 +109,7 @@ public class HomeAggregator {
             clientFactory.featureFlagClient()
                 .get()
                 .uri(uriBuilder -> buildFeatureFlagUri(uriBuilder, userId, hasUserId))
-                .headers(headers -> applyUserHeader(headers, userId, hasUserId))
+                .headers(headers -> applyRequestHeaders(headers, userId, hasUserId))
                 .retrieve()
                 .bodyToMono(MAP_TYPE),
             Map.of());
@@ -123,7 +128,80 @@ public class HomeAggregator {
             })
             .onErrorResume(ex -> {
                 log.error("Unhandled error aggregating home response: {}", ex.getMessage(), ex);
-                return Mono.just(HomeResponse.fallback(ex.getMessage()));
+                return Mono.just(HomeResponse.fallback("upstream_unavailable"));
+            });
+    }
+
+    public Mono<Map<String, Object>> aggregateProfile(String userId) {
+        return aggregateProfile(userId, null);
+    }
+
+    public Mono<Map<String, Object>> aggregateProfile(String userId, String bearerToken) {
+        boolean hasUserId = userId != null && !userId.isBlank() && !"anonymous".equals(userId);
+        String resolvedUserId = hasUserId ? userId : "anonymous";
+        if (!hasUserId) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("userId", resolvedUserId);
+            result.put("status", "anonymous");
+            result.put("profile", Map.of());
+            result.put("wallet", Map.of());
+            result.put("loyalty", Map.of());
+            return Mono.just(result);
+        }
+
+        Mono<Map<String, Object>> profileMono = executeWithCircuitBreaker(
+            "identityService",
+            identityCircuitBreaker,
+            clientFactory.identityClient()
+                .get()
+                .uri("/users/{id}", userId)
+                .headers(headers -> applyProfileHeaders(headers, userId, bearerToken))
+                .retrieve()
+                .bodyToMono(MAP_TYPE),
+            Map.of());
+
+        Mono<Map<String, Object>> walletMono = executeWithCircuitBreaker(
+            "walletLoyaltyService",
+            walletLoyaltyCircuitBreaker,
+            clientFactory.walletLoyaltyClient()
+                .get()
+                .uri("/wallet/balance")
+                .headers(headers -> applyProfileHeaders(headers, userId, bearerToken))
+                .retrieve()
+                .bodyToMono(MAP_TYPE),
+            Map.of());
+
+        Mono<Map<String, Object>> loyaltyMono = executeWithCircuitBreaker(
+            "walletLoyaltyService",
+            walletLoyaltyCircuitBreaker,
+            clientFactory.walletLoyaltyClient()
+                .get()
+                .uri("/loyalty/points")
+                .headers(headers -> applyProfileHeaders(headers, userId, bearerToken))
+                .retrieve()
+                .bodyToMono(MAP_TYPE),
+            Map.of());
+
+        return Mono.zip(profileMono, walletMono, loyaltyMono)
+            .map(tuple -> {
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("userId", resolvedUserId);
+                response.put("status", "authenticated");
+                response.put("profile", tuple.getT1());
+                response.put("wallet", tuple.getT2());
+                response.put("loyalty", tuple.getT3());
+                return response;
+            })
+            .onErrorResume(ex -> {
+                log.warn("Unhandled error aggregating profile for user {}: {}", resolvedUserId, ex.getMessage());
+                Map<String, Object> fallback = new LinkedHashMap<>();
+                fallback.put("userId", resolvedUserId);
+                fallback.put("status", "authenticated");
+                fallback.put("degraded", true);
+                fallback.put("profile", Map.of());
+                fallback.put("wallet", Map.of());
+                fallback.put("loyalty", Map.of());
+                return Mono.just(fallback);
             });
     }
 
@@ -140,9 +218,17 @@ public class HomeAggregator {
         return builder.build().toUri();
     }
 
-    private void applyUserHeader(HttpHeaders headers, String userId, boolean hasUserId) {
+    private void applyRequestHeaders(HttpHeaders headers, String userId, boolean hasUserId) {
+        clientFactory.applyInternalHeaders(headers);
         if (hasUserId) {
             headers.set("X-User-Id", userId);
+        }
+    }
+
+    private void applyProfileHeaders(HttpHeaders headers, String userId, String bearerToken) {
+        applyRequestHeaders(headers, userId, true);
+        if (bearerToken != null && !bearerToken.isBlank()) {
+            headers.setBearerAuth(bearerToken);
         }
     }
 

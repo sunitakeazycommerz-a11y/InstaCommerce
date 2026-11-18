@@ -5,6 +5,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.core.context.SecurityContextHolder.getContext;
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.instacommerce.identity.config.InternalServiceProperties;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -285,5 +286,47 @@ class InternalServiceAuthFilterTest {
 
         Authentication auth = getContext().getAuthentication();
         assertNull(auth, "Strict mode must reject flat shared token fallback");
+    }
+
+    @Test
+    @DisplayName("Blank sharedToken and blank request headers must fail closed")
+    void testBlankTokensFailClosed() throws Exception {
+        InternalServiceProperties props = new InternalServiceProperties();
+        props.setToken("");
+        props.setAllowedCallers(Map.of("order-service", ""));
+        filter = new InternalServiceAuthFilter(props);
+
+        when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
+        when(request.getHeader("X-Internal-Token")).thenReturn("");
+        when(request.getMethod()).thenReturn("GET");
+        when(request.getRequestURI()).thenReturn("/admin/users/123");
+
+        filter.doFilterInternal(request, response, filterChain);
+        assertNull(getContext().getAuthentication(), "Blank tokens must fail closed");
+
+        when(request.getHeader("X-Internal-Service")).thenReturn("   ");
+        when(request.getHeader("X-Internal-Token")).thenReturn(SHARED_TOKEN);
+        filter = new InternalServiceAuthFilter(SHARED_TOKEN, Map.of());
+        filter.doFilterInternal(request, response, filterChain);
+        assertNull(getContext().getAuthentication(), "Blank service header must fail closed");
+    }
+
+    @Test
+    @DisplayName("InternalServiceProperties constructor binds allowedCallers map cleanly")
+    void testPropertiesConstructorBindsAllowedCallers() throws Exception {
+        InternalServiceProperties props = new InternalServiceProperties();
+        props.setToken(SHARED_TOKEN);
+        props.setAllowedCallers(Map.of("notification-service", ORDER_SERVICE_TOKEN));
+        filter = new InternalServiceAuthFilter(props);
+
+        when(request.getHeader("X-Internal-Service")).thenReturn("notification-service");
+        when(request.getHeader("X-Internal-Token")).thenReturn(ORDER_SERVICE_TOKEN);
+        when(request.getMethod()).thenReturn("GET");
+        when(request.getRequestURI()).thenReturn("/users/123");
+
+        filter.doFilterInternal(request, response, filterChain);
+        Authentication auth = getContext().getAuthentication();
+        assertNotNull(auth);
+        assertEquals("notification-service", auth.getPrincipal());
     }
 }

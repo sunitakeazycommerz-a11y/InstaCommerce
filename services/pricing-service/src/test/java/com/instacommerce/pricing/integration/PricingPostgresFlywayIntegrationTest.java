@@ -68,7 +68,8 @@ class PricingPostgresFlywayIntegrationTest {
             "outbox_events",
             "shedlock",
             "price_quotes",
-            "coupon_redemptions"
+            "coupon_redemptions",
+            "promotion_redemptions"
         );
     }
 
@@ -125,20 +126,26 @@ class PricingPostgresFlywayIntegrationTest {
         assertThat(indexNames).anyMatch(name -> name.contains("outbox_events"));
 
         // Test Unique Constraint on Coupon Code
+        UUID promotionId = UUID.randomUUID();
         UUID couponId1 = UUID.randomUUID();
         UUID couponId2 = UUID.randomUUID();
         String code = "FLAT50-" + UUID.randomUUID().toString().substring(0, 8);
 
         jdbcTemplate.update("""
-            INSERT INTO coupons (id, code, discount_type, discount_value, max_uses, current_uses, active)
-            VALUES (?, ?, 'PERCENTAGE', 50, 100, 0, true)
-            """, couponId1, code);
+            INSERT INTO promotions (id, name, discount_type, discount_value, min_order_cents, start_at, end_at, active)
+            VALUES (?, 'Test Promo', 'PERCENTAGE', 50, 0, now() - interval '1 day', now() + interval '7 days', true)
+            """, promotionId);
+
+        jdbcTemplate.update("""
+            INSERT INTO coupons (id, code, promotion_id, single_use, per_user_limit, total_limit, total_redeemed, active)
+            VALUES (?, ?, ?, true, 1, 100, 0, true)
+            """, couponId1, code, promotionId);
 
         // Duplicate code must violate unique constraint in real PostgreSQL
         assertThatThrownBy(() -> jdbcTemplate.update("""
-            INSERT INTO coupons (id, code, discount_type, discount_value, max_uses, current_uses, active)
-            VALUES (?, ?, 'PERCENTAGE', 50, 100, 0, true)
-            """, couponId2, code))
+            INSERT INTO coupons (id, code, promotion_id, single_use, per_user_limit, total_limit, total_redeemed, active)
+            VALUES (?, ?, ?, true, 1, 100, 0, true)
+            """, couponId2, code, promotionId))
             .isInstanceOf(Exception.class)
             .hasMessageContaining("duplicate key value violates unique constraint");
     }

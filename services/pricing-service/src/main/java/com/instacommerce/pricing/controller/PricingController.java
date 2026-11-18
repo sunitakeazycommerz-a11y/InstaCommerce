@@ -17,6 +17,7 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -25,7 +26,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping({"/pricing", "/api/pricing"})
+@RequestMapping({"/pricing", "/api/pricing", "/api/v1/pricing"})
 public class PricingController {
 
     private final PricingService pricingService;
@@ -64,6 +65,7 @@ public class PricingController {
     }
 
     @PostMapping("/coupons/redeem")
+    @PreAuthorize("hasAnyRole('INTERNAL_SERVICE', 'ADMIN')")
     @RateLimiter(name = "pricingLimiter")
     public ResponseEntity<Void> redeemCoupon(@Valid @RequestBody RedeemCouponRequest request) {
         couponService.redeemCoupon(request.code(), request.userId(), request.orderId(), request.discountCents());
@@ -71,6 +73,7 @@ public class PricingController {
     }
 
     @PostMapping("/coupons/unredeem")
+    @PreAuthorize("hasAnyRole('INTERNAL_SERVICE', 'ADMIN')")
     @RateLimiter(name = "pricingLimiter")
     public ResponseEntity<Void> unredeemCoupon(@Valid @RequestBody UnredeemCouponRequest request) {
         couponService.unredeemCoupon(request.code(), request.userId(), request.orderId());
@@ -78,6 +81,7 @@ public class PricingController {
     }
 
     @PostMapping("/coupons/rollback-usage")
+    @PreAuthorize("hasAnyRole('INTERNAL_SERVICE', 'ADMIN')")
     @RateLimiter(name = "pricingLimiter")
     public ResponseEntity<Void> rollbackUsage(@Valid @RequestBody RollbackCouponUsageRequest request) {
         couponService.rollbackUsage(request.code(), request.userId());
@@ -85,6 +89,7 @@ public class PricingController {
     }
 
     @PostMapping("/quotes/validate")
+    @PreAuthorize("hasAnyRole('INTERNAL_SERVICE', 'ADMIN')")
     @RateLimiter(name = "pricingLimiter")
     public ResponseEntity<QuoteValidationResponse> validateQuote(
             @Valid @RequestBody QuoteValidationRequest request) {

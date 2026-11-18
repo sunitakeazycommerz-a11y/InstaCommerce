@@ -88,9 +88,10 @@ public class CartController {
 
     @PostMapping("/merge")
     public ResponseEntity<CartResponse> mergeCart(Authentication authentication,
-                                                  @RequestParam UUID guestUserId) {
-        UUID userId = extractUserId(authentication);
-        CartResponse response = cartService.mergeCart(userId, guestUserId);
+                                                  @RequestParam UUID guestUserId,
+                                                  @RequestParam(required = false) UUID userId) {
+        UUID targetUserId = resolveAndAuthorizeTargetUser(authentication, userId);
+        CartResponse response = cartService.mergeCart(targetUserId, guestUserId);
         return ResponseEntity.ok()
             .eTag("\"" + response.version() + "\"")
             .body(response);
@@ -98,9 +99,10 @@ public class CartController {
 
     @PostMapping("/merge/{guestUserId}")
     public ResponseEntity<CartResponse> mergeCartByPath(Authentication authentication,
-                                                        @PathVariable UUID guestUserId) {
-        UUID userId = extractUserId(authentication);
-        CartResponse response = cartService.mergeCart(userId, guestUserId);
+                                                        @PathVariable UUID guestUserId,
+                                                        @RequestParam(required = false) UUID userId) {
+        UUID targetUserId = resolveAndAuthorizeTargetUser(authentication, userId);
+        CartResponse response = cartService.mergeCart(targetUserId, guestUserId);
         return ResponseEntity.ok()
             .eTag("\"" + response.version() + "\"")
             .body(response);
@@ -177,7 +179,24 @@ public class CartController {
         }
     }
 
+    private UUID resolveAndAuthorizeTargetUser(Authentication authentication, UUID requestedUserId) {
+        if (requestedUserId != null) {
+            authorizeUserAccess(requestedUserId, authentication);
+            return requestedUserId;
+        }
+        UUID authenticatedUserId = extractUserId(authentication);
+        authorizeUserAccess(authenticatedUserId, authentication);
+        return authenticatedUserId;
+    }
+
     private UUID extractUserId(Authentication authentication) {
-        return UUID.fromString(authentication.getName());
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new AccessDeniedException("Access denied");
+        }
+        UUID parsed = parseUuidOrNull(authentication.getName());
+        if (parsed == null) {
+            throw new AccessDeniedException("Access denied");
+        }
+        return parsed;
     }
 }

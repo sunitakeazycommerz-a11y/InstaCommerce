@@ -93,12 +93,14 @@ public class PricingService {
         }
 
         // Evaluate candidate promotions
-        var activePromotions = promotionService.findActivePromotions();
+        List<Promotion> activePromotions = promotionService.findActivePromotions().stream()
+                .filter(p -> p.isActive()
+                        && (p.getStartAt() == null || !now.isBefore(p.getStartAt()))
+                        && (p.getEndAt() == null || !now.isAfter(p.getEndAt())))
+                .toList();
         long preliminaryPromoDiscount = 0;
         for (Promotion promotion : activePromotions) {
-            if (subtotalCents >= promotion.getMinOrderCents()
-                    && !now.isBefore(promotion.getStartAt())
-                    && now.isBefore(promotion.getEndAt())) {
+            if (subtotalCents >= promotion.getMinOrderCents()) {
                 long discount = promotionService.calculateDiscount(promotion, subtotalCents);
                 if (discount > preliminaryPromoDiscount) {
                     preliminaryPromoDiscount = discount;
@@ -140,7 +142,9 @@ public class PricingService {
                 pricedItems,
                 subtotalCents,
                 totalDiscount,
+                0L,
                 totalCents,
+                "INR",
                 appliedPromotions,
                 appliedCoupon,
                 null,
@@ -155,7 +159,9 @@ public class PricingService {
                 pricedItems,
                 subtotalCents,
                 totalDiscount,
+                0L,
                 totalCents,
+                "INR",
                 appliedPromotions,
                 appliedCoupon,
                 quoteResult.quoteId(),

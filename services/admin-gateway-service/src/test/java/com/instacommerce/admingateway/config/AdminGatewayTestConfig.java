@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
 import com.instacommerce.admingateway.security.JwtKeyLoader;
+import java.security.interfaces.RSAPublicKey;
 
 @TestConfiguration
 @ActiveProfiles("test")
@@ -26,7 +27,7 @@ public class AdminGatewayTestConfig {
     PublicKey publicKey = parsePublicKey(publicKeyPem);
 
     JwtKeyLoader mockKeyLoader = mock(JwtKeyLoader.class);
-    when(mockKeyLoader.getPublicKey()).thenReturn((java.security.interfaces.RSAPublicKey) publicKey);
+    when(mockKeyLoader.getPublicKey()).thenReturn((RSAPublicKey) publicKey);
     return mockKeyLoader;
   }
 

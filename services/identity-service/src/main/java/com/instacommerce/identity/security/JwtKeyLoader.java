@@ -14,8 +14,13 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -25,8 +30,8 @@ public class JwtKeyLoader {
     private final RSAPublicKey activePublicKey;
     private final RSAPrivateKey activePrivateKey;
     private final String activeKeyId;
-    private final java.util.Map<String, RSAPublicKey> verificationKeys;
-    private final java.util.List<KeyEntry> allPublicKeys;
+    private final Map<String, RSAPublicKey> verificationKeys;
+    private final List<KeyEntry> allPublicKeys;
 
     public JwtKeyLoader(IdentityProperties identityProperties) {
         String publicKeyValue = identityProperties.getJwt().getPublicKey();
@@ -35,15 +40,15 @@ public class JwtKeyLoader {
         this.activePublicKey = resolvePublicKey(publicKeyValue, this.activePrivateKey);
         this.activeKeyId = computeKeyId(this.activePublicKey);
 
-        java.util.Map<String, RSAPublicKey> verKeys = new java.util.LinkedHashMap<>();
-        java.util.List<KeyEntry> allKeys = new java.util.ArrayList<>();
+        Map<String, RSAPublicKey> verKeys = new LinkedHashMap<>();
+        List<KeyEntry> allKeys = new ArrayList<>();
 
         // Active key is primary for signing and verification
         verKeys.put(this.activeKeyId, this.activePublicKey);
         allKeys.add(new KeyEntry(this.activeKeyId, this.activePublicKey));
 
         // Prior keys in rotation grace period
-        java.util.List<String> previousKeys = identityProperties.getJwt().getPreviousPublicKeys();
+        List<String> previousKeys = identityProperties.getJwt().getPreviousPublicKeys();
         if (previousKeys != null) {
             for (String prevKeyPem : previousKeys) {
                 if (prevKeyPem != null && !prevKeyPem.isBlank()) {
@@ -57,8 +62,8 @@ public class JwtKeyLoader {
             }
         }
 
-        this.verificationKeys = java.util.Collections.unmodifiableMap(verKeys);
-        this.allPublicKeys = java.util.Collections.unmodifiableList(allKeys);
+        this.verificationKeys = Collections.unmodifiableMap(verKeys);
+        this.allPublicKeys = Collections.unmodifiableList(allKeys);
     }
 
     public RSAPublicKey getPublicKey() {
@@ -80,7 +85,7 @@ public class JwtKeyLoader {
         return verificationKeys.get(kid);
     }
 
-    public java.util.List<KeyEntry> getAllPublicKeys() {
+    public List<KeyEntry> getAllPublicKeys() {
         return allPublicKeys;
     }
 

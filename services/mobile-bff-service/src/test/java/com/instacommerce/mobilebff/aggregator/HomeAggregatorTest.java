@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.mobilebff.client.UpstreamClientFactory;
 import com.instacommerce.mobilebff.config.MobileBffProperties;
+import com.instacommerce.mobilebff.dto.HomeResponse;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -383,5 +384,62 @@ class HomeAggregatorTest {
             .verifyComplete();
 
         assertThat(searchCalls.get()).isZero();
+    }
+
+    @Test
+    @DisplayName("Should aggregate profile, wallet, and loyalty with internal headers and graceful fallback")
+    void testAggregateProfileWithInternalHeadersAndFallback() {
+        AtomicReference<String> seenInternalService = new AtomicReference<>();
+        AtomicReference<String> seenInternalToken = new AtomicReference<>();
+        AtomicReference<String> seenUserId = new AtomicReference<>();
+
+        WebClient identityClient = WebClient.builder()
+            .exchangeFunction(req -> {
+                seenInternalService.set(req.headers().getFirst("X-Internal-Service"));
+                seenInternalToken.set(req.headers().getFirst("X-Internal-Token"));
+                seenUserId.set(req.headers().getFirst("X-User-Id"));
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .body("{\"id\":\"usr_prof_1\",\"firstName\":\"Asha\"}")
+                    .build());
+            })
+            .build();
+        WebClient failingWalletClient = createFailingWebClient();
+
+        UpstreamClientFactory factory = new UpstreamClientFactory(
+                WebClient.builder(), properties, "mobile-bff-service", "secret-token-1") {
+            @Override
+            public WebClient identityClient() {
+                return identityClient;
+            }
+
+            @Override
+            public WebClient walletLoyaltyClient() {
+                return failingWalletClient;
+            }
+        };
+
+        HomeAggregator aggregator = new HomeAggregator(factory, properties);
+
+        StepVerifier.create(aggregator.aggregateProfile("usr_prof_1", "jwt-abc"))
+            .assertNext(resp -> {
+                assertThat(resp).containsEntry("userId", "usr_prof_1");
+                assertThat(resp).containsEntry("status", "authenticated");
+                assertThat(resp.get("profile")).isEqualTo(Map.of("id", "usr_prof_1", "firstName", "Asha"));
+                assertThat(resp.get("wallet")).isEqualTo(Map.of());
+                assertThat(resp.get("loyalty")).isEqualTo(Map.of());
+            })
+            .verifyComplete();
+
+        assertThat(seenInternalService.get()).isEqualTo("mobile-bff-service");
+        assertThat(seenInternalToken.get()).isEqualTo("secret-token-1");
+        assertThat(seenUserId.get()).isEqualTo("usr_prof_1");
+    }
+
+    @Test
+    @DisplayName("HomeResponse.fallback sanitizes raw exception text")
+    void testFallbackReasonSanitization() {
+        HomeResponse sanitized = HomeResponse.fallback("Connection refused: http://internal-host:8082");
+        assertThat(sanitized.metadata()).containsEntry("reason", "upstream_unavailable");
     }
 }

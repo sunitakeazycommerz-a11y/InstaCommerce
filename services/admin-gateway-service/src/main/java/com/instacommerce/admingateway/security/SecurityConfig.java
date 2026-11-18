@@ -1,5 +1,6 @@
 package com.instacommerce.admingateway.security;
 
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -18,6 +19,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    AdminJwtAuthenticationFilter jwtAuthenticationFilter,
+                                                   AdminRateLimitFilter rateLimitFilter,
                                                    AdminSecurityAuditFilter auditFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler) throws Exception {
@@ -35,7 +37,32 @@ public class SecurityConfig {
                 .authenticationEntryPoint(authenticationEntryPoint)
                 .accessDeniedHandler(accessDeniedHandler))
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-            .addFilterAfter(auditFilter, AdminJwtAuthenticationFilter.class);
+            .addFilterAfter(rateLimitFilter, AdminJwtAuthenticationFilter.class)
+            .addFilterAfter(auditFilter, AdminRateLimitFilter.class);
         return http.build();
+    }
+
+    @Bean
+    public FilterRegistrationBean<AdminJwtAuthenticationFilter> disableJwtFilterAutoRegistration(
+            AdminJwtAuthenticationFilter filter) {
+        FilterRegistrationBean<AdminJwtAuthenticationFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    @Bean
+    public FilterRegistrationBean<AdminRateLimitFilter> disableRateLimitFilterAutoRegistration(
+            AdminRateLimitFilter filter) {
+        FilterRegistrationBean<AdminRateLimitFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    @Bean
+    public FilterRegistrationBean<AdminSecurityAuditFilter> disableAuditFilterAutoRegistration(
+            AdminSecurityAuditFilter filter) {
+        FilterRegistrationBean<AdminSecurityAuditFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 }

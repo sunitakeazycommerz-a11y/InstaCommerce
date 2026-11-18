@@ -48,11 +48,11 @@ public class MobileBffController {
 
     @GetMapping("/profile")
     public Mono<Map<String, Object>> profile(Authentication authentication) {
-        String userId = authentication != null ? authentication.getName() : "anonymous";
-        return Mono.just(Map.of(
-            "userId", userId,
-            "status", "authenticated"
-        ));
+        String userId = isAuthenticatedUser(authentication) ? authentication.getName() : "anonymous";
+        String bearerToken = authentication != null && authentication.getCredentials() instanceof String token
+            ? token
+            : null;
+        return homeAggregator.aggregateProfile(userId, bearerToken);
     }
 
     @GetMapping(value = "/cart/stream/{userId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

@@ -1,5 +1,6 @@
 package com.instacommerce.admingateway.security;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -9,16 +10,25 @@ import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 @ExtendWith(MockitoExtension.class)
-@org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class AdminJwtAuthenticationFilterTest {
     @Mock
     private JwtService jwtService;
@@ -50,8 +60,8 @@ class AdminJwtAuthenticationFilterTest {
         when(jwtService.validateAccessToken("validToken")).thenReturn(jws);
         when(jws.getPayload()).thenReturn(claims);
         when(claims.getSubject()).thenReturn("admin-user-1");
-        doReturn(java.util.List.of(
-            new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN")
+        doReturn(List.of(
+            new SimpleGrantedAuthority("ROLE_ADMIN")
         )).when(jwtService).extractAuthorities(claims);
 
         filter.doFilterInternal(request, response, filterChain);
@@ -67,8 +77,8 @@ class AdminJwtAuthenticationFilterTest {
         when(jwtService.validateAccessToken("expiredToken"))
             .thenThrow(new JwtException("Token expired"));
 
-        java.io.StringWriter writer = new java.io.StringWriter();
-        when(response.getWriter()).thenReturn(new java.io.PrintWriter(writer));
+        StringWriter writer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -83,8 +93,8 @@ class AdminJwtAuthenticationFilterTest {
         when(jwtService.validateAccessToken("wrongAudToken"))
             .thenThrow(new JwtException("Token audience does not match"));
 
-        java.io.StringWriter writer = new java.io.StringWriter();
-        when(response.getWriter()).thenReturn(new java.io.PrintWriter(writer));
+        StringWriter writer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -98,8 +108,8 @@ class AdminJwtAuthenticationFilterTest {
         when(jwtService.validateAccessToken("invalidSignature"))
             .thenThrow(new JwtException("Invalid signature"));
 
-        java.io.StringWriter writer = new java.io.StringWriter();
-        when(response.getWriter()).thenReturn(new java.io.PrintWriter(writer));
+        StringWriter writer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -135,5 +145,44 @@ class AdminJwtAuthenticationFilterTest {
 
         verify(filterChain).doFilter(request, response);
         verify(jwtService, never()).validateAccessToken(anyString());
+    }
+
+    @Test
+    void shouldStripSpoofedAdminAndInternalHeadersBeforePassingChain() throws Exception {
+        MockHttpServletRequest mockRequest = new MockHttpServletRequest("GET", "/admin/v1/dashboard");
+        mockRequest.addHeader("X-Admin-Id", "spoofed-admin");
+        mockRequest.addHeader("X-Internal-Service", "spoofed-svc");
+        mockRequest.addHeader("X-Internal-Token", "spoofed-token");
+        mockRequest.addHeader("X-Trace-Id", "trace-123");
+
+        filter.doFilterInternal(mockRequest, response, filterChain);
+
+        ArgumentCaptor<HttpServletRequest> captor = ArgumentCaptor.forClass(HttpServletRequest.class);
+        verify(filterChain).doFilter(captor.capture(), eq(response));
+        HttpServletRequest passed = captor.getValue();
+        assertThat(passed.getHeader("X-Admin-Id")).isNull();
+        assertThat(passed.getHeader("X-Internal-Service")).isNull();
+        assertThat(passed.getHeader("X-Internal-Token")).isNull();
+        assertThat(passed.getHeader("X-Trace-Id")).isEqualTo("trace-123");
+    }
+
+    @Test
+    void shouldRejectApiAudienceTokenWithoutAdminRole() throws Exception {
+        when(request.getRequestURI()).thenReturn("/admin/v1/dashboard");
+        when(request.getHeader("Authorization")).thenReturn("Bearer customerToken");
+        when(jwtService.validateAccessToken("customerToken")).thenReturn(jws);
+        when(jws.getPayload()).thenReturn(claims);
+        when(claims.getSubject()).thenReturn("cust-1");
+        when(claims.getAudience()).thenReturn(Set.of("instacommerce-api"));
+        doReturn(List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")))
+            .when(jwtService).extractAuthorities(claims);
+
+        StringWriter writer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(writer));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(filterChain, never()).doFilter(any(), any());
     }
 }

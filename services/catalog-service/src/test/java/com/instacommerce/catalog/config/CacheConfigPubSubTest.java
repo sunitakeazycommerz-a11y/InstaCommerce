@@ -12,7 +12,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.catalog.config.CacheConfig.TwoLevelCacheManager;
+import com.instacommerce.catalog.dto.response.ProductResponse;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -108,13 +112,14 @@ class CacheConfigPubSubTest {
             assertThat(cacheB.get(productId, String.class)).isEqualTo("Old Product");
 
             cacheA.put(productId, "Updated Product");
-            verify(templateA).convertAndSend(eq("catalog:cache:invalidate"),
-                argThat((String msg) -> msg.indexOf('|') > 0 && msg.endsWith("|products:" + productId)));
+            verify(templateA, never()).convertAndSend(any(), any());
             assertThat(cacheA.get(productId, String.class)).isEqualTo("Updated Product");
-            awaitCacheEviction(cacheB, productId);
+            assertThat(cacheB.get(productId, String.class)).isEqualTo("Old Product");
 
             cacheB.put(productId, "Stale Again");
             cacheA.evict(productId);
+            verify(templateA).convertAndSend(eq("catalog:cache:invalidate"),
+                argThat((String msg) -> msg.indexOf('|') > 0 && msg.endsWith("|products:" + productId)));
             awaitCacheEviction(cacheB, productId);
 
             String colonKey = "store-1:sku-42";
@@ -164,6 +169,36 @@ class CacheConfigPubSubTest {
 
         ((DisposableBean) manager).destroy();
         assertThat(closed.get()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Redis serializer handles ProductResponse Instant timestamps via JavaTimeModule")
+    @SuppressWarnings({"deprecation", "removal"})
+    void redisSerializerRoundTripsProductResponseWithInstant() {
+        var serializer = CacheConfig.jsonRedisSerializer();
+        UUID id = UUID.randomUUID();
+        ProductResponse sample = new ProductResponse(
+            id,
+            "SKU-1",
+            "Organic Milk",
+            "organic-milk",
+            "Fresh milk",
+            null,
+            "Farm",
+            5500L,
+            "INR",
+            "1L",
+            BigDecimal.ONE,
+            1000,
+            List.of(),
+            true,
+            Instant.parse("2026-01-15T10:30:00Z")
+        );
+
+        byte[] serialized = serializer.serialize(sample);
+        Object deserialized = serializer.deserialize(serialized);
+
+        assertThat(deserialized).isEqualTo(sample);
     }
 
     private RedisConnectionFactory mockSubscribedConnectionFactory(

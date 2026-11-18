@@ -1,10 +1,11 @@
 package com.instacommerce.cart.service;
 
+import com.instacommerce.cart.config.CartProperties;
 import com.instacommerce.cart.domain.model.Cart;
 import com.instacommerce.cart.domain.model.CartItem;
 import com.instacommerce.cart.dto.request.AddItemRequest;
-import com.instacommerce.cart.exception.CartNotFoundException;
 import com.instacommerce.cart.exception.CartItemNotFoundException;
+import com.instacommerce.cart.exception.CartNotFoundException;
 import com.instacommerce.cart.repository.CartItemRepository;
 import com.instacommerce.cart.repository.CartRepository;
 import java.time.Instant;
@@ -12,8 +13,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,55 +27,75 @@ public class JpaCartStore implements CartStore {
     private final CartRepository cartRepository;
     private final CartItemRepository cartItemRepository;
     private final OutboxService outboxService;
+    private final CartProperties cartProperties;
+
+    @Autowired
+    public JpaCartStore(CartRepository cartRepository,
+                        CartItemRepository cartItemRepository,
+                        OutboxService outboxService,
+                        CartProperties cartProperties) {
+        this.cartRepository = cartRepository;
+        this.cartItemRepository = cartItemRepository;
+        this.outboxService = outboxService;
+        this.cartProperties = cartProperties != null ? cartProperties : new CartProperties();
+    }
 
     public JpaCartStore(CartRepository cartRepository,
                         CartItemRepository cartItemRepository,
                         OutboxService outboxService) {
-        this.cartRepository = cartRepository;
-        this.cartItemRepository = cartItemRepository;
-        this.outboxService = outboxService;
+        this(cartRepository, cartItemRepository, outboxService, new CartProperties());
     }
 
     @Override
     @Transactional(readOnly = true)
-    @Cacheable(value = "carts", key = "#userId")
     public Optional<Cart> getCart(UUID userId) {
         return cartRepository.findByUserId(userId);
     }
 
     @Override
     @Transactional
-    @CacheEvict(value = "carts", key = "#userId")
     public Cart addItem(UUID userId, AddItemRequest request) {
-        Cart cart = cartRepository.findByUserId(userId).orElseGet(() -> {
+        Cart cart = cartRepository.findByUserIdForUpdate(userId).orElseGet(() -> {
             Cart newCart = new Cart();
             newCart.setUserId(userId);
             newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-            return cartRepository.save(newCart);
+            return cartRepository.saveAndFlush(newCart);
         });
 
-        // Idempotent: if product already in cart, increase quantity
         Optional<CartItem> existing = cartItemRepository.findByCartIdAndProductId(cart.getId(), request.productId());
         CartItem item;
         if (existing.isPresent()) {
             item = existing.get();
-            item.setQuantity(item.getQuantity() + request.quantity());
+            int newQuantity = item.getQuantity() + request.quantity();
+            if (newQuantity > cartProperties.getMaxQuantityPerItem()) {
+                throw new IllegalArgumentException(
+                    "Total quantity for this item would exceed maximum of "
+                        + cartProperties.getMaxQuantityPerItem());
+            }
+            item.setQuantity(newQuantity);
             item.setProductName(request.productName());
             item.setUnitPriceCents(request.unitPriceCents());
             cartItemRepository.save(item);
         } else {
+            if (cart.getItems().size() >= cartProperties.getMaxItemsPerCart()) {
+                throw new IllegalArgumentException(
+                    "Cart cannot exceed " + cartProperties.getMaxItemsPerCart() + " distinct items");
+            }
+            if (request.quantity() > cartProperties.getMaxQuantityPerItem()) {
+                throw new IllegalArgumentException(
+                    "Total quantity for this item would exceed maximum of "
+                        + cartProperties.getMaxQuantityPerItem());
+            }
             item = new CartItem();
             item.setProductId(request.productId());
             item.setProductName(request.productName());
             item.setUnitPriceCents(request.unitPriceCents());
             item.setQuantity(request.quantity());
             cart.addItem(item);
-            cartRepository.save(cart);
         }
 
-        // Extend expiry on mutation
         cart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-        Cart savedCart = cartRepository.save(cart);
+        Cart savedCart = cartRepository.saveAndFlush(cart);
         outboxService.publish(AGGREGATE_TYPE, savedCart.getId().toString(), EVENT_ITEM_ADDED,
             itemPayload(userId, savedCart, item));
         return savedCart;
@@ -83,9 +103,8 @@ public class JpaCartStore implements CartStore {
 
     @Override
     @Transactional
-    @CacheEvict(value = "carts", key = "#userId")
     public Cart updateQuantity(UUID userId, UUID productId, int quantity) {
-        Cart cart = cartRepository.findByUserId(userId)
+        Cart cart = cartRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new CartNotFoundException(userId));
 
         CartItem item = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId)
@@ -100,9 +119,8 @@ public class JpaCartStore implements CartStore {
 
     @Override
     @Transactional
-    @CacheEvict(value = "carts", key = "#userId")
     public Cart removeItem(UUID userId, UUID productId) {
-        Cart cart = cartRepository.findByUserId(userId)
+        Cart cart = cartRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new CartNotFoundException(userId));
 
         CartItem item = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId)
@@ -120,9 +138,8 @@ public class JpaCartStore implements CartStore {
 
     @Override
     @Transactional
-    @CacheEvict(value = "carts", key = "#userId")
     public void clearCart(UUID userId) {
-        cartRepository.findByUserId(userId).ifPresent(cart -> {
+        cartRepository.findByUserIdForUpdate(userId).ifPresent(cart -> {
             outboxService.publish(AGGREGATE_TYPE, cart.getId().toString(), EVENT_CART_CLEARED,
                 Map.of("userId", userId, "cartId", cart.getId(), "itemCount", cart.getItems().size()));
             cartRepository.delete(cart);
@@ -146,31 +163,40 @@ public class JpaCartStore implements CartStore {
 
     @Override
     @Transactional
-    @CacheEvict(value = "carts", allEntries = true)
     public Cart mergeCart(UUID targetUserId, UUID sourceGuestUserId) {
         if (targetUserId.equals(sourceGuestUserId)) {
-            return cartRepository.findByUserId(targetUserId).orElseGet(() -> {
+            return cartRepository.findByUserIdForUpdate(targetUserId).orElseGet(() -> {
                 Cart newCart = new Cart();
                 newCart.setUserId(targetUserId);
                 newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-                return cartRepository.save(newCart);
+                return cartRepository.saveAndFlush(newCart);
             });
         }
 
-        Cart targetCart = cartRepository.findByUserId(targetUserId).orElseGet(() -> {
+        Cart targetCart = cartRepository.findByUserIdForUpdate(targetUserId).orElseGet(() -> {
             Cart newCart = new Cart();
             newCart.setUserId(targetUserId);
             newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-            return cartRepository.save(newCart);
+            return cartRepository.saveAndFlush(newCart);
         });
 
-        Optional<Cart> guestCartOpt = cartRepository.findByUserId(sourceGuestUserId);
-        if (guestCartOpt.isEmpty() || guestCartOpt.get().getItems().isEmpty()) {
+        Optional<Cart> guestCartOpt = cartRepository.findByUserIdForUpdate(sourceGuestUserId);
+        if (guestCartOpt.isEmpty()) {
             return targetCart;
         }
 
         Cart guestCart = guestCartOpt.get();
-        int maxQtyPerItem = 10;
+        if (guestCart.getExpiresAt() != null && guestCart.getExpiresAt().isBefore(Instant.now())) {
+            cartRepository.delete(guestCart);
+            return targetCart;
+        }
+        if (guestCart.getItems().isEmpty()) {
+            cartRepository.delete(guestCart);
+            return targetCart;
+        }
+
+        int maxQtyPerItem = cartProperties.getMaxQuantityPerItem();
+        int maxItemsPerCart = cartProperties.getMaxItemsPerCart();
 
         for (CartItem guestItem : guestCart.getItems()) {
             Optional<CartItem> existingTargetItem = cartItemRepository.findByCartIdAndProductId(
@@ -180,7 +206,7 @@ public class JpaCartStore implements CartStore {
                 int combinedQty = Math.min(targetItem.getQuantity() + guestItem.getQuantity(), maxQtyPerItem);
                 targetItem.setQuantity(combinedQty);
                 cartItemRepository.save(targetItem);
-            } else {
+            } else if (targetCart.getItems().size() < maxItemsPerCart) {
                 CartItem newItem = new CartItem();
                 newItem.setProductId(guestItem.getProductId());
                 newItem.setProductName(guestItem.getProductName());
@@ -191,9 +217,8 @@ public class JpaCartStore implements CartStore {
         }
 
         targetCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-        Cart savedTargetCart = cartRepository.save(targetCart);
+        Cart savedTargetCart = cartRepository.saveAndFlush(targetCart);
 
-        // Delete guest cart so it is not orphaned or duplicated
         cartRepository.delete(guestCart);
 
         outboxService.publish(AGGREGATE_TYPE, savedTargetCart.getId().toString(), "CART_MERGED",

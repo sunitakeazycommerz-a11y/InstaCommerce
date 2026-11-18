@@ -61,7 +61,7 @@ class AdminDashboardControllerTest {
     private RestTemplate restTemplate;
 
     @Test
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnHealthyDashboardWhenAllDownstreamServicesAreUp() throws Exception {
         when(restTemplate.exchange(
                 eq("http://order-service:8085/actuator/health"),
@@ -110,7 +110,7 @@ class AdminDashboardControllerTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldMarkUnreachableServicesDegradedWithoutFailingDashboard() throws Exception {
         when(restTemplate.exchange(
                 eq("http://order-service:8085/actuator/health"),
@@ -154,7 +154,7 @@ class AdminDashboardControllerTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldBoundSlowDownstreamServiceCallsAndMarkTimedOutServiceDegraded() throws Exception {
         CountDownLatch slowCallLatch = new CountDownLatch(1);
         when(restTemplate.exchange(
@@ -203,7 +203,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnFeatureFlags() throws Exception {
         Map<String, Object> flags = Map.of("feature-a", true, "feature-b", false);
         when(restTemplate.exchange(
@@ -222,7 +222,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldHandleFeatureFlagsServiceError() throws Exception {
         when(restTemplate.exchange(
                 anyString(),
@@ -250,7 +250,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "superadmin", roles = {"ADMIN", "SUPER_ADMIN"})
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldOverrideFeatureFlagViaFeatureFlagServiceWithInternalHeaders() throws Exception {
         when(restTemplate.exchange(
                 eq("http://config-feature-flag-service:8098/admin/flags/{key}/overrides"),
@@ -288,7 +288,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "superadmin", roles = {"ADMIN", "SUPER_ADMIN"})
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldPropagateDownstreamHttpErrorOnFeatureFlagOverride() throws Exception {
         HttpHeaders responseHeaders = new HttpHeaders();
         responseHeaders.setContentType(MediaType.APPLICATION_JSON);
@@ -316,7 +316,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "superadmin", roles = {"ADMIN", "SUPER_ADMIN"})
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnBadGatewayWhenFeatureFlagServiceUnreachable() throws Exception {
         when(restTemplate.exchange(
                 eq("http://config-feature-flag-service:8098/admin/flags/{key}/overrides"),
@@ -336,7 +336,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnPendingReconciliation() throws Exception {
         Map<String, Object> pending = Map.of(
             "items", new Object[]{
@@ -353,6 +353,57 @@ class AdminDashboardControllerTest {
                 .with(csrf()))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.items[0].id").value("rec-1"));
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = "ADMIN")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void shouldReturnReconciliationSummaryWithInternalHeaders() throws Exception {
+        Map<String, Object> summary = Map.of(
+            "count", 2,
+            "runs", new Object[]{
+                Map.of("id", "run-1", "status", "COMPLETED")
+            });
+        when(restTemplate.exchange(
+                eq("http://reconciliation-engine:8107/reconciliation/runs"),
+                eq(HttpMethod.GET),
+                any(HttpEntity.class),
+                any(ParameterizedTypeReference.class)))
+            .thenReturn(ResponseEntity.ok(summary));
+
+        mockMvc.perform(get("/admin/v1/reconciliation/summary")
+                .with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("ok"))
+            .andExpect(jsonPath("$.count").value(2));
+
+        ArgumentCaptor<HttpEntity<Void>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(
+            eq("http://reconciliation-engine:8107/reconciliation/runs"),
+            eq(HttpMethod.GET),
+            captor.capture(),
+            any(ParameterizedTypeReference.class));
+        assertThat(captor.getValue().getHeaders().getFirst("X-Internal-Service"))
+            .isEqualTo("admin-gateway-service");
+        assertThat(captor.getValue().getHeaders().getFirst("X-Internal-Token"))
+            .isEqualTo("test-internal-service-token");
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = "ADMIN")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void shouldReturnBadGatewayWhenReconciliationSummaryUnreachable() throws Exception {
+        when(restTemplate.exchange(
+                eq("http://reconciliation-engine:8107/reconciliation/runs"),
+                eq(HttpMethod.GET),
+                any(HttpEntity.class),
+                any(ParameterizedTypeReference.class)))
+            .thenThrow(new ResourceAccessException("Connection refused"));
+
+        mockMvc.perform(get("/admin/v1/reconciliation/summary")
+                .with(csrf()))
+            .andExpect(status().isBadGateway())
+            .andExpect(jsonPath("$.code").value("UPSTREAM_UNAVAILABLE"));
     }
 
     @Test

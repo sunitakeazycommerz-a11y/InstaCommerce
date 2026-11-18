@@ -68,8 +68,13 @@ public class CartSyncService implements DisposableBean {
 
     public Flux<ServerSentEvent<Map<String, Object>>> subscribeToCartUpdates(String userId) {
         Sinks.Many<ServerSentEvent<Map<String, Object>>> sink = userSinks.computeIfAbsent(userId, k ->
-                Sinks.many().multicast().onBackpressureBuffer());
-        return sink.asFlux();
+                Sinks.many().multicast().onBackpressureBuffer(256, false));
+        return sink.asFlux()
+                .doFinally(signal -> {
+                    if (sink.currentSubscriberCount() <= 0) {
+                        userSinks.remove(userId, sink);
+                    }
+                });
     }
 
     public void dispatchToUser(String userId, Map<String, Object> cartEvent) {
@@ -79,9 +84,18 @@ public class CartSyncService implements DisposableBean {
                     .event("cart-updated")
                     .data(cartEvent)
                     .build();
-            sink.tryEmitNext(sse);
-            log.debug("Dispatched cart update SSE to userId={}", userId);
+            Sinks.EmitResult result = sink.tryEmitNext(sse);
+            if (result == Sinks.EmitResult.FAIL_TERMINATED || result == Sinks.EmitResult.FAIL_CANCELLED) {
+                userSinks.remove(userId, sink);
+                log.debug("Removed terminated/cancelled SSE sink for userId={}", userId);
+                return;
+            }
+            log.debug("Dispatched cart update SSE to userId={} (result={})", userId, result);
         }
+    }
+
+    int activeSinkCount() {
+        return userSinks.size();
     }
 
     @Override

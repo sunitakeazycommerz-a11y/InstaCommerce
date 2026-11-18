@@ -1,6 +1,8 @@
 package com.instacommerce.identity.config;
 
 import jakarta.validation.constraints.NotBlank;
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -74,7 +76,7 @@ public class IdentityProperties {
         @NotBlank
         private String privateKey;
 
-        private java.util.List<String> previousPublicKeys = new java.util.ArrayList<>();
+        private List<String> previousPublicKeys = new ArrayList<>();
 
         public String getIssuer() {
             return issuer;
@@ -100,12 +102,12 @@ public class IdentityProperties {
             this.privateKey = privateKey;
         }
 
-        public java.util.List<String> getPreviousPublicKeys() {
+        public List<String> getPreviousPublicKeys() {
             return previousPublicKeys;
         }
 
-        public void setPreviousPublicKeys(java.util.List<String> previousPublicKeys) {
-            this.previousPublicKeys = previousPublicKeys != null ? previousPublicKeys : new java.util.ArrayList<>();
+        public void setPreviousPublicKeys(List<String> previousPublicKeys) {
+            this.previousPublicKeys = previousPublicKeys != null ? previousPublicKeys : new ArrayList<>();
         }
     }
 }

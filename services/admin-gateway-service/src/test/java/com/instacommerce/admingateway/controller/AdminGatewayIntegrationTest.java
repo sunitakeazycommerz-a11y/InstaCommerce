@@ -137,6 +137,10 @@ class AdminGatewayIntegrationTest {
     } else if ("/metrics".equals(path)) {
       contentType = "text/plain; version=0.0.4";
       response = "http_requests_total 10\ngo_goroutines 14\n";
+    } else if ("/flags".equals(path)) {
+      response = "{\"canary\":true}";
+    } else if ("/reconciliation/runs".equals(path)) {
+      response = "{\"count\":1,\"runs\":[{\"id\":\"run-1\",\"status\":\"COMPLETED\"}]}";
     } else if ("/audit/events".equals(path)) {
       status = 201;
       response = "";
@@ -322,6 +326,39 @@ class AdminGatewayIntegrationTest {
   void testHealthEndpointWithoutToken() throws Exception {
     mvc.perform(get("/admin/health"))
         .andExpect(status().isOk());
+  }
+
+  @Test
+  @DisplayName("GET /admin/v1/flags and /admin/v1/reconciliation/summary accept instacommerce-api token with ROLE_ADMIN and propagate internal headers")
+  void testApiAudienceWithAdminRoleAndSummaryFlags() throws Exception {
+    String apiAudAdminToken = generateValidToken("admin-api", "instacommerce-api",
+        Instant.now().plus(1, ChronoUnit.HOURS), List.of("ROLE_ADMIN"));
+
+    mvc.perform(get("/admin/v1/flags")
+        .header("Authorization", "Bearer " + apiAudAdminToken)
+        .header("X-Internal-Service", "spoofed")
+        .header("X-Admin-Spoof", "true"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.canary").value(true));
+
+    mvc.perform(get("/admin/v1/reconciliation/summary")
+        .header("Authorization", "Bearer " + apiAudAdminToken))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.count").value(1));
+
+    RecordedRequest flagsCall = recordedRequests.stream()
+        .filter(r -> "/flags".equals(r.path()))
+        .findFirst()
+        .orElseThrow();
+    assertThat(flagsCall.internalService()).isEqualTo("admin-gateway-service");
+    assertThat(flagsCall.internalToken()).isEqualTo("test-internal-service-token");
+
+    RecordedRequest summaryCall = recordedRequests.stream()
+        .filter(r -> "/reconciliation/runs".equals(r.path()))
+        .findFirst()
+        .orElseThrow();
+    assertThat(summaryCall.internalService()).isEqualTo("admin-gateway-service");
+    assertThat(summaryCall.internalToken()).isEqualTo("test-internal-service-token");
   }
 
   private String generateValidToken(String subject, String audience, Instant expiresAt) {

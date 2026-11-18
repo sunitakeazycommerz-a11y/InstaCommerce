@@ -4,7 +4,9 @@ import com.instacommerce.identity.config.IdentityProperties;
 import com.instacommerce.identity.domain.model.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.JwsHeader;
 import io.jsonwebtoken.Jwts;
+import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.Date;
@@ -48,10 +50,10 @@ public class DefaultJwtService implements JwtService {
     public Jws<Claims> validateAccessToken(String token) {
         return Jwts.parser()
             .keyLocator(header -> {
-                if (header instanceof io.jsonwebtoken.JwsHeader jwsHeader) {
+                if (header instanceof JwsHeader jwsHeader) {
                     String kid = jwsHeader.getKeyId();
                     if (kid != null) {
-                        java.security.interfaces.RSAPublicKey key = keyLoader.getVerificationKey(kid);
+                        RSAPublicKey key = keyLoader.getVerificationKey(kid);
                         if (key != null) {
                             return key;
                         }

@@ -3,6 +3,7 @@ package com.instacommerce.identity.service;
 import com.instacommerce.identity.repository.RefreshTokenRepository;
 import java.time.Duration;
 import java.time.Instant;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -20,6 +21,7 @@ public class RefreshTokenCleanupJob {
     }
 
     @Scheduled(cron = "${refresh-token.cleanup-cron:0 30 3 * * *}")
+    @SchedulerLock(name = "refresh-token-cleanup", lockAtLeastFor = "PT5M", lockAtMostFor = "PT30M")
     @Transactional
     public void purgeExpiredTokens() {
         Instant cutoff = Instant.now().minus(retention);

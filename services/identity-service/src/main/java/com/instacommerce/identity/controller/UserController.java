@@ -2,6 +2,7 @@ package com.instacommerce.identity.controller;
 
 import com.instacommerce.identity.dto.request.ChangePasswordRequest;
 import com.instacommerce.identity.dto.request.NotificationPreferenceRequest;
+import com.instacommerce.identity.dto.request.UpdateProfileRequest;
 import com.instacommerce.identity.dto.response.NotificationPreferenceResponse;
 import com.instacommerce.identity.dto.response.UserResponse;
 import com.instacommerce.identity.exception.TraceIdProvider;
@@ -15,6 +16,7 @@ import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -22,7 +24,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/users/me")
+@RequestMapping({"/users/me", "/api/v1/users/me"})
 public class UserController {
     private final UserService userService;
     private final UserDeletionService userDeletionService;
@@ -42,6 +44,19 @@ public class UserController {
     @GetMapping
     public UserResponse getMe() {
         return userService.getCurrentUser();
+    }
+
+    @PatchMapping
+    public UserResponse updateMe(@Valid @RequestBody UpdateProfileRequest request, HttpServletRequest httpRequest) {
+        String traceId = traceIdProvider.resolveTraceId(httpRequest);
+        UserResponse updated = userService.updateProfile(request,
+            RequestContextUtil.resolveIp(httpRequest),
+            RequestContextUtil.resolveUserAgent(httpRequest),
+            traceId);
+        if (request.notificationPreferences() != null) {
+            notificationPreferenceService.updatePreferences(updated.id(), request.notificationPreferences());
+        }
+        return updated;
     }
 
     @GetMapping("/notification-preferences")

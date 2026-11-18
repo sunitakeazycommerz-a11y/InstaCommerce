@@ -1,6 +1,9 @@
 spring:
   config:
     import: "optional:classpath:application-test-noop.properties"
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   cloud:
     gcp:
       secretmanager:

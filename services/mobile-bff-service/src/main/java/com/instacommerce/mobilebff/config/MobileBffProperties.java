@@ -49,8 +49,12 @@ public class MobileBffProperties {
 
     public static class UpstreamProperties {
         private String catalogUrl = "http://catalog-service:8082";
-        private String searchUrl = "http://search-service:8086";
-        private String featureFlagUrl = "http://config-feature-flag-service:8096";
+        private String searchUrl = "http://search-service:8088";
+        private String featureFlagUrl = "http://config-feature-flag-service:8098";
+        private String cartUrl = "http://cart-service:8090";
+        private String orderUrl = "http://order-service:8084";
+        private String identityUrl = "http://identity-service:8081";
+        private String walletUrl = "http://wallet-loyalty-service:8095";
         private int timeoutMs = 2000;
 
         public String getCatalogUrl() {
@@ -75,6 +79,38 @@ public class MobileBffProperties {
 
         public void setFeatureFlagUrl(String featureFlagUrl) {
             this.featureFlagUrl = featureFlagUrl;
+        }
+
+        public String getCartUrl() {
+            return cartUrl;
+        }
+
+        public void setCartUrl(String cartUrl) {
+            this.cartUrl = cartUrl;
+        }
+
+        public String getOrderUrl() {
+            return orderUrl;
+        }
+
+        public void setOrderUrl(String orderUrl) {
+            this.orderUrl = orderUrl;
+        }
+
+        public String getIdentityUrl() {
+            return identityUrl;
+        }
+
+        public void setIdentityUrl(String identityUrl) {
+            this.identityUrl = identityUrl;
+        }
+
+        public String getWalletUrl() {
+            return walletUrl;
+        }
+
+        public void setWalletUrl(String walletUrl) {
+            this.walletUrl = walletUrl;
         }
 
         public int getTimeoutMs() {

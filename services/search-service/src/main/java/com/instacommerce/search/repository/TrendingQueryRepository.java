@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -14,7 +15,7 @@ public interface TrendingQueryRepository extends JpaRepository<TrendingQuery, UU
 
     Optional<TrendingQuery> findByQuery(String query);
 
-    List<TrendingQuery> findTopByOrderByHitCountDesc(org.springframework.data.domain.Pageable pageable);
+    List<TrendingQuery> findTopByOrderByHitCountDesc(Pageable pageable);
 
     @Modifying
     @Query(value = """

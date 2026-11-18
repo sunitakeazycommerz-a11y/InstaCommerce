@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/products")
+@RequestMapping({"/products", "/api/v1/products"})
 public class ProductController {
     private final ProductService productService;
     private final RateLimitService rateLimitService;

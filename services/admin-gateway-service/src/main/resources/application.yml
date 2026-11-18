@@ -5,6 +5,9 @@ server:
 spring:
   application:
     name: admin-gateway-service
+  http:
+    converters:
+      preferred-json-mapper: jackson2
   config:
     import: optional:sm://
   lifecycle:
@@ -51,7 +54,10 @@ admin-gateway:
     public-key: ${JWT_PUBLIC_KEY:#{null}}
     issuer: ${JWT_ISSUER:instacommerce-identity}
     aud: ${JWT_AUD:instacommerce-admin}
+    accepted-audiences: ${JWT_ACCEPTED_AUDIENCES:instacommerce-admin,instacommerce-api}
     clock-skew-seconds: ${JWT_CLOCK_SKEW_SECONDS:300}
+  rate-limit:
+    requests-per-minute: ${ADMIN_RATE_LIMIT_RPM:120}
   http:
     connect-timeout-ms: ${ADMIN_HTTP_CONNECT_TIMEOUT_MS:1500}
     read-timeout-ms: ${ADMIN_HTTP_READ_TIMEOUT_MS:2000}

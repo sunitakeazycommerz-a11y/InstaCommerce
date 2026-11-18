@@ -303,4 +303,28 @@ class CartControllerTest {
             .andExpect(status().isPreconditionFailed())
             .andExpect(jsonPath("$.code").value("PRECONDITION_FAILED"));
     }
+
+    @Test
+    void mergeCartDeniesDifferentTargetUserWithoutPrivilegedRole() throws Exception {
+        UUID guestUserId = UUID.randomUUID();
+        UUID otherUserId = UUID.randomUUID();
+
+        mockMvc.perform(post("/cart/merge")
+                .param("guestUserId", guestUserId.toString())
+                .param("userId", otherUserId.toString())
+                .with(user(userId.toString()).roles("USER")))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    void mergeCartDeniesNonUuidPrincipal() throws Exception {
+        UUID guestUserId = UUID.randomUUID();
+
+        mockMvc.perform(post("/cart/merge")
+                .param("guestUserId", guestUserId.toString())
+                .with(user("not-a-uuid").roles("USER")))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+    }
 }

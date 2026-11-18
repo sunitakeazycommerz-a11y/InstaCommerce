@@ -42,7 +42,7 @@ public class AuditLog {
     @Column(name = "user_agent")
     private String userAgent;
 
-    @Column(name = "trace_id", length = 32)
+    @Column(name = "trace_id", length = 64)
     private String traceId;
 
     @CreationTimestamp

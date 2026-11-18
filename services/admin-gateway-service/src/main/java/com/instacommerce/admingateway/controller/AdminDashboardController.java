@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 @RestController
@@ -66,6 +67,8 @@ public class AdminDashboardController {
             );
             var flags = response.getBody();
             return flags != null ? flags : Map.of("error", "No flags configured");
+        } catch (RestClientException ex) {
+            throw ex;
         } catch (Exception ex) {
             return Map.of("error", "Failed to fetch feature flags: " + ex.getMessage());
         }
@@ -88,14 +91,8 @@ public class AdminDashboardController {
             downstreamPayload.put("expiresAt", Instant.now().plusSeconds(ttl).toString());
         }
 
-        HttpHeaders headers = new HttpHeaders();
+        HttpHeaders headers = buildInternalHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        if (internalServiceName != null && !internalServiceName.isBlank()) {
-            headers.set("X-Internal-Service", internalServiceName);
-        }
-        if (internalServiceToken != null && !internalServiceToken.isBlank()) {
-            headers.set("X-Internal-Token", internalServiceToken);
-        }
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(downstreamPayload, headers);
         ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
@@ -128,9 +125,40 @@ public class AdminDashboardController {
             );
             var reconciliation = response.getBody();
             return reconciliation != null ? reconciliation : Map.of("items", new Object[0]);
+        } catch (RestClientException ex) {
+            throw ex;
         } catch (Exception ex) {
             return Map.of("error", "Failed to fetch pending reconciliation: " + ex.getMessage());
         }
+    }
+
+    @GetMapping("/reconciliation/summary")
+    public Map<String, Object> reconciliationSummary() {
+        HttpEntity<Void> entity = new HttpEntity<>(buildInternalHeaders());
+        ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+            reconciliationUrl + "/reconciliation/runs",
+            HttpMethod.GET,
+            entity,
+            MAP_TYPE
+        );
+        Map<String, Object> body = response.getBody();
+        if (body == null) {
+            return Map.of("status", "ok", "count", 0);
+        }
+        Map<String, Object> result = new LinkedHashMap<>(body);
+        result.putIfAbsent("status", "ok");
+        return result;
+    }
+
+    private HttpHeaders buildInternalHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        if (internalServiceName != null && !internalServiceName.isBlank()) {
+            headers.set("X-Internal-Service", internalServiceName);
+        }
+        if (internalServiceToken != null && !internalServiceToken.isBlank()) {
+            headers.set("X-Internal-Token", internalServiceToken);
+        }
+        return headers;
     }
 
     private static String normalizeBaseUrl(String baseUrl) {

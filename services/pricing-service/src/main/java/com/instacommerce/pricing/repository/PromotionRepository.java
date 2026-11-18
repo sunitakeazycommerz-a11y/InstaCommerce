@@ -2,6 +2,7 @@ package com.instacommerce.pricing.repository;
 
 import com.instacommerce.pricing.domain.Promotion;
 import jakarta.persistence.LockModeType;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,9 +21,15 @@ public interface PromotionRepository extends JpaRepository<Promotion, UUID> {
     @Query("""
         SELECT p FROM Promotion p
         WHERE p.active = true
+          AND p.startAt <= :now
+          AND (p.endAt IS NULL OR p.endAt >= :now)
           AND (p.maxUses IS NULL OR p.currentUses < p.maxUses)
         """)
-    List<Promotion> findActivePromotions();
+    List<Promotion> findActivePromotions(@Param("now") Instant now);
+
+    default List<Promotion> findActivePromotions() {
+        return findActivePromotions(Instant.now());
+    }
 
     @Modifying
     @Query("""

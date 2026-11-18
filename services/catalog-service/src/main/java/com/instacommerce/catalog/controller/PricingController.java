@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/pricing")
+@RequestMapping({"/pricing", "/api/v1/pricing"})
 public class PricingController {
     private final PricingService pricingService;
 

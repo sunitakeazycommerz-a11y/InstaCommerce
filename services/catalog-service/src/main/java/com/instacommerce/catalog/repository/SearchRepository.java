@@ -89,6 +89,13 @@ public class SearchRepository {
     }
 
     public List<AutocompleteResult> autocomplete(String prefix) {
+        if (prefix == null || prefix.isBlank()) {
+            return List.of();
+        }
+        String sanitized = prefix.replaceAll("[^a-zA-Z0-9 ]", "").trim();
+        if (sanitized.isEmpty()) {
+            return List.of();
+        }
         String sql = """
             SELECT p.id, p.name FROM products p
             WHERE p.is_active = true
@@ -97,7 +104,6 @@ public class SearchRepository {
             LIMIT 10
             """;
         Query query = entityManager.createNativeQuery(sql);
-        String sanitized = prefix.replaceAll("[^a-zA-Z0-9 ]", "").trim();
         String tsquery = sanitized.replaceAll("\\s+", " & ") + ":*";
         query.setParameter("tsquery", tsquery);
         @SuppressWarnings("unchecked")

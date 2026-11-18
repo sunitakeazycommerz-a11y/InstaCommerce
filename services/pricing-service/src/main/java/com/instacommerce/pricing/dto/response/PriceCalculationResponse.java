@@ -8,7 +8,9 @@ public record PriceCalculationResponse(
     List<PricedItem> items,
     long subtotalCents,
     long discountCents,
+    long deliveryFeeCents,
     long totalCents,
+    String currency,
     List<String> appliedPromotions,
     String appliedCoupon,
     UUID quoteId,
@@ -24,12 +26,40 @@ public record PriceCalculationResponse(
             List<String> appliedPromotions,
             String appliedCoupon,
             UUID quoteId,
+            String quoteToken,
+            long estimatedTaxCents,
+            BigDecimal taxRate) {
+        this(
+                items,
+                subtotalCents,
+                discountCents,
+                0L,
+                totalCents,
+                "INR",
+                appliedPromotions,
+                appliedCoupon,
+                quoteId,
+                quoteToken,
+                estimatedTaxCents,
+                taxRate);
+    }
+
+    public PriceCalculationResponse(
+            List<PricedItem> items,
+            long subtotalCents,
+            long discountCents,
+            long totalCents,
+            List<String> appliedPromotions,
+            String appliedCoupon,
+            UUID quoteId,
             String quoteToken) {
         this(
                 items,
                 subtotalCents,
                 discountCents,
+                0L,
                 totalCents,
+                "INR",
                 appliedPromotions,
                 appliedCoupon,
                 quoteId,

@@ -1,5 +1,6 @@
 package com.instacommerce.identity.security;
 
+import com.instacommerce.identity.config.InternalServiceProperties;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -12,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -33,17 +34,25 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
     private final Map<String, String> allowedCallers;
     private final boolean strictPerServiceTokens;
 
+    @Autowired
+    public InternalServiceAuthFilter(InternalServiceProperties properties) {
+        this(
+                properties != null ? properties.getToken() : null,
+                properties != null ? properties.getAllowedCallers() : Collections.emptyMap(),
+                properties != null && properties.isStrictPerServiceTokens());
+    }
+
     public InternalServiceAuthFilter(
-            @Value("${internal.service.token}") String sharedToken,
-            @Value("#{${internal.service.allowed-callers:{}}}") Map<String, String> allowedCallers) {
+            String sharedToken,
+            Map<String, String> allowedCallers) {
         this(sharedToken, allowedCallers, false);
     }
 
     public InternalServiceAuthFilter(
             String sharedToken,
             Map<String, String> allowedCallers,
-            @Value("${internal.service.strict-per-service-tokens:false}") boolean strictPerServiceTokens) {
-        this.sharedToken = sharedToken;
+            boolean strictPerServiceTokens) {
+        this.sharedToken = sharedToken != null ? sharedToken : "";
         this.allowedCallers = allowedCallers != null ? allowedCallers : Collections.emptyMap();
         this.strictPerServiceTokens = strictPerServiceTokens;
     }
@@ -53,29 +62,33 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
             FilterChain filterChain) throws ServletException, IOException {
         String serviceName = request.getHeader("X-Internal-Service");
         String token = request.getHeader("X-Internal-Token");
-        if (serviceName != null && token != null) {
-            if (isValidToken(serviceName, token)) {
+        if (serviceName != null && !serviceName.isBlank() && token != null && !token.isBlank()) {
+            String trimmedService = serviceName.trim();
+            if (isValidToken(trimmedService, token)) {
                 log.info("Internal service authentication accepted: service={}, method={}, path={}",
-                    serviceName, request.getMethod(), request.getRequestURI());
+                    trimmedService, request.getMethod(), request.getRequestURI());
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                        serviceName, null,
+                        trimmedService, null,
                         List.of(new SimpleGrantedAuthority("ROLE_INTERNAL_SERVICE")));
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             } else {
                 log.warn("Internal service authentication rejected (invalid token): service={}, method={}, path={}",
-                    serviceName, request.getMethod(), request.getRequestURI());
+                    trimmedService, request.getMethod(), request.getRequestURI());
             }
-        } else if (serviceName != null || token != null) {
+        } else if ((serviceName != null && !serviceName.isBlank()) || (token != null && !token.isBlank())) {
             log.warn("Incomplete internal service auth headers: service={}, hasToken={}, method={}, path={}",
-                serviceName, token != null, request.getMethod(), request.getRequestURI());
+                serviceName, token != null && !token.isBlank(), request.getMethod(), request.getRequestURI());
         }
         filterChain.doFilter(request, response);
     }
 
     private boolean isValidToken(String serviceName, String token) {
+        if (serviceName == null || serviceName.isBlank() || token == null || token.isBlank()) {
+            return false;
+        }
         // Per-service token takes precedence
         String perServiceToken = allowedCallers.get(serviceName);
-        if (perServiceToken != null && !perServiceToken.isEmpty()) {
+        if (perServiceToken != null && !perServiceToken.isBlank()) {
             boolean isValid = MessageDigest.isEqual(
                     perServiceToken.getBytes(StandardCharsets.UTF_8),
                     token.getBytes(StandardCharsets.UTF_8));
@@ -89,6 +102,10 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
         // Fall back to shared token during migration
         if (strictPerServiceTokens) {
             log.warn("STRICT_PER_SERVICE_REJECTION: Caller '{}' attempted shared token fallback, but strict per-service tokens are enforced.", serviceName);
+            return false;
+        }
+        if (sharedToken.isBlank()) {
+            log.warn("Internal service authentication rejected (shared token is blank): service={}", serviceName);
             return false;
         }
         boolean isValid = MessageDigest.isEqual(

@@ -10,6 +10,8 @@ import java.time.Instant;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.CacheManager;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,12 +22,12 @@ public class CatalogEventConsumer {
 
     private final ObjectMapper objectMapper;
     private final PriceRuleRepository priceRuleRepository;
-    private final org.springframework.cache.CacheManager cacheManager;
+    private final CacheManager cacheManager;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public CatalogEventConsumer(ObjectMapper objectMapper,
                                 PriceRuleRepository priceRuleRepository,
-                                org.springframework.cache.CacheManager cacheManager) {
+                                CacheManager cacheManager) {
         this.objectMapper = objectMapper;
         this.priceRuleRepository = priceRuleRepository;
         this.cacheManager = cacheManager;

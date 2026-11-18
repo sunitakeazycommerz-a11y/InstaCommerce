@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -81,7 +82,7 @@ public class GlobalExceptionHandler {
             .body(buildError("CART_INVALID", ex.getMessage(), List.of(), request));
     }
 
-    @ExceptionHandler({OptimisticLockException.class, org.springframework.dao.OptimisticLockingFailureException.class})
+    @ExceptionHandler({OptimisticLockException.class, OptimisticLockingFailureException.class})
     public ResponseEntity<ErrorResponse> handleOptimisticLock(Exception ex,
                                                               HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.CONFLICT)

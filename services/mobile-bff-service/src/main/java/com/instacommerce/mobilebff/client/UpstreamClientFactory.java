@@ -6,6 +6,9 @@ import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.handler.timeout.WriteTimeoutHandler;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -15,11 +18,31 @@ import reactor.netty.resources.ConnectionProvider;
 @Component
 public class UpstreamClientFactory {
 
+    private static final String HEADER_INTERNAL_SERVICE = "X-Internal-Service";
+    private static final String HEADER_INTERNAL_TOKEN = "X-Internal-Token";
+
     private final WebClient catalogClient;
     private final WebClient searchClient;
     private final WebClient featureFlagClient;
+    private final WebClient cartClient;
+    private final WebClient orderClient;
+    private final WebClient identityClient;
+    private final WebClient walletLoyaltyClient;
+    private final String internalServiceName;
+    private final String internalServiceToken;
 
     public UpstreamClientFactory(WebClient.Builder webClientBuilder, MobileBffProperties properties) {
+        this(webClientBuilder, properties, "mobile-bff-service", "");
+    }
+
+    @Autowired
+    public UpstreamClientFactory(
+            WebClient.Builder webClientBuilder,
+            MobileBffProperties properties,
+            @Value("${internal.service.name:${spring.application.name:mobile-bff-service}}") String internalServiceName,
+            @Value("${internal.service.token:}") String internalServiceToken) {
+        this.internalServiceName = internalServiceName;
+        this.internalServiceToken = internalServiceToken;
         var upstream = properties.getUpstream();
         int timeoutMs = upstream.getTimeoutMs();
 
@@ -37,20 +60,33 @@ public class UpstreamClientFactory {
 
         ReactorClientHttpConnector connector = new ReactorClientHttpConnector(httpClient);
 
-        this.catalogClient = webClientBuilder.clone()
-            .baseUrl(upstream.getCatalogUrl())
-            .clientConnector(connector)
-            .build();
+        this.catalogClient = buildClient(webClientBuilder, connector, upstream.getCatalogUrl());
+        this.searchClient = buildClient(webClientBuilder, connector, upstream.getSearchUrl());
+        this.featureFlagClient = buildClient(webClientBuilder, connector, upstream.getFeatureFlagUrl());
+        this.cartClient = buildClient(webClientBuilder, connector, upstream.getCartUrl());
+        this.orderClient = buildClient(webClientBuilder, connector, upstream.getOrderUrl());
+        this.identityClient = buildClient(webClientBuilder, connector, upstream.getIdentityUrl());
+        this.walletLoyaltyClient = buildClient(webClientBuilder, connector, upstream.getWalletUrl());
+    }
 
-        this.searchClient = webClientBuilder.clone()
-            .baseUrl(upstream.getSearchUrl())
+    private WebClient buildClient(
+            WebClient.Builder webClientBuilder,
+            ReactorClientHttpConnector connector,
+            String baseUrl) {
+        return webClientBuilder.clone()
+            .baseUrl(baseUrl)
             .clientConnector(connector)
+            .defaultHeaders(this::applyInternalHeaders)
             .build();
+    }
 
-        this.featureFlagClient = webClientBuilder.clone()
-            .baseUrl(upstream.getFeatureFlagUrl())
-            .clientConnector(connector)
-            .build();
+    public void applyInternalHeaders(HttpHeaders headers) {
+        if (internalServiceName != null && !internalServiceName.isBlank()) {
+            headers.set(HEADER_INTERNAL_SERVICE, internalServiceName);
+        }
+        if (internalServiceToken != null && !internalServiceToken.isBlank()) {
+            headers.set(HEADER_INTERNAL_TOKEN, internalServiceToken);
+        }
     }
 
     public WebClient catalogClient() {
@@ -63,5 +99,21 @@ public class UpstreamClientFactory {
 
     public WebClient featureFlagClient() {
         return featureFlagClient;
+    }
+
+    public WebClient cartClient() {
+        return cartClient;
+    }
+
+    public WebClient orderClient() {
+        return orderClient;
+    }
+
+    public WebClient identityClient() {
+        return identityClient;
+    }
+
+    public WebClient walletLoyaltyClient() {
+        return walletLoyaltyClient;
     }
 }

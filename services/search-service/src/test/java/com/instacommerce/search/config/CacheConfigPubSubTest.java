@@ -103,10 +103,14 @@ class CacheConfigPubSubTest {
             assertThat(trendingB.get(10)).isNotNull();
 
             trendingA.put(10, List.of("fresh-milk"));
-            verify(templateA).convertAndSend(eq("search:cache:invalidate"),
-                argThat((String msg) -> msg.indexOf('|') > 0 && msg.endsWith("|trending:10")));
+            verify(templateA, never()).convertAndSend(any(), any());
             assertThat(trendingA.get(10)).isNotNull();
             assertThat(trendingA.get(10).get()).isEqualTo(List.of("fresh-milk"));
+            assertThat(trendingB.get(10).get()).isEqualTo(List.of("old-milk"));
+
+            trendingA.evict(10);
+            verify(templateA).convertAndSend(eq("search:cache:invalidate"),
+                argThat((String msg) -> msg.indexOf('|') > 0 && msg.endsWith("|trending:10")));
             awaitCacheEviction(trendingB, 10);
 
             Cache resultsA = managerA.getCache("searchResults");

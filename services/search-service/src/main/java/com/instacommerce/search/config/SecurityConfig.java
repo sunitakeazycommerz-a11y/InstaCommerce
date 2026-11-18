@@ -36,9 +36,12 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.GET, "/search/**").permitAll()
+                .requestMatchers(HttpMethod.GET,
+                    "/search/**", "/api/v1/search/**",
+                    "/autocomplete", "/autocomplete/**",
+                    "/api/v1/autocomplete", "/api/v1/autocomplete/**").permitAll()
                 .requestMatchers("/actuator/**", "/error").permitAll()
-                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .requestMatchers("/admin/**", "/api/v1/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)

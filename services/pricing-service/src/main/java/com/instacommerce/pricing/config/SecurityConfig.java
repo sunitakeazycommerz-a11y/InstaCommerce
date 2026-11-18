@@ -38,11 +38,15 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST, "/pricing/calculate", "/api/pricing/calculate").permitAll()
-                .requestMatchers(HttpMethod.POST, "/pricing/tax", "/api/pricing/tax").permitAll()
-                .requestMatchers(HttpMethod.GET, "/pricing/products/**", "/api/pricing/products/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/pricing/calculate", "/api/pricing/calculate", "/api/v1/pricing/calculate").permitAll()
+                .requestMatchers(HttpMethod.POST, "/pricing/tax", "/api/pricing/tax", "/api/v1/pricing/tax").permitAll()
+                .requestMatchers(HttpMethod.GET, "/pricing/products/**", "/api/pricing/products/**", "/api/v1/pricing/products/**").permitAll()
+                .requestMatchers(
+                    "/pricing/coupons/**", "/api/pricing/coupons/**", "/api/v1/pricing/coupons/**",
+                    "/pricing/quotes/validate", "/api/pricing/quotes/validate", "/api/v1/pricing/quotes/validate"
+                ).hasAnyRole("INTERNAL_SERVICE", "ADMIN")
                 .requestMatchers("/actuator/**", "/error").permitAll()
-                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .requestMatchers("/admin/**", "/api/v1/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)
