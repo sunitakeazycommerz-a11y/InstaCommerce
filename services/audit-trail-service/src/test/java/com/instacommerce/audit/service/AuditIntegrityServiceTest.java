@@ -343,6 +343,92 @@ class AuditIntegrityServiceTest {
         assertThat(report.firstBreakSequence()).isEqualTo("10");
     }
 
+    @Test
+    void verifyChain_mixedLegacyV1AndNewV2Rows_verifiesCleanlyWithoutChainBreak() {
+        AuditEvent v1Event1 = buildLegacyV1ChainedEvent(1L, hashChainService.genesisHash(), BASE_TIME);
+        AuditEvent v1Event2 = buildLegacyV1ChainedEvent(2L, v1Event1.getEventHash(), BASE_TIME.plusSeconds(1));
+        AuditEvent v2Event3 = buildChainedEvent(3L, v1Event2.getEventHash(), BASE_TIME.plusSeconds(2));
+
+        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(v1Event1, v1Event2, v2Event3))
+                .thenReturn(List.of());
+
+        IntegrityReport report = integrityService.verifyChain(null, null, 10);
+
+        assertThat(report.intact()).isTrue();
+        assertThat(report.eventsVerified()).isEqualTo(3);
+        assertThat(report.chainBreaks()).isZero();
+        assertThat(report.firstBreakSequence()).isNull();
+    }
+
+    @Test
+    void verifyChain_tamperedLegacyV1Row_detectsChainBreak() {
+        AuditEvent v1Event1 = buildLegacyV1ChainedEvent(1L, hashChainService.genesisHash(), BASE_TIME);
+        AuditEvent tamperedV1 = AuditEvent.builder()
+                .id(new UUID(0L, 2L))
+                .eventType("ORDER_CREATED")
+                .sourceService("order-service")
+                .action("DELETE")
+                .actorId(UUID.fromString("00000000-0000-0000-0000-000000000001"))
+                .resourceType("Order")
+                .resourceId("ord-2")
+                .correlationId("corr-2")
+                .sequenceNumber(2L)
+                .previousHash(v1Event1.getEventHash())
+                .eventHash("wrong-v1-hash")
+                .hashVersion(1)
+                .createdAt(BASE_TIME.plusSeconds(1))
+                .build();
+
+        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(v1Event1, tamperedV1))
+                .thenReturn(List.of());
+
+        IntegrityReport report = integrityService.verifyChain(null, null, 10);
+
+        assertThat(report.intact()).isFalse();
+        assertThat(report.eventsVerified()).isEqualTo(2);
+        assertThat(report.chainBreaks()).isEqualTo(1);
+        assertThat(report.firstBreakSequence()).isEqualTo("2");
+    }
+
+    private AuditEvent buildLegacyV1ChainedEvent(long seq, String previousHash, Instant createdAt) {
+        AuditEvent unsigned = AuditEvent.builder()
+                .id(new UUID(0L, seq))
+                .eventType("ORDER_CREATED")
+                .sourceService("order-service")
+                .action("CREATE")
+                .actorId(UUID.fromString("00000000-0000-0000-0000-000000000001"))
+                .actorType("USER")
+                .resourceType("Order")
+                .resourceId("ord-" + seq)
+                .ipAddress("127.0.0.1")
+                .correlationId("corr-" + seq)
+                .sequenceNumber(seq)
+                .previousHash(previousHash)
+                .hashVersion(1)
+                .createdAt(createdAt)
+                .build();
+        String v1Hash = hashChainService.computeLegacyV1EventHash(unsigned);
+        return AuditEvent.builder()
+                .id(new UUID(0L, seq))
+                .eventType("ORDER_CREATED")
+                .sourceService("order-service")
+                .action("CREATE")
+                .actorId(UUID.fromString("00000000-0000-0000-0000-000000000001"))
+                .actorType("USER")
+                .resourceType("Order")
+                .resourceId("ord-" + seq)
+                .ipAddress("127.0.0.1")
+                .correlationId("corr-" + seq)
+                .sequenceNumber(seq)
+                .previousHash(previousHash)
+                .eventHash(v1Hash)
+                .hashVersion(1)
+                .createdAt(createdAt)
+                .build();
+    }
+
     private AuditEvent buildChainedEvent(long seq, String previousHash, Instant createdAt) {
         UUID eventId = new UUID(0L, seq);
         AuditEvent unsigned = AuditEvent.builder()

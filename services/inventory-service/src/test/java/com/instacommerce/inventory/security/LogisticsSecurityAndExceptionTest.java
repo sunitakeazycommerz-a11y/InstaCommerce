@@ -19,6 +19,8 @@ import com.instacommerce.inventory.service.PerishableLiquidationService;
 import com.instacommerce.inventory.service.RateLimitService;
 import com.instacommerce.inventory.service.SafetyStockService;
 import com.instacommerce.inventory.service.StockReconciliationService;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
+import com.instacommerce.platform.security.SharedInternalServiceAuthFilter;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.UUID;
@@ -50,7 +52,7 @@ import static org.mockito.Mockito.when;
 })
 @Import({
     SecurityConfig.class,
-    InternalServiceAuthFilter.class,
+    InternalServiceSecurityConfiguration.class,
     JwtAuthenticationFilter.class,
     ClientIpResolver.class,
     RestAuthenticationEntryPoint.class,
@@ -89,9 +91,9 @@ class LogisticsSecurityAndExceptionTest {
     private RateLimitService rateLimitService;
 
     @Test
-    @DisplayName("InternalServiceAuthFilter grants ROLE_INTERNAL_SERVICE and caller-scoped role and fails closed on blank")
+    @DisplayName("SharedInternalServiceAuthFilter grants ROLE_INTERNAL_SERVICE and caller-scoped role and fails closed on blank")
     void internalFilterGrantsCallerRoleAndFailsClosed() throws Exception {
-        InternalServiceAuthFilter filter = new InternalServiceAuthFilter("", Map.of());
+        SharedInternalServiceAuthFilter filter = new SharedInternalServiceAuthFilter("", Map.of());
         MockHttpServletRequest req = new MockHttpServletRequest();
         req.addHeader("X-Internal-Service", "fulfillment-service");
         req.addHeader("X-Internal-Token", "");
@@ -99,7 +101,7 @@ class LogisticsSecurityAndExceptionTest {
         filter.doFilter(req, new MockHttpServletResponse(), new MockFilterChain());
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
 
-        InternalServiceAuthFilter activeFilter = new InternalServiceAuthFilter("secret", Map.of());
+        SharedInternalServiceAuthFilter activeFilter = new SharedInternalServiceAuthFilter("secret", Map.of());
         req = new MockHttpServletRequest();
         req.addHeader("X-Internal-Service", "fulfillment-service");
         req.addHeader("X-Internal-Token", "secret");

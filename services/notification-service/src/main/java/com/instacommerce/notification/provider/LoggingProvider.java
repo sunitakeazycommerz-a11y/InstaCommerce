@@ -10,7 +10,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 @Component
-@Profile("!prod")
+@Profile("!prod & !gcp")
 @Order(Ordered.LOWEST_PRECEDENCE)
 public class LoggingProvider implements NotificationProvider {
     private static final Logger logger = LoggerFactory.getLogger(LoggingProvider.class);

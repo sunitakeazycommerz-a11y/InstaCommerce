@@ -387,37 +387,35 @@ class HomeAggregatorTest {
     }
 
     @Test
-    @DisplayName("Should aggregate profile, wallet, and loyalty with internal headers and graceful fallback")
+    @DisplayName("Should aggregate profile without forwarding Bearer to identity-service while sending it to wallet-loyalty-service")
     void testAggregateProfileWithInternalHeadersAndFallback() {
-        AtomicReference<String> seenInternalService = new AtomicReference<>();
-        AtomicReference<String> seenInternalToken = new AtomicReference<>();
-        AtomicReference<String> seenUserId = new AtomicReference<>();
+        AtomicReference<String> seenIdentityInternalService = new AtomicReference<>();
+        AtomicReference<String> seenIdentityInternalToken = new AtomicReference<>();
+        AtomicReference<String> seenIdentityUserId = new AtomicReference<>();
+        AtomicReference<String> seenIdentityAuthHeader = new AtomicReference<>();
+        AtomicReference<String> seenWalletAuthHeader = new AtomicReference<>();
 
-        WebClient identityClient = WebClient.builder()
+        WebClient.Builder routingBuilder = WebClient.builder()
             .exchangeFunction(req -> {
-                seenInternalService.set(req.headers().getFirst("X-Internal-Service"));
-                seenInternalToken.set(req.headers().getFirst("X-Internal-Token"));
-                seenUserId.set(req.headers().getFirst("X-User-Id"));
-                return Mono.just(ClientResponse.create(HttpStatus.OK)
-                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                    .body("{\"id\":\"usr_prof_1\",\"firstName\":\"Asha\"}")
-                    .build());
-            })
-            .build();
-        WebClient failingWalletClient = createFailingWebClient();
+                String path = req.url().getPath();
+                if (path.contains("/users/")) {
+                    seenIdentityInternalService.set(req.headers().getFirst("X-Internal-Service"));
+                    seenIdentityInternalToken.set(req.headers().getFirst("X-Internal-Token"));
+                    seenIdentityUserId.set(req.headers().getFirst("X-User-Id"));
+                    seenIdentityAuthHeader.set(req.headers().getFirst(HttpHeaders.AUTHORIZATION));
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"id\":\"usr_prof_1\",\"firstName\":\"Asha\"}")
+                        .build());
+                }
+                if (path.contains("/wallet/")) {
+                    seenWalletAuthHeader.set(req.headers().getFirst(HttpHeaders.AUTHORIZATION));
+                }
+                return Mono.error(new RuntimeException("Connection refused"));
+            });
 
         UpstreamClientFactory factory = new UpstreamClientFactory(
-                WebClient.builder(), properties, "mobile-bff-service", "secret-token-1") {
-            @Override
-            public WebClient identityClient() {
-                return identityClient;
-            }
-
-            @Override
-            public WebClient walletLoyaltyClient() {
-                return failingWalletClient;
-            }
-        };
+                routingBuilder, properties, "mobile-bff-service", "secret-token-1");
 
         HomeAggregator aggregator = new HomeAggregator(factory, properties);
 
@@ -431,9 +429,11 @@ class HomeAggregatorTest {
             })
             .verifyComplete();
 
-        assertThat(seenInternalService.get()).isEqualTo("mobile-bff-service");
-        assertThat(seenInternalToken.get()).isEqualTo("secret-token-1");
-        assertThat(seenUserId.get()).isEqualTo("usr_prof_1");
+        assertThat(seenIdentityInternalService.get()).isEqualTo("mobile-bff-service");
+        assertThat(seenIdentityInternalToken.get()).isEqualTo("secret-token-1");
+        assertThat(seenIdentityUserId.get()).isEqualTo("usr_prof_1");
+        assertThat(seenIdentityAuthHeader.get()).isNull();
+        assertThat(seenWalletAuthHeader.get()).isEqualTo("Bearer jwt-abc");
     }
 
     @Test

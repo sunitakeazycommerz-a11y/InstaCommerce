@@ -229,4 +229,43 @@ class HashChainServiceTest {
 
         verify(jdbcTemplate).queryForObject("SELECT pg_advisory_xact_lock(?)", Object.class, globalKey);
     }
+
+    @Test
+    @DisplayName("computeLegacyV1EventHash matches legacy 10-field SHA-256 formula and new events default to hashVersion 2")
+    void computeLegacyV1EventHash_matchesLegacyTenFieldFormula() {
+        UUID actorId = UUID.fromString("00000000-0000-0000-0000-000000000007");
+        Instant ts = Instant.parse("2026-01-10T12:00:00Z");
+        String prev = hashChainService.genesisHash();
+
+        AuditEvent legacyEvent = AuditEvent.builder()
+            .id(UUID.randomUUID())
+            .sequenceNumber(1L)
+            .eventType("ORDER_CREATED")
+            .sourceService("order-service")
+            .action("CREATE")
+            .actorId(actorId)
+            .actorType("USER")
+            .resourceType("Order")
+            .resourceId("ord-1")
+            .details(Map.of("k", "v"))
+            .ipAddress("10.0.0.1")
+            .userAgent("agent")
+            .correlationId("corr-1")
+            .createdAt(ts)
+            .previousHash(prev)
+            .hashVersion(1)
+            .build();
+
+        String expectedV1 = HashChainService.sha256(
+            "1|ORDER_CREATED|order-service|CREATE|" + actorId + "|Order|ord-1|corr-1|" + ts + "|" + prev);
+        assertThat(hashChainService.computeLegacyV1EventHash(legacyEvent)).isEqualTo(expectedV1);
+        assertThat(hashChainService.computeEventHash(legacyEvent)).isNotEqualTo(expectedV1);
+
+        AuditEvent v2Event = AuditEvent.builder()
+            .eventType("ORDER_CREATED")
+            .sourceService("order-service")
+            .action("CREATE")
+            .build();
+        assertThat(v2Event.getHashVersion()).isEqualTo(2);
+    }
 }

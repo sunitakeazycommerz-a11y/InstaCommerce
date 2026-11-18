@@ -16,12 +16,12 @@ import com.instacommerce.notification.config.SecurityConfig;
 import com.instacommerce.notification.dto.DeviceTokenResponse;
 import com.instacommerce.notification.exception.GlobalExceptionHandler;
 import com.instacommerce.notification.exception.TraceIdProvider;
-import com.instacommerce.notification.security.InternalServiceAuthFilter;
 import com.instacommerce.notification.security.JwtAuthenticationFilter;
 import com.instacommerce.notification.security.JwtService;
 import com.instacommerce.notification.security.RestAccessDeniedHandler;
 import com.instacommerce.notification.security.RestAuthenticationEntryPoint;
 import com.instacommerce.notification.service.DeviceTokenService;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;
@@ -47,7 +47,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @WebMvcTest(controllers = DeviceTokenController.class)
 @Import({
     SecurityConfig.class,
-    InternalServiceAuthFilter.class,
+    InternalServiceSecurityConfiguration.class,
     JwtAuthenticationFilter.class,
     RestAuthenticationEntryPoint.class,
     RestAccessDeniedHandler.class,

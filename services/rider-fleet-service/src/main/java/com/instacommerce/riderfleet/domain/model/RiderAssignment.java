@@ -31,6 +31,9 @@ public class RiderAssignment {
     @Column(name = "assigned_at")
     private Instant assignedAt;
 
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
     @PrePersist
     void prePersist() {
         if (assignedAt == null) {
@@ -76,5 +79,13 @@ public class RiderAssignment {
 
     public void setAssignedAt(Instant assignedAt) {
         this.assignedAt = assignedAt;
+    }
+
+    public Instant getCompletedAt() {
+        return completedAt;
+    }
+
+    public void setCompletedAt(Instant completedAt) {
+        this.completedAt = completedAt;
     }
 }

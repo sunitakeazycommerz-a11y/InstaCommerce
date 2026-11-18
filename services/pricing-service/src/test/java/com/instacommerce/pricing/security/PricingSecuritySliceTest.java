@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
 import com.instacommerce.pricing.config.CacheConfig;
 import com.instacommerce.pricing.config.JacksonConfig;
 import com.instacommerce.pricing.config.SecurityConfig;
@@ -51,7 +52,7 @@ class PricingSecuritySliceTest {
         SecurityConfig.class,
         CacheConfig.class,
         JacksonConfig.class,
-        InternalServiceAuthFilter.class,
+        InternalServiceSecurityConfiguration.class,
         JwtAuthenticationFilter.class,
         RestAuthenticationEntryPoint.class,
         RestAccessDeniedHandler.class,

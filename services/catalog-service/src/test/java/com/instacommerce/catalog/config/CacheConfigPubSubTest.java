@@ -11,8 +11,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.instacommerce.catalog.config.CacheConfig.TwoLevelCacheManager;
 import com.instacommerce.catalog.dto.response.ProductResponse;
+import com.instacommerce.platform.cache.CacheJsonSerializer;
+import com.instacommerce.platform.cache.TwoLevelCacheManager;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -35,6 +36,7 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.Subscription;
 import org.springframework.data.redis.connection.SubscriptionListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @DisplayName("Catalog CacheConfig Pub/Sub Tests")
@@ -173,9 +175,8 @@ class CacheConfigPubSubTest {
 
     @Test
     @DisplayName("Redis serializer handles ProductResponse Instant timestamps via JavaTimeModule")
-    @SuppressWarnings({"deprecation", "removal"})
     void redisSerializerRoundTripsProductResponseWithInstant() {
-        var serializer = CacheConfig.jsonRedisSerializer();
+        RedisSerializer<Object> serializer = CacheJsonSerializer.create();
         UUID id = UUID.randomUUID();
         ProductResponse sample = new ProductResponse(
             id,

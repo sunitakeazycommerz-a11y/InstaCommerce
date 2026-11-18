@@ -31,7 +31,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @TestPropertySource(properties = {
     "spring.jpa.hibernate.ddl-auto=validate",
     "spring.flyway.enabled=true",
-    "spring.redis.host=localhost",
+    "spring.data.redis.host=localhost",
     "spring.data.redis.repositories.enabled=false"
 })
 @DisplayName("Config Feature Flag Integration Tests")

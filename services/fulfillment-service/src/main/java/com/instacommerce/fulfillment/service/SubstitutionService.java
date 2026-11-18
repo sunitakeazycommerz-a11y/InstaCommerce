@@ -5,6 +5,7 @@ import com.instacommerce.fulfillment.client.PaymentClient;
 import com.instacommerce.fulfillment.domain.model.PickItem;
 import com.instacommerce.fulfillment.domain.model.PickItemStatus;
 import com.instacommerce.fulfillment.domain.model.PickTask;
+import com.instacommerce.fulfillment.event.ItemSubstitutedEvent;
 import com.instacommerce.fulfillment.event.MissingItemEvent;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -36,7 +37,7 @@ public class SubstitutionService {
 
     /**
      * Phase 1 — must be called inside an existing transaction.
-     * Validates, publishes the outbox event, and schedules HTTP calls for after commit.
+     * Validates, publishes outbox events, and schedules inventory/payment HTTP calls for after commit.
      */
     @Transactional
     public void handleMissingItem(PickTask task, PickItem item, int missingQty) {
@@ -48,10 +49,7 @@ public class SubstitutionService {
         if (item.getQuantity() <= 0) {
             throw new IllegalStateException("Invalid item quantity for product " + item.getProductId());
         }
-        if (missingQty > 0 && task.getPaymentId() == null) {
-            throw new IllegalStateException("Payment reference missing for order " + task.getOrderId());
-        }
-        long refundAmount = missingQty > 0
+        long refundAmount = (missingQty > 0 && task.getPaymentId() != null)
             ? Math.round((double) item.getLineTotalCents() * missingQty / item.getQuantity())
             : 0L;
         String referenceId = task.getOrderId() + ":" + item.getProductId();
@@ -70,8 +68,14 @@ public class SubstitutionService {
                 ));
 
             eventPublisher.publishEvent(new MissingItemEvent(
-                item.getProductId(), task.getStoreId(), missingQty, referenceId,
-                task.getPaymentId(), refundAmount));
+                item.getProductId(),
+                task.getStoreId(),
+                missingQty,
+                referenceId,
+                task.getPaymentId(),
+                refundAmount,
+                isSubstituted ? item.getSubstituteProductId() : null,
+                substitutedQty));
         }
     }
 
@@ -81,20 +85,6 @@ public class SubstitutionService {
             return;
         }
         UUID substituteProductId = item.getSubstituteProductId();
-        inventoryClient.releaseStock(
-            item.getProductId(),
-            task.getStoreId(),
-            approvedSubstitutedQty,
-            "FULFILLMENT_SUBSTITUTED_ORIGINAL_RELEASE",
-            referenceId + ":release"
-        );
-        inventoryClient.releaseStock(
-            substituteProductId,
-            task.getStoreId(),
-            -approvedSubstitutedQty,
-            "FULFILLMENT_SUBSTITUTION_REPLACEMENT",
-            referenceId + ":reserve"
-        );
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("orderId", task.getOrderId());
         payload.put("storeId", task.getStoreId());
@@ -102,6 +92,44 @@ public class SubstitutionService {
         payload.put("substituteProductId", substituteProductId);
         payload.put("substitutedQuantity", approvedSubstitutedQty);
         outboxService.publish("Fulfillment", task.getOrderId().toString(), "ItemSubstituted", payload);
+        eventPublisher.publishEvent(new ItemSubstitutedEvent(
+            item.getProductId(),
+            substituteProductId,
+            task.getStoreId(),
+            approvedSubstitutedQty,
+            referenceId));
+    }
+
+    /**
+     * Phase 2 — called after TX commit by MissingItemEventListener.
+     * Adjusts original and replacement SKU inventory outside any database transaction.
+     */
+    public void adjustSubstitutionStock(ItemSubstitutedEvent event) {
+        if (event.substitutedQty() <= 0 || event.substituteProductId() == null) {
+            return;
+        }
+        try {
+            inventoryClient.releaseStock(
+                event.originalProductId(),
+                event.storeId(),
+                event.substitutedQty(),
+                "FULFILLMENT_SUBSTITUTED_ORIGINAL_RELEASE",
+                event.referenceId() + ":release");
+        } catch (Exception ex) {
+            logger.error("Failed to release original stock for substitution reference {}: {}",
+                event.referenceId(), ex.getMessage());
+        }
+        try {
+            inventoryClient.reserveOrDeductStock(
+                event.substituteProductId(),
+                event.storeId(),
+                event.substitutedQty(),
+                "FULFILLMENT_SUBSTITUTION_REPLACEMENT",
+                event.referenceId() + ":reserve");
+        } catch (Exception ex) {
+            logger.error("Failed to deduct replacement stock for substitution reference {}: {}",
+                event.referenceId(), ex.getMessage());
+        }
     }
 
     /**
@@ -111,8 +139,12 @@ public class SubstitutionService {
     public void releaseStockAndRefund(MissingItemEvent event) {
         if (event.missingQty() > 0 && event.substituteProductId() == null) {
             try {
-                inventoryClient.releaseStock(event.productId(), event.storeId(), -event.missingQty(),
-                    "FULFILLMENT_MISSING", event.referenceId());
+                inventoryClient.reserveOrDeductStock(
+                    event.productId(),
+                    event.storeId(),
+                    event.missingQty(),
+                    "FULFILLMENT_MISSING",
+                    event.referenceId());
             } catch (Exception ex) {
                 logger.error("Failed to adjust stock for reference {}: {}", event.referenceId(), ex.getMessage());
             }

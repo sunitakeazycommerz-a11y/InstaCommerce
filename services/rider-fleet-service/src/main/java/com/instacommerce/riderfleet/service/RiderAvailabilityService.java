@@ -59,10 +59,11 @@ public class RiderAvailabilityService {
     }
 
     /**
-     * Ingests rider GPS location pings into Redis geospatial index, PostgreSQL availability coordinates,
-     * and Kafka location history stream.
+     * Ingests high-frequency GPS location pings from riders.
+     * To eliminate PostgreSQL lock contention and connection pool exhaustion under high concurrency (Issue #584),
+     * location pings are strictly written to Redis geospatial index (GEOADD riders:active) and buffered
+     * in Kafka (rider.location.updates) without touching synchronous database locks.
      */
-    @Transactional
     public void updateLocation(UUID riderId, BigDecimal lat, BigDecimal lng) {
         if (riderId == null || lat == null || lng == null) {
             return;
@@ -101,15 +102,7 @@ public class RiderAvailabilityService {
             }
         }
 
-        // 3. Persist latest rider coordinates to PostgreSQL rider_availability for Haversine/optimizer reads
-        availabilityRepository.findByRiderId(riderId).ifPresent(availability -> {
-            availability.setCurrentLat(lat);
-            availability.setCurrentLng(lng);
-            availability.setLastUpdated(Instant.now());
-            availabilityRepository.save(availability);
-        });
-
-        logger.debug("Ingested location ping for rider id={} lat={} lng={}", riderId, lat, lng);
+        logger.debug("Ingested high-frequency location ping for rider id={} lat={} lng={}", riderId, lat, lng);
     }
 
     @Transactional

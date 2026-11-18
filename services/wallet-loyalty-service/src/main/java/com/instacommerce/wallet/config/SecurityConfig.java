@@ -1,6 +1,7 @@
 package com.instacommerce.wallet.config;
 
-import com.instacommerce.wallet.security.InternalServiceAuthFilter;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
+import com.instacommerce.platform.security.SharedInternalServiceAuthFilter;
 import com.instacommerce.wallet.security.JwtAuthenticationFilter;
 import com.instacommerce.wallet.security.RestAccessDeniedHandler;
 import com.instacommerce.wallet.security.RestAuthenticationEntryPoint;
@@ -9,6 +10,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -23,6 +25,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@Import(InternalServiceSecurityConfiguration.class)
 public class SecurityConfig {
 
     @Value("${wallet.cors.allowed-origins:http://localhost:3000,https://*.instacommerce.dev}")
@@ -44,7 +47,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
-                                                   InternalServiceAuthFilter internalServiceAuthFilter,
+                                                   SharedInternalServiceAuthFilter internalServiceAuthFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler,
                                                    CorsConfigurationSource corsConfigurationSource) throws Exception {

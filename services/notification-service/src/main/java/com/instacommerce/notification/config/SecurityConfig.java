@@ -1,14 +1,16 @@
 package com.instacommerce.notification.config;
 
-import com.instacommerce.notification.security.InternalServiceAuthFilter;
 import com.instacommerce.notification.security.JwtAuthenticationFilter;
 import com.instacommerce.notification.security.RestAccessDeniedHandler;
 import com.instacommerce.notification.security.RestAuthenticationEntryPoint;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
+import com.instacommerce.platform.security.SharedInternalServiceAuthFilter;
 import java.util.Arrays;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -22,6 +24,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@Import(InternalServiceSecurityConfiguration.class)
 public class SecurityConfig {
 
     @Value("${notification.cors.allowed-origins:http://localhost:3000,https://*.instacommerce.dev}")
@@ -43,7 +46,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            JwtAuthenticationFilter jwtAuthenticationFilter,
-                                           InternalServiceAuthFilter internalServiceAuthFilter,
+                                           SharedInternalServiceAuthFilter internalServiceAuthFilter,
                                            RestAuthenticationEntryPoint authenticationEntryPoint,
                                            RestAccessDeniedHandler accessDeniedHandler) throws Exception {
         http

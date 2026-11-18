@@ -1,6 +1,5 @@
-package com.instacommerce.identity.security;
+package com.instacommerce.platform.security;
 
-import com.instacommerce.identity.config.InternalServiceProperties;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,45 +9,49 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Authenticates internal service-to-service requests using shared token headers.
- * Defense-in-depth on top of Istio mTLS.
- *
- * Supports per-service tokens via {@code internal.service.allowed-callers} map.
- * Falls back to the shared token during migration (see ADR-010).
+ * Authenticates internal service-to-service requests using {@code X-Internal-Service}
+ * and {@code X-Internal-Token} headers. Per-service tokens configured under
+ * {@code internal.service.allowed-callers} take precedence over the shared token,
+ * and blank configured or supplied secrets always fail closed. Accepted callers
+ * receive {@code ROLE_INTERNAL_SERVICE} and {@code ROLE_SERVICE_<CALLER>}.
  */
-@Component
-public class InternalServiceAuthFilter extends OncePerRequestFilter {
-    private static final Logger log = LoggerFactory.getLogger(InternalServiceAuthFilter.class);
+public class SharedInternalServiceAuthFilter extends OncePerRequestFilter {
+    public static final String INTERNAL_SERVICE_ROLE = "ROLE_INTERNAL_SERVICE";
+    public static final String CALLER_ROLE_PREFIX = "ROLE_SERVICE_";
+    public static final String HEADER_INTERNAL_SERVICE = "X-Internal-Service";
+    public static final String HEADER_INTERNAL_TOKEN = "X-Internal-Token";
+
+    private static final Logger log = LoggerFactory.getLogger(SharedInternalServiceAuthFilter.class);
+
     private final String sharedToken;
     private final Map<String, String> allowedCallers;
     private final boolean strictPerServiceTokens;
 
     @Autowired
-    public InternalServiceAuthFilter(InternalServiceProperties properties) {
+    public SharedInternalServiceAuthFilter(InternalServiceProperties properties) {
         this(
                 properties != null ? properties.getToken() : null,
                 properties != null ? properties.getAllowedCallers() : Collections.emptyMap(),
                 properties != null && properties.isStrictPerServiceTokens());
     }
 
-    public InternalServiceAuthFilter(
-            String sharedToken,
-            Map<String, String> allowedCallers) {
+    public SharedInternalServiceAuthFilter(String sharedToken, Map<String, String> allowedCallers) {
         this(sharedToken, allowedCallers, false);
     }
 
-    public InternalServiceAuthFilter(
+    public SharedInternalServiceAuthFilter(
             String sharedToken,
             Map<String, String> allowedCallers,
             boolean strictPerServiceTokens) {
@@ -58,64 +61,56 @@ public class InternalServiceAuthFilter extends OncePerRequestFilter {
     }
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+    public void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
-        String serviceName = request.getHeader("X-Internal-Service");
-        String token = request.getHeader("X-Internal-Token");
+        String serviceName = request.getHeader(HEADER_INTERNAL_SERVICE);
+        String token = request.getHeader(HEADER_INTERNAL_TOKEN);
         if (serviceName != null && !serviceName.isBlank() && token != null && !token.isBlank()) {
             String trimmedService = serviceName.trim();
             if (isValidToken(trimmedService, token)) {
-                log.info("Internal service authentication accepted: service={}, method={}, path={}",
-                    trimmedService, request.getMethod(), request.getRequestURI());
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                        trimmedService, null,
-                        List.of(new SimpleGrantedAuthority("ROLE_INTERNAL_SERVICE")));
+                        trimmedService, null, authoritiesFor(trimmedService));
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             } else {
-                log.warn("Internal service authentication rejected (invalid token): service={}, method={}, path={}",
-                    trimmedService, request.getMethod(), request.getRequestURI());
+                log.warn("Internal service authentication rejected: service={}, method={}, path={}",
+                        trimmedService, request.getMethod(), request.getRequestURI());
             }
         } else if ((serviceName != null && !serviceName.isBlank()) || (token != null && !token.isBlank())) {
             log.warn("Incomplete internal service auth headers: service={}, hasToken={}, method={}, path={}",
-                serviceName, token != null && !token.isBlank(), request.getMethod(), request.getRequestURI());
+                    serviceName, token != null && !token.isBlank(), request.getMethod(), request.getRequestURI());
         }
         filterChain.doFilter(request, response);
     }
 
+    public static List<GrantedAuthority> authoritiesFor(String serviceName) {
+        String callerRole = CALLER_ROLE_PREFIX
+                + serviceName.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "_");
+        return List.of(
+                new SimpleGrantedAuthority(INTERNAL_SERVICE_ROLE),
+                new SimpleGrantedAuthority(callerRole));
+    }
+
     private boolean isValidToken(String serviceName, String token) {
-        if (serviceName == null || serviceName.isBlank() || token == null || token.isBlank()) {
+        if (serviceName.isBlank() || token.isBlank()) {
             return false;
         }
-        // Per-service token takes precedence
         String perServiceToken = allowedCallers.get(serviceName);
         if (perServiceToken != null && !perServiceToken.isBlank()) {
-            boolean isValid = MessageDigest.isEqual(
+            return MessageDigest.isEqual(
                     perServiceToken.getBytes(StandardCharsets.UTF_8),
                     token.getBytes(StandardCharsets.UTF_8));
-            if (isValid) {
-                log.debug("Per-service token accepted for: {}", serviceName);
-            } else {
-                log.debug("Per-service token rejected for: {}", serviceName);
-            }
-            return isValid;
         }
-        // Fall back to shared token during migration
         if (strictPerServiceTokens) {
-            log.warn("STRICT_PER_SERVICE_REJECTION: Caller '{}' attempted shared token fallback, but strict per-service tokens are enforced.", serviceName);
+            log.warn("Caller '{}' rejected because strict per-service tokens are enabled", serviceName);
             return false;
         }
         if (sharedToken.isBlank()) {
-            log.warn("Internal service authentication rejected (shared token is blank): service={}", serviceName);
             return false;
         }
-        boolean isValid = MessageDigest.isEqual(
+        return MessageDigest.isEqual(
                 sharedToken.getBytes(StandardCharsets.UTF_8),
                 token.getBytes(StandardCharsets.UTF_8));
-        if (isValid) {
-            log.warn("DEPRECATION_WARNING: Caller '{}' authenticated via legacy flat shared token! Per-service tokens required under ADR-010/ADR-012.", serviceName);
-        } else {
-            log.debug("Shared token fallback rejected for: {}", serviceName);
-        }
-        return isValid;
     }
 }

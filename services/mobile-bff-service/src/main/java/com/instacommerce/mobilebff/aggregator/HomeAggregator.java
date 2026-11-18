@@ -155,7 +155,7 @@ public class HomeAggregator {
             clientFactory.identityClient()
                 .get()
                 .uri("/users/{id}", userId)
-                .headers(headers -> applyProfileHeaders(headers, userId, bearerToken))
+                .headers(headers -> applyRequestHeaders(headers, userId, true))
                 .retrieve()
                 .bodyToMono(MAP_TYPE),
             Map.of());
@@ -219,7 +219,6 @@ public class HomeAggregator {
     }
 
     private void applyRequestHeaders(HttpHeaders headers, String userId, boolean hasUserId) {
-        clientFactory.applyInternalHeaders(headers);
         if (hasUserId) {
             headers.set("X-User-Id", userId);
         }

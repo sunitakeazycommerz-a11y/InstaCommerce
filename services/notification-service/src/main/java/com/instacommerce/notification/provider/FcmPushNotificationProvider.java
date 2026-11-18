@@ -17,7 +17,7 @@ import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClient;
 
 @Component
-@Profile("prod")
+@Profile({"prod", "gcp"})
 public class FcmPushNotificationProvider implements NotificationProvider {
     private static final Logger logger = LoggerFactory.getLogger(FcmPushNotificationProvider.class);
 

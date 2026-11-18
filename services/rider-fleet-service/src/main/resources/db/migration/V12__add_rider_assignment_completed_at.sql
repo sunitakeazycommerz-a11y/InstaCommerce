@@ -1,0 +1,1 @@
+ALTER TABLE rider_assignments ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;

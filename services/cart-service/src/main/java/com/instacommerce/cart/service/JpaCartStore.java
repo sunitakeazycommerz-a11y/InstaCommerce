@@ -55,23 +55,14 @@ public class JpaCartStore implements CartStore {
     @Override
     @Transactional
     public Cart addItem(UUID userId, AddItemRequest request) {
-        Cart cart = cartRepository.findByUserIdForUpdate(userId).orElseGet(() -> {
-            Cart newCart = new Cart();
-            newCart.setUserId(userId);
-            newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-            return cartRepository.saveAndFlush(newCart);
-        });
+        Cart cart = findOrCreateCartForUpdate(userId);
 
         Optional<CartItem> existing = cartItemRepository.findByCartIdAndProductId(cart.getId(), request.productId());
         CartItem item;
         if (existing.isPresent()) {
             item = existing.get();
             int newQuantity = item.getQuantity() + request.quantity();
-            if (newQuantity > cartProperties.getMaxQuantityPerItem()) {
-                throw new IllegalArgumentException(
-                    "Total quantity for this item would exceed maximum of "
-                        + cartProperties.getMaxQuantityPerItem());
-            }
+            validateMaxQuantityPerItem(newQuantity);
             item.setQuantity(newQuantity);
             item.setProductName(request.productName());
             item.setUnitPriceCents(request.unitPriceCents());
@@ -81,11 +72,7 @@ public class JpaCartStore implements CartStore {
                 throw new IllegalArgumentException(
                     "Cart cannot exceed " + cartProperties.getMaxItemsPerCart() + " distinct items");
             }
-            if (request.quantity() > cartProperties.getMaxQuantityPerItem()) {
-                throw new IllegalArgumentException(
-                    "Total quantity for this item would exceed maximum of "
-                        + cartProperties.getMaxQuantityPerItem());
-            }
+            validateMaxQuantityPerItem(request.quantity());
             item = new CartItem();
             item.setProductId(request.productId());
             item.setProductName(request.productName());
@@ -164,21 +151,10 @@ public class JpaCartStore implements CartStore {
     @Override
     @Transactional
     public Cart mergeCart(UUID targetUserId, UUID sourceGuestUserId) {
+        Cart targetCart = findOrCreateCartForUpdate(targetUserId);
         if (targetUserId.equals(sourceGuestUserId)) {
-            return cartRepository.findByUserIdForUpdate(targetUserId).orElseGet(() -> {
-                Cart newCart = new Cart();
-                newCart.setUserId(targetUserId);
-                newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-                return cartRepository.saveAndFlush(newCart);
-            });
+            return targetCart;
         }
-
-        Cart targetCart = cartRepository.findByUserIdForUpdate(targetUserId).orElseGet(() -> {
-            Cart newCart = new Cart();
-            newCart.setUserId(targetUserId);
-            newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-            return cartRepository.saveAndFlush(newCart);
-        });
 
         Optional<Cart> guestCartOpt = cartRepository.findByUserIdForUpdate(sourceGuestUserId);
         if (guestCartOpt.isEmpty()) {
@@ -225,6 +201,23 @@ public class JpaCartStore implements CartStore {
             Map.of("targetUserId", targetUserId.toString(), "guestUserId", sourceGuestUserId.toString()));
 
         return savedTargetCart;
+    }
+
+    private Cart findOrCreateCartForUpdate(UUID userId) {
+        return cartRepository.findByUserIdForUpdate(userId).orElseGet(() -> {
+            Cart newCart = new Cart();
+            newCart.setUserId(userId);
+            newCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
+            return cartRepository.saveAndFlush(newCart);
+        });
+    }
+
+    private void validateMaxQuantityPerItem(int quantity) {
+        if (quantity > cartProperties.getMaxQuantityPerItem()) {
+            throw new IllegalArgumentException(
+                "Total quantity for this item would exceed maximum of "
+                    + cartProperties.getMaxQuantityPerItem());
+        }
     }
 
     private Map<String, Object> itemPayload(UUID userId, Cart cart, CartItem item) {

@@ -79,18 +79,8 @@ public class LoyaltyService {
         checkTierUpgrade(account);
         log.info("Earned {} points for user={} order={}", pointsEarned, userId, orderId);
 
-        Map<String, Object> earnedPayload = new LinkedHashMap<>();
-        earnedPayload.put("transactionId", txn.getId().toString());
-        earnedPayload.put("accountId", account.getId().toString());
-        earnedPayload.put("userId", userId.toString());
-        earnedPayload.put("orderId", orderId);
-        earnedPayload.put("points", pointsEarned);
-        earnedPayload.put("tier", account.getTier().name());
-        earnedPayload.put("totalBalance", account.getPointsBalance());
-        earnedPayload.put("pointsBalance", account.getPointsBalance());
-        earnedPayload.put("referenceType", "ORDER");
-        earnedPayload.put("referenceId", orderId);
-        outboxService.publish("Loyalty", account.getId().toString(), "PointsEarned", earnedPayload);
+        outboxService.publish("Loyalty", account.getId().toString(), "PointsEarned",
+            buildPointEventPayload(txn, account, userId, orderId, pointsEarned, "ORDER"));
         return toResponse(account);
     }
 
@@ -123,19 +113,26 @@ public class LoyaltyService {
         }
 
         log.info("Redeemed {} points for user={}", points, userId);
-        Map<String, Object> redeemedPayload = new LinkedHashMap<>();
-        redeemedPayload.put("transactionId", txn.getId().toString());
-        redeemedPayload.put("accountId", account.getId().toString());
-        redeemedPayload.put("userId", userId.toString());
-        redeemedPayload.put("orderId", orderId);
-        redeemedPayload.put("points", points);
-        redeemedPayload.put("tier", account.getTier().name());
-        redeemedPayload.put("totalBalance", account.getPointsBalance());
-        redeemedPayload.put("pointsBalance", account.getPointsBalance());
-        redeemedPayload.put("referenceType", "REDEMPTION");
-        redeemedPayload.put("referenceId", orderId);
-        outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed", redeemedPayload);
+        outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed",
+            buildPointEventPayload(txn, account, userId, orderId, points, "REDEMPTION"));
         return toResponse(account);
+    }
+
+    private Map<String, Object> buildPointEventPayload(LoyaltyTransaction txn, LoyaltyAccount account,
+                                                       UUID userId, String orderId, int points,
+                                                       String referenceType) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("transactionId", txn.getId().toString());
+        payload.put("accountId", account.getId().toString());
+        payload.put("userId", userId.toString());
+        payload.put("orderId", orderId);
+        payload.put("points", points);
+        payload.put("tier", account.getTier().name());
+        payload.put("totalBalance", account.getPointsBalance());
+        payload.put("pointsBalance", account.getPointsBalance());
+        payload.put("referenceType", referenceType);
+        payload.put("referenceId", orderId);
+        return payload;
     }
 
     void checkTierUpgrade(LoyaltyAccount account) {

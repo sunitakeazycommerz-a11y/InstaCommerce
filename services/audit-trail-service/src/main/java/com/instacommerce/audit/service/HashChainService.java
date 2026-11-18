@@ -74,6 +74,21 @@ public class HashChainService {
         return results.get(0);
     }
 
+    public String computeLegacyV1EventHash(AuditEvent event) {
+        String canonical = String.join("|",
+                String.valueOf(event.getSequenceNumber()),
+                nullSafe(event.getEventType()),
+                nullSafe(event.getSourceService()),
+                nullSafe(event.getAction()),
+                event.getActorId() != null ? event.getActorId().toString() : "",
+                nullSafe(event.getResourceType()),
+                nullSafe(event.getResourceId()),
+                nullSafe(event.getCorrelationId()),
+                event.getCreatedAt() != null ? event.getCreatedAt().toString() : "",
+                nullSafe(event.getPreviousHash()));
+        return sha256(canonical);
+    }
+
     public String computeEventHash(AuditEvent event) {
         String createdAtStr = event.getCreatedAt() != null
                 ? event.getCreatedAt().truncatedTo(ChronoUnit.MICROS).toString()

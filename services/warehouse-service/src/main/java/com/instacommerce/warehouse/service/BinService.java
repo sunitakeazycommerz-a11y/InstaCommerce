@@ -53,20 +53,11 @@ public class BinService {
                 }
 
                 int addedVol = request.volumeCm3() != null ? request.volumeCm3() : 0;
-                if (bin.getCurrentVolumeCm3() + addedVol > bin.getMaxVolumeCm3()) {
-                    throw new BinAlreadyOccupiedException(
-                            String.format("Bin %s-%s-%s-%s volume capacity exceeded. Max: %d, Current: %d, Requested: %d",
-                                    request.aisle(), request.rack(), request.shelf(), request.binNumber(),
-                                    bin.getMaxVolumeCm3(), bin.getCurrentVolumeCm3(), addedVol));
-                }
-
                 int addedWeight = request.weightGrams() != null ? request.weightGrams() : 0;
-                if (bin.getCurrentWeightGrams() + addedWeight > bin.getMaxWeightGrams()) {
-                    throw new BinAlreadyOccupiedException(
-                            String.format("Bin %s-%s-%s-%s weight capacity exceeded. Max: %d, Current: %d, Requested: %d",
-                                    request.aisle(), request.rack(), request.shelf(), request.binNumber(),
-                                    bin.getMaxWeightGrams(), bin.getCurrentWeightGrams(), addedWeight));
-                }
+                validateCapacity(bin.getCurrentVolumeCm3(), addedVol, bin.getMaxVolumeCm3(),
+                        "volume", request, true);
+                validateCapacity(bin.getCurrentWeightGrams(), addedWeight, bin.getMaxWeightGrams(),
+                        "weight", request, true);
 
                 bin.setSku(request.sku());
                 bin.setCurrentVolumeCm3(bin.getCurrentVolumeCm3() + addedVol);
@@ -81,13 +72,9 @@ public class BinService {
                 bin.setBinNumber(request.binNumber());
                 bin.setSku(request.sku());
                 int vol = request.volumeCm3() != null ? request.volumeCm3() : 0;
-                if (vol > bin.getMaxVolumeCm3()) {
-                    throw new BinAlreadyOccupiedException("Requested item volume exceeds max bin capacity");
-                }
                 int weight = request.weightGrams() != null ? request.weightGrams() : 0;
-                if (weight > bin.getMaxWeightGrams()) {
-                    throw new BinAlreadyOccupiedException("Requested item weight exceeds max bin capacity");
-                }
+                validateCapacity(0, vol, bin.getMaxVolumeCm3(), "volume", request, false);
+                validateCapacity(0, weight, bin.getMaxWeightGrams(), "weight", request, false);
                 bin.setCurrentVolumeCm3(vol);
                 bin.setCurrentWeightGrams(weight);
                 bin.setOccupied(true);
@@ -122,6 +109,21 @@ public class BinService {
         return binRepository.findByStoreIdAndSku(storeId, sku).stream()
                 .map(this::toResponse)
                 .toList();
+    }
+
+    private void validateCapacity(int current, int added, int max, String metric,
+                                  BinAssignmentRequest request, boolean existingBin) {
+        if (current + added <= max) {
+            return;
+        }
+        if (existingBin) {
+            throw new BinAlreadyOccupiedException(
+                    String.format("Bin %s-%s-%s-%s %s capacity exceeded. Max: %d, Current: %d, Requested: %d",
+                            request.aisle(), request.rack(), request.shelf(), request.binNumber(),
+                            metric, max, current, added));
+        }
+        throw new BinAlreadyOccupiedException(
+                String.format("Requested item %s exceeds max bin capacity", metric));
     }
 
     private BinResponse toResponse(WarehouseBin bin) {

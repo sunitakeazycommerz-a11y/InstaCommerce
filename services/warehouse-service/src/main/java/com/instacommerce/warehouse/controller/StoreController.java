@@ -1,12 +1,10 @@
 package com.instacommerce.warehouse.controller;
 
-import com.instacommerce.warehouse.dto.request.UpsertStoreHoursRequest;
 import com.instacommerce.warehouse.dto.response.CapacityResponse;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.service.CapacityService;
 import com.instacommerce.warehouse.service.StoreService;
 import com.instacommerce.warehouse.service.ZoneService;
-import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
@@ -20,8 +18,6 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -99,13 +95,5 @@ public class StoreController {
     @GetMapping("/{id}/delivery-radius")
     public ResponseEntity<BigDecimal> getDeliveryRadius(@PathVariable UUID id) {
         return ResponseEntity.ok(zoneService.getDeliveryRadius(id));
-    }
-
-    @PutMapping("/{id}/hours")
-    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
-    public ResponseEntity<StoreResponse.HoursResponse> upsertStoreHours(
-            @PathVariable UUID id,
-            @RequestBody @Valid UpsertStoreHoursRequest request) {
-        return ResponseEntity.ok(storeService.upsertStoreHours(id, request));
     }
 }

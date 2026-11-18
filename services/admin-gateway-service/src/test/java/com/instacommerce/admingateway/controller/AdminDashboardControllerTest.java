@@ -1,7 +1,6 @@
 package com.instacommerce.admingateway.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -20,6 +19,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -60,34 +60,41 @@ class AdminDashboardControllerTest {
     @MockitoBean
     private RestTemplate restTemplate;
 
+    private static HttpEntity<?> anyEntity() {
+        return ArgumentMatchers.any();
+    }
+
+    private static ParameterizedTypeReference<Map<String, Object>> anyMapType() {
+        return ArgumentMatchers.any();
+    }
+
     @Test
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnHealthyDashboardWhenAllDownstreamServicesAreUp() throws Exception {
         when(restTemplate.exchange(
                 eq("http://order-service:8085/actuator/health"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class)))
+                anyEntity(),
+                anyMapType()))
             .thenReturn(ResponseEntity.ok(Map.of("status", "UP")));
 
         when(restTemplate.exchange(
                 eq("http://order-service:8085/actuator/metrics/http.server.requests"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
+                anyEntity(),
                 eq(String.class)))
             .thenReturn(ResponseEntity.ok("{\"name\":\"http.server.requests\",\"measurements\":[{\"statistic\":\"COUNT\",\"value\":42.0}]}"));
 
         when(restTemplate.exchange(
                 eq("http://payment-service:8086/actuator/health"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class)))
+                anyEntity(),
+                anyMapType()))
             .thenReturn(ResponseEntity.ok(Map.of("status", "UP")));
 
         when(restTemplate.exchange(
                 eq("http://payment-service:8086/actuator/metrics/http.server.requests"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
+                anyEntity(),
                 eq(String.class)))
             .thenReturn(ResponseEntity.ok("{\"name\":\"http.server.requests\",\"measurements\":[{\"statistic\":\"COUNT\",\"value\":18.0}]}"));
 
@@ -110,33 +117,32 @@ class AdminDashboardControllerTest {
     }
 
     @Test
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldMarkUnreachableServicesDegradedWithoutFailingDashboard() throws Exception {
         when(restTemplate.exchange(
                 eq("http://order-service:8085/actuator/health"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class)))
+                anyEntity(),
+                anyMapType()))
             .thenReturn(ResponseEntity.ok(Map.of("status", "UP")));
 
         when(restTemplate.exchange(
                 eq("http://order-service:8085/actuator/metrics/http.server.requests"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
+                anyEntity(),
                 eq(String.class)))
             .thenReturn(ResponseEntity.ok("{\"measurements\":[{\"statistic\":\"COUNT\",\"value\":15.0}]}"));
 
         when(restTemplate.exchange(
                 eq("http://payment-service:8086/actuator/health"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class)))
+                anyEntity(),
+                anyMapType()))
             .thenThrow(new ResourceAccessException("Connection refused"));
 
         when(restTemplate.exchange(
                 eq("http://payment-service:8086/actuator/metrics/http.server.requests"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
+                anyEntity(),
                 eq(String.class)))
             .thenThrow(new ResourceAccessException("Connection refused"));
 
@@ -154,28 +160,27 @@ class AdminDashboardControllerTest {
     }
 
     @Test
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldBoundSlowDownstreamServiceCallsAndMarkTimedOutServiceDegraded() throws Exception {
         CountDownLatch slowCallLatch = new CountDownLatch(1);
         when(restTemplate.exchange(
                 eq("http://order-service:8085/actuator/health"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class)))
+                anyEntity(),
+                anyMapType()))
             .thenReturn(ResponseEntity.ok(Map.of("status", "UP")));
 
         when(restTemplate.exchange(
                 eq("http://order-service:8085/actuator/metrics/http.server.requests"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
+                anyEntity(),
                 eq(String.class)))
             .thenReturn(ResponseEntity.ok("{\"measurements\":[{\"statistic\":\"COUNT\",\"value\":5.0}]}"));
 
         when(restTemplate.exchange(
                 eq("http://payment-service:8086/actuator/health"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class)))
+                anyEntity(),
+                anyMapType()))
             .thenAnswer(invocation -> {
                 slowCallLatch.await(3, TimeUnit.SECONDS);
                 return ResponseEntity.ok(Map.of("status", "UP"));
@@ -203,14 +208,13 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnFeatureFlags() throws Exception {
         Map<String, Object> flags = Map.of("feature-a", true, "feature-b", false);
         when(restTemplate.exchange(
                 eq("http://config-feature-flag-service:8098/flags"),
                 eq(HttpMethod.GET),
                 isNull(),
-                any(ParameterizedTypeReference.class)))
+                anyMapType()))
             .thenReturn(ResponseEntity.ok(flags));
 
         mockMvc.perform(get("/admin/v1/flags")
@@ -222,13 +226,12 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldHandleFeatureFlagsServiceError() throws Exception {
         when(restTemplate.exchange(
                 anyString(),
                 eq(HttpMethod.GET),
                 isNull(),
-                any(ParameterizedTypeReference.class)))
+                anyMapType()))
             .thenThrow(new RuntimeException("Service unavailable"));
 
         mockMvc.perform(get("/admin/v1/flags")
@@ -250,13 +253,12 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "superadmin", roles = {"ADMIN", "SUPER_ADMIN"})
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    void shouldOverrideFeatureFlagViaFeatureFlagServiceWithInternalHeaders() throws Exception {
+    void shouldOverrideFeatureFlagViaFeatureFlagServiceWithJsonPayload() throws Exception {
         when(restTemplate.exchange(
                 eq("http://config-feature-flag-service:8098/admin/flags/{key}/overrides"),
                 eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class),
+                anyEntity(),
+                anyMapType(),
                 eq("feature-a")))
             .thenReturn(ResponseEntity.status(HttpStatus.CREATED).build());
 
@@ -270,17 +272,16 @@ class AdminDashboardControllerTest {
             .andExpect(jsonPath("$.status").value("applied"))
             .andExpect(jsonPath("$.httpStatus").value(201));
 
-        ArgumentCaptor<HttpEntity<Map<String, Object>>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        ArgumentCaptor<HttpEntity<Map<String, Object>>> captor = ArgumentCaptor.captor();
         verify(restTemplate).exchange(
             eq("http://config-feature-flag-service:8098/admin/flags/{key}/overrides"),
             eq(HttpMethod.POST),
             captor.capture(),
-            any(ParameterizedTypeReference.class),
+            anyMapType(),
             eq("feature-a"));
 
         HttpEntity<Map<String, Object>> sentEntity = captor.getValue();
-        assertThat(sentEntity.getHeaders().getFirst("X-Internal-Service")).isEqualTo("admin-gateway-service");
-        assertThat(sentEntity.getHeaders().getFirst("X-Internal-Token")).isEqualTo("test-internal-service-token");
+        assertThat(sentEntity.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
         assertThat(sentEntity.getBody()).containsEntry("userId", userId);
         assertThat(sentEntity.getBody()).containsEntry("value", "true");
         assertThat(sentEntity.getBody()).containsKey("expiresAt");
@@ -288,15 +289,14 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "superadmin", roles = {"ADMIN", "SUPER_ADMIN"})
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldPropagateDownstreamHttpErrorOnFeatureFlagOverride() throws Exception {
         HttpHeaders responseHeaders = new HttpHeaders();
         responseHeaders.setContentType(MediaType.APPLICATION_JSON);
         when(restTemplate.exchange(
                 eq("http://config-feature-flag-service:8098/admin/flags/{key}/overrides"),
                 eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class),
+                anyEntity(),
+                anyMapType(),
                 eq("missing-flag")))
             .thenThrow(HttpClientErrorException.create(
                 HttpStatus.NOT_FOUND,
@@ -316,13 +316,12 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "superadmin", roles = {"ADMIN", "SUPER_ADMIN"})
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnBadGatewayWhenFeatureFlagServiceUnreachable() throws Exception {
         when(restTemplate.exchange(
                 eq("http://config-feature-flag-service:8098/admin/flags/{key}/overrides"),
                 eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class),
+                anyEntity(),
+                anyMapType(),
                 eq("feature-a")))
             .thenThrow(new ResourceAccessException("Connection refused"));
 
@@ -336,7 +335,6 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnPendingReconciliation() throws Exception {
         Map<String, Object> pending = Map.of(
             "items", new Object[]{
@@ -346,7 +344,7 @@ class AdminDashboardControllerTest {
                 eq("http://reconciliation-engine:8107/pending"),
                 eq(HttpMethod.GET),
                 isNull(),
-                any(ParameterizedTypeReference.class)))
+                anyMapType()))
             .thenReturn(ResponseEntity.ok(pending));
 
         mockMvc.perform(get("/admin/v1/reconciliation/pending")
@@ -357,8 +355,7 @@ class AdminDashboardControllerTest {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    void shouldReturnReconciliationSummaryWithInternalHeaders() throws Exception {
+    void shouldReturnReconciliationSummary() throws Exception {
         Map<String, Object> summary = Map.of(
             "count", 2,
             "runs", new Object[]{
@@ -367,8 +364,8 @@ class AdminDashboardControllerTest {
         when(restTemplate.exchange(
                 eq("http://reconciliation-engine:8107/reconciliation/runs"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class)))
+                eq(HttpEntity.EMPTY),
+                anyMapType()))
             .thenReturn(ResponseEntity.ok(summary));
 
         mockMvc.perform(get("/admin/v1/reconciliation/summary")
@@ -376,28 +373,16 @@ class AdminDashboardControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("ok"))
             .andExpect(jsonPath("$.count").value(2));
-
-        ArgumentCaptor<HttpEntity<Void>> captor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate).exchange(
-            eq("http://reconciliation-engine:8107/reconciliation/runs"),
-            eq(HttpMethod.GET),
-            captor.capture(),
-            any(ParameterizedTypeReference.class));
-        assertThat(captor.getValue().getHeaders().getFirst("X-Internal-Service"))
-            .isEqualTo("admin-gateway-service");
-        assertThat(captor.getValue().getHeaders().getFirst("X-Internal-Token"))
-            .isEqualTo("test-internal-service-token");
     }
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldReturnBadGatewayWhenReconciliationSummaryUnreachable() throws Exception {
         when(restTemplate.exchange(
                 eq("http://reconciliation-engine:8107/reconciliation/runs"),
                 eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                any(ParameterizedTypeReference.class)))
+                anyEntity(),
+                anyMapType()))
             .thenThrow(new ResourceAccessException("Connection refused"));
 
         mockMvc.perform(get("/admin/v1/reconciliation/summary")

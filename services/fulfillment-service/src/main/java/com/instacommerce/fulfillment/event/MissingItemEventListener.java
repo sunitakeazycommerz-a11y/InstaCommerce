@@ -19,8 +19,15 @@ public class MissingItemEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handleMissingItem(MissingItemEvent event) {
-        logger.info("Processing missing item stock release and refund for reference {} after TX commit",
+        logger.info("Processing missing item stock adjustment and refund for reference {} after TX commit",
             event.referenceId());
         substitutionService.releaseStockAndRefund(event);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void handleItemSubstituted(ItemSubstitutedEvent event) {
+        logger.info("Processing substitution stock adjustment for reference {} after TX commit",
+            event.referenceId());
+        substitutionService.adjustSubstitutionStock(event);
     }
 }

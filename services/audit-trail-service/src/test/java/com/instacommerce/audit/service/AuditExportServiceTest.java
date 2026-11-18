@@ -2,12 +2,15 @@ package com.instacommerce.audit.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.dto.AuditSearchCriteria;
 import com.instacommerce.audit.repository.AuditEventRepository;
+import jakarta.persistence.EntityManager;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -70,5 +73,30 @@ class AuditExportServiceTest {
         assertThat(csv).startsWith("id,event_type,source_service,");
         assertThat(csv).contains("'=1+1");
         assertThat(csv).contains("\"Agent\r\nNext\"");
+    }
+
+    @Test
+    void exportCsv_usesSingleSpecificationPathAndClearsEntityManagerWhenPresent() throws Exception {
+        AuditEvent event = AuditEvent.builder()
+                .id(UUID.randomUUID())
+                .eventType("PAYMENT_CAPTURED")
+                .sourceService("payment-service")
+                .action("CAPTURE")
+                .createdAt(Instant.parse("2026-03-01T11:00:00Z"))
+                .build();
+
+        when(repository.findAll(ArgumentMatchers.<Specification<AuditEvent>>any(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(event)));
+
+        StringWriter buffer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(buffer));
+        EntityManager entityManager = mock(EntityManager.class);
+
+        AuditExportService service = new AuditExportService(repository, new ObjectMapper(), entityManager);
+        service.exportCsv(new AuditSearchCriteria(null, null, null, null, null, null, null, null, 0, 20), response);
+
+        verify(repository).findAll(ArgumentMatchers.<Specification<AuditEvent>>any(), any(Pageable.class));
+        verify(entityManager).clear();
+        assertThat(buffer.toString()).contains("PAYMENT_CAPTURED");
     }
 }

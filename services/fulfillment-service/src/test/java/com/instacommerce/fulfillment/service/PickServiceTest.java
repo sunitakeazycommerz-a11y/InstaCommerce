@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -264,5 +265,30 @@ class PickServiceTest {
             .containsEntry("pickupLng", new BigDecimal("77.5946"))
             .containsEntry("dropoffLat", dropoffLat)
             .containsEntry("dropoffLng", dropoffLng);
+    }
+
+    @Test
+    void markItemDoesNotRetriggerSubstitutionOnUnchangedSubstitutedUpdate() {
+        UUID orderId = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+        UUID substituteProductId = UUID.randomUUID();
+        UUID pickerId = UUID.randomUUID();
+
+        PickTask task = newPickTask(taskId, orderId, PickTaskStatus.IN_PROGRESS);
+        PickItem item = newPickItem(task, productId, 4);
+
+        when(pickTaskRepository.findByOrderIdForUpdate(orderId)).thenReturn(Optional.of(task));
+        when(pickItemRepository.findByPickTask_OrderIdAndProductId(orderId, productId)).thenReturn(Optional.of(item));
+        when(pickItemRepository.save(any(PickItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        stubItemCounts(taskId, 1L, 0L, 1L);
+
+        MarkItemPickedRequest subRequest = new MarkItemPickedRequest(
+            PickItemStatus.SUBSTITUTED, 3, substituteProductId, "sub");
+        pickService.markItem(orderId, productId, subRequest, pickerId);
+        verify(substitutionService).handleMissingItem(task, item, 1);
+
+        pickService.markItem(orderId, productId, subRequest, pickerId);
+        verify(substitutionService, times(1)).handleMissingItem(any(), any(), any(Integer.class));
     }
 }

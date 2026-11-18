@@ -5,10 +5,7 @@ import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.dto.AuditSearchCriteria;
 import com.instacommerce.audit.repository.AuditEventRepository;
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.criteria.CriteriaBuilder;
-import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Predicate;
-import jakarta.persistence.criteria.Root;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -101,38 +98,24 @@ public class AuditExportService {
     private List<AuditEvent> fetchNextBatch(Specification<AuditEvent> baseSpec,
                                             Instant lastCreatedAt,
                                             UUID lastId) {
-        if (entityManager != null) {
-            CriteriaBuilder cb = entityManager.getCriteriaBuilder();
-            CriteriaQuery<AuditEvent> query = cb.createQuery(AuditEvent.class);
-            Root<AuditEvent> root = query.from(AuditEvent.class);
-
-            List<Predicate> predicates = new ArrayList<>();
-            Predicate basePredicate = baseSpec.toPredicate(root, query, cb);
-            if (basePredicate != null) {
-                predicates.add(basePredicate);
-            }
-            Predicate cursorPredicate = buildCursorPredicate(root, cb, lastCreatedAt, lastId);
-            if (cursorPredicate != null) {
-                predicates.add(cursorPredicate);
-            }
-            if (!predicates.isEmpty()) {
-                query.where(predicates.toArray(new Predicate[0]));
-            }
-            query.orderBy(cb.asc(root.get("createdAt")), cb.asc(root.get("id")));
-            return entityManager.createQuery(query)
-                    .setMaxResults(EXPORT_BATCH_SIZE)
-                    .getResultList();
-        }
-
         Specification<AuditEvent> cursorSpec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             Predicate basePredicate = baseSpec.toPredicate(root, query, cb);
             if (basePredicate != null) {
                 predicates.add(basePredicate);
             }
-            Predicate cursorPredicate = buildCursorPredicate(root, cb, lastCreatedAt, lastId);
-            if (cursorPredicate != null) {
-                predicates.add(cursorPredicate);
+            if (lastCreatedAt != null) {
+                if (lastId == null) {
+                    predicates.add(cb.greaterThan(root.get("createdAt"), lastCreatedAt));
+                } else {
+                    predicates.add(cb.or(
+                            cb.greaterThan(root.get("createdAt"), lastCreatedAt),
+                            cb.and(
+                                    cb.equal(root.get("createdAt"), lastCreatedAt),
+                                    cb.greaterThan(root.get("id"), lastId)
+                            )
+                    ));
+                }
             }
             return cb.and(predicates.toArray(new Predicate[0]));
         };
@@ -140,25 +123,6 @@ public class AuditExportService {
                 Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
         Page<AuditEvent> batch = repository.findAll(cursorSpec, pageRequest);
         return batch.getContent();
-    }
-
-    private static Predicate buildCursorPredicate(Root<AuditEvent> root,
-                                                  CriteriaBuilder cb,
-                                                  Instant lastCreatedAt,
-                                                  UUID lastId) {
-        if (lastCreatedAt == null) {
-            return null;
-        }
-        if (lastId == null) {
-            return cb.greaterThan(root.get("createdAt"), lastCreatedAt);
-        }
-        return cb.or(
-                cb.greaterThan(root.get("createdAt"), lastCreatedAt),
-                cb.and(
-                        cb.equal(root.get("createdAt"), lastCreatedAt),
-                        cb.greaterThan(root.get("id"), lastId)
-                )
-        );
     }
 
     private String toCsvRow(AuditEvent event) {

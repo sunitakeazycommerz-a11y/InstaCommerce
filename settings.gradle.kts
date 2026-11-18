@@ -8,6 +8,7 @@ pluginManagement {
 rootProject.name = "instacommerce"
 
 include("contracts")
+include("libs:platform-common")
 include("services:identity-service")
 include("services:catalog-service")
 include("services:inventory-service")

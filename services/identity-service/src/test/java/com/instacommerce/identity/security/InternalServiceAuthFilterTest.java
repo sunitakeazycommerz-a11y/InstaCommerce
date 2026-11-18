@@ -5,7 +5,8 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.core.context.SecurityContextHolder.getContext;
 import static org.junit.jupiter.api.Assertions.*;
 
-import com.instacommerce.identity.config.InternalServiceProperties;
+import com.instacommerce.platform.security.InternalServiceProperties;
+import com.instacommerce.platform.security.SharedInternalServiceAuthFilter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -14,15 +15,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 
 /**
- * Tests for InternalServiceAuthFilter with per-service token scoping.
+ * Tests for SharedInternalServiceAuthFilter with per-service token scoping.
  * Verifies both per-service tokens and shared token fallback during migration period.
  */
-@DisplayName("InternalServiceAuthFilter - Per-Service Token Scoping")
+@DisplayName("SharedInternalServiceAuthFilter - Per-Service Token Scoping")
 class InternalServiceAuthFilterTest {
 
-    private InternalServiceAuthFilter filter;
+    private SharedInternalServiceAuthFilter filter;
     private HttpServletRequest request;
     private HttpServletResponse response;
     private FilterChain filterChain;
@@ -47,7 +49,7 @@ class InternalServiceAuthFilterTest {
             "order-service", ORDER_SERVICE_TOKEN,
             "payment-service", PAYMENT_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(ORDER_SERVICE_TOKEN);
@@ -69,7 +71,7 @@ class InternalServiceAuthFilterTest {
         Map<String, String> allowedCallers = Map.of(
             "order-service", ORDER_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(INVALID_TOKEN);
@@ -89,7 +91,7 @@ class InternalServiceAuthFilterTest {
             "payment-service", PAYMENT_SERVICE_TOKEN
             // order-service not in map, should fall back to shared token
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(SHARED_TOKEN);
@@ -111,7 +113,7 @@ class InternalServiceAuthFilterTest {
         Map<String, String> allowedCallers = Map.of(
             "order-service", "" // Empty token configured
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(SHARED_TOKEN);
@@ -131,7 +133,7 @@ class InternalServiceAuthFilterTest {
         Map<String, String> allowedCallers = Map.of(
             "order-service", ORDER_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(INVALID_TOKEN);
@@ -150,7 +152,7 @@ class InternalServiceAuthFilterTest {
         Map<String, String> allowedCallers = Map.of(
             "order-service", ORDER_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn(null);
         when(request.getHeader("X-Internal-Token")).thenReturn(ORDER_SERVICE_TOKEN);
@@ -169,7 +171,7 @@ class InternalServiceAuthFilterTest {
         Map<String, String> allowedCallers = Map.of(
             "order-service", ORDER_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(null);
@@ -189,7 +191,7 @@ class InternalServiceAuthFilterTest {
             "order-service", ORDER_SERVICE_TOKEN,
             "payment-service", PAYMENT_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(PAYMENT_SERVICE_TOKEN); // Wrong token
@@ -203,12 +205,12 @@ class InternalServiceAuthFilterTest {
     }
 
     @Test
-    @DisplayName("Grant only ROLE_INTERNAL_SERVICE authority, never ROLE_ADMIN")
+    @DisplayName("Grant ROLE_INTERNAL_SERVICE and caller-scoped authority, never ROLE_ADMIN")
     void testGrantedAuthorityIsInternalServiceOnly() throws Exception {
         Map<String, String> allowedCallers = Map.of(
             "order-service", ORDER_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(ORDER_SERVICE_TOKEN);
@@ -219,9 +221,10 @@ class InternalServiceAuthFilterTest {
 
         Authentication auth = getContext().getAuthentication();
         assertNotNull(auth);
-        assertEquals(1, auth.getAuthorities().size());
+        assertEquals(2, auth.getAuthorities().size());
         assertTrue(auth.getAuthorities().stream()
-            .allMatch(a -> a.getAuthority().equals("ROLE_INTERNAL_SERVICE")));
+            .map(GrantedAuthority::getAuthority)
+            .allMatch(a -> a.equals("ROLE_INTERNAL_SERVICE") || a.equals("ROLE_SERVICE_ORDER_SERVICE")));
         assertFalse(auth.getAuthorities().stream()
             .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN")),
             "ROLE_ADMIN must not be granted to internal service callers");
@@ -233,7 +236,7 @@ class InternalServiceAuthFilterTest {
         Map<String, String> allowedCallers = Map.of(
             "order-service", ORDER_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         // This test verifies that MessageDigest.isEqual is used
         // MessageDigest.isEqual performs constant-time comparison
@@ -255,7 +258,7 @@ class InternalServiceAuthFilterTest {
     @DisplayName("Empty allowed callers map should use shared token fallback")
     void testEmptyAllowedCallersUsesSharedToken() throws Exception {
         Map<String, String> allowedCallers = Map.of(); // Empty map
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(SHARED_TOKEN);
@@ -275,7 +278,7 @@ class InternalServiceAuthFilterTest {
         Map<String, String> allowedCallers = Map.of(
             "payment-service", PAYMENT_SERVICE_TOKEN
         );
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, allowedCallers, true);
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, allowedCallers, true);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(SHARED_TOKEN);
@@ -294,7 +297,7 @@ class InternalServiceAuthFilterTest {
         InternalServiceProperties props = new InternalServiceProperties();
         props.setToken("");
         props.setAllowedCallers(Map.of("order-service", ""));
-        filter = new InternalServiceAuthFilter(props);
+        filter = new SharedInternalServiceAuthFilter(props);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("order-service");
         when(request.getHeader("X-Internal-Token")).thenReturn("");
@@ -306,7 +309,7 @@ class InternalServiceAuthFilterTest {
 
         when(request.getHeader("X-Internal-Service")).thenReturn("   ");
         when(request.getHeader("X-Internal-Token")).thenReturn(SHARED_TOKEN);
-        filter = new InternalServiceAuthFilter(SHARED_TOKEN, Map.of());
+        filter = new SharedInternalServiceAuthFilter(SHARED_TOKEN, Map.of());
         filter.doFilterInternal(request, response, filterChain);
         assertNull(getContext().getAuthentication(), "Blank service header must fail closed");
     }
@@ -317,7 +320,7 @@ class InternalServiceAuthFilterTest {
         InternalServiceProperties props = new InternalServiceProperties();
         props.setToken(SHARED_TOKEN);
         props.setAllowedCallers(Map.of("notification-service", ORDER_SERVICE_TOKEN));
-        filter = new InternalServiceAuthFilter(props);
+        filter = new SharedInternalServiceAuthFilter(props);
 
         when(request.getHeader("X-Internal-Service")).thenReturn("notification-service");
         when(request.getHeader("X-Internal-Token")).thenReturn(ORDER_SERVICE_TOKEN);

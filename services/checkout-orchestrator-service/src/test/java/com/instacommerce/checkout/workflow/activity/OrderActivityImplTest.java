@@ -47,23 +47,22 @@ class OrderActivityImplTest {
         when(context.getInfo()).thenReturn(info);
         when(info.getWorkflowId()).thenReturn("wf-checkout-123");
 
-        OrderCreateRequest requestWithoutKey = new OrderCreateRequest(
-            "user-1",
-            "store-1",
-            List.of(new CartItem("prod-1", 1, 5000L)),
-            5000L,
-            0L,
-            0L,
-            5000L,
-            "INR",
-            null,
-            "res-1",
-            "pay-1",
-            "addr-1",
-            "pm-1",
-            "quote-1",
-            "token-1"
-        );
+        OrderCreateRequest requestWithoutKey = OrderCreateRequest.builder()
+            .userId("user-1")
+            .storeId("store-1")
+            .items(List.of(new CartItem("prod-1", 1, 5000L)))
+            .subtotalCents(5000L)
+            .discountCents(0L)
+            .deliveryFeeCents(0L)
+            .totalCents(5000L)
+            .currency("INR")
+            .reservationId("res-1")
+            .paymentId("pay-1")
+            .deliveryAddressId("addr-1")
+            .paymentMethodId("pm-1")
+            .quoteId("quote-1")
+            .quoteToken("token-1")
+            .build();
 
         server.expect(twice(), requestTo("/api/orders"))
             .andExpect(method(HttpMethod.POST))
@@ -85,24 +84,23 @@ class OrderActivityImplTest {
 
     @Test
     void createOrderPreservesExplicitDeterministicIdempotencyKey() {
-        OrderCreateRequest requestWithKey = new OrderCreateRequest(
-            "user-1",
-            "store-1",
-            List.of(new CartItem("prod-1", 1, 5000L)),
-            5000L,
-            0L,
-            0L,
-            5000L,
-            "INR",
-            null,
-            "res-1",
-            "pay-1",
-            "addr-1",
-            "pm-1",
-            "quote-1",
-            "token-1",
-            "wf-explicit:order:create"
-        );
+        OrderCreateRequest requestWithKey = OrderCreateRequest.builder()
+            .userId("user-1")
+            .storeId("store-1")
+            .items(List.of(new CartItem("prod-1", 1, 5000L)))
+            .subtotalCents(5000L)
+            .discountCents(0L)
+            .deliveryFeeCents(0L)
+            .totalCents(5000L)
+            .currency("INR")
+            .reservationId("res-1")
+            .paymentId("pay-1")
+            .deliveryAddressId("addr-1")
+            .paymentMethodId("pm-1")
+            .quoteId("quote-1")
+            .quoteToken("token-1")
+            .idempotencyKey("wf-explicit:order:create")
+            .build();
 
         server.expect(requestTo("/api/orders"))
             .andExpect(method(HttpMethod.POST))

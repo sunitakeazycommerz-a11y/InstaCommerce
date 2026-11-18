@@ -71,25 +71,23 @@ class OrderControllerTest {
 
         when(orderService.createOrder(any(CreateOrderCommand.class))).thenReturn(expectedOrderId);
 
-        OrderCreateRequest request = new OrderCreateRequest(
-            userId.toString(),
-            "store_1",
-            List.of(new CartItem(productId, 2, 500L)),
-            1000L,
-            0L,
-            50L,
-            1050L,
-            "INR",
-            "SAVE10",
-            UUID.randomUUID().toString(),
-            UUID.randomUUID().toString(),
-            "addr_1",
-            "123 Main St",
-            "pm_card",
-            null,
-            null,
-            "idemp_key_1"
-        );
+        OrderCreateRequest request = OrderCreateRequest.builder()
+            .userId(userId.toString())
+            .storeId("store_1")
+            .items(List.of(new CartItem(productId, 2, 500L)))
+            .subtotalCents(1000L)
+            .discountCents(0L)
+            .deliveryFeeCents(50L)
+            .totalCents(1050L)
+            .currency("INR")
+            .couponCode("SAVE10")
+            .reservationId(UUID.randomUUID().toString())
+            .paymentId(UUID.randomUUID().toString())
+            .deliveryAddressId("addr_1")
+            .deliveryAddress("123 Main St")
+            .paymentMethodId("pm_card")
+            .idempotencyKey("idemp_key_1")
+            .build();
 
         OrderCreationResult result = controller.createOrder(request);
 
@@ -150,25 +148,20 @@ class OrderControllerTest {
         UUID productId = UUID.randomUUID();
         when(orderService.createOrder(any(CreateOrderCommand.class))).thenReturn(UUID.randomUUID().toString());
 
-        OrderCreateRequest request = new OrderCreateRequest(
-            userId.toString(),
-            "store_1",
-            List.of(new CartItem(productId, 1, 500L)),
-            500L,
-            0L,
-            0L,
-            500L,
-            "INR",
-            null,
-            null,
-            null,
-            "addr_1",
-            "123 Main St",
-            "pm_card",
-            null,
-            null,
-            "   "
-        );
+        OrderCreateRequest request = OrderCreateRequest.builder()
+            .userId(userId.toString())
+            .storeId("store_1")
+            .items(List.of(new CartItem(productId, 1, 500L)))
+            .subtotalCents(500L)
+            .discountCents(0L)
+            .deliveryFeeCents(0L)
+            .totalCents(500L)
+            .currency("INR")
+            .deliveryAddressId("addr_1")
+            .deliveryAddress("123 Main St")
+            .paymentMethodId("pm_card")
+            .idempotencyKey("   ")
+            .build();
 
         controller.createOrder(request);
 
@@ -192,25 +185,20 @@ class OrderControllerTest {
             callerId.toString(), null, List.of(new SimpleGrantedAuthority("ROLE_USER")));
         SecurityContextHolder.getContext().setAuthentication(auth);
 
-        OrderCreateRequest request = new OrderCreateRequest(
-            victimUserId.toString(),
-            "store_1",
-            List.of(new CartItem(UUID.randomUUID(), 1, 500L)),
-            500L,
-            0L,
-            0L,
-            500L,
-            "INR",
-            null,
-            null,
-            null,
-            "addr_1",
-            "123 Main St",
-            "pm_card",
-            null,
-            null,
-            "idem-key"
-        );
+        OrderCreateRequest request = OrderCreateRequest.builder()
+            .userId(victimUserId.toString())
+            .storeId("store_1")
+            .items(List.of(new CartItem(UUID.randomUUID(), 1, 500L)))
+            .subtotalCents(500L)
+            .discountCents(0L)
+            .deliveryFeeCents(0L)
+            .totalCents(500L)
+            .currency("INR")
+            .deliveryAddressId("addr_1")
+            .deliveryAddress("123 Main St")
+            .paymentMethodId("pm_card")
+            .idempotencyKey("idem-key")
+            .build();
 
         mockMvc.perform(post("/api/v1/orders")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -384,27 +372,24 @@ class OrderControllerTest {
             return o;
         });
 
-        OrderCreateRequest request = new OrderCreateRequest(
-            userId.toString(),
-            "store_1",
-            List.of(new CartItem(productId, 1, 500L)),
-            500L,
-            0L,
-            0L,
-            500L,
-            "INR",
-            null,
-            UUID.randomUUID().toString(),
-            UUID.randomUUID().toString(),
-            "addr_1",
-            "123 Main St",
-            "pm_card",
-            null,
-            null,
-            "idem-coords-1",
-            dropoffLat,
-            dropoffLng
-        );
+        OrderCreateRequest request = OrderCreateRequest.builder()
+            .userId(userId.toString())
+            .storeId("store_1")
+            .items(List.of(new CartItem(productId, 1, 500L)))
+            .subtotalCents(500L)
+            .discountCents(0L)
+            .deliveryFeeCents(0L)
+            .totalCents(500L)
+            .currency("INR")
+            .reservationId(UUID.randomUUID().toString())
+            .paymentId(UUID.randomUUID().toString())
+            .deliveryAddressId("addr_1")
+            .deliveryAddress("123 Main St")
+            .paymentMethodId("pm_card")
+            .idempotencyKey("idem-coords-1")
+            .dropoffLat(dropoffLat)
+            .dropoffLng(dropoffLng)
+            .build();
 
         OrderCreationResult created = controller.createOrder(request);
         assertThat(created.orderId()).isEqualTo(orderId.toString());
@@ -425,16 +410,39 @@ class OrderControllerTest {
             .containsEntry("dropoffLng", dropoffLng);
 
         Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
-        OrderCreateRequest partialRequest = new OrderCreateRequest(
-            userId.toString(), "store_1", List.of(new CartItem(productId, 1, 500L)),
-            500L, 0L, 0L, 500L, "INR", null, null, null, "addr_1", "123 Main St",
-            "pm_card", null, null, "idem-partial", dropoffLat, null);
+        OrderCreateRequest partialRequest = OrderCreateRequest.builder()
+            .userId(userId.toString())
+            .storeId("store_1")
+            .items(List.of(new CartItem(productId, 1, 500L)))
+            .subtotalCents(500L)
+            .discountCents(0L)
+            .deliveryFeeCents(0L)
+            .totalCents(500L)
+            .currency("INR")
+            .deliveryAddressId("addr_1")
+            .deliveryAddress("123 Main St")
+            .paymentMethodId("pm_card")
+            .idempotencyKey("idem-partial")
+            .dropoffLat(dropoffLat)
+            .build();
         assertThat(validator.validate(partialRequest)).isNotEmpty();
 
-        OrderCreateRequest outOfBoundsRequest = new OrderCreateRequest(
-            userId.toString(), "store_1", List.of(new CartItem(productId, 1, 500L)),
-            500L, 0L, 0L, 500L, "INR", null, null, null, "addr_1", "123 Main St",
-            "pm_card", null, null, "idem-oob", new BigDecimal("95.0"), new BigDecimal("77.6245"));
+        OrderCreateRequest outOfBoundsRequest = OrderCreateRequest.builder()
+            .userId(userId.toString())
+            .storeId("store_1")
+            .items(List.of(new CartItem(productId, 1, 500L)))
+            .subtotalCents(500L)
+            .discountCents(0L)
+            .deliveryFeeCents(0L)
+            .totalCents(500L)
+            .currency("INR")
+            .deliveryAddressId("addr_1")
+            .deliveryAddress("123 Main St")
+            .paymentMethodId("pm_card")
+            .idempotencyKey("idem-oob")
+            .dropoffLat(new BigDecimal("95.0"))
+            .dropoffLng(new BigDecimal("77.6245"))
+            .build();
         assertThat(validator.validate(outOfBoundsRequest)).isNotEmpty();
     }
 }

@@ -12,12 +12,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
 import com.instacommerce.warehouse.config.JacksonConfig;
 import com.instacommerce.warehouse.config.SecurityConfig;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.exception.GlobalExceptionHandler;
 import com.instacommerce.warehouse.exception.TraceIdProvider;
-import com.instacommerce.warehouse.security.InternalServiceAuthFilter;
 import com.instacommerce.warehouse.security.JwtAuthenticationFilter;
 import com.instacommerce.warehouse.security.JwtService;
 import com.instacommerce.warehouse.security.RestAccessDeniedHandler;
@@ -48,7 +48,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @WebMvcTest(controllers = {AdminStoreController.class, StoreController.class})
 @Import({
     SecurityConfig.class,
-    InternalServiceAuthFilter.class,
+    InternalServiceSecurityConfiguration.class,
     JwtAuthenticationFilter.class,
     RestAuthenticationEntryPoint.class,
     RestAccessDeniedHandler.class,

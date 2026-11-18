@@ -205,7 +205,9 @@ public class PickService {
         }
 
         int missingQtyDelta = calculateMissingQtyDelta(previousStatus, previousPickedQty, item);
-        if (missingQtyDelta > 0 || item.getStatus() == PickItemStatus.SUBSTITUTED) {
+        boolean transitionedToSubstituted = item.getStatus() == PickItemStatus.SUBSTITUTED
+            && previousStatus != PickItemStatus.SUBSTITUTED;
+        if (missingQtyDelta > 0 || transitionedToSubstituted) {
             substitutionService.handleMissingItem(task, item, missingQtyDelta);
         }
 

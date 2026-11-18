@@ -347,7 +347,7 @@ public class AuthService {
     @Transactional
     public void logout(String ipAddress, String userAgent, String traceId) {
         UUID userId = userService.getCurrentUserId();
-        int revoked = refreshTokenRepository.revokeAllActiveByUserId(userId);
+        int revoked = refreshTokenRepository.revokeAllByUserId(userId);
         authMetrics.incrementRevoke();
         auditService.logAction(userId,
             "USER_LOGOUT",

@@ -1,14 +1,15 @@
-package com.instacommerce.identity.config;
+package com.instacommerce.platform.security;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
 
-@Component
+/**
+ * Shared configuration properties for internal service-to-service authentication.
+ */
 @ConfigurationProperties(prefix = "internal.service")
 public class InternalServiceProperties {
-    private String name = "identity-service";
+    private String name = "";
     private String token = "";
     private Map<String, String> allowedCallers = new LinkedHashMap<>();
     private boolean strictPerServiceTokens;
@@ -18,7 +19,7 @@ public class InternalServiceProperties {
     }
 
     public void setName(String name) {
-        this.name = name;
+        this.name = name != null ? name : "";
     }
 
     public String getToken() {
@@ -26,7 +27,7 @@ public class InternalServiceProperties {
     }
 
     public void setToken(String token) {
-        this.token = token;
+        this.token = token != null ? token : "";
     }
 
     public Map<String, String> getAllowedCallers() {

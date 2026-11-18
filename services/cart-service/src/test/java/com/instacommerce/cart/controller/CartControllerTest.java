@@ -23,12 +23,12 @@ import com.instacommerce.cart.dto.response.CartItemResponse;
 import com.instacommerce.cart.dto.response.CartResponse;
 import com.instacommerce.cart.exception.GlobalExceptionHandler;
 import com.instacommerce.cart.exception.TraceIdProvider;
-import com.instacommerce.cart.security.InternalServiceAuthFilter;
 import com.instacommerce.cart.security.JwtAuthenticationFilter;
 import com.instacommerce.cart.security.JwtService;
 import com.instacommerce.cart.security.RestAccessDeniedHandler;
 import com.instacommerce.cart.security.RestAuthenticationEntryPoint;
 import com.instacommerce.cart.service.CartService;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
 import io.jsonwebtoken.JwtException;
 import java.time.Instant;
 import java.util.List;
@@ -45,7 +45,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @Import({
     SecurityConfig.class,
     JwtAuthenticationFilter.class,
-    InternalServiceAuthFilter.class,
+    InternalServiceSecurityConfiguration.class,
     RestAuthenticationEntryPoint.class,
     RestAccessDeniedHandler.class,
     GlobalExceptionHandler.class,

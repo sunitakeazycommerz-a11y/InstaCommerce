@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.fulfillment.client.InventoryClient;
@@ -20,6 +21,9 @@ import com.instacommerce.fulfillment.domain.model.PickTask;
 import com.instacommerce.fulfillment.domain.model.PickTaskStatus;
 import com.instacommerce.fulfillment.domain.model.Rider;
 import com.instacommerce.fulfillment.dto.request.MarkItemPickedRequest;
+import com.instacommerce.fulfillment.event.ItemSubstitutedEvent;
+import com.instacommerce.fulfillment.event.MissingItemEvent;
+import com.instacommerce.fulfillment.event.MissingItemEventListener;
 import com.instacommerce.fulfillment.repository.DeliveryRepository;
 import com.instacommerce.fulfillment.repository.PickBatchRepository;
 import com.instacommerce.fulfillment.repository.PickItemRepository;
@@ -84,7 +88,7 @@ class FulfillmentRemediationTest {
     private ArgumentCaptor<Map<String, Object>> payloadCaptor;
 
     @Test
-    @DisplayName("SubstitutionService adjusts original and replacement SKUs and emits ItemSubstituted")
+    @DisplayName("SubstitutionService defers inventory HTTP calls to AFTER_COMMIT and preserves substituteProductId on shortfall")
     void substitutionAdjustsSkusAndEmitsItemSubstituted() {
         UUID orderId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID();
@@ -110,15 +114,80 @@ class FulfillmentRemediationTest {
             inventoryClient, paymentClient, outboxService, eventPublisher);
         service.handleMissingItem(task, item, 1);
 
-        verify(inventoryClient).releaseStock(
-            eq(originalProductId), eq(storeId), eq(2), eq("FULFILLMENT_SUBSTITUTED_ORIGINAL_RELEASE"), any());
-        verify(inventoryClient).releaseStock(
-            eq(replacementProductId), eq(storeId), eq(-2), eq("FULFILLMENT_SUBSTITUTION_REPLACEMENT"), any());
+        verifyNoInteractions(inventoryClient, paymentClient);
         verify(outboxService).publish(
             eq("Fulfillment"), eq(orderId.toString()), eq("ItemSubstituted"), any());
         verify(outboxService).publish(
             eq("Fulfillment"), eq(orderId.toString()), eq("OrderModified"), payloadCaptor.capture());
         assertThat(payloadCaptor.getValue()).containsEntry("missingQty", 1);
+
+        ArgumentCaptor<Object> eventsCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher, Mockito.times(2)).publishEvent(eventsCaptor.capture());
+
+        ItemSubstitutedEvent substitutedEvent = eventsCaptor.getAllValues().stream()
+            .filter(ItemSubstitutedEvent.class::isInstance)
+            .map(ItemSubstitutedEvent.class::cast)
+            .findFirst()
+            .orElseThrow();
+        MissingItemEvent missingEvent = eventsCaptor.getAllValues().stream()
+            .filter(MissingItemEvent.class::isInstance)
+            .map(MissingItemEvent.class::cast)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(missingEvent.substituteProductId()).isEqualTo(replacementProductId);
+        assertThat(missingEvent.substitutedQty()).isEqualTo(2);
+
+        MissingItemEventListener listener = new MissingItemEventListener(service);
+        listener.handleItemSubstituted(substitutedEvent);
+        listener.handleMissingItem(missingEvent);
+
+        verify(inventoryClient).releaseStock(
+            eq(originalProductId), eq(storeId), eq(2), eq("FULFILLMENT_SUBSTITUTED_ORIGINAL_RELEASE"), any());
+        verify(inventoryClient).reserveOrDeductStock(
+            eq(replacementProductId), eq(storeId), eq(2), eq("FULFILLMENT_SUBSTITUTION_REPLACEMENT"), any());
+        verify(paymentClient).refund(eq(paymentId), eq(1000L), eq("Item missing"), any());
+    }
+
+    @Test
+    @DisplayName("SubstitutionService supports $0 orders with null paymentId without throwing")
+    void zeroDollarOrderSkipsRefundAndStillReleasesMissingStock() {
+        UUID orderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+
+        PickTask task = new PickTask();
+        task.setId(UUID.randomUUID());
+        task.setOrderId(orderId);
+        task.setStoreId(storeId);
+        task.setPaymentId(null);
+
+        PickItem item = new PickItem();
+        item.setProductId(productId);
+        item.setQuantity(2);
+        item.setPickedQty(0);
+        item.setLineTotalCents(0L);
+        item.setStatus(PickItemStatus.MISSING);
+
+        SubstitutionService service = new SubstitutionService(
+            inventoryClient, paymentClient, outboxService, eventPublisher);
+        service.handleMissingItem(task, item, 2);
+
+        verify(outboxService).publish(
+            eq("Fulfillment"), eq(orderId.toString()), eq("OrderModified"), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+            .containsEntry("missingQty", 2)
+            .containsEntry("refundCents", 0L);
+
+        ArgumentCaptor<MissingItemEvent> eventCaptor = ArgumentCaptor.forClass(MissingItemEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+
+        MissingItemEventListener listener = new MissingItemEventListener(service);
+        listener.handleMissingItem(eventCaptor.getValue());
+
+        verify(inventoryClient).reserveOrDeductStock(
+            eq(productId), eq(storeId), eq(2), eq("FULFILLMENT_MISSING"), any());
+        verifyNoInteractions(paymentClient);
     }
 
     @Test

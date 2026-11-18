@@ -17,14 +17,17 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
@@ -43,6 +46,7 @@ public class RiderAssignmentService {
     private final RiderFleetProperties properties;
     private final DispatchOptimizerClient dispatchOptimizerClient;
     private final RiderEarningsService riderEarningsService;
+    private final StringRedisTemplate redisTemplate;
 
     public RiderAssignmentService(RiderRepository riderRepository,
                                    RiderAvailabilityRepository availabilityRepository,
@@ -51,7 +55,18 @@ public class RiderAssignmentService {
                                    RiderFleetProperties properties,
                                    DispatchOptimizerClient dispatchOptimizerClient) {
         this(riderRepository, availabilityRepository, assignmentRepository, outboxService,
-            properties, dispatchOptimizerClient, null);
+            properties, dispatchOptimizerClient, null, (StringRedisTemplate) null);
+    }
+
+    public RiderAssignmentService(RiderRepository riderRepository,
+                                   RiderAvailabilityRepository availabilityRepository,
+                                   RiderAssignmentRepository assignmentRepository,
+                                   OutboxService outboxService,
+                                   RiderFleetProperties properties,
+                                   DispatchOptimizerClient dispatchOptimizerClient,
+                                   RiderEarningsService riderEarningsService) {
+        this(riderRepository, availabilityRepository, assignmentRepository, outboxService,
+            properties, dispatchOptimizerClient, riderEarningsService, (StringRedisTemplate) null);
     }
 
     @Autowired
@@ -61,7 +76,21 @@ public class RiderAssignmentService {
                                    OutboxService outboxService,
                                    RiderFleetProperties properties,
                                    DispatchOptimizerClient dispatchOptimizerClient,
-                                   RiderEarningsService riderEarningsService) {
+                                   RiderEarningsService riderEarningsService,
+                                   ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+        this(riderRepository, availabilityRepository, assignmentRepository, outboxService,
+            properties, dispatchOptimizerClient, riderEarningsService,
+            redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null);
+    }
+
+    public RiderAssignmentService(RiderRepository riderRepository,
+                                   RiderAvailabilityRepository availabilityRepository,
+                                   RiderAssignmentRepository assignmentRepository,
+                                   OutboxService outboxService,
+                                   RiderFleetProperties properties,
+                                   DispatchOptimizerClient dispatchOptimizerClient,
+                                   RiderEarningsService riderEarningsService,
+                                   StringRedisTemplate redisTemplate) {
         this.riderRepository = riderRepository;
         this.availabilityRepository = availabilityRepository;
         this.assignmentRepository = assignmentRepository;
@@ -69,6 +98,7 @@ public class RiderAssignmentService {
         this.properties = properties;
         this.dispatchOptimizerClient = dispatchOptimizerClient;
         this.riderEarningsService = riderEarningsService;
+        this.redisTemplate = redisTemplate;
     }
 
     /**
@@ -197,32 +227,8 @@ public class RiderAssignmentService {
         List<DispatchOptimizerClient.RiderState> riderStates = availableRiders.stream()
             .filter(ra -> riderMap.containsKey(ra.getRiderId()))
             .filter(ra -> riderMap.get(ra.getRiderId()).getStatus() == RiderStatus.ACTIVE)
-            .filter(ra -> ra.getCurrentLat() != null && ra.getCurrentLng() != null)
-            .map(ra -> {
-                Rider r = riderMap.get(ra.getRiderId());
-                double lat = ra.getCurrentLat().doubleValue();
-                double lng = ra.getCurrentLng().doubleValue();
-                String vehicle = r.getVehicleType() != null ? r.getVehicleType().name().toLowerCase() : "scooter";
-                double avgRating = r.getRatingAvg() != null ? r.getRatingAvg().doubleValue() : 5.0;
-                double defaultSpeedKmh = switch (vehicle) {
-                    case "bicycle" -> 15.0;
-                    case "car" -> 28.0;
-                    default -> 22.0;
-                };
-                return new DispatchOptimizerClient.RiderState(
-                    ra.getRiderId().toString(),
-                    new DispatchOptimizerClient.Position(lat, lng),
-                    0,
-                    vehicle,
-                    true,
-                    r.getTotalDeliveries(),
-                    avgRating,
-                    0,
-                    defaultSpeedKmh,
-                    100.0,
-                    storeId != null ? storeId.toString() : null
-                );
-            })
+            .map(ra -> buildOptimizerRiderState(ra, riderMap.get(ra.getRiderId()), storeId))
+            .filter(Objects::nonNull)
             .toList();
 
         if (riderStates.isEmpty()) {
@@ -255,6 +261,56 @@ public class RiderAssignmentService {
             });
     }
 
+    private DispatchOptimizerClient.RiderState buildOptimizerRiderState(
+            RiderAvailability ra, Rider r, UUID storeId) {
+        double[] coords = resolveRiderCoordinates(ra);
+        if (coords == null) {
+            return null;
+        }
+        String vehicle = r.getVehicleType() != null ? r.getVehicleType().name().toLowerCase() : "scooter";
+        double avgRating = r.getRatingAvg() != null ? r.getRatingAvg().doubleValue() : 5.0;
+        double defaultSpeedKmh = switch (vehicle) {
+            case "bicycle" -> 15.0;
+            case "car" -> 28.0;
+            default -> 22.0;
+        };
+        return new DispatchOptimizerClient.RiderState(
+            ra.getRiderId().toString(),
+            new DispatchOptimizerClient.Position(coords[0], coords[1]),
+            0,
+            vehicle,
+            true,
+            r.getTotalDeliveries(),
+            avgRating,
+            0,
+            defaultSpeedKmh,
+            100.0,
+            storeId != null ? storeId.toString() : null
+        );
+    }
+
+    private double[] resolveRiderCoordinates(RiderAvailability ra) {
+        if (redisTemplate != null) {
+            try {
+                Object rawLat = redisTemplate.opsForHash().get("rider:location:" + ra.getRiderId(), "lat");
+                Object rawLng = redisTemplate.opsForHash().get("rider:location:" + ra.getRiderId(), "lng");
+                if (rawLat != null && rawLng != null) {
+                    return new double[]{
+                        Double.parseDouble(rawLat.toString()),
+                        Double.parseDouble(rawLng.toString())
+                    };
+                }
+            } catch (Exception ex) {
+                logger.debug("Redis location lookup fallback to DB for rider={}: {}",
+                    ra.getRiderId(), ex.getMessage());
+            }
+        }
+        if (ra.getCurrentLat() != null && ra.getCurrentLng() != null) {
+            return new double[]{ra.getCurrentLat().doubleValue(), ra.getCurrentLng().doubleValue()};
+        }
+        return null;
+    }
+
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
@@ -262,6 +318,10 @@ public class RiderAssignmentService {
         Optional<RiderAssignment> assignmentOpt = assignmentRepository.findByOrderId(orderId);
         if (assignmentOpt.isEmpty()) {
             logger.info("No rider assignment found to complete for order={}", orderId);
+            return;
+        }
+        if (assignmentRepository.markCompletedIfPending(orderId, Instant.now()) == 0) {
+            logger.info("Rider assignment for order={} already completed; skipping duplicate completion", orderId);
             return;
         }
         RiderAssignment assignment = assignmentOpt.get();

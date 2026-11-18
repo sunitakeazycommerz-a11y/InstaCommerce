@@ -1,14 +1,16 @@
 package com.instacommerce.inventory.config;
 
-import com.instacommerce.inventory.security.InternalServiceAuthFilter;
 import com.instacommerce.inventory.security.JwtAuthenticationFilter;
 import com.instacommerce.inventory.security.RestAccessDeniedHandler;
 import com.instacommerce.inventory.security.RestAuthenticationEntryPoint;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
+import com.instacommerce.platform.security.SharedInternalServiceAuthFilter;
 import java.util.Arrays;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -23,6 +25,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@Import(InternalServiceSecurityConfiguration.class)
 public class SecurityConfig {
 
     @Value("${inventory.cors.allowed-origins:http://localhost:3000,https://*.instacommerce.dev}")
@@ -44,7 +47,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
-                                                   InternalServiceAuthFilter internalServiceAuthFilter,
+                                                   SharedInternalServiceAuthFilter internalServiceAuthFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler,
                                                    CorsConfigurationSource corsConfigurationSource) throws Exception {

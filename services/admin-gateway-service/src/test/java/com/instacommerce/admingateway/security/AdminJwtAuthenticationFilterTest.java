@@ -20,15 +20,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.quality.Strictness;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 @ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.LENIENT)
 class AdminJwtAuthenticationFilterTest {
     @Mock
     private JwtService jwtService;
@@ -55,7 +52,6 @@ class AdminJwtAuthenticationFilterTest {
 
     @Test
     void shouldAllowAccessWithValidJwt() throws Exception {
-        when(request.getRequestURI()).thenReturn("/admin/v1/dashboard");
         when(request.getHeader("Authorization")).thenReturn("Bearer validToken");
         when(jwtService.validateAccessToken("validToken")).thenReturn(jws);
         when(jws.getPayload()).thenReturn(claims);
@@ -72,7 +68,6 @@ class AdminJwtAuthenticationFilterTest {
 
     @Test
     void shouldRejectExpiredJwt() throws Exception {
-        when(request.getRequestURI()).thenReturn("/admin/v1/dashboard");
         when(request.getHeader("Authorization")).thenReturn("Bearer expiredToken");
         when(jwtService.validateAccessToken("expiredToken"))
             .thenThrow(new JwtException("Token expired"));
@@ -88,7 +83,6 @@ class AdminJwtAuthenticationFilterTest {
 
     @Test
     void shouldRejectWrongAudience() throws Exception {
-        when(request.getRequestURI()).thenReturn("/admin/v1/dashboard");
         when(request.getHeader("Authorization")).thenReturn("Bearer wrongAudToken");
         when(jwtService.validateAccessToken("wrongAudToken"))
             .thenThrow(new JwtException("Token audience does not match"));
@@ -103,7 +97,6 @@ class AdminJwtAuthenticationFilterTest {
 
     @Test
     void shouldRejectInvalidSignature() throws Exception {
-        when(request.getRequestURI()).thenReturn("/admin/v1/dashboard");
         when(request.getHeader("Authorization")).thenReturn("Bearer invalidSignature");
         when(jwtService.validateAccessToken("invalidSignature"))
             .thenThrow(new JwtException("Invalid signature"));
@@ -120,6 +113,7 @@ class AdminJwtAuthenticationFilterTest {
     void shouldAllowUnauthenticatedAccessToHealth() throws Exception {
         when(request.getRequestURI()).thenReturn("/admin/health");
 
+        assertThat(filter.shouldNotFilter(request)).isTrue();
         filter.doFilterInternal(request, response, filterChain);
 
         verify(filterChain).doFilter(request, response);
@@ -130,6 +124,7 @@ class AdminJwtAuthenticationFilterTest {
     void shouldAllowUnauthenticatedAccessToMetrics() throws Exception {
         when(request.getRequestURI()).thenReturn("/admin/metrics");
 
+        assertThat(filter.shouldNotFilter(request)).isTrue();
         filter.doFilterInternal(request, response, filterChain);
 
         verify(filterChain).doFilter(request, response);
@@ -138,7 +133,6 @@ class AdminJwtAuthenticationFilterTest {
 
     @Test
     void shouldAllowMissingBearerToken() throws Exception {
-        when(request.getRequestURI()).thenReturn("/admin/v1/dashboard");
         when(request.getHeader("Authorization")).thenReturn(null);
 
         filter.doFilterInternal(request, response, filterChain);
@@ -168,11 +162,9 @@ class AdminJwtAuthenticationFilterTest {
 
     @Test
     void shouldRejectApiAudienceTokenWithoutAdminRole() throws Exception {
-        when(request.getRequestURI()).thenReturn("/admin/v1/dashboard");
         when(request.getHeader("Authorization")).thenReturn("Bearer customerToken");
         when(jwtService.validateAccessToken("customerToken")).thenReturn(jws);
         when(jws.getPayload()).thenReturn(claims);
-        when(claims.getSubject()).thenReturn("cust-1");
         when(claims.getAudience()).thenReturn(Set.of("instacommerce-api"));
         doReturn(List.of(new SimpleGrantedAuthority("ROLE_CUSTOMER")))
             .when(jwtService).extractAuthorities(claims);

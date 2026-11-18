@@ -72,6 +72,7 @@ class RiderAssignmentServiceTest {
         availability.setAvailable(false);
 
         when(assignmentRepository.findByOrderId(orderId)).thenReturn(Optional.of(assignment));
+        when(assignmentRepository.markCompletedIfPending(eq(orderId), any())).thenReturn(1);
         when(riderRepository.findById(riderId)).thenReturn(Optional.of(rider));
         when(availabilityRepository.findByRiderId(riderId)).thenReturn(Optional.of(availability));
 
@@ -82,6 +83,27 @@ class RiderAssignmentServiceTest {
         verify(riderRepository).save(rider);
         verify(availabilityRepository).save(availability);
         verify(outboxService).publish(eq("Rider"), eq(riderId.toString()), eq("DeliveryCompleted"), any());
+    }
+
+    @Test
+    @DisplayName("completeDelivery skips duplicate redelivery atomically when already completed")
+    void completeDeliveryDuplicateDeliveryIsIdempotent() {
+        UUID orderId = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        RiderAssignment assignment = new RiderAssignment();
+        assignment.setOrderId(orderId);
+        assignment.setRiderId(riderId);
+        assignment.setStoreId(UUID.randomUUID());
+
+        when(assignmentRepository.findByOrderId(orderId)).thenReturn(Optional.of(assignment));
+        when(assignmentRepository.markCompletedIfPending(eq(orderId), any())).thenReturn(0);
+
+        service.completeDelivery(orderId);
+
+        verify(riderRepository, never()).findById(any());
+        verify(riderRepository, never()).save(any());
+        verify(availabilityRepository, never()).save(any());
+        verify(outboxService, never()).publish(any(), any(), any(), any());
     }
 
     @Test

@@ -7,13 +7,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.instacommerce.identity.config.IdentityProperties;
-import com.instacommerce.identity.config.InternalServiceProperties;
 import com.instacommerce.identity.config.JacksonConfig;
 import com.instacommerce.identity.dto.response.NotificationPreferenceResponse;
 import com.instacommerce.identity.dto.response.UserResponse;
 import com.instacommerce.identity.exception.GlobalExceptionHandler;
 import com.instacommerce.identity.exception.TraceIdProvider;
-import com.instacommerce.identity.security.InternalServiceAuthFilter;
 import com.instacommerce.identity.security.JwtAuthenticationFilter;
 import com.instacommerce.identity.security.JwtService;
 import com.instacommerce.identity.security.RestAccessDeniedHandler;
@@ -21,6 +19,7 @@ import com.instacommerce.identity.security.RestAuthenticationEntryPoint;
 import com.instacommerce.identity.security.SecurityConfig;
 import com.instacommerce.identity.service.NotificationPreferenceService;
 import com.instacommerce.identity.service.UserService;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -35,11 +34,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(controllers = AdminController.class)
-@EnableConfigurationProperties({IdentityProperties.class, InternalServiceProperties.class})
+@EnableConfigurationProperties({IdentityProperties.class})
 @Import({
     SecurityConfig.class,
     JacksonConfig.class,
-    InternalServiceAuthFilter.class,
+    InternalServiceSecurityConfiguration.class,
     JwtAuthenticationFilter.class,
     RestAuthenticationEntryPoint.class,
     RestAccessDeniedHandler.class,

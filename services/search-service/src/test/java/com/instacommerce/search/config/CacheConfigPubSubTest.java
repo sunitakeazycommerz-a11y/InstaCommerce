@@ -11,7 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.instacommerce.search.config.CacheConfig.TwoLevelCacheManager;
+import com.instacommerce.platform.cache.TwoLevelCacheManager;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;

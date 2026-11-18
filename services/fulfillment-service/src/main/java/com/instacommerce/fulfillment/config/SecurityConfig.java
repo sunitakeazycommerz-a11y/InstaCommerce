@@ -1,14 +1,16 @@
 package com.instacommerce.fulfillment.config;
 
-import com.instacommerce.fulfillment.security.InternalServiceAuthFilter;
 import com.instacommerce.fulfillment.security.JwtAuthenticationFilter;
 import com.instacommerce.fulfillment.security.RestAccessDeniedHandler;
 import com.instacommerce.fulfillment.security.RestAuthenticationEntryPoint;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
+import com.instacommerce.platform.security.SharedInternalServiceAuthFilter;
 import java.util.Arrays;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -23,6 +25,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@Import(InternalServiceSecurityConfiguration.class)
 public class SecurityConfig {
 
     @Value("${fulfillment.cors.allowed-origins:http://localhost:3000,https://*.instacommerce.dev}")
@@ -31,7 +34,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
-                                                   InternalServiceAuthFilter internalServiceAuthFilter,
+                                                   SharedInternalServiceAuthFilter internalServiceAuthFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler) throws Exception {
         http.csrf(csrf -> csrf.disable())

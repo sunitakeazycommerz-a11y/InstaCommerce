@@ -70,6 +70,9 @@ public class AuditEvent implements Persistable<UUID> {
     @Column(name = "previous_hash", length = 64, updatable = false)
     private String previousHash;
 
+    @Column(name = "hash_version", nullable = false, updatable = false)
+    private int hashVersion = 2;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -92,6 +95,7 @@ public class AuditEvent implements Persistable<UUID> {
         this.sequenceNumber = builder.sequenceNumber;
         this.eventHash = builder.eventHash;
         this.previousHash = builder.previousHash;
+        this.hashVersion = builder.hashVersion;
         Instant rawCreatedAt = builder.createdAt != null ? builder.createdAt : Instant.now();
         this.createdAt = rawCreatedAt.truncatedTo(ChronoUnit.MICROS);
     }
@@ -173,6 +177,7 @@ public class AuditEvent implements Persistable<UUID> {
     public Long getSequenceNumber() { return sequenceNumber; }
     public String getEventHash() { return eventHash; }
     public String getPreviousHash() { return previousHash; }
+    public int getHashVersion() { return hashVersion; }
 
     public Instant getCreatedAt() {
         return createdAt;

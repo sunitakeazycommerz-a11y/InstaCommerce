@@ -89,6 +89,11 @@ class RiderAvailabilityServiceTest {
         verify(kafkaTemplate).send(eq(TopicNames.RIDER_LOCATION_UPDATES), eq(riderId.toString()), payloadCaptor.capture());
         assertTrue(payloadCaptor.getValue().contains(riderId.toString()));
         assertTrue(payloadCaptor.getValue().contains("12.9715987"));
+
+        // Verify zero PostgreSQL reads or writes in the hot GPS ping path
+        verify(availabilityRepository, never()).findByRiderId(any());
+        verify(availabilityRepository, never()).save(any());
+        verify(riderRepository, never()).findById(any());
     }
 
     @Test

@@ -24,28 +24,69 @@ public class RestInventoryClient implements InventoryClient {
     public RestInventoryClient(FulfillmentProperties fulfillmentProperties,
                                @Value("${internal.service.name:${spring.application.name}}") String serviceName,
                                @Value("${internal.service.token}") String serviceToken) {
+        this(createRestTemplate(serviceName, serviceToken),
+             fulfillmentProperties.getClients().getInventory().getBaseUrl());
+    }
+
+    RestInventoryClient(RestTemplate restTemplate, String baseUrl) {
+        this.restTemplate = restTemplate;
+        this.baseUrl = baseUrl;
+    }
+
+    private static RestTemplate createRestTemplate(String serviceName, String serviceToken) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofSeconds(5));
         requestFactory.setReadTimeout(Duration.ofSeconds(10));
-        this.restTemplate = new RestTemplate(requestFactory);
-        this.restTemplate.getInterceptors().add(new InternalServiceAuthInterceptor(serviceName, serviceToken));
-        this.baseUrl = fulfillmentProperties.getClients().getInventory().getBaseUrl();
+        RestTemplate template = new RestTemplate(requestFactory);
+        template.getInterceptors().add(new InternalServiceAuthInterceptor(serviceName, serviceToken));
+        return template;
     }
 
     @Override
     @CircuitBreaker(name = "inventoryService", fallbackMethod = "releaseStockFallback")
     @Retry(name = "inventoryService")
     public void releaseStock(UUID productId, UUID storeId, int quantity, String reason, String referenceId) {
+        requirePositiveQuantity(quantity, "releaseStock");
         InventoryAdjustRequest request = new InventoryAdjustRequest(productId, storeId, quantity, reason, referenceId);
         restTemplate.postForObject(baseUrl + "/inventory/adjust", request, Object.class);
+    }
+
+    @Override
+    @CircuitBreaker(name = "inventoryService", fallbackMethod = "reserveOrDeductStockFallback")
+    @Retry(name = "inventoryService")
+    public void reserveOrDeductStock(UUID productId, UUID storeId, int quantity, String reason, String referenceId) {
+        requirePositiveQuantity(quantity, "reserveOrDeductStock");
+        InventoryAdjustRequest request = new InventoryAdjustRequest(productId, storeId, -quantity, reason, referenceId);
+        restTemplate.postForObject(baseUrl + "/inventory/adjust", request, Object.class);
+    }
+
+    private static void requirePositiveQuantity(int quantity, String operation) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException(operation + " requires positive quantity, got: " + quantity);
+        }
     }
 
     @SuppressWarnings("unused")
     private void releaseStockFallback(UUID productId, UUID storeId, int quantity, String reason,
                                       String referenceId, Exception e) {
+        if (e instanceof IllegalArgumentException iae) {
+            throw iae;
+        }
         logger.warn("Circuit breaker fallback for inventoryService releaseStock product={} store={} qty={}: {}",
                 productId, storeId, quantity, e.getMessage());
         throw new ServiceUnavailableException("inventoryService",
                 "Inventory service unavailable for releaseStock product=" + productId, e);
+    }
+
+    @SuppressWarnings("unused")
+    private void reserveOrDeductStockFallback(UUID productId, UUID storeId, int quantity, String reason,
+                                              String referenceId, Exception e) {
+        if (e instanceof IllegalArgumentException iae) {
+            throw iae;
+        }
+        logger.warn("Circuit breaker fallback for inventoryService reserveOrDeductStock product={} store={} qty={}: {}",
+                productId, storeId, quantity, e.getMessage());
+        throw new ServiceUnavailableException("inventoryService",
+                "Inventory service unavailable for reserveOrDeductStock product=" + productId, e);
     }
 }

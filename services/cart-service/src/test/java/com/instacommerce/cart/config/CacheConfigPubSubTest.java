@@ -9,13 +9,16 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.instacommerce.cart.config.CacheConfig.TwoLevelCacheManager;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.instacommerce.cart.dto.response.CartItemResponse;
 import com.instacommerce.cart.dto.response.CartResponse;
+import com.instacommerce.platform.cache.CacheJsonSerializer;
+import com.instacommerce.platform.cache.TwoLevelCacheManager;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -26,6 +29,7 @@ import org.springframework.data.redis.connection.MessageListener;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.test.util.ReflectionTestUtils;
 
 @DisplayName("Cart CacheConfig Pub/Sub and Serialization Tests")
@@ -43,8 +47,16 @@ class CacheConfigPubSubTest {
     void cacheInvalidationPubSubAndContainerRegistration() {
         StringRedisTemplate templateA = mock(StringRedisTemplate.class);
         StringRedisTemplate templateB = mock(StringRedisTemplate.class);
-        TwoLevelCacheManager managerA = new TwoLevelCacheManager(null, templateA);
-        TwoLevelCacheManager managerB = new TwoLevelCacheManager(null, templateB);
+        TwoLevelCacheManager managerA = new TwoLevelCacheManager(
+                null,
+                templateA,
+                CacheConfig.INVALIDATION_CHANNEL,
+                n -> Caffeine.newBuilder().maximumSize(50_000).expireAfterWrite(30, TimeUnit.SECONDS));
+        TwoLevelCacheManager managerB = new TwoLevelCacheManager(
+                null,
+                templateB,
+                CacheConfig.INVALIDATION_CHANNEL,
+                n -> Caffeine.newBuilder().maximumSize(50_000).expireAfterWrite(30, TimeUnit.SECONDS));
 
         CacheConfig config = new CacheConfig();
         RedisConnectionFactory factory = mock(RedisConnectionFactory.class);
@@ -75,9 +87,8 @@ class CacheConfigPubSubTest {
 
     @Test
     @DisplayName("Redis serializer handles CartResponse Instant fields cleanly via JavaTimeModule")
-    @SuppressWarnings({"deprecation", "removal"})
     void redisSerializerRoundTripsCartResponse() {
-        var serializer = CacheConfig.jsonRedisSerializer();
+        RedisSerializer<Object> serializer = CacheJsonSerializer.create();
         UUID cartId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();

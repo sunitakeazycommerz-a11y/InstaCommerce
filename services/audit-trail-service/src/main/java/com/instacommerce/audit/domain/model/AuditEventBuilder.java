@@ -21,6 +21,7 @@ public class AuditEventBuilder {
     Long sequenceNumber;
     String eventHash;
     String previousHash;
+    int hashVersion = 2;
     Instant createdAt;
 
     AuditEventBuilder() {
@@ -89,6 +90,7 @@ public class AuditEventBuilder {
     public AuditEventBuilder sequenceNumber(Long sequenceNumber) { this.sequenceNumber = sequenceNumber; return this; }
     public AuditEventBuilder eventHash(String eventHash) { this.eventHash = eventHash; return this; }
     public AuditEventBuilder previousHash(String previousHash) { this.previousHash = previousHash; return this; }
+    public AuditEventBuilder hashVersion(int hashVersion) { this.hashVersion = hashVersion; return this; }
 
     public AuditEventBuilder createdAt(Instant createdAt) {
         this.createdAt = createdAt;

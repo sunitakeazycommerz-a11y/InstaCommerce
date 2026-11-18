@@ -22,11 +22,11 @@ import com.instacommerce.routing.domain.model.WeatherCondition;
 import com.instacommerce.routing.dto.response.DeliveryResponse;
 import com.instacommerce.routing.exception.GlobalExceptionHandler;
 import com.instacommerce.routing.exception.TraceIdProvider;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
 import com.instacommerce.routing.repository.DeliveryRepository;
 import com.instacommerce.routing.repository.RoutingBarrierRepository;
 import com.instacommerce.routing.repository.TrafficCongestionFeedRepository;
 import com.instacommerce.routing.repository.WeatherConditionRepository;
-import com.instacommerce.routing.security.InternalServiceAuthFilter;
 import com.instacommerce.routing.security.JwtAuthenticationFilter;
 import com.instacommerce.routing.security.JwtService;
 import com.instacommerce.routing.security.RestAccessDeniedHandler;
@@ -51,7 +51,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @WebMvcTest(controllers = {AdminRoutingController.class, DeliveryController.class, TrackingController.class})
 @Import({
     SecurityConfig.class,
-    InternalServiceAuthFilter.class,
+    InternalServiceSecurityConfiguration.class,
     JwtAuthenticationFilter.class,
     RestAuthenticationEntryPoint.class,
     RestAccessDeniedHandler.class,

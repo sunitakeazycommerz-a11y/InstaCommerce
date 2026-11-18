@@ -19,7 +19,7 @@ import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
 @Component
-@Profile("prod")
+@Profile({"prod", "gcp"})
 public class SendGridEmailProvider implements NotificationProvider {
     private static final Logger logger = LoggerFactory.getLogger(SendGridEmailProvider.class);
     private static final String SENDGRID_URL = "https://api.sendgrid.com/v3/mail/send";

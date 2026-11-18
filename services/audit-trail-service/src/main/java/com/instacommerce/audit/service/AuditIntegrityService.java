@@ -60,7 +60,9 @@ public class AuditIntegrityService {
             }
 
             for (AuditEvent event : events) {
-                String recomputed = hashChainService.computeEventHash(event);
+                String recomputed = event.getHashVersion() <= 1
+                        ? hashChainService.computeLegacyV1EventHash(event)
+                        : hashChainService.computeEventHash(event);
                 boolean hashValid = recomputed.equals(event.getEventHash());
                 boolean anchorOk = eventsVerified > 0 || initialAnchorValid;
                 boolean linkValid = anchorOk && (expectedPreviousHash != null

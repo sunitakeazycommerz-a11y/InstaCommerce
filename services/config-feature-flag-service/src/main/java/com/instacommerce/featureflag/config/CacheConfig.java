@@ -10,8 +10,6 @@ import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
@@ -29,31 +27,18 @@ public class CacheConfig {
     @Value("${feature-flag.cache.redis-enabled:true}")
     private boolean redisEnabled;
 
-    @Value("${spring.data.redis.host:${spring.redis.host:localhost}}")
-    private String redisHost;
-
-    @Value("${spring.data.redis.port:${spring.redis.port:6379}}")
-    private int redisPort;
-
     @Bean
     public CacheManager cacheManager() {
         CaffeineCacheManager manager = new CaffeineCacheManager("flags", "flag-overrides", "flag-overrides-bulk");
-        // Default spec for flags and flag-overrides
         manager.setCaffeine(Caffeine.newBuilder()
                 .maximumSize(maxSize)
                 .expireAfterWrite(flagsTtlSeconds, TimeUnit.SECONDS));
-        // Register a shorter TTL for the bulk overrides cache
         manager.registerCustomCache("flag-overrides-bulk",
                 Caffeine.newBuilder()
                         .maximumSize(maxSize)
                         .expireAfterWrite(10, TimeUnit.SECONDS)
                         .build());
         return manager;
-    }
-
-    @Bean
-    public RedisConnectionFactory redisConnectionFactory() {
-        return new LettuceConnectionFactory(new RedisStandaloneConfiguration(redisHost, redisPort));
     }
 
     @Bean

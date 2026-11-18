@@ -12,10 +12,15 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
@@ -61,10 +66,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = header.substring(7);
         try {
             Jws<Claims> jws = jwtService.validateAccessToken(token);
+            List<GrantedAuthority> mergedAuthorities = mergeInternalAuthorities(
+                    SecurityContextHolder.getContext().getAuthentication(),
+                    jwtService.extractAuthorities(jws.getPayload()));
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                     jws.getPayload().getSubject(),
                     token,
-                    jwtService.extractAuthorities(jws.getPayload()));
+                    mergedAuthorities);
             authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
             SecurityContextHolder.getContext().setAuthentication(authentication);
             filterChain.doFilter(request, response);
@@ -82,5 +90,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 List.of());
             objectMapper.writeValue(response.getWriter(), error);
         }
+    }
+
+    private static List<GrantedAuthority> mergeInternalAuthorities(
+            Authentication existingAuth,
+            Collection<? extends GrantedAuthority> jwtAuthorities) {
+        if (existingAuth == null || !existingAuth.isAuthenticated()) {
+            return List.copyOf(jwtAuthorities);
+        }
+        boolean hasInternalServiceRole = existingAuth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_INTERNAL_SERVICE".equals(a.getAuthority()));
+        if (!hasInternalServiceRole) {
+            return List.copyOf(jwtAuthorities);
+        }
+        Set<GrantedAuthority> merged = new LinkedHashSet<>(jwtAuthorities);
+        for (GrantedAuthority authority : existingAuth.getAuthorities()) {
+            String role = authority.getAuthority();
+            if ("ROLE_INTERNAL_SERVICE".equals(role) || (role != null && role.startsWith("ROLE_SERVICE_"))) {
+                merged.add(authority);
+            }
+        }
+        return List.copyOf(merged);
     }
 }

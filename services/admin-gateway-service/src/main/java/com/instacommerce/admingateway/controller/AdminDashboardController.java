@@ -33,22 +33,16 @@ public class AdminDashboardController {
     private final DashboardAggregationService dashboardAggregationService;
     private final String featureFlagUrl;
     private final String reconciliationUrl;
-    private final String internalServiceName;
-    private final String internalServiceToken;
 
     public AdminDashboardController(
             RestTemplate restTemplate,
             DashboardAggregationService dashboardAggregationService,
             @Value("${admin-gateway.upstream.feature-flag-url:http://config-feature-flag-service:8098}") String featureFlagUrl,
-            @Value("${admin-gateway.upstream.reconciliation-url:http://reconciliation-engine:8107}") String reconciliationUrl,
-            @Value("${internal.service.name:${spring.application.name:admin-gateway-service}}") String internalServiceName,
-            @Value("${internal.service.token:}") String internalServiceToken) {
+            @Value("${admin-gateway.upstream.reconciliation-url:http://reconciliation-engine:8107}") String reconciliationUrl) {
         this.restTemplate = restTemplate;
         this.dashboardAggregationService = dashboardAggregationService;
         this.featureFlagUrl = normalizeBaseUrl(featureFlagUrl);
         this.reconciliationUrl = normalizeBaseUrl(reconciliationUrl);
-        this.internalServiceName = internalServiceName;
-        this.internalServiceToken = internalServiceToken;
     }
 
     @GetMapping("/dashboard")
@@ -67,9 +61,10 @@ public class AdminDashboardController {
             );
             var flags = response.getBody();
             return flags != null ? flags : Map.of("error", "No flags configured");
-        } catch (RestClientException ex) {
-            throw ex;
         } catch (Exception ex) {
+            if (ex instanceof RestClientException rce) {
+                throw rce;
+            }
             return Map.of("error", "Failed to fetch feature flags: " + ex.getMessage());
         }
     }
@@ -91,7 +86,7 @@ public class AdminDashboardController {
             downstreamPayload.put("expiresAt", Instant.now().plusSeconds(ttl).toString());
         }
 
-        HttpHeaders headers = buildInternalHeaders();
+        HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(downstreamPayload, headers);
@@ -125,20 +120,20 @@ public class AdminDashboardController {
             );
             var reconciliation = response.getBody();
             return reconciliation != null ? reconciliation : Map.of("items", new Object[0]);
-        } catch (RestClientException ex) {
-            throw ex;
         } catch (Exception ex) {
+            if (ex instanceof RestClientException rce) {
+                throw rce;
+            }
             return Map.of("error", "Failed to fetch pending reconciliation: " + ex.getMessage());
         }
     }
 
     @GetMapping("/reconciliation/summary")
     public Map<String, Object> reconciliationSummary() {
-        HttpEntity<Void> entity = new HttpEntity<>(buildInternalHeaders());
         ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
             reconciliationUrl + "/reconciliation/runs",
             HttpMethod.GET,
-            entity,
+            HttpEntity.EMPTY,
             MAP_TYPE
         );
         Map<String, Object> body = response.getBody();
@@ -148,17 +143,6 @@ public class AdminDashboardController {
         Map<String, Object> result = new LinkedHashMap<>(body);
         result.putIfAbsent("status", "ok");
         return result;
-    }
-
-    private HttpHeaders buildInternalHeaders() {
-        HttpHeaders headers = new HttpHeaders();
-        if (internalServiceName != null && !internalServiceName.isBlank()) {
-            headers.set("X-Internal-Service", internalServiceName);
-        }
-        if (internalServiceToken != null && !internalServiceToken.isBlank()) {
-            headers.set("X-Internal-Token", internalServiceToken);
-        }
-        return headers;
     }
 
     private static String normalizeBaseUrl(String baseUrl) {

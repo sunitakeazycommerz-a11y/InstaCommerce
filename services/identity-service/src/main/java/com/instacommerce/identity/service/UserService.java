@@ -131,7 +131,7 @@ public class UserService {
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
-        refreshTokenRepository.revokeAllActiveByUserId(user.getId());
+        refreshTokenRepository.revokeAllByUserId(user.getId());
         auditService.logAction(user.getId(),
             "PASSWORD_CHANGED",
             "User",

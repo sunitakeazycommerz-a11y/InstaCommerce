@@ -254,27 +254,27 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
 
             // Step 5: Create order
             currentStatus = "CREATING_ORDER";
-            OrderCreateRequest orderRequest = new OrderCreateRequest(
-                request.userId(),
-                storeId,
-                items,
-                pricingResult.subtotalCents(),
-                pricingResult.discountCents(),
-                pricingResult.deliveryFeeCents(),
-                pricingResult.totalCents(),
-                currency,
-                request.couponCode(),
-                reservationResult.reservationId(),
-                paymentResult != null ? paymentResult.paymentId() : null,
-                request.deliveryAddressId(),
-                request.paymentMethodId(),
-                pricingResult.quoteId(),
-                pricingResult.quoteToken(),
-                workflowId + ":order:create",
-                request.dropoffLat(),
-                request.dropoffLng(),
-                expectedOrderId
-            );
+            OrderCreateRequest orderRequest = OrderCreateRequest.builder()
+                .userId(request.userId())
+                .storeId(storeId)
+                .items(items)
+                .subtotalCents(pricingResult.subtotalCents())
+                .discountCents(pricingResult.discountCents())
+                .deliveryFeeCents(pricingResult.deliveryFeeCents())
+                .totalCents(pricingResult.totalCents())
+                .currency(currency)
+                .couponCode(request.couponCode())
+                .reservationId(reservationResult.reservationId())
+                .paymentId(paymentResult != null ? paymentResult.paymentId() : null)
+                .deliveryAddressId(request.deliveryAddressId())
+                .paymentMethodId(request.paymentMethodId())
+                .quoteId(pricingResult.quoteId())
+                .quoteToken(pricingResult.quoteToken())
+                .idempotencyKey(workflowId + ":order:create")
+                .dropoffLat(request.dropoffLat())
+                .dropoffLng(request.dropoffLng())
+                .orderId(expectedOrderId)
+                .build();
             OrderCreationResult orderResult = orderActivity.createOrder(orderRequest);
             saga.addCompensation(() -> safeCancelOrder(orderResult.orderId()));
 

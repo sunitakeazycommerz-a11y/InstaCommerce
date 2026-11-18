@@ -19,10 +19,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -42,21 +40,15 @@ public class DashboardAggregationService {
     private final RestTemplate restTemplate;
     private final AdminDashboardProperties properties;
     private final ObjectMapper objectMapper;
-    private final String internalServiceName;
-    private final String internalServiceToken;
     private final ExecutorService executorService;
 
     public DashboardAggregationService(
             RestTemplate restTemplate,
             AdminDashboardProperties properties,
-            ObjectMapper objectMapper,
-            @Value("${internal.service.name:${spring.application.name:admin-gateway-service}}") String internalServiceName,
-            @Value("${internal.service.token:}") String internalServiceToken) {
+            ObjectMapper objectMapper) {
         this.restTemplate = restTemplate;
         this.properties = properties;
         this.objectMapper = objectMapper;
-        this.internalServiceName = internalServiceName;
-        this.internalServiceToken = internalServiceToken;
         AtomicInteger threadCounter = new AtomicInteger(1);
         this.executorService = Executors.newFixedThreadPool(8, runnable -> {
             Thread thread = new Thread(runnable, "dashboard-probe-" + threadCounter.getAndIncrement());
@@ -77,7 +69,7 @@ public class DashboardAggregationService {
     public Map<String, Object> aggregate() {
         long startNanos = System.nanoTime();
         List<ServiceTarget> targets = properties.getServices();
-        HttpEntity<Void> requestEntity = new HttpEntity<>(buildInternalHeaders());
+        HttpEntity<?> requestEntity = HttpEntity.EMPTY;
         long perServiceTimeoutMs = Math.max(100L, properties.getPerServiceTimeoutMs());
         long overallTimeoutMs = Math.max(perServiceTimeoutMs, properties.getTimeoutMs());
 
@@ -175,7 +167,7 @@ public class DashboardAggregationService {
         }
     }
 
-    private ServiceProbe probeService(ServiceTarget target, HttpEntity<Void> requestEntity) {
+    private ServiceProbe probeService(ServiceTarget target, HttpEntity<?> requestEntity) {
         long startNanos = System.nanoTime();
         String name = targetName(target);
         String baseUrl = normalizeBaseUrl(target.getBaseUrl());
@@ -234,7 +226,7 @@ public class DashboardAggregationService {
         return HEALTHY_STATUSES.contains(normalized) ? "UP" : "DEGRADED";
     }
 
-    private String fetchMetrics(String metricsUrl, HttpEntity<Void> requestEntity, Map<String, Object> targetMetrics) {
+    private String fetchMetrics(String metricsUrl, HttpEntity<?> requestEntity, Map<String, Object> targetMetrics) {
         try {
             ResponseEntity<String> metricsResponse = restTemplate.exchange(
                 metricsUrl,
@@ -343,17 +335,6 @@ public class DashboardAggregationService {
             isTimeout ? properties.getPerServiceTimeoutMs() : 0L,
             message,
             isTimeout);
-    }
-
-    private HttpHeaders buildInternalHeaders() {
-        HttpHeaders headers = new HttpHeaders();
-        if (internalServiceName != null && !internalServiceName.isBlank()) {
-            headers.set("X-Internal-Service", internalServiceName);
-        }
-        if (internalServiceToken != null && !internalServiceToken.isBlank()) {
-            headers.set("X-Internal-Token", internalServiceToken);
-        }
-        return headers;
     }
 
     private static String targetName(ServiceTarget target) {

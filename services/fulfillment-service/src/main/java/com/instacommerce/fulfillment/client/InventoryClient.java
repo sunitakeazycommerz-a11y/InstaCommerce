@@ -4,4 +4,6 @@ import java.util.UUID;
 
 public interface InventoryClient {
     void releaseStock(UUID productId, UUID storeId, int quantity, String reason, String referenceId);
+
+    void reserveOrDeductStock(UUID productId, UUID storeId, int quantity, String reason, String referenceId);
 }
