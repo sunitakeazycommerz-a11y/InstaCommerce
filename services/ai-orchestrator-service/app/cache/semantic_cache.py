@@ -16,6 +16,11 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+try:
+    import redis  # type: ignore[import-untyped]
+except ImportError:
+    redis = None  # type: ignore[assignment]
+
 logger = logging.getLogger("ai_orchestrator.semantic_cache")
 
 # Vector dimension for FAQ semantic embeddings
@@ -76,10 +81,9 @@ class SemanticCache:
         self._load_seed_faqs()
 
     def _init_redis(self) -> None:
-        if not self._redis_url:
+        if not self._redis_url or redis is None:
             return
         try:
-            import redis
             self._redis = redis.from_url(self._redis_url, decode_responses=False)
             self._redis.ping()
             logger.info("SemanticCache connected to Redis at %s", self._redis_url)

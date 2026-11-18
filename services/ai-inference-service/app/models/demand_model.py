@@ -5,6 +5,7 @@ Per store × per SKU × per hour. Target: 92% accuracy (Zepto benchmark).
 from __future__ import annotations
 
 import logging
+import pickle
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -107,7 +108,6 @@ class DemandModel:
     def load_model(self, path: str) -> None:
         """Load a serialised demand model (e.g., TFT checkpoint)."""
         try:
-            import pickle
             with open(path, "rb") as f:
                 model = pickle.load(f)
             with self._lock:

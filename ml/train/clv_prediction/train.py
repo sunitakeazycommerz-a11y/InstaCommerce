@@ -22,6 +22,8 @@ except (ImportError, OSError):
     mlflow: Any = None
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
+from scipy.special import gammaln
 import yaml
 from google.cloud import bigquery  # type: ignore
 from sklearn.metrics import mean_absolute_error
@@ -114,15 +116,10 @@ class CLVPredictionTrainer:
         """
         logger.info("Fitting BG/NBD model")
 
-        # Initialize parameters
-        from scipy.optimize import minimize
-
         def _bgnbd_log_likelihood(params, frequency, recency, T):
             r, alpha, a, b = params
             if r <= 0 or alpha <= 0 or a <= 0 or b <= 0:
                 return 1e10
-
-            from scipy.special import gammaln
 
             ln_A_0 = (
                 gammaln(r + frequency)
@@ -169,9 +166,6 @@ class CLVPredictionTrainer:
         Parameters: p, q (shape), v (scale) for the gamma prior on spend.
         """
         logger.info("Fitting Gamma-Gamma model")
-
-        from scipy.optimize import minimize
-        from scipy.special import gammaln
 
         def _gg_log_likelihood(params, frequency, monetary_value):
             p, q, v = params

@@ -6,10 +6,11 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
+from plugins.slack_alerts import send_slack_alert
+
 
 def failure_alert(context):
     try:
-        from plugins.slack_alerts import send_slack_alert
         send_slack_alert(context)
     except Exception:
         pass
@@ -71,8 +72,6 @@ with DAG(
 
     def _alert_on_failure(**context):
         """Send detailed failure alert with task context."""
-        from plugins.slack_alerts import send_slack_alert
-
         send_slack_alert(context)
 
     alert_on_failure = PythonOperator(

@@ -23,9 +23,12 @@ except (ImportError, OSError):
 try:
     import mlflow as _mlflow  # type: ignore
     import mlflow.lightgbm  # type: ignore
+    from mlflow.tracking import MlflowClient as _MlflowClient  # type: ignore
     mlflow: Any = _mlflow
+    MlflowClient: Any = _MlflowClient
 except (ImportError, OSError):
     mlflow: Any = None
+    MlflowClient: Any = None
 
 import numpy as np
 import pandas as pd
@@ -339,7 +342,8 @@ def _check_promotion_gates(
 def promote_in_mlflow_registry(model_name: str, version: str) -> bool:
     """Automatically promote model version in MLflow registry upon gate passage."""
     try:
-        from mlflow.tracking import MlflowClient  # type: ignore
+        if MlflowClient is None:
+            raise ImportError("mlflow is unavailable")
 
         client = MlflowClient()
         logger.info(

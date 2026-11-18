@@ -1,0 +1,80 @@
+"""Pydantic request and response schemas for AI Inference Service."""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class InferenceBaseModel(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class EtaRequest(InferenceBaseModel):
+    distance_km: float = Field(..., ge=0, le=200)
+    item_count: int = Field(..., ge=0, le=200)
+    traffic_factor: float = Field(..., ge=0.5, le=3.0)
+    model_version: Optional[str] = None
+
+
+class EtaResponse(InferenceBaseModel):
+    eta_minutes: float
+    feature_contributions: Dict[str, float]
+    bias: float
+    model_version: str
+
+
+class RankingRequest(InferenceBaseModel):
+    relevance_score: float = Field(..., ge=0, le=1)
+    price_score: float = Field(..., ge=0, le=1)
+    availability_score: float = Field(..., ge=0, le=1)
+    user_affinity: float = Field(..., ge=0, le=1)
+    model_version: Optional[str] = None
+
+
+class RankingResponse(InferenceBaseModel):
+    ranking_score: float
+    raw_score: float
+    feature_contributions: Dict[str, float]
+    bias: float
+    model_version: str
+
+
+class FraudRequest(InferenceBaseModel):
+    order_amount: float = Field(..., ge=0, le=10000)
+    chargeback_rate: float = Field(..., ge=0, le=1)
+    device_risk: float = Field(..., ge=0, le=1)
+    account_age_days: int = Field(..., ge=0, le=36500)
+    model_version: Optional[str] = None
+
+
+class FraudResponse(InferenceBaseModel):
+    fraud_probability: float
+    raw_score: float
+    feature_contributions: Dict[str, float]
+    bias: float
+    model_version: str
+
+
+class BatchInferenceItem(InferenceBaseModel):
+    model_name: Literal["eta", "ranking", "fraud"]
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    model_version: Optional[str] = None
+    entity_id: Optional[str] = None
+    use_feature_store: bool = False
+
+
+class BatchInferenceRequest(InferenceBaseModel):
+    items: List[BatchInferenceItem] = Field(..., min_length=1, max_length=100)
+
+
+class BatchInferenceResult(InferenceBaseModel):
+    model_name: str
+    model_version: Optional[str] = None
+    output: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+class BatchInferenceResponse(InferenceBaseModel):
+    results: List[BatchInferenceResult]

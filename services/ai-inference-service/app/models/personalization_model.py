@@ -10,7 +10,6 @@ import threading
 import time
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from unittest.mock import DEFAULT, Mock
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -149,46 +148,37 @@ class PersonalizationModel:
 
     @staticmethod
     def _extract_model_scores(model: Any, X: np.ndarray, num_candidates: int) -> Optional[np.ndarray]:
-        """Invoke model.predict_proba or model.predict and normalise output to 1D array."""
-        raw_out: Any = None
+        """Invoke model.predict_proba or model.predict and normalise output to 1D finite float array."""
+        if num_candidates <= 0:
+            return None
+
         predict_proba_fn = getattr(model, "predict_proba", None)
         predict_fn = getattr(model, "predict", None)
 
-        proba_configured = (
-            callable(predict_proba_fn)
-            and (
-                not isinstance(predict_proba_fn, Mock)
-                or predict_proba_fn._mock_return_value is not DEFAULT
-                or predict_proba_fn._mock_side_effect is not None
-            )
-        )
-        predict_configured = (
-            callable(predict_fn)
-            and (
-                not isinstance(predict_fn, Mock)
-                or predict_fn._mock_return_value is not DEFAULT
-                or predict_fn._mock_side_effect is not None
-            )
-        )
-
-        if proba_configured and predict_proba_fn is not None:
+        raw_out: Any = None
+        if callable(predict_proba_fn):
             raw_out = predict_proba_fn(X)
-        elif predict_configured and predict_fn is not None:
-            raw_out = predict_fn(X)
         elif callable(predict_fn):
             raw_out = predict_fn(X)
-        elif callable(predict_proba_fn):
-            raw_out = predict_proba_fn(X)
+        else:
+            return None
 
         if raw_out is None:
             return None
 
         arr = np.asarray(raw_out, dtype=np.float64)
+        if arr.size == 0:
+            return None
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("Model returned non-finite score values")
+
         if arr.ndim == 2:
+            if arr.shape[1] == 0:
+                return None
             arr = arr[:, 1] if arr.shape[1] > 1 else arr[:, 0]
         elif arr.ndim == 0:
             arr = np.full(num_candidates, float(arr), dtype=np.float64)
-        else:
+        elif arr.ndim > 2:
             arr = arr.ravel()
 
         if len(arr) != num_candidates:

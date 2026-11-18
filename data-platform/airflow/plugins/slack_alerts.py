@@ -6,6 +6,11 @@ from typing import Optional
 
 from airflow.hooks.base import BaseHook
 
+try:
+    from airflow.providers.slack.hooks.slack_webhook import SlackWebhookHook
+except ImportError:
+    SlackWebhookHook = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 SLACK_CONN_ID = "slack_data_alerts"
@@ -134,8 +139,8 @@ def send_slack_alert(
     payload = build_block_kit_payload(message, context, level, channel)
 
     try:
-        from airflow.providers.slack.hooks.slack_webhook import SlackWebhookHook
-
+        if SlackWebhookHook is None:
+            raise ImportError("SlackWebhookHook unavailable")
         slack_hook = SlackWebhookHook(slack_webhook_conn_id=SLACK_CONN_ID)
         slack_hook.send(
             text=payload["text"],

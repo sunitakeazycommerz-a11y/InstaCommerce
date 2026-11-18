@@ -96,6 +96,7 @@ class AgentState(BaseModel):
     retrieval_results: List[RetrievalResult] = Field(default_factory=list)
 
     # -- Tool execution ------------------------------------------------------
+    execute_tools: bool = True
     tool_results: List[ToolResult] = Field(default_factory=list)
     tool_calls_remaining: int = 10
 

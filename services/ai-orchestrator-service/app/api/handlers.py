@@ -1,39 +1,40 @@
-"""FastAPI v2 endpoints that invoke the LangGraph agent.
-
-These handlers live under ``/v2/`` and coexist with the legacy endpoints
-in ``main.py``.  They are mounted via ``app.include_router(router)``.
-"""
+"""FastAPI v2 endpoints and shared orchestrator runtime singletons."""
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
 
 from app.audit import AuditEventPublisher
+from app.cache.semantic_cache import SemanticCache
 from app.config import Settings
+from app.core.llm import CachedRetrievalProvider, LlmClient
 from app.graph.checkpoints import CheckpointSaver, RedisCheckpointSaver
 from app.graph.graph import build_agent_graph
 from app.graph.nodes import AgentExecutionRunner, extract_structured_tool_outputs
 from app.graph.state import AgentState, RiskLevel
 from app.graph.tools import ToolRegistry
 from app.guardrails import InjectionDetector, OutputPolicy, PIIVault
+from app.schemas import AgentRequest, AgentResponse
 
 logger = logging.getLogger("ai_orchestrator.api")
 
 router = APIRouter(prefix="/v2", tags=["agent-v2"])
 
 # ---------------------------------------------------------------------------
-# Module-level singletons (initialised on first use)
+# Module-level singletons (initialised on first use or from lifespan)
 # ---------------------------------------------------------------------------
 _settings: Optional[Settings] = None
 _tool_registry: Optional[ToolRegistry] = None
 _compiled_graph: Any = None
 _checkpoint_saver: Optional[CheckpointSaver] = None
 _audit_publisher: Optional[AuditEventPublisher] = None
+_llm_client: Optional[LlmClient] = None
+_retriever: Optional[CachedRetrievalProvider] = None
+_semantic_cache: Optional[SemanticCache] = None
 
 _injection_detector = InjectionDetector()
 _pii_vault = PIIVault()
@@ -56,6 +57,16 @@ async def _get_registry() -> ToolRegistry:
     return _tool_registry
 
 
+async def get_registry() -> ToolRegistry:
+    """Return the shared ``ToolRegistry`` singleton."""
+    return await _get_registry()
+
+
+def get_execution_runner() -> AgentExecutionRunner:
+    """Return the shared ``AgentExecutionRunner`` enforcing bounded session budgets."""
+    return _execution_runner
+
+
 def set_checkpoint_saver(saver: Optional[CheckpointSaver]) -> None:
     """Inject the checkpoint saver (e.g., ``RedisCheckpointSaver``) from lifespan."""
     global _checkpoint_saver, _compiled_graph
@@ -63,8 +74,13 @@ def set_checkpoint_saver(saver: Optional[CheckpointSaver]) -> None:
     _compiled_graph = None
 
 
+def get_checkpoint_saver() -> Optional[CheckpointSaver]:
+    """Return the active checkpoint saver."""
+    return _checkpoint_saver
+
+
 def set_compiled_graph(graph: Any) -> None:
-    """Set pre-compiled graph explicitly (e.g., from lifespan)."""
+    """Set pre-compiled graph explicitly (e.g., from lifespan or tests)."""
     global _compiled_graph
     _compiled_graph = graph
 
@@ -84,21 +100,12 @@ async def _get_graph() -> Any:
     return _compiled_graph
 
 
-async def shutdown_handlers() -> None:
-    """Close shared v2 handler resources cleanly during lifespan shutdown."""
-    global _tool_registry, _checkpoint_saver, _compiled_graph
-    if _tool_registry is not None:
-        await _tool_registry.close()
-        _tool_registry = None
-    if _checkpoint_saver is not None and hasattr(_checkpoint_saver, "close"):
-        close_fn = getattr(_checkpoint_saver, "close")
-        res = close_fn()
-        if res is not None:
-            await res
-    _compiled_graph = None
+async def get_graph() -> Any:
+    """Return the compiled LangGraph instance."""
+    return await _get_graph()
 
 
-def set_audit_publisher(publisher: AuditEventPublisher) -> None:
+def set_audit_publisher(publisher: Optional[AuditEventPublisher]) -> None:
     """Set the module-level audit publisher (called from lifespan)."""
     global _audit_publisher
     _audit_publisher = publisher
@@ -108,51 +115,83 @@ def _get_audit_publisher() -> Optional[AuditEventPublisher]:
     return _audit_publisher
 
 
-# ---------------------------------------------------------------------------
-# Request / Response models
-# ---------------------------------------------------------------------------
-
-class AgentRequest(BaseModel):
-    """Inbound request to the agent."""
-
-    query: str = Field(..., min_length=1, max_length=4_000)
-    user_id: str = Field(..., min_length=1, max_length=256)
-    session_id: Optional[str] = None
-    context: Dict[str, Any] = Field(default_factory=dict)
-    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
-    max_cost_usd: float = Field(default=0.50, ge=0.0, le=0.50)
-    max_tokens: int = Field(default=0, ge=0)
-    max_latency_ms: float = Field(default=10_000.0, ge=0.0, le=30_000.0)
+def get_audit_publisher() -> Optional[AuditEventPublisher]:
+    """Return the active audit publisher."""
+    return _audit_publisher
 
 
-class AgentResponse(BaseModel):
-    """Agent response payload."""
+def set_llm_client(client: Optional[LlmClient]) -> None:
+    global _llm_client
+    _llm_client = client
 
-    request_id: str
-    response: str
-    intent: str
-    intent_confidence: float
-    risk_level: str
-    citations: List[str] = Field(default_factory=list)
-    escalated: bool = False
-    escalation_reason: Optional[str] = None
-    tool_results_summary: List[Dict[str, Any]] = Field(default_factory=list)
-    total_tokens_used: int = 0
-    total_cost_usd: float = 0.0
-    elapsed_ms: float = 0.0
-    errors: List[str] = Field(default_factory=list)
+
+def get_llm_client() -> Optional[LlmClient]:
+    return _llm_client
+
+
+def set_retriever(retriever: Optional[CachedRetrievalProvider]) -> None:
+    global _retriever
+    _retriever = retriever
+
+
+def get_retriever() -> Optional[CachedRetrievalProvider]:
+    return _retriever
+
+
+def set_semantic_cache(cache: Optional[SemanticCache]) -> None:
+    global _semantic_cache
+    _semantic_cache = cache
+
+
+def get_semantic_cache() -> Optional[SemanticCache]:
+    return _semantic_cache
+
+
+async def shutdown_handlers() -> None:
+    """Close shared handler resources cleanly once during lifespan shutdown."""
+    global _tool_registry, _checkpoint_saver, _compiled_graph, _llm_client
+    if _tool_registry is not None:
+        try:
+            await _tool_registry.close()
+        except Exception:
+            logger.exception("handlers.shutdown.tool_registry_close_failed")
+        finally:
+            _tool_registry = None
+
+    if _checkpoint_saver is not None and hasattr(_checkpoint_saver, "close"):
+        try:
+            close_fn = getattr(_checkpoint_saver, "close")
+            res = close_fn()
+            if res is not None:
+                await res
+        except Exception:
+            logger.exception("handlers.shutdown.checkpoint_saver_close_failed")
+        finally:
+            _checkpoint_saver = None
+    else:
+        _checkpoint_saver = None
+
+    if _llm_client is not None:
+        try:
+            await _llm_client.close()
+        except Exception:
+            logger.exception("handlers.shutdown.llm_client_close_failed")
+        finally:
+            _llm_client = None
+
+    _compiled_graph = None
 
 
 # ---------------------------------------------------------------------------
 # Shared guarded execution helper
 # ---------------------------------------------------------------------------
 
+
 async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
     """Run injection detection, PII redaction, budgeted graph invocation, and output policy."""
     start_ns = time.monotonic_ns()
 
     try:
-        # Step 1: Prompt injection check BEFORE invoking graph
         is_injection, inj_conf, inj_reason = _injection_detector.check(request.query)
         if is_injection:
             logger.warning(
@@ -174,7 +213,6 @@ async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
                 elapsed_ms=round(elapsed_ms, 1),
             )
 
-        # Step 2: Redact PII in query BEFORE invoking graph
         redacted_query, _ = _pii_vault.redact(request.query)
         redacted_context = _pii_vault.redact_value(request.context)
 
@@ -186,15 +224,17 @@ async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
             session_id=request.session_id,
             context=redacted_context if isinstance(redacted_context, dict) else {},
             conversation_history=request.conversation_history,
-            max_cost_usd=min(request.max_cost_usd, 0.50),  # hard cap
+            max_cost_usd=min(request.max_cost_usd, 0.50),
             max_tokens=request.max_tokens,
             max_latency_ms=request.max_latency_ms,
         )
 
-        # Step 3: Enforce request and session budgets via AgentExecutionRunner
-        result = await _execution_runner.run(graph, initial_state)
+        result = await _execution_runner.run(
+            graph,
+            initial_state,
+            checkpointer=_checkpoint_saver,
+        )
 
-        # Step 4: Pass structured tool outputs into _output_policy.validate(raw_output)
         structured_tools = extract_structured_tool_outputs(
             result.tool_results,
             tool_calls=getattr(result, "tool_calls", None),
@@ -206,7 +246,11 @@ async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
             "message": result.response,
             **structured_tools,
         }
-        val_result = _output_policy.validate(raw_output, tool_results=result.tool_results)
+        val_result = _output_policy.validate(
+            raw_output,
+            intent=result.intent.value,
+            tool_results=result.tool_results,
+        )
         final_response_text = result.response
         if val_result.sanitised_output:
             final_response_text = str(
@@ -219,7 +263,9 @@ async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
         if not val_result.is_valid:
             error_msgs = [v.message for v in val_result.violations if v.severity == "error"]
             escalated = True
-            escalation_reason = escalation_reason or f"Output policy violations: {'; '.join(error_msgs)}"
+            escalation_reason = (
+                escalation_reason or f"Output policy violations: {'; '.join(error_msgs)}"
+            )
             final_response_text = (
                 "I'm connecting you with a support specialist who can better assist you. "
                 f"Your reference number is {result.request_id}."
@@ -237,7 +283,6 @@ async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
             },
         )
 
-        # Publish audit events (fire-and-forget)
         publisher = _get_audit_publisher()
         if publisher is not None:
             try:
@@ -315,6 +360,7 @@ async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.post("/agent/invoke", response_model=AgentResponse)
 async def invoke_agent(request: AgentRequest) -> AgentResponse:

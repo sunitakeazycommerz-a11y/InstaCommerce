@@ -227,6 +227,25 @@ class ShadowRunner:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _compare_pair(
+        pv: Any,
+        sv: Any,
+        score_delta: Optional[float],
+    ) -> tuple[bool, Optional[float]]:
+        if (
+            isinstance(pv, (int, float))
+            and not isinstance(pv, bool)
+            and isinstance(sv, (int, float))
+            and not isinstance(sv, bool)
+        ):
+            delta = abs(float(sv) - float(pv))
+            next_delta = delta if score_delta is None else score_delta
+            # Agreement if within 10 % relative tolerance (guard pv == 0)
+            relative_diff = delta / max(abs(float(pv)), 1e-9)
+            return relative_diff <= 0.10, next_delta
+        return pv == sv, score_delta
+
     def _compare(
         self,
         production: PredictionResult,
@@ -241,34 +260,24 @@ class ShadowRunner:
         score_delta: Optional[float] = None
         agrees = True
 
-        primary_m = prod_output.get("metrics", prod_output) if isinstance(prod_output, dict) else {}
-        shadow_m = shadow_output.get("metrics", shadow_output) if isinstance(shadow_output, dict) else {}
+        pairs_to_compare: List[tuple[Any, Any]] = []
+        primary_m = prod_output.get("metrics") if isinstance(prod_output, dict) else None
+        shadow_m = shadow_output.get("metrics") if isinstance(shadow_output, dict) else None
         if isinstance(primary_m, dict) and isinstance(shadow_m, dict):
             for metric_name in ("ndcg@10", "rmse", "roc_auc", "f1"):
-                pv = primary_m.get(metric_name)
-                sv = shadow_m.get(metric_name)
-                if isinstance(pv, (int, float)) and isinstance(sv, (int, float)):
-                    delta = abs(float(sv) - float(pv))
-                    if score_delta is None:
-                        score_delta = delta
-                    relative_diff = delta / max(abs(float(pv)), 1e-9)
-                    if relative_diff > 0.10:
-                        agrees = False
+                if metric_name in primary_m and metric_name in shadow_m:
+                    pairs_to_compare.append((primary_m[metric_name], shadow_m[metric_name]))
 
-        for key in prod_output:
+        for key, pv in prod_output.items():
+            if key == "metrics" and isinstance(pv, dict) and isinstance(shadow_m, dict):
+                continue
             if key in shadow_output:
-                pv = prod_output[key]
-                sv = shadow_output[key]
-                if isinstance(pv, (int, float)) and isinstance(sv, (int, float)):
-                    delta = abs(float(sv) - float(pv))
-                    if score_delta is None:
-                        score_delta = delta
-                    # Agreement if within 10 % relative tolerance (guard pv == 0)
-                    relative_diff = delta / max(abs(float(pv)), 1e-9)
-                    if relative_diff > 0.10:
-                        agrees = False
-                elif pv != sv:
-                    agrees = False
+                pairs_to_compare.append((pv, shadow_output[key]))
+
+        for pv, sv in pairs_to_compare:
+            pair_agrees, score_delta = self._compare_pair(pv, sv, score_delta)
+            if not pair_agrees:
+                agrees = False
 
         if agrees:
             self._agreement_count += 1

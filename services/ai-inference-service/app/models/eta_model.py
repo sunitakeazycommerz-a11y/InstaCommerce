@@ -17,6 +17,12 @@ from pydantic import BaseModel, Field
 from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
+try:
+    import lightgbm as _lgb  # type: ignore[import-untyped]
+    lgb: Any = _lgb
+except (ImportError, OSError):
+    lgb = None
+
 logger = logging.getLogger("ai_inference.models.eta")
 
 # ---------------------------------------------------------------------------
@@ -107,7 +113,8 @@ class ETAModel:
     def load_model(self, path: str) -> None:
         """Load a LightGBM Booster from disk (thread-safe)."""
         try:
-            import lightgbm as lgb
+            if lgb is None:
+                raise ImportError("lightgbm unavailable")
             booster = lgb.Booster(model_file=path)
             with self._lock:
                 self._model = booster

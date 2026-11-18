@@ -37,20 +37,12 @@ class _BatchItem:
     model_name: str
     features: Dict[str, float]
     model_config: Any
-    future: asyncio.Future
+    future: asyncio.Future[Dict[str, Any]]
     enqueued_at: float
 
 
 class DynamicBatcher:
-    """Dynamic batching engine that merges concurrent single-request inferences.
-
-    Parameters
-    ----------
-    max_batch_size:
-        Maximum items per GPU matrix execution (default: 64).
-    max_wait_ms:
-        Time window to accumulate concurrent requests (default: 5.0 ms).
-    """
+    """Dynamic batching engine that merges concurrent single-request inferences."""
 
     def __init__(
         self,
@@ -60,9 +52,13 @@ class DynamicBatcher:
         self.max_batch_size = max_batch_size
         self.max_wait_s = max_wait_ms / 1000.0
         self._queues: Dict[str, asyncio.Queue[_BatchItem]] = {}
-        self._queue: List[_BatchItem] = []
-        self._workers: Dict[str, asyncio.Task] = {}
+        self._workers: Dict[str, asyncio.Task[None]] = {}
         self._running = False
+
+    @property
+    def queue_depth(self) -> int:
+        """Total number of requests currently waiting across per-model queues."""
+        return sum(queue.qsize() for queue in self._queues.values())
 
     def _get_queue(self, model_key: str) -> asyncio.Queue[_BatchItem]:
         if model_key not in self._queues:
@@ -83,8 +79,11 @@ class DynamicBatcher:
     async def stop(self) -> None:
         """Cancel worker tasks, cancel pending futures, and drain queues."""
         self._running = False
-        for task in self._workers.values():
+        workers = list(self._workers.values())
+        for task in workers:
             task.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
         self._workers.clear()
 
         for queue in self._queues.values():
@@ -93,14 +92,9 @@ class DynamicBatcher:
                     queued_item = queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-                if hasattr(queued_item, "future") and not queued_item.future.done():
+                if not queued_item.future.done():
                     queued_item.future.cancel()
 
-        for queued_item in list(self._queue):
-            if hasattr(queued_item, "future") and not queued_item.future.done():
-                queued_item.future.cancel()
-
-        self._queue.clear()
         self._queues.clear()
 
     async def submit(
@@ -109,12 +103,9 @@ class DynamicBatcher:
         features: Dict[str, float],
         model_config: Any,
     ) -> Dict[str, Any]:
-        """Submit a single inference request to the dynamic batch queue.
-
-        Suspends caller until the batch runs and returns the individual slice.
-        """
+        """Submit a single inference request to the dynamic batch queue."""
         loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
+        future: asyncio.Future[Dict[str, Any]] = loop.create_future()
         model_key = f"{model_name}:{getattr(model_config, 'version', 'v1')}"
         queue = self._get_queue(model_key)
         item = _BatchItem(
@@ -124,20 +115,18 @@ class DynamicBatcher:
             future=future,
             enqueued_at=time.perf_counter(),
         )
-        self._queue.append(item)
         await queue.put(item)
         return await future
 
     async def _worker_loop(self, model_key: str, queue: asyncio.Queue[_BatchItem]) -> None:
         """Continuous batching loop accumulating requests within the max_wait window."""
         while self._running:
+            batch: List[_BatchItem] = []
             try:
-                # Wait for first item in batch
                 first_item = await queue.get()
-                batch: List[_BatchItem] = [first_item]
+                batch.append(first_item)
                 deadline = time.perf_counter() + self.max_wait_s
 
-                # Accumulate subsequent items within time window up to max_batch_size
                 while len(batch) < self.max_batch_size:
                     timeout = deadline - time.perf_counter()
                     if timeout <= 0:
@@ -154,9 +143,15 @@ class DynamicBatcher:
                 DYNAMIC_BATCH_LATENCY.observe(time.perf_counter() - start_time)
 
             except asyncio.CancelledError:
+                for item in batch:
+                    if not item.future.done():
+                        item.future.cancel()
                 break
             except Exception as exc:
-                logger.exception("Unexpected error in dynamic batch worker: %s", exc)
+                logger.exception("Unexpected error in dynamic batch worker (%s): %s", model_key, exc)
+                for item in batch:
+                    if not item.future.done():
+                        item.future.set_exception(exc)
 
     def _execute_batch(self, batch: List[_BatchItem]) -> None:
         """Perform vectorized parallel matrix multiplication and resolve futures."""
@@ -173,23 +168,22 @@ class DynamicBatcher:
         keys = sorted(weights.keys())
         w_vec = np.array([weights[k] for k in keys], dtype=np.float64)
 
-        # Build feature matrix X: shape (N, D)
         X = np.zeros((len(batch), len(keys)), dtype=np.float64)
         for i, item in enumerate(batch):
             for j, k in enumerate(keys):
                 X[i, j] = float(item.features.get(k, 0.0))
 
-        # Parallel Vector Matrix Multiplication: Y = X @ W + Bias
         raw_scores = X @ w_vec + bias
 
         for i, item in enumerate(batch):
             try:
                 raw_score = float(raw_scores[i])
-                contributions = {keys[j]: round(float(X[i, j] * w_vec[j]), 6) for j in range(len(keys))}
+                contributions = {
+                    keys[j]: round(float(X[i, j] * w_vec[j]), 6) for j in range(len(keys))
+                }
                 if model_name == "eta":
-                    eta_minutes = max(0.0, raw_score)
-                    res = {
-                        "eta_minutes": eta_minutes,
+                    res: Dict[str, Any] = {
+                        "eta_minutes": max(0.0, raw_score),
                         "feature_contributions": contributions,
                         "bias": bias,
                         "model_version": version,
@@ -224,8 +218,3 @@ class DynamicBatcher:
             except Exception as exc:
                 if not item.future.done():
                     item.future.set_exception(exc)
-            finally:
-                try:
-                    self._queue.remove(item)
-                except ValueError:
-                    pass

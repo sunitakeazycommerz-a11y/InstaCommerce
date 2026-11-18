@@ -16,6 +16,12 @@ from pydantic import BaseModel, Field
 from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
+try:
+    import xgboost as _xgb  # type: ignore[import-untyped]
+    xgb: Any = _xgb
+except Exception:
+    xgb = None
+
 logger = logging.getLogger("ai_inference.models.fraud")
 
 # ---------------------------------------------------------------------------
@@ -132,7 +138,8 @@ class FraudModel:
     def load_model(self, path: str) -> None:
         """Load an XGBoost Booster from disk (thread-safe)."""
         try:
-            import xgboost as xgb
+            if xgb is None:
+                raise ImportError("xgboost unavailable")
             booster = xgb.Booster()
             booster.load_model(path)
             with self._lock:
@@ -191,7 +198,8 @@ class FraudModel:
 
     def _predict_ml(self, features: FraudFeatures) -> FraudResponse:
         """Predict using the loaded XGBoost model."""
-        import xgboost as xgb
+        if xgb is None:
+            raise ImportError("xgboost unavailable")
 
         X = self.preprocess(features)
         dmatrix = xgb.DMatrix(X, feature_names=self.FEATURE_COLUMNS)

@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import os
+import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -19,8 +20,28 @@ try:
     mlflow: Any = _mlflow
 except (ImportError, OSError):
     mlflow: Any = None
+try:
+    import lightgbm as _lgb  # type: ignore
+    lgb: Any = _lgb
+except (ImportError, OSError):
+    lgb: Any = None
+try:
+    import xgboost as _xgb  # type: ignore
+    xgb: Any = _xgb
+except Exception:
+    xgb: Any = None
 import numpy as np
 import pandas as pd
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    r2_score,
+    recall_score,
+    roc_auc_score,
+)
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -206,17 +227,6 @@ class ModelEvaluator:
         task_type: str | None = None,
     ) -> dict[str, float]:
         """Compute appropriate metrics based on prediction type."""
-        from sklearn.metrics import (
-            accuracy_score,
-            f1_score,
-            mean_absolute_error,
-            mean_squared_error,
-            precision_score,
-            r2_score,
-            recall_score,
-            roc_auc_score,
-        )
-
         metrics = {}
 
         # Determine if classification or regression
@@ -409,14 +419,15 @@ def main():
     # Load model (detect format from extension)
     model_path = Path(args.model_path)
     if model_path.suffix == ".xgb":
-        import xgboost as xgb
+        if xgb is None:
+            raise ImportError("xgboost is unavailable")
         model = xgb.XGBClassifier()
         model.load_model(str(model_path))
     elif model_path.suffix == ".lgb":
-        import lightgbm as lgb
+        if lgb is None:
+            raise ImportError("lightgbm is unavailable")
         model = lgb.Booster(model_file=str(model_path))
     elif model_path.suffix == ".pkl":
-        import pickle
         with open(model_path, "rb") as f:
             model = pickle.load(f)
     else:

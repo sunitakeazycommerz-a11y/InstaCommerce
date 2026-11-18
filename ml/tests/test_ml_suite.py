@@ -1,46 +1,18 @@
 """Unified test suite for ML training, evaluation, feature store, experiments, and serving."""
 from pathlib import Path
-from typing import cast
-from unittest.mock import MagicMock
+from typing import Any, Dict, Optional, cast
 
 import numpy as np
 import pandas as pd
 
-from ml.demand_forecast.demand_predictor import DemandPredictor
 from ml.eval.evaluate import evaluate_model
-from ml.experiments.tests.test_experiment_client import (
-    test_deterministic_user_variant_assignment,
-    test_murmur3_cross_language_parity_with_java_guava,
-)
-from ml.feature_store.integrity import format_feature_view_name
+from ml.serving.demand_predictor import DemandPredictor
+from ml.serving.integrity import format_feature_view_name
 from ml.serving.model_registry import ABTestRouter, ModelRegistry
 from ml.serving.predictor import BasePredictor, PredictionResult
 from ml.serving.shadow_mode import ShadowRunner
-from ml.serving.tests.test_integrity import (
-    test_compute_sha256,
-    test_generate_and_verify_checksums,
-    test_parse_checksums_ignores_comments,
-    test_verify_detects_tampering,
-    test_verify_missing_artifact,
-    test_verify_missing_checksums_nonstrict,
-    test_verify_missing_checksums_strict,
-)
-from ml.serving.tests.test_ks_drift import (
-    test_ks_drift_detects_distribution_shift,
-    test_ks_drift_no_drift_on_identical_distributions,
-)
-from ml.serving.tests.test_shadow_mode import (
-    test_shadow_runner_promotion_gate_threshold,
-    test_shadow_runner_streams_and_buffers_logs,
-)
 from ml.train.clv_prediction.train import CLVPredictionTrainer
-from ml.train.personalization.tests.test_personalization_leakage_and_cold_start import (
-    test_split_train_test_zero_label_leakage,
-)
 from ml.train.personalization.train import PersonalizationTrainer
-from ml.train.search_ranking.tests.test_promotion_gates import (
-    test_promotion_gates_pass_when_all_thresholds_met,
-)
 from ml.train.search_ranking.train import SearchRankingTrainer
 
 
@@ -156,6 +128,23 @@ def test_model_registry_loads_version_and_ab_test_router(tmp_path: Path):
     assert router.route("user-42", "eta") == v_first
 
 
+class _FixedShadowPredictor(BasePredictor):
+    def __init__(self, result: PredictionResult) -> None:
+        super().__init__(result.model_name, ".")
+        self._result = result
+
+    def _load_model(self, version: Optional[str]) -> None:
+        del version
+
+    def predict(self, features: Dict[str, Any]) -> PredictionResult:
+        del features
+        return self._result
+
+    def rule_based_fallback(self, features: Dict[str, Any]) -> PredictionResult:
+        del features
+        return self._result
+
+
 def test_shadow_runner_guards_zero_pv_and_checks_primary_metrics():
     runner = ShadowRunner()
     prod = PredictionResult(
@@ -164,18 +153,40 @@ def test_shadow_runner_guards_zero_pv_and_checks_primary_metrics():
         model_name="ranker",
         latency_ms=5.0,
     )
-    shadow = MagicMock()
-    shadow.model_name = "ranker"
-    shadow.predict.return_value = PredictionResult(
-        output={"ndcg@10": 0.5, "rmse": 1.0},
-        model_version="v2",
-        model_name="ranker",
-        latency_ms=6.0,
+    shadow = _FixedShadowPredictor(
+        PredictionResult(
+            output={"ndcg@10": 0.5, "rmse": 1.0},
+            model_version="v2",
+            model_name="ranker",
+            latency_ms=6.0,
+        )
     )
     comp = runner.run_shadow(prod, shadow, {})
     assert comp is not None
     assert comp["agrees"] is False
     assert comp["score_delta"] == 0.5
+
+
+def test_shadow_runner_nested_metrics_and_bool_comparison():
+    runner = ShadowRunner()
+    prod = PredictionResult(
+        output={"metrics": {"ndcg@10": 0.8}, "is_fraud": True},
+        model_version="v1",
+        model_name="ranker",
+        latency_ms=4.0,
+    )
+    shadow = _FixedShadowPredictor(
+        PredictionResult(
+            output={"metrics": {"ndcg@10": 0.8}, "is_fraud": False},
+            model_version="v2",
+            model_name="ranker",
+            latency_ms=4.5,
+        )
+    )
+    comp = runner.run_shadow(prod, shadow, {})
+    assert comp is not None
+    assert comp["score_delta"] == 0.0
+    assert comp["agrees"] is False
 
 
 def test_feature_view_name_and_demand_predictor_hourly_multiplier():
@@ -185,22 +196,3 @@ def test_feature_view_name_and_demand_predictor_hourly_multiplier():
     predictor = DemandPredictor()
     res = predictor.rule_based_fallback({"zone_id": "z1", "category": "dairy", "hour_of_day": 19, "horizon_hours": 2})
     assert res.output["predicted_demand"] == 50.0 * 1.8
-
-
-__all__ = [
-    "test_compute_sha256",
-    "test_deterministic_user_variant_assignment",
-    "test_generate_and_verify_checksums",
-    "test_ks_drift_detects_distribution_shift",
-    "test_ks_drift_no_drift_on_identical_distributions",
-    "test_murmur3_cross_language_parity_with_java_guava",
-    "test_parse_checksums_ignores_comments",
-    "test_promotion_gates_pass_when_all_thresholds_met",
-    "test_shadow_runner_promotion_gate_threshold",
-    "test_shadow_runner_streams_and_buffers_logs",
-    "test_split_train_test_zero_label_leakage",
-    "test_verify_detects_tampering",
-    "test_verify_missing_artifact",
-    "test_verify_missing_checksums_nonstrict",
-    "test_verify_missing_checksums_strict",
-]

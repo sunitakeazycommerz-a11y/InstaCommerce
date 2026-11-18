@@ -3,7 +3,7 @@ import os
 import sys
 import types
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -106,12 +106,29 @@ if "airflow" not in sys.modules:
     )
     mock_hooks_base = _stub_module("airflow.hooks.base", BaseHook=MagicMock())
     mock_hooks = _stub_module("airflow.hooks", base=mock_hooks_base)
+    mock_models = _stub_module(
+        "airflow.models",
+        DagRun=MagicMock(),
+        Variable=MagicMock(get=MagicMock(return_value=None)),
+    )
+    mock_slack_webhook = _stub_module(
+        "airflow.providers.slack.hooks.slack_webhook",
+        SlackWebhookHook=MagicMock(),
+    )
+    mock_slack_hooks = _stub_module(
+        "airflow.providers.slack.hooks",
+        slack_webhook=mock_slack_webhook,
+    )
+    mock_slack = _stub_module("airflow.providers.slack", hooks=mock_slack_hooks)
+    mock_providers = _stub_module("airflow.providers", slack=mock_slack)
     mock_airflow = _stub_module(
         "airflow",
         DAG=_MockDAG,
         operators=mock_operators,
         sensors=mock_sensors,
         hooks=mock_hooks,
+        models=mock_models,
+        providers=mock_providers,
     )
 
     sys.modules["airflow"] = mock_airflow
@@ -123,14 +140,21 @@ if "airflow" not in sys.modules:
     sys.modules["airflow.sensors.external_task"] = mock_external_task
     sys.modules["airflow.hooks"] = mock_hooks
     sys.modules["airflow.hooks.base"] = mock_hooks_base
+    sys.modules["airflow.models"] = mock_models
+    sys.modules["airflow.providers"] = mock_providers
+    sys.modules["airflow.providers.slack"] = mock_slack
+    sys.modules["airflow.providers.slack.hooks"] = mock_slack_hooks
+    sys.modules["airflow.providers.slack.hooks.slack_webhook"] = mock_slack_webhook
 
 airflow_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if airflow_dir not in sys.path:
     sys.path.insert(0, airflow_dir)
 
+import plugins.kafka_lag_sensor as kafka_lag_sensor_mod  # noqa: E402
+from plugins.kafka_lag_sensor import KafkaLagSensor  # noqa: E402
 from plugins.slack_alerts import build_block_kit_payload  # noqa: E402
 from dags import data_quality, dbt_marts, dbt_staging, monitoring_alerts  # noqa: E402
-from dags.dbt_marts import KafkaLagSensor  # noqa: E402
+from dags.historical_backfill import _prepare_backfill_params  # noqa: E402
 
 
 def _install_mock_admin_client(monkeypatch: pytest.MonkeyPatch, admin_client: Any) -> None:
@@ -140,6 +164,8 @@ def _install_mock_admin_client(monkeypatch: pytest.MonkeyPatch, admin_client: An
     mock_ck = _stub_module("confluent_kafka", admin=mock_admin, Consumer=consumer_cls)
     monkeypatch.setitem(sys.modules, "confluent_kafka", mock_ck)
     monkeypatch.setitem(sys.modules, "confluent_kafka.admin", mock_admin)
+    monkeypatch.setattr(kafka_lag_sensor_mod, "AdminClient", admin_cls)
+    monkeypatch.setattr(kafka_lag_sensor_mod, "Consumer", consumer_cls)
 
 
 def _mock_consumer_admin(
@@ -264,8 +290,6 @@ def test_kafka_lag_sensor_handles_negative_sentinels_and_admin_errors(monkeypatc
 
 def test_historical_backfill_param_extraction():
     """Verify historical backfill param preparation extracts dates and model (#667)."""
-    from dags.historical_backfill import _prepare_backfill_params
-
     mock_ti = MagicMock()
     mock_dag_run = MagicMock()
     mock_dag_run.conf = {
@@ -310,9 +334,14 @@ def test_monitoring_alerts_kafka_lag_ignores_negative_sentinel(monkeypatch: pyte
 
     check_fn = monitoring_alerts.dag.task_dict["check_kafka_lag"].python_callable
     ti = MagicMock()
+    monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "kafka-env:9092")
     check_fn(ti=ti)
     ti.xcom_push.assert_called_once_with(key="kafka_alerts", value=[])
     admin.get_watermark_offsets.assert_not_called()
+    # O(G) invariant: list_consumer_groups and list_consumer_group_offsets called ONCE across all CRITICAL_TOPICS
+    assert admin.list_consumer_groups.call_count == 1
+    assert admin.list_consumer_group_offsets.call_count == len(groups)
+    assert cast(MagicMock, kafka_lag_sensor_mod.AdminClient).call_args.args[0]["bootstrap.servers"] == "kafka-env:9092"
 
     fut_lagging = MagicMock()
     fut_lagging.result.return_value = {

@@ -1,14 +1,16 @@
 """Tests for internal service authentication middleware."""
 
+from unittest.mock import patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
-from unittest.mock import patch
+
+from app.main import app
 
 
 @pytest.fixture
 def auth_app():
     with patch.dict("os.environ", {"INTERNAL_SERVICE_TOKEN": "test-secret-token"}):
-        from app.main import app
         yield app
 
 

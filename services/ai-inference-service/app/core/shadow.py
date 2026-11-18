@@ -91,6 +91,36 @@ class ShadowRunner:
             "agreement_rate": (self.agreement_count / total) if total > 0 else 1.0,
         }
 
+    def _record_comparison(
+        self,
+        model_name: str,
+        shadow_version: str,
+        primary_output: Any,
+        shadow_output: Any,
+        elapsed_s: float,
+    ) -> Tuple[bool, float]:
+        SHADOW_LATENCY.labels(model=model_name, version=shadow_version).observe(elapsed_s)
+        agreed, delta = compare_shadow_output(
+            primary_output, shadow_output, tolerance=self.tolerance
+        )
+        SHADOW_SCORE_DELTA.labels(model=model_name, version=shadow_version).observe(delta)
+        if agreed:
+            self.agreement_count += 1
+            SHADOW_AGREEMENT_TOTAL.labels(model=model_name, version=shadow_version).inc()
+        else:
+            self.divergence_count += 1
+            SHADOW_DIVERGENCE_TOTAL.labels(model=model_name, version=shadow_version).inc()
+        return agreed, delta
+
+    def _record_error(self, model_name: str, shadow_version: str, reason: str) -> None:
+        self.error_count += 1
+        logger.warning(
+            "Shadow prediction failed for %s (%s): %s",
+            model_name,
+            shadow_version,
+            reason,
+        )
+
     async def _run_shadow(
         self,
         model_name: str,
@@ -103,23 +133,14 @@ class ShadowRunner:
         start = time.perf_counter()
         try:
             res = shadow_fn(*args, **kwargs)
-            if inspect.isawaitable(res):
-                shadow_output = await res
-            else:
-                shadow_output = res
-            SHADOW_LATENCY.labels(model=model_name, version=shadow_version).observe(
-                time.perf_counter() - start
+            shadow_output = await res if inspect.isawaitable(res) else res
+            agreed, delta = self._record_comparison(
+                model_name,
+                shadow_version,
+                primary_output,
+                shadow_output,
+                time.perf_counter() - start,
             )
-            agreed, delta = compare_shadow_output(
-                primary_output, shadow_output, tolerance=self.tolerance
-            )
-            SHADOW_SCORE_DELTA.labels(model=model_name, version=shadow_version).observe(delta)
-            if agreed:
-                self.agreement_count += 1
-                SHADOW_AGREEMENT_TOTAL.labels(model=model_name, version=shadow_version).inc()
-            else:
-                self.divergence_count += 1
-                SHADOW_DIVERGENCE_TOTAL.labels(model=model_name, version=shadow_version).inc()
             return {
                 "model": model_name,
                 "version": shadow_version,
@@ -128,13 +149,7 @@ class ShadowRunner:
                 "shadow_output": shadow_output,
             }
         except Exception as exc:
-            self.error_count += 1
-            logger.warning(
-                "Shadow prediction failed for %s (%s): %s",
-                model_name,
-                shadow_version,
-                exc.__class__.__name__,
-            )
+            self._record_error(model_name, shadow_version, exc.__class__.__name__)
             return None
 
     def dispatch(
@@ -147,48 +162,38 @@ class ShadowRunner:
         **kwargs: Any,
     ) -> Optional[asyncio.Task[Any]]:
         """Schedule shadow prediction via asyncio.create_task without blocking caller."""
-        coro = self._run_shadow(
-            model_name, shadow_version, shadow_fn, primary_output, *args, **kwargs
-        )
         try:
+            asyncio.get_running_loop()
+            coro = self._run_shadow(
+                model_name, shadow_version, shadow_fn, primary_output, *args, **kwargs
+            )
             task = asyncio.create_task(coro)
             self._pending_tasks.add(task)
             task.add_done_callback(self._pending_tasks.discard)
             return task
         except RuntimeError:
-            # No running event loop; run coroutine synchronously in an isolated call
-            coro.close()
+            # No running event loop; execute synchronous shadow_fn directly.
             start = time.perf_counter()
             try:
                 res = shadow_fn(*args, **kwargs)
-                if not inspect.isawaitable(res):
-                    SHADOW_LATENCY.labels(model=model_name, version=shadow_version).observe(
-                        time.perf_counter() - start
+                if inspect.isawaitable(res):
+                    if inspect.iscoroutine(res):
+                        res.close()
+                    self._record_error(
+                        model_name,
+                        shadow_version,
+                        "async shadow_fn dropped without running event loop",
                     )
-                    agreed, delta = compare_shadow_output(
-                        primary_output, res, tolerance=self.tolerance
-                    )
-                    SHADOW_SCORE_DELTA.labels(model=model_name, version=shadow_version).observe(
-                        delta
-                    )
-                    if agreed:
-                        self.agreement_count += 1
-                        SHADOW_AGREEMENT_TOTAL.labels(
-                            model=model_name, version=shadow_version
-                        ).inc()
-                    else:
-                        self.divergence_count += 1
-                        SHADOW_DIVERGENCE_TOTAL.labels(
-                            model=model_name, version=shadow_version
-                        ).inc()
-            except Exception as exc:
-                self.error_count += 1
-                logger.warning(
-                    "Shadow prediction failed for %s (%s): %s",
+                    return None
+                self._record_comparison(
                     model_name,
                     shadow_version,
-                    exc.__class__.__name__,
+                    primary_output,
+                    res,
+                    time.perf_counter() - start,
                 )
+            except Exception as exc:
+                self._record_error(model_name, shadow_version, exc.__class__.__name__)
             return None
 
 

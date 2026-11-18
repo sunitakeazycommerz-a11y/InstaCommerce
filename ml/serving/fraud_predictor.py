@@ -12,6 +12,20 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np  # type: ignore[import-untyped]
+
+try:
+    import onnxruntime as _ort  # type: ignore[import-untyped]
+    ort: Any = _ort
+except ImportError:
+    ort: Any = None
+
+try:
+    import xgboost as _xgb  # type: ignore[import-untyped]
+    xgb: Any = _xgb
+except Exception:
+    xgb: Any = None
+
 from .predictor import BasePredictor, ModelMetadata, ModelStatus, PredictionResult
 
 logger = logging.getLogger(__name__)
@@ -56,14 +70,12 @@ class FraudPredictor(BasePredictor):
 
         onnx_path = model_path / "model.onnx"
         if onnx_path.exists():
-            try:
-                import onnxruntime as ort  # type: ignore[import-untyped]
-
+            if ort is not None:
                 self._model = ort.InferenceSession(
                     str(onnx_path),
                     providers=["CPUExecutionProvider"],
                 )
-            except ImportError:
+            else:
                 logger.warning("onnxruntime not installed — attempting native XGBoost load")
                 self._load_native_xgboost(model_path)
         else:
@@ -189,8 +201,6 @@ class FraudPredictor(BasePredictor):
 
     def _run_model(self, features: Dict[str, Any]) -> float:
         """Execute ONNX or native model and return raw probability × 100."""
-        import numpy as np  # type: ignore[import-untyped]
-
         input_array = np.array(
             [[float(features.get(f, 0)) for f in self._feature_names]],
             dtype=np.float32,
@@ -202,8 +212,8 @@ class FraudPredictor(BasePredictor):
             proba = float(results[1][0][1])  # probability of fraud class
         else:
             # Native XGBoost Booster
-            import xgboost as xgb  # type: ignore[import-untyped]
-
+            if xgb is None:
+                raise ImportError("xgboost is not installed")
             dmat = xgb.DMatrix(input_array, feature_names=self._feature_names)
             proba = float(self._model.predict(dmat)[0])
 
@@ -224,13 +234,10 @@ class FraudPredictor(BasePredictor):
         xgb_path = model_path / "model.json"
         if not xgb_path.exists():
             raise FileNotFoundError(f"No model artefact found at {model_path}")
-        try:
-            import xgboost as xgb  # type: ignore[import-untyped]
-
-            self._model = xgb.Booster()
-            self._model.load_model(str(xgb_path))
-        except ImportError as exc:
+        if xgb is None:
             raise ImportError(
                 "Neither onnxruntime nor xgboost is installed. "
                 "Install at least one to load the fraud model."
-            ) from exc
+            )
+        self._model = xgb.Booster()
+        self._model.load_model(str(xgb_path))

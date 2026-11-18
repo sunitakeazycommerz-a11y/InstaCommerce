@@ -1,18 +1,48 @@
 """Data Pipeline Monitoring — runs every 15 minutes.
 Checks: Kafka lag, BigQuery freshness, dbt SLA, feature store health.
 """
+
+import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from google.cloud import bigquery  # type: ignore[import-untyped]
+from plugins.kafka_lag_sensor import collect_topic_lags
+from plugins.slack_alerts import send_slack_alert
 from plugins.sql_validation import validate_bq_identifier
+
+try:
+    from airflow.models import DagRun, Variable
+except ImportError:
+    DagRun = None  # type: ignore[assignment,misc]
+    Variable = None  # type: ignore[assignment,misc]
+
+try:
+    from google.cloud import aiplatform
+except ImportError:
+    aiplatform = None  # type: ignore[assignment]
+
 
 def failure_alert(context):
     try:
-        from plugins.slack_alerts import send_slack_alert
         send_slack_alert(context)
     except Exception:
         pass
+
+
+def _get_kafka_bootstrap_servers() -> str:
+    if Variable is not None:
+        try:
+            val = Variable.get("KAFKA_BOOTSTRAP_SERVERS", default_var=None)
+            if not val:
+                val = Variable.get("kafka_bootstrap_servers", default_var=None)
+            if val:
+                return str(val)
+        except Exception:
+            pass
+    return os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka-bootstrap:9092")
+
 
 default_args = {
     "owner": "data-eng",
@@ -58,53 +88,21 @@ with DAG(
 ) as dag:
 
     def _check_kafka_lag(**context):
-        """Check Kafka consumer group lag for critical topics."""
-        from confluent_kafka import Consumer
-        from confluent_kafka.admin import AdminClient
-
-        bootstrap_servers = "kafka.instacommerce.internal:9092"
-        admin = AdminClient({"bootstrap.servers": bootstrap_servers})
-        consumer = Consumer(
-            {
-                "bootstrap.servers": bootstrap_servers,
-                "group.id": "airflow-kafka-lag-monitor",
-                "enable.auto.commit": False,
-            }
-        )
-
+        """Check Kafka consumer group lag for critical topics in O(G) calls."""
+        bootstrap_servers = _get_kafka_bootstrap_servers()
         alerts = []
         try:
+            lags_by_topic = collect_topic_lags(
+                bootstrap_servers,
+                CRITICAL_TOPICS,
+                consumer_group_id="airflow-kafka-lag-monitor",
+            )
             for topic in CRITICAL_TOPICS:
-                try:
-                    # Fetch consumer group lag via admin API + consumer watermarks
-                    consumer_groups = admin.list_consumer_groups().result()
-                    for group in consumer_groups.valid:
-                        futures_dict = admin.list_consumer_group_offsets(
-                            [group.group_id]
-                        )
-                        for _, future in futures_dict.items():
-                            result_obj = future.result()
-                            offsets_iter = (
-                                result_obj.items()
-                                if isinstance(result_obj, dict)
-                                else [
-                                    (tp, tp)
-                                    for tp in getattr(result_obj, "topic_partitions", []) or []
-                                ]
-                            )
-                            for tp, offset_info in offsets_iter:
-                                if tp.topic == topic and offset_info.offset >= 0:
-                                    watermarks = consumer.get_watermark_offsets(tp)
-                                    if watermarks and watermarks[1] >= 0:
-                                        lag = max(0, watermarks[1] - offset_info.offset)
-                                        if lag > KAFKA_LAG_THRESHOLD:
-                                            alerts.append(
-                                                f"{topic} (group={group.group_id}): lag={lag:,}"
-                                            )
-                except Exception as e:
-                    alerts.append(f"{topic}: error checking lag - {str(e)}")
-        finally:
-            consumer.close()
+                for group_id, lag in lags_by_topic.get(topic, {}).items():
+                    if lag > KAFKA_LAG_THRESHOLD:
+                        alerts.append(f"{topic} (group={group_id}): lag={lag:,}")
+        except Exception as e:
+            alerts.append(f"error checking Kafka lag - {str(e)}")
 
         context["ti"].xcom_push(key="kafka_alerts", value=alerts)
         if alerts:
@@ -118,8 +116,6 @@ with DAG(
 
     def _check_bq_freshness(**context):
         """Check BigQuery table freshness for critical tables."""
-        from google.cloud import bigquery
-
         project_id = validate_bq_identifier(PROJECT_ID, "project")
         client = bigquery.Client(project=project_id)
         alerts = []
@@ -182,15 +178,14 @@ with DAG(
 
     def _check_dbt_sla(**context):
         """Check that dbt DAGs completed within SLA."""
-        from airflow.models import DagRun
+        if DagRun is None:
+            raise ImportError("airflow.models.DagRun unavailable")
 
         dbt_dags = ["dbt_staging", "dbt_marts"]
         alerts = []
 
         for dag_id in dbt_dags:
-            latest_run = (
-                DagRun.find(dag_id=dag_id, state="success")
-            )
+            latest_run = DagRun.find(dag_id=dag_id, state="success")
             if not latest_run:
                 alerts.append(f"{dag_id}: no successful runs found")
                 continue
@@ -215,7 +210,8 @@ with DAG(
 
     def _check_feature_store_health(**context):
         """Check Vertex AI Feature Store online serving health."""
-        from google.cloud import aiplatform
+        if aiplatform is None:
+            raise ImportError("google.cloud.aiplatform unavailable")
 
         aiplatform.init(project=PROJECT_ID, location="us-central1")
         alerts = []
@@ -225,7 +221,6 @@ with DAG(
             for fs in featurestores:
                 entity_types = fs.list_entity_types()
                 for et in entity_types:
-                    # Check last ingestion timestamp
                     metadata = et.gca_resource
                     if hasattr(metadata, "monitoring_stats_anomalies"):
                         for anomaly in metadata.monitoring_stats_anomalies:
@@ -248,8 +243,6 @@ with DAG(
 
     def _aggregate_and_alert(**context):
         """Aggregate all monitoring results and send unified alert."""
-        from plugins.slack_alerts import send_slack_alert
-
         ti = context["ti"]
         all_alerts = []
 
@@ -260,9 +253,7 @@ with DAG(
                 "dbt_sla_alerts": "check_dbt_sla",
                 "feature_store_alerts": "check_feature_store_health",
             }
-            alerts = ti.xcom_pull(
-                task_ids=task_map[check_key], key=check_key
-            ) or []
+            alerts = ti.xcom_pull(task_ids=task_map[check_key], key=check_key) or []
             all_alerts.extend(alerts)
 
         if all_alerts:

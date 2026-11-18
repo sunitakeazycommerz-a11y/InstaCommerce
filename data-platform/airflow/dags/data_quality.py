@@ -6,11 +6,18 @@ from datetime import datetime, timedelta, timezone
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.sensors.external_task import ExternalTaskSensor
+from google.cloud import bigquery  # type: ignore[import-untyped]
+from plugins.slack_alerts import send_slack_alert
 from plugins.sql_validation import validate_bq_identifier
+
+try:
+    import great_expectations as gx  # type: ignore[import-untyped]
+except ImportError:
+    gx = None  # type: ignore[assignment]
+
 
 def failure_alert(context):
     try:
-        from plugins.slack_alerts import send_slack_alert
         send_slack_alert(context)
     except Exception:
         pass
@@ -77,7 +84,8 @@ with DAG(
     def _validate_domain(domain: str, suite_config: dict, **context):
         """Run Great Expectations validation suite for a domain."""
         datasource = validate_bq_identifier(suite_config["datasource"], "table_ref")
-        import great_expectations as gx
+        if gx is None:
+            raise ImportError("great_expectations is unavailable")
 
         ge_context = gx.get_context(context_root_dir=GE_ROOT_DIR)
 
@@ -136,8 +144,6 @@ with DAG(
 
     def _alert_on_critical_failures(**context):
         """Check all validation results and alert on critical failures."""
-        from plugins.slack_alerts import send_slack_alert
-
         failures = []
         for domain, suite_config in DOMAIN_SUITES.items():
             passed = context["ti"].xcom_pull(
@@ -187,8 +193,6 @@ with DAG(
 
         Alerts via Slack and blocks accounting journal entries if discrepancy > 0.1% or > $100.
         """
-        from plugins.slack_alerts import send_slack_alert
-
         project_id = validate_bq_identifier(PROJECT_ID, "project")
         orders_table = validate_bq_identifier(f"{project_id}.staging.stg_orders", "table_ref")
         payments_table = validate_bq_identifier(f"{project_id}.staging.stg_payments", "table_ref")
@@ -213,7 +217,6 @@ with DAG(
         """
 
         try:
-            from google.cloud import bigquery
             client = bigquery.Client(project=project_id)
             query_job = client.query(query)
             rows = list(query_job.result())

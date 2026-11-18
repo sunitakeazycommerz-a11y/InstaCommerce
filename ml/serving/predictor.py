@@ -8,6 +8,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ml.serving.integrity import verify_model_integrity
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,7 +112,6 @@ class BasePredictor(ABC):
 
     def _verify_integrity(self, model_dir: Path) -> bool:
         """Verify model artifact checksums before loading."""
-        from ml.serving.integrity import verify_model_integrity
         return verify_model_integrity(model_dir, self.model_name)
 
     def health(self) -> Dict[str, Any]:

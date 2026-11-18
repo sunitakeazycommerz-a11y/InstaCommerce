@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple, cast
 from unittest.mock import patch
@@ -13,7 +14,12 @@ from app.config import Settings
 from app.graph import checkpoints as cp_mod
 from app.graph.checkpoints import RedisCheckpointSaver
 from app.graph.graph import build_agent_graph, build_graph
-from app.graph.nodes import AgentExecutionRunner, _plan_tools, check_policy
+from app.graph.nodes import (
+    AgentExecutionRunner,
+    _plan_tools,
+    check_policy,
+    extract_structured_tool_outputs,
+)
 from app.graph.state import AgentState, IntentType, RetrievalResult, ToolResult
 from app.graph.tools import ToolDescriptor, ToolRegistry
 from app.main import app, global_exception_handler, lifespan
@@ -511,8 +517,7 @@ async def test_redis_checkpoint_saver_cooldown_recovery(monkeypatch: pytest.Monk
 
     state = AgentState(request_id="req-cp-1", query="hello", user_id="u1")
     await saver.save("thread-1", state)
-    assert saver._init_failed is True
-    assert saver._use_fallback is True
+    assert saver.is_fallback_active is True
     assert attempts == 1
 
     # Immediate retry during cooldown stays in fallback without hitting Redis
@@ -520,24 +525,47 @@ async def test_redis_checkpoint_saver_cooldown_recovery(monkeypatch: pytest.Monk
     assert loaded_fb is not None and loaded_fb.request_id == "req-cp-1"
     assert attempts == 1
 
-    # Advance past cooldown and verify automatic recovery
-    saver._next_retry_at = 0.0
+    # Wait past cooldown and verify automatic recovery via public save/load APIs
+    await asyncio.sleep(0.06)
     await saver.save("thread-1", state)
-    assert saver._init_failed is False
-    assert saver._use_fallback is False
+    assert saver.is_fallback_active is False
     assert attempts == 2
-    assert f"{RedisCheckpointSaver._KEY_PREFIX}thread-1" in stored
+    assert any(k.endswith("thread-1") for k in stored)
+    loaded_redis = await saver.load("thread-1")
+    assert loaded_redis is not None and loaded_redis.request_id == "req-cp-1"
     await saver.close()
 
 
 @pytest.mark.asyncio
 async def test_lifespan_wires_checkpointer_closes_registry_and_sanitizes_500() -> None:
+    cp_closes = 0
+    reg_closes = 0
+
     async with lifespan(app):
         assert app.state.checkpoint_saver is not None
         assert app.state.agent_graph is not None
-        assert app.state.agent_graph.checkpointer is app.state.checkpoint_saver
-        assert v2_handlers._tool_registry is not None
-    assert v2_handlers._tool_registry is None
+        assert app.state.tool_registry is not None
+        assert v2_handlers.get_checkpoint_saver() is app.state.checkpoint_saver
+
+        orig_cp_close = app.state.checkpoint_saver.close
+        orig_reg_close = app.state.tool_registry.close
+
+        async def counted_cp_close() -> None:
+            nonlocal cp_closes
+            cp_closes += 1
+            await orig_cp_close()
+
+        async def counted_reg_close() -> None:
+            nonlocal reg_closes
+            reg_closes += 1
+            await orig_reg_close()
+
+        app.state.checkpoint_saver.close = counted_cp_close  # type: ignore[method-assign]
+        app.state.tool_registry.close = counted_reg_close  # type: ignore[method-assign]
+
+    assert cp_closes == 1
+    assert reg_closes == 1
+    assert v2_handlers.get_checkpoint_saver() is None
 
     # Verify global_exception_handler sanitizes 500 without leaking exc string
     scope = {"type": "http", "method": "GET", "path": "/boom", "headers": []}
@@ -620,7 +648,6 @@ async def test_assist_v2_applies_guardrails_structured_validation_and_budgets(
             assert "555-123-4567" not in captured_queries[0]
             assert "[PII_EMAIL_" in captured_queries[0]
             body = res.json()
-            # Structured policy_check had amount_cents=5000 > $15 cap, so OutputPolicy escalated!
             assert body["escalated"] is True
             assert "refund" in (body["escalation_reason"] or "").lower()
     finally:
@@ -635,20 +662,114 @@ async def test_assist_v2_applies_guardrails_structured_validation_and_budgets(
     assert ":8089" in str(default_settings.pricing_service_url)
     assert ":8090" in str(default_settings.cart_service_url)
 
-    # 3. BudgetTracker enforced across requests in AgentExecutionRunner
-    runner = AgentExecutionRunner(max_session_tokens=100, max_session_cost_usd=0.05)
+    # Verify canonical pricing_lookup key (no pricing_Lookup typo)
+    structured = extract_structured_tool_outputs(
+        [ToolResult(tool_name="pricing.calculate", success=True, data={"total_cents": 1200})]
+    )
+    assert "pricing_lookup" in structured
+    assert "pricing_Lookup" not in structured
+
+    # 3. BudgetTracker enforced via real build_agent_graph() and when max_session_tokens == 0
+    runner = AgentExecutionRunner(max_session_tokens=0, max_session_cost_usd=0.05)
+    assert runner.max_sessions == 10_000
+    real_graph = build_agent_graph()
+    real_res = await runner.run(
+        real_graph,
+        AgentState(
+            query="search find look for show me organic milk available",
+            user_id="u-real",
+            session_id="s-real",
+        ),
+    )
+    assert real_res.needs_escalation is False
+    assert real_res.completed_nodes[-1] == "validate_output"
 
     class CostlyGraph:
+        def __init__(self) -> None:
+            self.observed_max_costs: List[float] = []
+
         async def ainvoke(self, state_dict: Dict[str, Any]) -> Dict[str, Any]:
+            self.observed_max_costs.append(float(state_dict["max_cost_usd"]))
             s = AgentState(**state_dict).model_copy(
                 update={"total_tokens_used": 120, "total_cost_usd": 0.06, "response": "ok"}
             )
             return s.model_dump()
 
-    g = build_agent_graph()
-    _ = g  # verify build_agent_graph alias callable
-    first = await runner.run(CostlyGraph(), AgentState(query="hi", user_id="u-b", session_id="s-b"))
+    costly = CostlyGraph()
+    first = await runner.run(costly, AgentState(query="hi", user_id="u-b", session_id="s-b"))
     assert first.needs_escalation is False
-    second = await runner.run(CostlyGraph(), AgentState(query="hi again", user_id="u-b", session_id="s-b"))
+    assert costly.observed_max_costs[0] == pytest.approx(0.05)
+    second = await runner.run(costly, AgentState(query="hi again", user_id="u-b", session_id="s-b"))
     assert second.needs_escalation is True
     assert "budget exceeded" in (second.escalation_reason or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_session_budget_lru_eviction_and_v1_assist_tracking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = AgentExecutionRunner(max_session_cost_usd=0.10, max_session_tokens=0, max_sessions=3)
+    for sid in ("s1", "s2", "s3"):
+        assert runner.get_session_tracker(sid) is not None
+    # Touch s1 so s2 becomes least recently used
+    assert runner.get_session_tracker("s1") is not None
+    assert runner.get_session_tracker("s4") is not None
+    assert list(runner._session_trackers.keys()) == ["s3", "s1", "s4"]
+
+    # Verify /agent/assist routes through AgentExecutionRunner and updates session tracker
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "test-internal-secret")
+    app.middleware_stack = None
+    auth_headers = {
+        "X-Internal-Service": "test-client",
+        "X-Internal-Token": "test-internal-secret",
+    }
+
+    class MeteringGraph:
+        async def ainvoke(self, state_dict: Dict[str, Any]) -> Dict[str, Any]:
+            out = AgentState(**state_dict).model_copy(
+                update={
+                    "intent": IntentType.SEARCH,
+                    "response": "Found organic milk.",
+                    "total_tokens_used": 80,
+                    "total_cost_usd": 0.30,
+                    "tool_results": [
+                        ToolResult(tool_name="catalog.search", success=True, data={"results": []})
+                    ],
+                }
+            )
+            return out.model_dump()
+
+    v2_handlers.set_compiled_graph(MeteringGraph())
+    shared_runner = v2_handlers.get_execution_runner()
+    session_id = "v1-assist-budget-sess"
+    try:
+        transport = httpx.ASGITransport(app=cast(Any, app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r1 = await client.post(
+                "/agent/assist",
+                json={"query": "organic milk", "session_id": session_id, "execute_tools": True},
+                headers=auth_headers,
+            )
+            assert r1.status_code == 200
+            tracker = shared_runner.get_session_tracker(session_id)
+            assert tracker is not None
+            assert tracker.total_tokens == 80
+            assert tracker.total_cost_usd == pytest.approx(0.30)
+            assert tracker.tool_calls_used == 1
+
+            r2 = await client.post(
+                "/agent/assist",
+                json={"query": "more milk", "session_id": session_id, "execute_tools": True},
+                headers=auth_headers,
+            )
+            assert r2.status_code == 200
+            r3 = await client.post(
+                "/agent/assist",
+                json={"query": "even more milk", "session_id": session_id, "execute_tools": True},
+                headers=auth_headers,
+            )
+            assert r3.status_code == 200
+            assert r3.json()["intent"] == "budget_exceeded"
+    finally:
+        v2_handlers.set_compiled_graph(None)
+        app.middleware_stack = None

@@ -11,6 +11,20 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np  # type: ignore[import-untyped]
+
+try:
+    import onnxruntime as _ort  # type: ignore[import-untyped]
+    ort: Any = _ort
+except ImportError:
+    ort: Any = None
+
+try:
+    import lightgbm as _lgb  # type: ignore[import-untyped]
+    lgb: Any = _lgb
+except (ImportError, OSError):
+    lgb: Any = None
+
 from .predictor import BasePredictor, ModelMetadata, ModelStatus, PredictionResult
 
 logger = logging.getLogger(__name__)
@@ -50,14 +64,12 @@ class CLVPredictor(BasePredictor):
 
         onnx_path = model_path / "model.onnx"
         if onnx_path.exists():
-            try:
-                import onnxruntime as ort  # type: ignore[import-untyped]
-
+            if ort is not None:
                 self._model = ort.InferenceSession(
                     str(onnx_path),
                     providers=["CPUExecutionProvider"],
                 )
-            except ImportError:
+            else:
                 logger.warning("onnxruntime not installed — attempting native LightGBM load")
                 self._load_native_lightgbm(model_path)
         else:
@@ -96,8 +108,6 @@ class CLVPredictor(BasePredictor):
 
         start = time.monotonic()
         try:
-            import numpy as np  # type: ignore[import-untyped]
-
             horizon = int(features.get("horizon_months", _DEFAULT_HORIZON_MONTHS))
             vec = np.array(
                 [[float(features.get(f, 0)) for f in self._feature_names]],
@@ -212,12 +222,9 @@ class CLVPredictor(BasePredictor):
         lgbm_path = model_path / "model.txt"
         if not lgbm_path.exists():
             raise FileNotFoundError(f"No model artefact found at {model_path}")
-        try:
-            import lightgbm as lgb  # type: ignore[import-untyped]
-
-            self._model = lgb.Booster(model_file=str(lgbm_path))
-        except ImportError as exc:
+        if lgb is None:
             raise ImportError(
                 "Neither onnxruntime nor lightgbm is installed. "
                 "Install at least one to load the CLV model."
-            ) from exc
+            )
+        self._model = lgb.Booster(model_file=str(lgbm_path))

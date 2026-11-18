@@ -5,6 +5,7 @@ Segments: Platinum (>$500/yr), Gold ($200-500), Silver ($50-200), Bronze (<$50).
 from __future__ import annotations
 
 import logging
+import pickle
 import threading
 import time
 from enum import Enum
@@ -135,7 +136,6 @@ class CLVModel:
     def load_model(self, path: str) -> None:
         """Load serialised BG/NBD + Gamma-Gamma model."""
         try:
-            import pickle
             with open(path, "rb") as f:
                 model = pickle.load(f)
             with self._lock:

@@ -13,6 +13,7 @@ the graph always reaches ``respond`` or ``escalate``.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import logging
 import re
 import time
@@ -20,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import Settings
 from app.graph.budgets import BudgetExceededError, BudgetTracker
+from app.graph.checkpoints import CheckpointSaver, run_agent_graph
 from app.graph.state import (
     AgentState,
     IntentType,
@@ -136,11 +138,10 @@ def extract_structured_tool_outputs(
     structured: Dict[str, Any] = {}
     ctx = context or {}
 
-    for key in ("pricing_lookup", "pricing_Lookup", "inventory_check", "policy_check", "order_status"):
+    for key in ("pricing_lookup", "inventory_check", "policy_check", "order_status"):
         val = ctx.get(key)
         if isinstance(val, dict):
-            canonical_key = "pricing_lookup" if key == "pricing_Lookup" else key
-            structured[canonical_key] = dict(val)
+            structured[key] = dict(val)
 
     for tr in tool_results:
         name = getattr(tr, "tool_name", None) or getattr(tr, "name", "")
@@ -170,9 +171,6 @@ def extract_structured_tool_outputs(
                 elif "policy" in tc_name and "policy_check" not in structured:
                     structured["policy_check"] = dict(tc_args)
 
-    if "pricing_lookup" in structured:
-        structured["pricing_Lookup"] = structured["pricing_lookup"]
-
     return structured
 
 
@@ -184,23 +182,31 @@ class AgentExecutionRunner:
         max_session_cost_usd: float = 0.50,
         max_session_tokens: int = 0,
         max_session_tool_calls: int = 25,
+        max_sessions: int = 10_000,
     ) -> None:
         self.max_session_cost_usd = max_session_cost_usd
         self.max_session_tokens = max_session_tokens
         self.max_session_tool_calls = max_session_tool_calls
-        self._session_trackers: Dict[str, BudgetTracker] = {}
+        self.max_sessions = max(1, max_sessions)
+        self._session_trackers: OrderedDict[str, BudgetTracker] = OrderedDict()
 
     def get_session_tracker(self, session_id: Optional[str]) -> Optional[BudgetTracker]:
         if not session_id:
             return None
-        if session_id not in self._session_trackers:
-            self._session_trackers[session_id] = BudgetTracker(
-                max_cost_usd=self.max_session_cost_usd,
-                max_tokens=self.max_session_tokens,
-                max_tool_calls=self.max_session_tool_calls,
-                max_latency_ms=60_000.0,
-            )
-        return self._session_trackers[session_id]
+        tracker = self._session_trackers.get(session_id)
+        if tracker is not None:
+            self._session_trackers.move_to_end(session_id)
+            return tracker
+        tracker = BudgetTracker(
+            max_cost_usd=self.max_session_cost_usd,
+            max_tokens=self.max_session_tokens,
+            max_tool_calls=self.max_session_tool_calls,
+            max_latency_ms=60_000.0,
+        )
+        self._session_trackers[session_id] = tracker
+        while len(self._session_trackers) > self.max_sessions:
+            self._session_trackers.popitem(last=False)
+        return tracker
 
     def build_request_tracker(self, state: AgentState) -> BudgetTracker:
         return budget_tracker_from_state(state)
@@ -210,6 +216,7 @@ class AgentExecutionRunner:
         graph: Any,
         state: AgentState,
         config: Optional[Dict[str, Any]] = None,
+        checkpointer: Optional[CheckpointSaver] = None,
     ) -> AgentState:
         session_id = state.session_id or state.user_id
         session_tracker = self.get_session_tracker(session_id)
@@ -238,36 +245,41 @@ class AgentExecutionRunner:
             )
 
         effective_state = state
-        if session_tracker is not None and session_tracker.max_tokens > 0:
-            remaining_session_tokens = max(
-                0, session_tracker.max_tokens - session_tracker.total_tokens
-            )
-            effective_max_tokens = (
-                min(state.max_tokens, remaining_session_tokens)
-                if state.max_tokens > 0
-                else remaining_session_tokens
-            )
-            effective_state = effective_state.model_copy(
-                update={
-                    "max_tokens": effective_max_tokens,
-                    "max_cost_usd": min(
-                        state.max_cost_usd,
-                        max(0.0, session_tracker.cost_remaining),
-                    ),
-                }
-            )
+        if session_tracker is not None:
+            updates: Dict[str, Any] = {
+                "max_cost_usd": min(
+                    state.max_cost_usd,
+                    max(0.0, session_tracker.cost_remaining),
+                ),
+                "tool_calls_remaining": min(
+                    state.tool_calls_remaining,
+                    max(0, session_tracker.tool_calls_remaining),
+                ),
+            }
+            if session_tracker.max_tokens > 0:
+                remaining_session_tokens = max(
+                    0, session_tracker.max_tokens - session_tracker.total_tokens
+                )
+                updates["max_tokens"] = (
+                    min(state.max_tokens, remaining_session_tokens)
+                    if state.max_tokens > 0
+                    else remaining_session_tokens
+                )
+            effective_state = effective_state.model_copy(update=updates)
 
-        if config is not None:
-            result_dict = await graph.ainvoke(effective_state.model_dump(), config=config)
-        else:
-            result_dict = await graph.ainvoke(effective_state.model_dump())
+        result_dict = await run_agent_graph(
+            graph,
+            effective_state.model_dump(),
+            checkpointer=checkpointer,
+            config=config,
+        )
 
         result = AgentState(**result_dict) if isinstance(result_dict, dict) else result_dict
 
         if session_tracker is not None:
             session_tracker.total_cost_usd += max(0.0, result.total_cost_usd - state.total_cost_usd)
             session_tracker.total_tokens += max(0, result.total_tokens_used - state.total_tokens_used)
-            session_tracker.tool_calls_used += len(result.tool_results) - len(state.tool_results)
+            session_tracker.tool_calls_used += max(0, len(result.tool_results) - len(state.tool_results))
 
         return result
 
@@ -598,6 +610,19 @@ async def execute_tools(
         tool_plan: List[Dict[str, Any]] = _plan_tools(state)
         results: List[ToolResult] = list(state.tool_results)
 
+        if not state.execute_tools:
+            logger.info(
+                "node.execute_tools.skipped",
+                extra={"request_id": state.request_id},
+            )
+            return state.model_copy(
+                update={
+                    "elapsed_ms": max(state.elapsed_ms, tracker.elapsed_ms),
+                    "current_node": "execute_tools",
+                    "completed_nodes": state.completed_nodes + ["execute_tools"],
+                }
+            )
+
         if registry is None:
             # No registry available — record a synthetic skip result
             logger.info(
@@ -729,7 +754,11 @@ def validate_output(state: AgentState) -> AgentState:
             "message": response,
             **structured,
         }
-        val_result = output_policy.validate(output_payload, tool_results=state.tool_results)
+        val_result = output_policy.validate(
+            output_payload,
+            intent=state.intent.value,
+            tool_results=state.tool_results,
+        )
         if not val_result.is_valid:
             error_msgs = [v.message for v in val_result.violations if v.severity == "error"]
             logger.warning(

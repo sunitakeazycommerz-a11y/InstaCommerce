@@ -11,13 +11,13 @@ import logging
 
 from airflow import DAG
 from airflow.operators.python import BranchPythonOperator, PythonOperator
+from plugins.slack_alerts import send_slack_alert
 
 logger = logging.getLogger(__name__)
 
 
 def failure_alert(context):
     try:
-        from plugins.slack_alerts import send_slack_alert
         send_slack_alert(context)
     except Exception:
         pass

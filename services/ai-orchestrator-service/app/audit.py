@@ -39,6 +39,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+try:
+    from aiokafka import AIOKafkaProducer  # type: ignore[import-untyped]
+except ImportError:
+    AIOKafkaProducer = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger("ai_orchestrator.audit")
 
 # ---------------------------------------------------------------------------
@@ -141,9 +146,16 @@ class AuditEventPublisher:
         Fails gracefully -- if ``aiokafka`` is not installed or the broker
         is unreachable, the publisher degrades to a no-op logger.
         """
-        try:
-            from aiokafka import AIOKafkaProducer
+        if AIOKafkaProducer is None:
+            logger.warning(
+                "audit.publisher.aiokafka_not_installed",
+                extra={
+                    "message": "aiokafka is not installed; audit events will only be logged",
+                },
+            )
+            return
 
+        try:
             self._producer = AIOKafkaProducer(
                 bootstrap_servers=self._bootstrap_servers,
                 client_id=self._client_id,

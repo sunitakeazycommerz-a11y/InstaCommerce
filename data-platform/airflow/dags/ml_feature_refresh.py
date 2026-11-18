@@ -1,17 +1,26 @@
 """ML Feature Refresh — runs every 4 hours.
 Recomputes feature store features from BigQuery and pushes to online store.
 """
+
 from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from google.cloud import bigquery  # type: ignore[import-untyped]
+from plugins.slack_alerts import send_slack_alert
+
+try:
+    from google.cloud import aiplatform
+except ImportError:
+    aiplatform = None  # type: ignore[assignment]
+
 
 def failure_alert(context):
     try:
-        from plugins.slack_alerts import send_slack_alert
         send_slack_alert(context)
     except Exception:
         pass
+
 
 default_args = {
     "owner": "ml-eng",
@@ -50,8 +59,6 @@ with DAG(
 
     def _run_feature_sql(feature_name: str, sql_path: str, **context):
         """Execute feature computation SQL in BigQuery."""
-        from google.cloud import bigquery
-
         client = bigquery.Client(project=PROJECT_ID)
 
         with open(f"/opt/airflow/dbt/{sql_path}") as f:
@@ -84,7 +91,8 @@ with DAG(
 
     def _push_to_online_store(**context):
         """Push computed features to Vertex AI Feature Store online serving."""
-        from google.cloud import aiplatform
+        if aiplatform is None:
+            raise ImportError("google.cloud.aiplatform unavailable")
 
         aiplatform.init(project=PROJECT_ID, location=FEATURE_STORE_REGION)
 
@@ -108,8 +116,6 @@ with DAG(
 
     def _validate_feature_freshness(**context):
         """Validate that all features were updated within the threshold."""
-        from google.cloud import bigquery
-
         client = bigquery.Client(project=PROJECT_ID)
         stale_features = []
 
@@ -142,8 +148,6 @@ with DAG(
 
     def _alert_if_stale(**context):
         """Send alert if any features are stale after refresh."""
-        from plugins.slack_alerts import send_slack_alert
-
         ti = context["ti"]
         stale = ti.xcom_pull(
             task_ids="validate_feature_freshness", key="stale_features"

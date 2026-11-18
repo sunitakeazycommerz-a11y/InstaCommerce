@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import pickle
 from pathlib import Path
 from typing import Any, cast
 
@@ -180,7 +181,6 @@ class DemandForecastTrainer:
         """Export all models to directory."""
         if not self.models:
             raise RuntimeError("No models trained yet")
-        import pickle
 
         export_dir = Path(path)
         export_dir.mkdir(parents=True, exist_ok=True)

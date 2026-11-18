@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
 import numpy as np  # type: ignore[import-untyped]
+import scipy.stats as stats  # type: ignore[import-untyped]
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
@@ -221,8 +222,6 @@ class ModelMonitor:
         Compares recent feature distribution against training baseline.
         Alerts when p-value < alpha (default 0.01) indicating significant covariate shift.
         """
-        import scipy.stats as stats
-
         r_clean = np.asarray(recent_features, dtype=float)
         b_clean = np.asarray(baseline_features, dtype=float)
         r_clean = r_clean[~np.isnan(r_clean)]

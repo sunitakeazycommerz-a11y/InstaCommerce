@@ -9,7 +9,7 @@ import logging
 import os
 import re
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -96,26 +96,13 @@ class OutputPolicy:
 
     def validate(
         self,
-        intent: Union[str, Dict[str, Any], None] = None,
-        output: Optional[Dict[str, Any]] = None,
+        output: Dict[str, Any],
+        intent: Optional[str] = None,
         tool_results: Optional[List[Any]] = None,
-        *,
-        raw_output: Optional[Dict[str, Any]] = None,
     ) -> ValidationResult:
-        """Check *output* against business policies for *intent*.
-
-        Supports both ``validate(intent, output, tool_results)`` and
-        ``validate(raw_output)`` (reading ``intent`` from the dict).
-        """
-        if raw_output is not None:
-            resolved_output = dict(raw_output)
-            resolved_intent = str(intent if isinstance(intent, str) and intent else resolved_output.get("intent") or "assist")
-        elif isinstance(intent, dict):
-            resolved_output = dict(intent)
-            resolved_intent = str(resolved_output.get("intent") or "assist")
-        else:
-            resolved_intent = str(intent or "assist")
-            resolved_output = dict(output) if output is not None else {}
+        """Check *output* against business policies for *intent*."""
+        resolved_output = dict(output)
+        resolved_intent = intent or str(resolved_output.get("intent") or "assist")
 
         violations: List[ValidationViolation] = []
 
@@ -170,7 +157,7 @@ class OutputPolicy:
         required = self.REQUIRED_FIELDS.get(intent, [])
         order_ctx = output.get("order_status")
         policy_ctx = output.get("policy_check")
-        pricing_ctx = output.get("pricing_lookup") or output.get("pricing_Lookup")
+        pricing_ctx = output.get("pricing_lookup")
         for field_name in required:
             present = (
                 field_name in output
@@ -201,8 +188,6 @@ class OutputPolicy:
         raw_policy = output.get("policy_check")
         policy_ctx: Dict[str, Any] = raw_policy if isinstance(raw_policy, dict) else {}
         raw_pricing = output.get("pricing_lookup")
-        if not isinstance(raw_pricing, dict):
-            raw_pricing = output.get("pricing_Lookup")
         pricing_ctx: Dict[str, Any] = raw_pricing if isinstance(raw_pricing, dict) else {}
         raw_order = output.get("order_status")
         order_ctx: Dict[str, Any] = raw_order if isinstance(raw_order, dict) else {}

@@ -9,6 +9,12 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+try:
+    from prophet.serialize import model_from_json as _model_from_json  # type: ignore[import-untyped]
+    model_from_json: Any = _model_from_json
+except ImportError:
+    model_from_json: Any = None
+
 from .predictor import BasePredictor, ModelMetadata, ModelStatus, PredictionResult
 
 logger = logging.getLogger(__name__)
@@ -66,12 +72,10 @@ class DemandPredictor(BasePredictor):
 
         prophet_path = model_path / "model.json"
         if prophet_path.exists():
-            try:
-                from prophet.serialize import model_from_json  # type: ignore[import-untyped]
-
+            if model_from_json is not None:
                 with open(prophet_path, "r") as fh:
                     self._model = model_from_json(fh.read())
-            except ImportError:
+            else:
                 logger.warning("prophet not installed — demand model will use fallback only")
                 self._model = None
         else:

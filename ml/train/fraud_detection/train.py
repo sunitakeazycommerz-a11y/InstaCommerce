@@ -27,7 +27,7 @@ from sklearn.metrics import (
     precision_recall_curve,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -345,8 +345,6 @@ def main():
         df = trainer.load_data(query)
 
         # Stratified train/test split preserving fraud ratio
-        from sklearn.model_selection import train_test_split
-
         val_split = config["training"].get("validation_split", 0.2)
         train_df, test_df = cast(
             tuple[pd.DataFrame, pd.DataFrame],

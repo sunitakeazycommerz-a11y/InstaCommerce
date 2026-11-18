@@ -1,9 +1,9 @@
 import asyncio
 import time
-import pytest
 import numpy as np
+import pytest
+
 from app.batching import DynamicBatcher
-from app.core.batching import DynamicBatcher as CoreDynamicBatcher, _BatchItem
 from app.core.shadow import ShadowRunner
 from app.models.onnx_runner import ManagedOnnxSession, check_memory_threshold, get_current_rss_bytes
 
@@ -52,7 +52,7 @@ async def test_dynamic_batcher_concurrent_requests():
 def test_managed_onnx_session_memory_leak_prevention():
     """Verify that running 10,000 continuous inferences does not leak native tensor memory (#612)."""
     session = ManagedOnnxSession()
-    
+
     # Warm-up run
     for _ in range(100):
         feed = {"input": np.random.randn(1, 16).astype(np.float32)}
@@ -74,32 +74,34 @@ def test_managed_onnx_session_memory_leak_prevention():
 
 def test_check_memory_threshold_alert():
     """Verify 80% threshold calculation and alert emission (#612)."""
-    # Test normal memory condition (< 80%)
     exceeded_low, rss, limit = check_memory_threshold(0.999)
-    # Test tight threshold trigger
     exceeded_high, rss, limit = check_memory_threshold(0.0001)
     assert exceeded_high is True
 
 
 @pytest.mark.asyncio
 async def test_dynamic_batcher_stop_cancels_queued_futures():
-    """Verify DynamicBatcher.stop() cancels remaining queued futures before clearing _queue."""
-    batcher = CoreDynamicBatcher(max_batch_size=64, max_wait_ms=500.0)
-    loop = asyncio.get_running_loop()
-    fut1 = loop.create_future()
-    fut2 = loop.create_future()
+    """Verify DynamicBatcher.stop() cancels pending submitted requests and clears queue_depth."""
+    batcher = DynamicBatcher(max_batch_size=64, max_wait_ms=500.0)
 
-    item1 = _BatchItem(model_name="eta", features={}, model_config=None, future=fut1, enqueued_at=0.0)
-    item2 = _BatchItem(model_name="eta", features={}, model_config=None, future=fut2, enqueued_at=0.0)
-    batcher._queue.append(item1)
-    q = batcher._get_queue("eta:v1")
-    await q.put(item2)
+    class DummyConfig:
+        version = "v1"
+        bias = 0.0
+        weights: dict[str, float] = {}
+
+    req1 = asyncio.create_task(batcher.submit("eta", {}, DummyConfig()))
+    req2 = asyncio.create_task(batcher.submit("eta", {}, DummyConfig()))
+    await asyncio.sleep(0)
+
+    assert batcher.queue_depth == 2
 
     await batcher.stop()
 
-    assert fut1.cancelled()
-    assert fut2.cancelled()
-    assert len(batcher._queue) == 0
+    assert batcher.queue_depth == 0
+    with pytest.raises(asyncio.CancelledError):
+        await req1
+    with pytest.raises(asyncio.CancelledError):
+        await req2
 
 
 @pytest.mark.asyncio
@@ -118,7 +120,7 @@ async def test_shadow_runner_async_create_task_and_metrics():
     start = time.perf_counter()
     task1 = runner.dispatch("ranking", "v2", slow_agreeing_shadow, {"ranking_score": 0.80})
     elapsed = time.perf_counter() - start
-    # Dispatch via create_task must return immediately (< 20ms despite 50ms sleep)
+    # Dispatch via create_task must return immediately (< 25ms despite 50ms sleep)
     assert elapsed < 0.025
     assert task1 is not None
 
@@ -130,3 +132,22 @@ async def test_shadow_runner_async_create_task_and_metrics():
     assert runner.divergence_count == 1
     assert runner.stats["total"] == 2
     assert runner.stats["agreement_rate"] == 0.5
+
+
+def test_shadow_runner_sync_fallback_and_dropped_async_error_count():
+    """Verify sync fallback records agreement/divergence and increments error_count if async fn is dropped."""
+    runner = ShadowRunner(tolerance=0.1)
+
+    def sync_agree() -> dict[str, float]:
+        return {"ranking_score": 0.82}
+
+    async def async_dropped() -> dict[str, float]:
+        return {"ranking_score": 0.82}
+
+    assert runner.dispatch("ranking", "v2", sync_agree, {"ranking_score": 0.80}) is None
+    assert runner.agreement_count == 1
+    assert runner.error_count == 0
+
+    assert runner.dispatch("ranking", "v2", async_dropped, {"ranking_score": 0.80}) is None
+    assert runner.error_count == 1
+    assert runner.stats["errors"] == 1

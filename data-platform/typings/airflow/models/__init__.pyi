@@ -10,4 +10,8 @@ class DagRun:
     @classmethod
     def find(cls, *args: Any, **kwargs: Any) -> list[DagRun]: ...
 
-__all__ = ["BaseOperator", "DagRun"]
+class Variable:
+    @classmethod
+    def get(cls, key: str, default_var: Any = ..., deserialize_json: bool = ...) -> Any: ...
+
+__all__ = ["BaseOperator", "DagRun", "Variable"]

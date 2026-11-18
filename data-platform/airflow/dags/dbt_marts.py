@@ -8,10 +8,11 @@ from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from airflow.sensors.external_task import ExternalTaskSensor
 from plugins.kafka_lag_sensor import KafkaLagSensor
+from plugins.slack_alerts import send_slack_alert
+
 
 def failure_alert(context):
     try:
-        from plugins.slack_alerts import send_slack_alert
         send_slack_alert(context)
     except Exception:
         pass
@@ -103,8 +104,6 @@ with DAG(
 
     def _notify_completion(**context):
         """Notify Slack and email on successful mart build."""
-        from plugins.slack_alerts import send_slack_alert
-
         dag_run = context["dag_run"]
         execution_date = context["execution_date"]
         msg = (
@@ -124,8 +123,6 @@ with DAG(
 
     def _alert_on_failure(**context):
         """Send detailed failure alert with task context."""
-        from plugins.slack_alerts import send_slack_alert
-
         send_slack_alert(context)
 
     alert_on_failure = PythonOperator(

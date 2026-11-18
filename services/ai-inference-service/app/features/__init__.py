@@ -1,25 +1,31 @@
 """Feature Store module for AI inference service."""
 
-from .redis_client import (
-    FeatureFetcher,
-    RedisFeatureClient,
-    RedisFeatureStoreClient,
-    create_child_trace_context,
-    format_traceparent,
-    get_current_trace_context,
-    parse_traceparent,
-    reset_current_trace_context,
-    set_current_trace_context,
+from app.features.extractors import (
+    build_feature_store,
+    build_features_for_model,
+    eta_features,
+    fetch_feature_store_features,
+    fraud_features,
+    parse_model_request,
+    ranking_features,
+)
+from app.features.redis_client import RedisFeatureStoreClient
+from app.features.store import (
+    BigQueryFeatureStoreClient,
+    FeatureStoreClient,
+    UnavailableFeatureStoreClient,
 )
 
 __all__ = [
-    "FeatureFetcher",
-    "RedisFeatureClient",
+    "BigQueryFeatureStoreClient",
+    "FeatureStoreClient",
     "RedisFeatureStoreClient",
-    "create_child_trace_context",
-    "format_traceparent",
-    "get_current_trace_context",
-    "parse_traceparent",
-    "reset_current_trace_context",
-    "set_current_trace_context",
+    "UnavailableFeatureStoreClient",
+    "build_feature_store",
+    "build_features_for_model",
+    "eta_features",
+    "fetch_feature_store_features",
+    "fraud_features",
+    "parse_model_request",
+    "ranking_features",
 ]

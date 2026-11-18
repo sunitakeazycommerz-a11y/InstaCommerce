@@ -208,11 +208,51 @@ class RedisCheckpointSaver(CheckpointSaver):
             self._mark_redis_failure()
             await self._fallback.delete(thread_id)
 
+    @property
+    def is_fallback_active(self) -> bool:
+        """Whether the saver is currently degraded to in-memory fallback."""
+        return self._use_fallback
+
     async def close(self) -> None:
         """Clean up the Redis connection."""
         if self._redis is not None:
             try:
                 await self._redis.aclose()
             except Exception:
-                pass
+                logger.warning("checkpoint.redis.close_failed", exc_info=True)
             self._redis = None
+
+
+async def run_agent_graph(
+    graph: Any,
+    input_state: Dict[str, Any],
+    *,
+    checkpointer: Optional[CheckpointSaver] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Invoke a compiled LangGraph with optional checkpoint load/save."""
+    thread_id = (
+        ((config or {}).get("configurable") or {}).get("thread_id")
+        or input_state.get("session_id")
+        or input_state.get("request_id")
+    )
+    state_to_run = dict(input_state)
+    if checkpointer is not None and thread_id:
+        try:
+            prior = await checkpointer.load(str(thread_id))
+            if prior is not None and not state_to_run.get("conversation_history"):
+                state_to_run["conversation_history"] = list(prior.conversation_history)
+        except Exception:
+            logger.warning("graph.checkpoint_load_failed", extra={"thread_id": str(thread_id)})
+
+    if config is not None:
+        result = await graph.ainvoke(state_to_run, config=config)
+    else:
+        result = await graph.ainvoke(state_to_run)
+
+    if checkpointer is not None and thread_id and isinstance(result, dict):
+        try:
+            await checkpointer.save(str(thread_id), AgentState(**result))
+        except Exception:
+            logger.warning("graph.checkpoint_save_failed", extra={"thread_id": str(thread_id)})
+    return result

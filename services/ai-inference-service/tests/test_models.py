@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+import numpy as np
 
 from app.models.demand_model import DemandModel, DemandFeatures
 from app.models.personalization_model import PersonalizationModel, PersonalizationFeatures, RecommendationSurface
@@ -138,12 +138,32 @@ def test_dynamic_pricing_floor_clamped_to_ceiling():
     assert guardrail == "price_floor"
 
 
+class _StubPredictEstimator:
+    def __init__(self, scores: list[float]) -> None:
+        self._scores = scores
+        self.calls: int = 0
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        self.calls += 1
+        return np.asarray(self._scores, dtype=np.float64)
+
+
+class _StubProbaEstimator:
+    def __init__(self, positive_probs: list[float]) -> None:
+        self._positive_probs = positive_probs
+        self.calls: int = 0
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        self.calls += 1
+        pos = np.asarray(self._positive_probs, dtype=np.float64)
+        return np.column_stack([1.0 - pos, pos])
+
+
 def test_personalization_predict_ml_blends_model_scores():
     """Verify _predict_ml calls self._model.predict / predict_proba and blends with feature scores."""
     model = PersonalizationModel()
-    mock_estimator = MagicMock()
-    mock_estimator.predict.return_value = [0.1, 0.95, 0.2]
-    model._model = mock_estimator
+    estimator = _StubPredictEstimator([0.1, 0.95, 0.2])
+    model._model = estimator
 
     features = PersonalizationFeatures(
         user_id="user-ml-blend",
@@ -157,7 +177,14 @@ def test_personalization_predict_ml_blends_model_scores():
         ],
     )
     response = model.predict(features)
-    assert mock_estimator.predict.called
+    assert estimator.calls == 1
     assert response.method == "ml"
     # prod-b has highest ML score (0.95) with identical embeddings, so it ranks #1
     assert response.recommendations[0]["product_id"] == "prod-b"
+
+    proba_estimator = _StubProbaEstimator([0.15, 0.25, 0.92])
+    model._model = proba_estimator
+    proba_response = model.predict(features)
+    assert proba_estimator.calls == 1
+    assert proba_response.method == "ml"
+    assert proba_response.recommendations[0]["product_id"] == "prod-c"

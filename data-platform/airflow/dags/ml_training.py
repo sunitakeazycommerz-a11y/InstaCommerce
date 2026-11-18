@@ -1,15 +1,28 @@
 """ML Model Training — runs daily at 04:00 UTC.
 Trains all scheduled models, evaluates, and promotes if gates pass.
 """
+import json
 from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.python import BranchPythonOperator, PythonOperator
 from airflow.utils.task_group import TaskGroup
+from plugins.slack_alerts import send_slack_alert
+
+try:
+    import mlflow  # type: ignore[import-untyped]
+except ImportError:
+    mlflow = None  # type: ignore[assignment]
+
+try:
+    from google.cloud import aiplatform, storage
+except ImportError:
+    aiplatform = None  # type: ignore[assignment]
+    storage = None  # type: ignore[assignment]
+
 
 def failure_alert(context):
     try:
-        from plugins.slack_alerts import send_slack_alert
         send_slack_alert(context)
     except Exception:
         pass
@@ -82,7 +95,8 @@ with DAG(
 
     def _train_model(model_name: str, config: dict, **context):
         """Submit training job to Vertex AI."""
-        from google.cloud import aiplatform
+        if aiplatform is None:
+            raise ImportError("google.cloud.aiplatform unavailable")
 
         aiplatform.init(
             project=PROJECT_ID,
@@ -129,7 +143,8 @@ with DAG(
 
     def _evaluate_model(model_name: str, config: dict, **context):
         """Evaluate trained model and log metrics to MLflow."""
-        import mlflow
+        if mlflow is None or storage is None:
+            raise ImportError("mlflow or google.cloud.storage unavailable")
 
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         mlflow.set_experiment(model_name)
@@ -141,15 +156,11 @@ with DAG(
                 key=f"{model_name}_job_id",
             )
 
-            from google.cloud import storage
-
             client = storage.Client(project=PROJECT_ID)
             bucket = client.bucket(f"{PROJECT_ID}-ml-artifacts")
             blob = bucket.blob(
                 f"{model_name}/{context['ds']}/metrics.json"
             )
-            import json
-
             metrics = json.loads(blob.download_as_text())
 
             mlflow.log_metrics(metrics)
@@ -182,7 +193,8 @@ with DAG(
 
     def _promote_model(model_name: str, **context):
         """Promote model to production serving endpoint."""
-        from google.cloud import aiplatform
+        if aiplatform is None:
+            raise ImportError("google.cloud.aiplatform unavailable")
 
         aiplatform.init(project=PROJECT_ID, location=REGION)
 
@@ -207,8 +219,6 @@ with DAG(
 
     def _skip_promote(model_name: str, **context):
         """Log that model did not pass quality gates."""
-        from plugins.slack_alerts import send_slack_alert
-
         metric_val = context["ti"].xcom_pull(
             task_ids=f"{model_name}_group.evaluate_{model_name}",
             key=f"{model_name}_primary_metric",

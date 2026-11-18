@@ -42,7 +42,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from langgraph.graph import END, StateGraph
 
 from app.config import Settings
-from app.graph.checkpoints import CheckpointSaver
+from app.graph.checkpoints import CheckpointSaver, run_agent_graph
 from app.graph.nodes import (
     check_policy,
     classify_intent,
@@ -91,71 +91,12 @@ def _wrap_async(
     return _node
 
 
-class CompiledAgentGraph:
-    """Wrapper around compiled LangGraph that persists state via ``CheckpointSaver``."""
-
-    def __init__(self, compiled: Any, checkpointer: Optional[CheckpointSaver] = None) -> None:
-        self._compiled = compiled
-        self.checkpointer = checkpointer
-
-    async def ainvoke(
-        self,
-        input_state: Dict[str, Any],
-        config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        thread_id = (
-            ((config or {}).get("configurable") or {}).get("thread_id")
-            or input_state.get("session_id")
-            or input_state.get("request_id")
-        )
-        state_to_run = dict(input_state)
-        if self.checkpointer is not None and thread_id:
-            try:
-                prior = await self.checkpointer.load(str(thread_id))
-                if prior is not None and not state_to_run.get("conversation_history"):
-                    state_to_run["conversation_history"] = list(prior.conversation_history)
-            except Exception:
-                logger.warning("graph.checkpoint_load_failed", extra={"thread_id": str(thread_id)})
-
-        if config is not None:
-            result = await self._compiled.ainvoke(state_to_run, config=config)
-        else:
-            result = await self._compiled.ainvoke(state_to_run)
-
-        if self.checkpointer is not None and thread_id and isinstance(result, dict):
-            try:
-                await self.checkpointer.save(str(thread_id), AgentState(**result))
-            except Exception:
-                logger.warning("graph.checkpoint_save_failed", extra={"thread_id": str(thread_id)})
-        return result
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._compiled, name)
-
-
 def build_graph(
     settings: Optional[Settings] = None,
     tool_registry: Optional[ToolRegistry] = None,
     checkpointer: Optional[CheckpointSaver] = None,
 ) -> Any:
-    """Construct and compile the LangGraph state machine.
-
-    Parameters
-    ----------
-    settings:
-        Application settings.  A default instance is created when *None*.
-    tool_registry:
-        Pre-built tool registry.  Nodes that need it receive it via a
-        closure.  When *None*, ``execute_tools`` runs in dry-run mode.
-    checkpointer:
-        Optional ``CheckpointSaver`` (e.g. ``RedisCheckpointSaver``) for
-        persisting state across invocations.
-
-    Returns
-    -------
-    CompiledAgentGraph
-        A compiled LangGraph ready for ``invoke()`` / ``ainvoke()``.
-    """
+    """Construct and compile the LangGraph state machine."""
     settings = settings or Settings()
 
     def _route_after_policy(state: Dict[str, Any]) -> str:
@@ -204,7 +145,9 @@ def build_graph(
         "graph.compiled",
         extra={"nodes": list(graph.nodes.keys()), "has_checkpointer": checkpointer is not None},
     )
-    return CompiledAgentGraph(compiled, checkpointer=checkpointer)
+    return compiled
 
 
 build_agent_graph = build_graph
+
+__all__ = ["build_agent_graph", "build_graph", "run_agent_graph"]
