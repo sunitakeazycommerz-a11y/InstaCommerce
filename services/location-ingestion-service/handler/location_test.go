@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,6 +61,9 @@ func newMockPositionStore() *mockPositionStore {
 func (m *mockPositionStore) Update(ctx context.Context, update LocationUpdate) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if prev, ok := m.positions[update.RiderID]; ok && !prev.Timestamp.IsZero() && !update.Timestamp.After(prev.Timestamp) {
+		return fmt.Errorf("%w: %s <= %s", ErrOutOfOrderPing, update.Timestamp, prev.Timestamp)
+	}
 	m.positions[update.RiderID] = update
 	return nil
 }
@@ -308,4 +313,174 @@ func TestGeofenceChecker_DebounceAndHysteresisDeduplication(t *testing.T) {
 	exitEvs := geofencer.Check(exitPing)
 	require.Len(t, exitEvs, 1)
 	assert.Equal(t, "EXITED_ZONE", exitEvs[0].EventType)
+}
+
+type spyGeofenceDeduplicator struct {
+	calls atomic.Int64
+	inner *InMemoryGeofenceDeduplicator
+}
+
+func newSpyGeofenceDeduplicator() *spyGeofenceDeduplicator {
+	return &spyGeofenceDeduplicator{inner: NewInMemoryGeofenceDeduplicator()}
+}
+
+func (s *spyGeofenceDeduplicator) TryAcquire(ctx context.Context, key string, ttl time.Duration) bool {
+	s.calls.Add(1)
+	return s.inner.TryAcquire(ctx, key, ttl)
+}
+
+func TestGeofenceChecker_OutOfOrderPingDoesNotMutateStateOrConsumeRedisLock(t *testing.T) {
+	geofencer := NewGeofenceChecker(9)
+	dedupSpy := newSpyGeofenceDeduplicator()
+	geofencer.SetDeduplicator(dedupSpy)
+
+	geofencer.AddZone(Zone{
+		ID:                  "store-main",
+		Type:                ZoneStore,
+		CenterLat:           12.9716,
+		CenterLng:           77.5946,
+		RadiusKm:            0.2,
+		MinConsecutivePings: 1,
+		HysteresisWindow:    3 * time.Minute,
+	})
+	geofencer.AddZone(Zone{
+		ID:                  "zone-other",
+		Type:                ZoneDelivery,
+		CenterLat:           12.9900,
+		CenterLng:           77.6100,
+		RadiusKm:            0.2,
+		MinConsecutivePings: 1,
+		HysteresisWindow:    3 * time.Minute,
+	})
+
+	t0 := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+
+	// 1. Accepted ping enters store-main at t0.
+	evs := geofencer.Check(LocationUpdate{
+		RiderID:   "rider-ooo",
+		Lat:       12.9716,
+		Lng:       77.5946,
+		Timestamp: t0,
+	})
+	require.Len(t, evs, 1)
+	assert.Equal(t, "ENTERED_STORE", evs[0].EventType)
+	assert.Equal(t, int64(1), dedupSpy.calls.Load())
+
+	trackMain := geofencer.tracking[riderZoneKey{riderID: "rider-ooo", zoneID: "store-main"}]
+	require.NotNil(t, trackMain)
+	assert.True(t, trackMain.inside)
+	assert.Equal(t, t0, trackMain.lastEventTime)
+
+	trackOther := geofencer.tracking[riderZoneKey{riderID: "rider-ooo", zoneID: "zone-other"}]
+	require.NotNil(t, trackOther)
+	trackOtherBefore := *trackOther
+
+	geofencer.AddZone(Zone{
+		ID:                  "zone-added-later",
+		Type:                ZoneDelivery,
+		CenterLat:           12.9900,
+		CenterLng:           77.6100,
+		RadiusKm:            0.2,
+		MinConsecutivePings: 1,
+		HysteresisWindow:    3 * time.Minute,
+	})
+
+	// 2. Stale ping outside store-main (at t0 - 10s and t0) inside zone-other/zone-added-later must return nil
+	// without emitting EXITED_ZONE or NEAR_DELIVERY, mutating tracking state, or calling TryAcquire.
+	for _, staleTs := range []time.Time{t0.Add(-10 * time.Second), t0} {
+		staleEvs := geofencer.Check(LocationUpdate{
+			RiderID:   "rider-ooo",
+			Lat:       12.9900,
+			Lng:       77.6100,
+			Timestamp: staleTs,
+		})
+		assert.Nil(t, staleEvs)
+		assert.True(t, trackMain.inside, "stale ping must not clear track.inside")
+		assert.Equal(t, t0, trackMain.lastEventTime, "stale ping must not overwrite lastEventTime")
+		assert.Equal(t, trackOtherBefore, *trackOther, "stale ping must not mutate another zone's tracking state")
+		assert.Equal(t, int64(1), dedupSpy.calls.Load(), "stale ping must not consume Redis dedup lock")
+		_, createdLater := geofencer.tracking[riderZoneKey{riderID: "rider-ooo", zoneID: "zone-added-later"}]
+		assert.False(t, createdLater, "stale ping must not create tracking state for new zones")
+	}
+
+	// 3. Debounce state protection: ping at t0+5s inside zone-other with MinConsecutivePings=3,
+	// followed by older ping at t0+2s must not increment consecutiveInside.
+	geofencer.AddZone(Zone{
+		ID:                  "zone-debounced",
+		Type:                ZoneStore,
+		CenterLat:           12.9500,
+		CenterLng:           77.5800,
+		RadiusKm:            0.2,
+		MinConsecutivePings: 3,
+		HysteresisWindow:    3 * time.Minute,
+	})
+	assert.Empty(t, geofencer.Check(LocationUpdate{
+		RiderID:   "rider-debounce-ooo",
+		Lat:       12.9500,
+		Lng:       77.5800,
+		Timestamp: t0.Add(5 * time.Second),
+	}))
+	assert.Empty(t, geofencer.Check(LocationUpdate{
+		RiderID:   "rider-debounce-ooo",
+		Lat:       12.9500,
+		Lng:       77.5800,
+		Timestamp: t0.Add(2 * time.Second),
+	}))
+	trackDeb := geofencer.tracking[riderZoneKey{riderID: "rider-debounce-ooo", zoneID: "zone-debounced"}]
+	require.NotNil(t, trackDeb)
+	assert.Equal(t, 1, trackDeb.consecutiveInside, "out-of-order ping must not advance debounce counter")
+}
+
+func TestLocationHandler_OutOfOrderStoreRejectionSkipsGeofenceAndRedisLock(t *testing.T) {
+	dedupSpy := newSpyGeofenceDeduplicator()
+	h, producer, _, geofencer := setupTestHandler(t, WithTelemetrySmoother(nil))
+	defer h.Close()
+	geofencer.SetDeduplicator(dedupSpy)
+
+	geofencer.AddZone(Zone{
+		ID:        "store-ooo-01",
+		Type:      ZoneStore,
+		CenterLat: 12.9716,
+		CenterLng: 77.5946,
+		RadiusKm:  0.2,
+	})
+
+	now := time.Now().UTC()
+	tsNew := now.UnixMilli()
+	tsStale := now.Add(-30 * time.Second).UnixMilli()
+
+	// 1. Newer ping inside store arrives on this instance -> accepted, emits ENTERED_STORE.
+	body1, _ := json.Marshal(LocationInput{
+		RiderID:   "rider-p1-8",
+		Lat:       12.9716,
+		Lng:       77.5946,
+		Timestamp: &tsNew,
+	})
+	req1 := httptest.NewRequest(http.MethodPost, "/ingest", bytes.NewReader(body1))
+	rec1 := httptest.NewRecorder()
+	h.HandleIngest(rec1, req1)
+	require.Equal(t, http.StatusAccepted, rec1.Code)
+	require.Len(t, producer.getMessages(DefaultGeofenceTopic), 1)
+	require.Len(t, producer.getMessages("rider.location.updates"), 0) // batcher not started; buffered
+	assert.Equal(t, int64(1), dedupSpy.calls.Load())
+
+	// 2. Stale ping outside store arrives (even if geofencer had not seen rider before!)
+	// Store rejects it as out-of-order -> geofence must NOT run, lock must NOT be consumed, no EXITED_ZONE emitted.
+	body2, _ := json.Marshal(LocationInput{
+		RiderID:   "rider-p1-8",
+		Lat:       12.9800,
+		Lng:       77.6000,
+		Timestamp: &tsStale,
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/ingest", bytes.NewReader(body2))
+	rec2 := httptest.NewRecorder()
+	h.HandleIngest(rec2, req2)
+	assert.Equal(t, http.StatusOK, rec2.Code)
+	assert.Contains(t, rec2.Body.String(), "out_of_order_timestamp")
+
+	assert.Len(t, producer.getMessages(DefaultGeofenceTopic), 1, "stale ping must not emit geofence event")
+	assert.Equal(t, int64(1), dedupSpy.calls.Load(), "stale ping must not touch geofence Redis dedup lock")
+	track := geofencer.tracking[riderZoneKey{riderID: "rider-p1-8", zoneID: "store-ooo-01"}]
+	require.NotNil(t, track)
+	assert.True(t, track.inside, "stale ping must not flip track.inside to false")
 }

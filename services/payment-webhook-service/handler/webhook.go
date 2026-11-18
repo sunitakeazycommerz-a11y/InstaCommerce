@@ -11,11 +11,20 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ErrMissingEventID indicates the PSP payload does not contain an event identifier.
 var ErrMissingEventID = errors.New("handler: event ID is required")
+
+// ErrProducerNotConfigured indicates Kafka publishing has not been configured.
+var ErrProducerNotConfigured = errors.New("handler: kafka producer not configured")
 
 // SchemaVersion is the current version of the Kafka transport envelope.
 // Bump when fields are added so consumers can branch on capability.
@@ -33,8 +42,17 @@ const (
 	PhonePe PSPType = "phonepe"
 )
 
-// maxWebhookBody is the upper bound on request body size (1 MiB).
-const maxWebhookBody = 1 << 20
+const (
+	maxWebhookBody        = 1 << 20
+	defaultPublishTimeout = 5 * time.Second
+)
+
+// StatusResponse is the JSON response returned by webhook ingestion endpoints.
+type StatusResponse struct {
+	Status    string `json:"status"`
+	EventID   string `json:"event_id,omitempty"`
+	Duplicate bool   `json:"duplicate,omitempty"`
+}
 
 // WebhookEvent is the canonical, PSP-agnostic representation of a payment
 // webhook event that is published to Kafka for downstream consumers.
@@ -74,15 +92,107 @@ type KafkaProducer interface {
 	Publish(ctx context.Context, topic string, key []byte, value []byte) error
 }
 
+// HeaderKafkaProducer is an optional extension of KafkaProducer that carries
+// Kafka headers and event metadata (e.g. event_id, event_type, trace context).
+type HeaderKafkaProducer interface {
+	KafkaProducer
+	PublishMessage(ctx context.Context, topic string, msg kafka.Message) error
+}
+
+// MessageWriter abstracts kafka.Writer for production publishing and unit testing.
+type MessageWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
+}
+
+// KafkaWriterProducer adapts a MessageWriter (such as *kafka.Writer) to KafkaProducer
+// and HeaderKafkaProducer.
+type KafkaWriterProducer struct {
+	writer MessageWriter
+}
+
+// NewKafkaWriterProducer creates a KafkaWriterProducer around writer.
+func NewKafkaWriterProducer(writer MessageWriter) *KafkaWriterProducer {
+	return &KafkaWriterProducer{writer: writer}
+}
+
+// Publish sends a keyed payload to Kafka.
+func (p *KafkaWriterProducer) Publish(ctx context.Context, topic string, key []byte, value []byte) error {
+	return p.PublishMessage(ctx, topic, kafka.Message{
+		Key:   key,
+		Value: value,
+		Time:  time.Now().UTC(),
+	})
+}
+
+// PublishMessage sends a full kafka.Message (including headers and timestamp) to Kafka.
+func (p *KafkaWriterProducer) PublishMessage(ctx context.Context, _ string, msg kafka.Message) error {
+	if p == nil || p.writer == nil {
+		return ErrProducerNotConfigured
+	}
+	return p.writer.WriteMessages(ctx, msg)
+}
+
+// UnconfiguredKafkaProducer returns ErrProducerNotConfigured so endpoints return HTTP 503.
+type UnconfiguredKafkaProducer struct{}
+
+// Publish returns ErrProducerNotConfigured.
+func (UnconfiguredKafkaProducer) Publish(_ context.Context, _ string, _ []byte, _ []byte) error {
+	return ErrProducerNotConfigured
+}
+
+// WebhookOption configures optional settings on WebhookHandler.
+type WebhookOption func(*WebhookHandler)
+
+// WithMaxBodyBytes overrides the maximum allowed webhook payload size.
+func WithMaxBodyBytes(limit int64) WebhookOption {
+	return func(h *WebhookHandler) {
+		if limit > 0 {
+			h.maxBodyBytes = limit
+		}
+	}
+}
+
+// WithPublishTimeout overrides the per-message Kafka publish timeout.
+func WithPublishTimeout(timeout time.Duration) WebhookOption {
+	return func(h *WebhookHandler) {
+		if timeout > 0 {
+			h.publishTimeout = timeout
+		}
+	}
+}
+
+// WithStripeSignatureHeader overrides the HTTP header inspected for Stripe signatures.
+func WithStripeSignatureHeader(header string) WebhookOption {
+	return func(h *WebhookHandler) {
+		if strings.TrimSpace(header) != "" {
+			h.stripeSigHeader = strings.TrimSpace(header)
+		}
+	}
+}
+
+// WithTracer overrides the OpenTelemetry tracer used for Kafka publish spans.
+func WithTracer(tracer trace.Tracer) WebhookOption {
+	return func(h *WebhookHandler) {
+		if tracer != nil {
+			h.tracer = tracer
+		}
+	}
+}
+
 // WebhookHandler routes incoming PSP callbacks through signature verification,
 // idempotency de-duplication, and Kafka publishing.
 type WebhookHandler struct {
-	verifiers map[PSPType]SignatureVerifier
-	deduper   *IdempotencyStore
-	producer  KafkaProducer
-	topic     string
-	logger    *slog.Logger
-	metrics   *WebhookMetrics
+	verifiers       map[PSPType]SignatureVerifier
+	deduper         DedupeStore
+	producer        KafkaProducer
+	topic           string
+	logger          *slog.Logger
+	metrics         *WebhookMetrics
+	maxBodyBytes    int64
+	publishTimeout  time.Duration
+	stripeSigHeader string
+	tracer          trace.Tracer
 }
 
 // NewWebhookHandler creates a ready-to-use WebhookHandler.
@@ -91,17 +201,18 @@ type WebhookHandler struct {
 // and metrics must be non-nil; the constructor returns an error otherwise.
 func NewWebhookHandler(
 	verifiers map[PSPType]SignatureVerifier,
-	deduper *IdempotencyStore,
+	deduper DedupeStore,
 	producer KafkaProducer,
 	topic string,
 	logger *slog.Logger,
 	metrics *WebhookMetrics,
+	opts ...WebhookOption,
 ) (*WebhookHandler, error) {
 	if len(verifiers) == 0 {
 		return nil, fmt.Errorf("handler: at least one SignatureVerifier is required")
 	}
 	if deduper == nil {
-		return nil, fmt.Errorf("handler: IdempotencyStore must not be nil")
+		return nil, fmt.Errorf("handler: DedupeStore must not be nil")
 	}
 	if producer == nil {
 		return nil, fmt.Errorf("handler: KafkaProducer must not be nil")
@@ -112,21 +223,33 @@ func NewWebhookHandler(
 	if metrics == nil {
 		return nil, fmt.Errorf("handler: WebhookMetrics must not be nil")
 	}
-	return &WebhookHandler{
-		verifiers: verifiers,
-		deduper:   deduper,
-		producer:  producer,
-		topic:     topic,
-		logger:    logger,
-		metrics:   metrics,
-	}, nil
+	h := &WebhookHandler{
+		verifiers:       verifiers,
+		deduper:         deduper,
+		producer:        producer,
+		topic:           topic,
+		logger:          logger,
+		metrics:         metrics,
+		maxBodyBytes:    maxWebhookBody,
+		publishTimeout:  defaultPublishTimeout,
+		stripeSigHeader: "Stripe-Signature",
+		tracer:          otel.Tracer("payment-webhook-service"),
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h, nil
 }
 
 // HandleStripe is the HTTP handler for Stripe webhook callbacks.
 // Stripe signs payloads using HMAC-SHA256 and passes the signature in the
-// "Stripe-Signature" header with format: t=<timestamp>,v1=<sig>.
+// "Stripe-Signature" header (or configured override) with format: t=<timestamp>,v1=<sig>.
 func (h *WebhookHandler) HandleStripe(w http.ResponseWriter, r *http.Request) {
-	h.handlePSP(w, r, Stripe, "Stripe-Signature")
+	sigHeader := h.stripeSigHeader
+	if sigHeader == "" {
+		sigHeader = "Stripe-Signature"
+	}
+	h.handlePSP(w, r, Stripe, sigHeader)
 }
 
 // HandleRazorpay is the HTTP handler for Razorpay webhook callbacks.
@@ -153,8 +276,34 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 
 	h.metrics.EventsReceived.WithLabelValues(string(psp), "").Inc()
 
+	verifier, ok := h.verifiers[psp]
+	if !ok {
+		h.metrics.EventsFailed.WithLabelValues(string(psp), "no_verifier").Inc()
+		h.writeError(w, http.StatusInternalServerError, "unsupported PSP")
+		return
+	}
+	if _, unconfigured := verifier.(*UnconfiguredVerifier); unconfigured {
+		h.metrics.EventsFailed.WithLabelValues(string(psp), "unconfigured_verifier").Inc()
+		h.writeError(w, http.StatusServiceUnavailable, "webhook secret not configured")
+		return
+	}
+	if _, unconfigured := h.producer.(UnconfiguredKafkaProducer); unconfigured {
+		h.metrics.EventsFailed.WithLabelValues(string(psp), "unconfigured_kafka").Inc()
+		h.writeError(w, http.StatusServiceUnavailable, "kafka not configured")
+		return
+	}
+	if _, unconfiguredPtr := h.producer.(*UnconfiguredKafkaProducer); unconfiguredPtr {
+		h.metrics.EventsFailed.WithLabelValues(string(psp), "unconfigured_kafka").Inc()
+		h.writeError(w, http.StatusServiceUnavailable, "kafka not configured")
+		return
+	}
+
+	maxBody := h.maxBodyBytes
+	if maxBody <= 0 {
+		maxBody = maxWebhookBody
+	}
 	// Read body with size limit.
-	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBody)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	defer r.Body.Close()
 
 	payload, err := io.ReadAll(r.Body)
@@ -168,21 +317,24 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 		h.writeError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
-
-	// Verify signature.
-	verifyStart := time.Now()
-	verifier, ok := h.verifiers[psp]
-	if !ok {
-		h.metrics.EventsFailed.WithLabelValues(string(psp), "no_verifier").Inc()
-		h.writeError(w, http.StatusInternalServerError, "unsupported PSP")
+	if len(payload) == 0 {
+		h.metrics.EventsFailed.WithLabelValues(string(psp), "empty_body").Inc()
+		h.writeError(w, http.StatusBadRequest, "empty payload")
 		return
 	}
 
+	// Verify signature.
+	verifyStart := time.Now()
 	signature := r.Header.Get(sigHeader)
 	if err := verifier.Verify(payload, signature); err != nil {
 		h.metrics.VerifyLatency.WithLabelValues(string(psp)).Observe(time.Since(verifyStart).Seconds())
+		if errors.Is(err, ErrVerifierNotConfigured) {
+			h.metrics.EventsFailed.WithLabelValues(string(psp), "unconfigured_verifier").Inc()
+			h.writeError(w, http.StatusServiceUnavailable, "webhook secret not configured")
+			return
+		}
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "signature").Inc()
-		h.logger.WarnContext(ctx, "signature verification failed",
+		h.loggerWithTrace(ctx).WarnContext(ctx, "signature verification failed",
 			"psp", psp, "error", err)
 		h.writeError(w, http.StatusUnauthorized, "invalid signature")
 		return
@@ -193,53 +345,150 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 	event, err := h.parseEvent(psp, payload)
 	if err != nil {
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "parse").Inc()
-		h.logger.WarnContext(ctx, "event parse failed",
+		h.loggerWithTrace(ctx).WarnContext(ctx, "event parse failed",
 			"psp", psp, "error", err)
+		if errors.Is(err, ErrMissingEventID) {
+			h.writeError(w, http.StatusBadRequest, "missing event id")
+			return
+		}
 		h.writeError(w, http.StatusBadRequest, "invalid event payload")
 		return
 	}
-
-	// Idempotency check with atomic CheckAndMark to eliminate concurrent race condition.
-	if h.deduper.CheckAndMark(event.ID) {
-		h.metrics.EventsDuplicate.WithLabelValues(string(psp), event.EventType).Inc()
-		h.logger.DebugContext(ctx, "duplicate event skipped",
-			"psp", psp, "event_id", event.ID)
-		h.writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
-		return
+	if event.EventType == "" {
+		event.EventType = "unknown"
 	}
 
-	// Publish to Kafka.
+	// Marshal canonical envelope before claiming idempotency lock.
 	processStart := time.Now()
 	encoded, err := json.Marshal(event)
 	if err != nil {
-		h.deduper.Remove(event.ID)
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "marshal").Inc()
-		h.writeError(w, http.StatusInternalServerError, "internal error")
+		h.writeError(w, http.StatusInternalServerError, "failed to encode event")
 		return
 	}
 
-	kafkaKey := event.PaymentID
-	if kafkaKey == "" {
-		kafkaKey = event.ID
+	// Atomic idempotency check.
+	isDuplicate, err := h.deduper.CheckAndMark(ctx, event.ID)
+	if err != nil {
+		h.metrics.EventsFailed.WithLabelValues(string(psp), "dedupe").Inc()
+		h.writeError(w, http.StatusServiceUnavailable, "dedupe unavailable")
+		return
 	}
-	if err := h.producer.Publish(ctx, h.topic, []byte(kafkaKey), encoded); err != nil {
-		h.deduper.Remove(event.ID)
+	if isDuplicate {
+		h.metrics.EventsDuplicate.WithLabelValues(string(psp), event.EventType).Inc()
+		h.loggerWithTrace(ctx).DebugContext(ctx, "duplicate event skipped",
+			"psp", psp, "event_id", event.ID)
+		h.writeJSON(w, http.StatusOK, StatusResponse{
+			Status:    "duplicate",
+			EventID:   event.ID,
+			Duplicate: true,
+		})
+		return
+	}
+
+	// Publish to Kafka keyed by PaymentID (fallback event.ID).
+	if err := h.publishEvent(ctx, event, encoded); err != nil {
+		removeCtx, removeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = h.deduper.Remove(removeCtx, event.ID)
+		removeCancel()
+
+		if errors.Is(err, ErrProducerNotConfigured) {
+			h.metrics.EventsFailed.WithLabelValues(string(psp), "unconfigured_kafka").Inc()
+			h.writeError(w, http.StatusServiceUnavailable, "kafka not configured")
+			return
+		}
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "publish").Inc()
-		h.logger.ErrorContext(ctx, "kafka publish failed",
+		h.loggerWithTrace(ctx).ErrorContext(ctx, "kafka publish failed",
 			"psp", psp, "event_id", event.ID, "error", err)
-		h.writeError(w, http.StatusServiceUnavailable, "publish failed")
+		h.writeError(w, http.StatusServiceUnavailable, "failed to publish event")
 		return
 	}
 
 	h.metrics.EventsProcessed.WithLabelValues(string(psp), event.EventType).Inc()
 	h.metrics.ProcessLatency.WithLabelValues(string(psp)).Observe(time.Since(processStart).Seconds())
 
-	h.logger.InfoContext(ctx, "webhook processed",
+	h.loggerWithTrace(ctx).InfoContext(ctx, "webhook accepted",
 		"psp", psp, "event_id", event.ID, "event_type", event.EventType)
-	h.writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":   "accepted",
-		"event_id": event.ID,
+	h.writeJSON(w, http.StatusAccepted, StatusResponse{
+		Status:  "accepted",
+		EventID: event.ID,
 	})
+}
+
+func (h *WebhookHandler) publishEvent(ctx context.Context, event WebhookEvent, encoded []byte) error {
+	kafkaKey := event.PaymentID
+	if kafkaKey == "" {
+		kafkaKey = event.ID
+	}
+
+	timeout := h.publishTimeout
+	if timeout <= 0 {
+		timeout = defaultPublishTimeout
+	}
+	publishCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if h.tracer != nil {
+		var span trace.Span
+		publishCtx, span = h.tracer.Start(publishCtx, "kafka.publish", trace.WithAttributes(
+			attribute.String("messaging.system", "kafka"),
+			attribute.String("messaging.destination", h.topic),
+			attribute.String("messaging.operation", "publish"),
+			attribute.String("event.id", event.ID),
+			attribute.String("event.type", event.EventType),
+		))
+		defer span.End()
+	}
+
+	if headerProd, ok := h.producer.(HeaderKafkaProducer); ok {
+		headers := []kafka.Header{
+			{Key: "event_id", Value: []byte(event.ID)},
+			{Key: "event_type", Value: []byte(event.EventType)},
+		}
+		otel.GetTextMapPropagator().Inject(publishCtx, kafkaHeaderCarrier{headers: &headers})
+		return headerProd.PublishMessage(publishCtx, h.topic, kafka.Message{
+			Key:     []byte(kafkaKey),
+			Value:   encoded,
+			Time:    event.ReceivedAt,
+			Headers: headers,
+		})
+	}
+
+	return h.producer.Publish(publishCtx, h.topic, []byte(kafkaKey), encoded)
+}
+
+func (h *WebhookHandler) loggerWithTrace(ctx context.Context) *slog.Logger {
+	span := trace.SpanFromContext(ctx)
+	sc := span.SpanContext()
+	if !sc.IsValid() {
+		return h.logger
+	}
+	return h.logger.With("trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
+}
+
+type kafkaHeaderCarrier struct {
+	headers *[]kafka.Header
+}
+
+func (c kafkaHeaderCarrier) Get(key string) string {
+	for _, header := range *c.headers {
+		if strings.EqualFold(header.Key, key) {
+			return string(header.Value)
+		}
+	}
+	return ""
+}
+
+func (c kafkaHeaderCarrier) Set(key, value string) {
+	*c.headers = append(*c.headers, kafka.Header{Key: key, Value: []byte(value)})
+}
+
+func (c kafkaHeaderCarrier) Keys() []string {
+	keys := make([]string, 0, len(*c.headers))
+	for _, header := range *c.headers {
+		keys = append(keys, header.Key)
+	}
+	return keys
 }
 
 // ParseEvent converts a raw PSP payload into a canonical WebhookEvent.

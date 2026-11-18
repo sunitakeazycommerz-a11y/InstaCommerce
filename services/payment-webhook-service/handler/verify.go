@@ -4,11 +4,15 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// ErrVerifierNotConfigured indicates a PSP verifier lacks signing credentials.
+var ErrVerifierNotConfigured = errors.New("verify: webhook verifier not configured")
 
 // DefaultTimestampTolerance is the standard 300-second (5-minute) replay window for webhook signatures.
 const DefaultTimestampTolerance = 300 * time.Second
@@ -19,6 +23,20 @@ type SignatureVerifier interface {
 	// Verify checks that signature is valid for the given payload.
 	// Returns nil on success or a descriptive error on failure.
 	Verify(payload []byte, signature string) error
+}
+
+// UnconfiguredVerifier rejects callbacks with ErrVerifierNotConfigured so callers
+// can surface HTTP 503 when signing secrets are not configured.
+type UnconfiguredVerifier struct {
+	Reason string
+}
+
+// Verify always returns ErrVerifierNotConfigured.
+func (v *UnconfiguredVerifier) Verify(_ []byte, _ string) error {
+	if v != nil && v.Reason != "" {
+		return fmt.Errorf("%w: %s", ErrVerifierNotConfigured, v.Reason)
+	}
+	return ErrVerifierNotConfigured
 }
 
 // StripeVerifier validates Stripe webhook signatures.
@@ -115,30 +133,17 @@ func parseStripeHeader(header string) (string, []string) {
 //
 // Razorpay uses HMAC-SHA256 with a shared webhook secret. The hex-encoded
 // signature is passed in the "X-Razorpay-Signature" header. The signed payload
-// is the raw request body (or "t=<ts>,v1=<sig>" when timestamped).
+// is the raw request body.
 type RazorpayVerifier struct {
-	secret    string
-	tolerance time.Duration
+	secret string
 }
 
-// NewRazorpayVerifier creates a RazorpayVerifier with the given webhook secret
-// and the standard 300s timestamp tolerance.
+// NewRazorpayVerifier creates a RazorpayVerifier with the given webhook secret.
 func NewRazorpayVerifier(secret string) (*RazorpayVerifier, error) {
 	if secret == "" {
 		return nil, fmt.Errorf("verify: razorpay webhook secret must not be empty")
 	}
-	return &RazorpayVerifier{
-		secret:    secret,
-		tolerance: DefaultTimestampTolerance,
-	}, nil
-}
-
-// Tolerance returns the configured timestamp replay tolerance.
-func (v *RazorpayVerifier) Tolerance() time.Duration {
-	if v.tolerance <= 0 {
-		return DefaultTimestampTolerance
-	}
-	return v.tolerance
+	return &RazorpayVerifier{secret: secret}, nil
 }
 
 // Verify validates an X-Razorpay-Signature header value against the raw payload.
@@ -147,28 +152,18 @@ func (v *RazorpayVerifier) Verify(payload []byte, signature string) error {
 	if signature == "" {
 		return fmt.Errorf("verify: missing X-Razorpay-Signature header")
 	}
-
-	// If header carries a timestamped signature (t=...,v1=...), enforce tolerance.
-	if tsStr, sigs := parseStripeHeader(signature); tsStr != "" && len(sigs) > 0 {
-		ts, err := strconv.ParseInt(tsStr, 10, 64)
-		if err != nil {
-			return fmt.Errorf("verify: invalid razorpay signature timestamp: %w", err)
-		}
-		age := time.Since(time.Unix(ts, 0))
-		if age < 0 {
-			age = -age
-		}
-		if age > v.Tolerance() {
-			return fmt.Errorf("verify: razorpay signature timestamp outside tolerance (%s)", age)
-		}
-		signature = sigs[0]
+	if len(signature) != sha256.Size*2 {
+		return fmt.Errorf("verify: invalid razorpay signature length")
+	}
+	if _, err := hex.DecodeString(signature); err != nil {
+		return fmt.Errorf("verify: invalid razorpay signature hex: %w", err)
 	}
 
 	mac := hmac.New(sha256.New, []byte(v.secret))
 	mac.Write(payload)
 	expected := hex.EncodeToString(mac.Sum(nil))
 
-	if !hmac.Equal([]byte(signature), []byte(expected)) {
+	if !hmac.Equal([]byte(strings.ToLower(signature)), []byte(expected)) {
 		return fmt.Errorf("verify: razorpay signature mismatch")
 	}
 	return nil
@@ -195,7 +190,8 @@ func NewPhonePeVerifier(saltKey, saltIndex string) (*PhonePeVerifier, error) {
 	return &PhonePeVerifier{saltKey: saltKey, saltIndex: saltIndex}, nil
 }
 
-// Verify validates an X-Verify header value against the raw payload.
+// Verify validates an X-Verify header value against the raw payload using
+// canonical SHA-256(payload + saltKey + saltIndex) verification.
 func (v *PhonePeVerifier) Verify(payload []byte, signature string) error {
 	signature = strings.TrimSpace(signature)
 	if signature == "" {
@@ -226,15 +222,9 @@ func (v *PhonePeVerifier) Verify(payload []byte, signature string) error {
 	h.Write(payload)
 	h.Write([]byte(v.saltKey))
 	h.Write([]byte(v.saltIndex))
-	expectedWithIndex := hex.EncodeToString(h.Sum(nil))
+	expected := hex.EncodeToString(h.Sum(nil))
 
-	hWithoutIndex := sha256.New()
-	hWithoutIndex.Write(payload)
-	hWithoutIndex.Write([]byte(v.saltKey))
-	expectedWithoutIndex := hex.EncodeToString(hWithoutIndex.Sum(nil))
-
-	if !hmac.Equal([]byte(strings.ToLower(receivedHash)), []byte(expectedWithIndex)) &&
-		!hmac.Equal([]byte(strings.ToLower(receivedHash)), []byte(expectedWithoutIndex)) {
+	if !hmac.Equal([]byte(strings.ToLower(receivedHash)), []byte(expected)) {
 		return fmt.Errorf("verify: phonepe signature mismatch")
 	}
 	return nil

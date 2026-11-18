@@ -3,10 +3,20 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/segmentio/kafka-go"
+)
+
+var (
+	// ErrKafkaDisabled indicates no Kafka producer is configured on the batcher.
+	ErrKafkaDisabled = errors.New("kafka disabled")
+	// ErrKafkaBufferFull indicates the batcher's bounded in-memory buffer is at capacity.
+	ErrKafkaBufferFull = errors.New("kafka buffer full")
 )
 
 // KafkaProducer abstracts Kafka message publishing so the batcher can be
@@ -23,19 +33,104 @@ type KafkaMessage struct {
 	Value []byte
 }
 
+// KafkaWriterProducer adapts a *kafka.Writer to KafkaProducer.
+type KafkaWriterProducer struct {
+	writer *kafka.Writer
+}
+
+// NewKafkaWriterProducer wraps a *kafka.Writer as a KafkaProducer.
+func NewKafkaWriterProducer(writer *kafka.Writer) *KafkaWriterProducer {
+	return &KafkaWriterProducer{writer: writer}
+}
+
+// PublishBatch writes keyed messages using the underlying *kafka.Writer.
+func (p *KafkaWriterProducer) PublishBatch(ctx context.Context, _ string, messages []KafkaMessage) error {
+	if p == nil || p.writer == nil {
+		return ErrKafkaDisabled
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	kafkaMsgs := make([]kafka.Message, 0, len(messages))
+	now := time.Now().UTC()
+	for _, m := range messages {
+		kafkaMsgs = append(kafkaMsgs, kafka.Message{
+			Key:   m.Key,
+			Value: m.Value,
+			Time:  now,
+		})
+	}
+	return p.writer.WriteMessages(ctx, kafkaMsgs...)
+}
+
+// LocationEvent is the canonical JSON payload emitted to the rider.location.updates topic.
+type LocationEvent struct {
+	RiderID     string   `json:"rider_id"`
+	Lat         float64  `json:"lat"`
+	Lng         float64  `json:"lng"`
+	TimestampMS int64    `json:"timestamp_ms"`
+	Speed       *float64 `json:"speed,omitempty"`
+	Heading     *float64 `json:"heading,omitempty"`
+	Accuracy    *float64 `json:"accuracy,omitempty"`
+	H3Index     string   `json:"h3_index,omitempty"`
+	GeofenceHit bool     `json:"geofence_hit,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	IngestedAt  string   `json:"ingested_at"`
+}
+
+// LocationBatcherOption configures optional behavior on LocationBatcher.
+type LocationBatcherOption func(*LocationBatcher)
+
+// WithBatchWriteTimeout sets the timeout for each PublishBatch attempt.
+func WithBatchWriteTimeout(d time.Duration) LocationBatcherOption {
+	return func(b *LocationBatcher) {
+		if d > 0 {
+			b.writeTimeout = d
+		}
+	}
+}
+
+// WithBatchBufferCapacity caps the number of buffered updates accepted by Enqueue.
+func WithBatchBufferCapacity(capacity int) LocationBatcherOption {
+	return func(b *LocationBatcher) {
+		if capacity > 0 {
+			b.maxBuffer = capacity
+		}
+	}
+}
+
+// WithBatchRetries sets how many times a failed PublishBatch is retried.
+func WithBatchRetries(retries int) LocationBatcherOption {
+	return func(b *LocationBatcher) {
+		if retries > 0 {
+			b.maxRetries = retries
+		}
+	}
+}
+
+// WithBatchDropHook registers a callback invoked when messages are dropped during flush.
+func WithBatchDropHook(fn func(reason string, count int)) LocationBatcherOption {
+	return func(b *LocationBatcher) {
+		b.onDrop = fn
+	}
+}
+
 // LocationBatcher accumulates GPS pings and flushes them to Kafka either when
 // maxSize messages are buffered or when maxWait elapses — whichever comes
-// first. The default configuration targets 50 messages / 100 ms for
-// low-latency delivery tracking.
+// first.
 type LocationBatcher struct {
-	mu       sync.Mutex
-	buffer   []LocationUpdate
-	maxSize  int
-	maxWait  time.Duration
-	producer KafkaProducer
-	topic    string
-	logger   *slog.Logger
-	notify   chan struct{} // signals that buffer may be full
+	mu           sync.Mutex
+	buffer       []LocationUpdate
+	maxSize      int
+	maxBuffer    int
+	maxWait      time.Duration
+	writeTimeout time.Duration
+	maxRetries   int
+	producer     KafkaProducer
+	topic        string
+	logger       *slog.Logger
+	onDrop       func(reason string, count int)
+	notify       chan struct{} // signals that buffer may be full
 }
 
 // NewLocationBatcher creates a LocationBatcher. The batcher does not start
@@ -46,6 +141,7 @@ func NewLocationBatcher(
 	maxSize int,
 	maxWait time.Duration,
 	logger *slog.Logger,
+	opts ...LocationBatcherOption,
 ) (*LocationBatcher, error) {
 	if producer == nil {
 		return nil, fmt.Errorf("batcher: KafkaProducer must not be nil")
@@ -62,21 +158,38 @@ func NewLocationBatcher(
 	if logger == nil {
 		return nil, fmt.Errorf("batcher: logger must not be nil")
 	}
-	return &LocationBatcher{
-		buffer:   make([]LocationUpdate, 0, maxSize),
-		maxSize:  maxSize,
-		maxWait:  maxWait,
-		producer: producer,
-		topic:    topic,
-		logger:   logger,
-		notify:   make(chan struct{}, 1),
-	}, nil
+	b := &LocationBatcher{
+		buffer:       make([]LocationUpdate, 0, maxSize),
+		maxSize:      maxSize,
+		maxWait:      maxWait,
+		writeTimeout: 5 * time.Second,
+		maxRetries:   3,
+		producer:     producer,
+		topic:        topic,
+		logger:       logger,
+		notify:       make(chan struct{}, 1),
+	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b, nil
 }
 
-// Add appends an update to the internal buffer. If the buffer reaches maxSize
-// the flush loop is notified immediately. Add is safe for concurrent use.
-func (b *LocationBatcher) Add(update LocationUpdate) {
+// Enqueue appends an update to the internal buffer, returning ErrKafkaBufferFull
+// if a bounded buffer capacity is configured and exceeded.
+func (b *LocationBatcher) Enqueue(update LocationUpdate) error {
+	if b == nil || b.producer == nil {
+		return ErrKafkaDisabled
+	}
+	if wp, ok := b.producer.(*KafkaWriterProducer); ok && (wp == nil || wp.writer == nil) {
+		return ErrKafkaDisabled
+	}
+
 	b.mu.Lock()
+	if b.maxBuffer > 0 && len(b.buffer) >= b.maxBuffer {
+		b.mu.Unlock()
+		return ErrKafkaBufferFull
+	}
 	b.buffer = append(b.buffer, update)
 	shouldNotify := len(b.buffer) >= b.maxSize
 	b.mu.Unlock()
@@ -87,6 +200,13 @@ func (b *LocationBatcher) Add(update LocationUpdate) {
 		default:
 		}
 	}
+	return nil
+}
+
+// Add appends an update to the internal buffer. If the buffer reaches maxSize
+// the flush loop is notified immediately. Add is safe for concurrent use.
+func (b *LocationBatcher) Add(update LocationUpdate) {
+	_ = b.Enqueue(update)
 }
 
 // Start runs the flush loop until ctx is cancelled. After cancellation it
@@ -99,8 +219,11 @@ func (b *LocationBatcher) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			b.flush(context.Background()) // best-effort final flush
-			return
+			for {
+				if !b.flush(context.Background()) {
+					return
+				}
+			}
 		case <-ticker.C:
 			b.flush(ctx)
 		case <-b.notify:
@@ -109,23 +232,40 @@ func (b *LocationBatcher) Start(ctx context.Context) {
 	}
 }
 
-// flush drains the buffer and publishes to Kafka.
-func (b *LocationBatcher) flush(ctx context.Context) {
+// flush drains up to maxSize updates from the buffer and publishes them to Kafka.
+// Returns true if more updates remain in the buffer.
+func (b *LocationBatcher) flush(ctx context.Context) bool {
 	b.mu.Lock()
 	if len(b.buffer) == 0 {
 		b.mu.Unlock()
-		return
+		return false
 	}
-	batch := b.buffer
-	b.buffer = make([]LocationUpdate, 0, b.maxSize)
+	n := len(b.buffer)
+	if n > b.maxSize {
+		n = b.maxSize
+	}
+	batch := make([]LocationUpdate, n)
+	copy(batch, b.buffer[:n])
+	remaining := len(b.buffer) - n
+	if remaining > 0 {
+		copy(b.buffer, b.buffer[n:])
+		b.buffer = b.buffer[:remaining]
+	} else {
+		b.buffer = b.buffer[:0]
+	}
 	b.mu.Unlock()
 
 	messages := make([]KafkaMessage, 0, len(batch))
+	ingestedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	for i := range batch {
-		payload, err := json.Marshal(&batch[i])
+		ev := toLocationEvent(batch[i], ingestedAt)
+		payload, err := json.Marshal(ev)
 		if err != nil {
 			b.logger.Error("failed to marshal location update",
 				"rider_id", batch[i].RiderID, "error", err)
+			if b.onDrop != nil {
+				b.onDrop("marshal", 1)
+			}
 			continue
 		}
 		messages = append(messages, KafkaMessage{
@@ -134,11 +274,67 @@ func (b *LocationBatcher) flush(ctx context.Context) {
 		})
 	}
 	if len(messages) == 0 {
-		return
+		return remaining > 0
 	}
 
-	if err := b.producer.PublishBatch(ctx, b.topic, messages); err != nil {
+	attempts := b.maxRetries
+	if attempts <= 0 {
+		attempts = 1
+	}
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		writeCtx := context.WithoutCancel(ctx)
+		var cancel context.CancelFunc
+		if b.writeTimeout > 0 {
+			writeCtx, cancel = context.WithTimeout(writeCtx, b.writeTimeout)
+		}
+		err = b.producer.PublishBatch(writeCtx, b.topic, messages)
+		if cancel != nil {
+			cancel()
+		}
+		if err == nil {
+			break
+		}
+		if attempt < attempts-1 {
+			select {
+			case <-ctx.Done():
+				time.Sleep(50 * time.Millisecond)
+			case <-time.After(time.Duration(50*(attempt+1)) * time.Millisecond):
+			}
+		}
+	}
+	if err != nil {
 		b.logger.Error("kafka batch publish failed",
 			"count", len(messages), "error", err)
+		if b.onDrop != nil {
+			b.onDrop("write", len(messages))
+		}
 	}
+	return remaining > 0
+}
+
+func toLocationEvent(u LocationUpdate, ingestedAt string) LocationEvent {
+	ev := LocationEvent{
+		RiderID:     u.RiderID,
+		Lat:         u.Lat,
+		Lng:         u.Lng,
+		TimestampMS: u.Timestamp.UnixMilli(),
+		H3Index:     u.H3Index,
+		GeofenceHit: u.Geofence,
+		Source:      u.Source,
+		IngestedAt:  ingestedAt,
+	}
+	if u.HasSpeed || u.Speed != 0 {
+		v := u.Speed
+		ev.Speed = &v
+	}
+	if u.HasHeading || u.Heading != 0 {
+		v := u.Heading
+		ev.Heading = &v
+	}
+	if u.HasAccuracy || u.Accuracy != 0 {
+		v := u.Accuracy
+		ev.Accuracy = &v
+	}
+	return ev
 }

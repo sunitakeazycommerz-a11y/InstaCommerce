@@ -279,3 +279,12 @@ func TestBloomFilterConcurrentReadWrite(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestExtractEventID_SupportsTopLevelNestedAndStringifiedPayload(t *testing.T) {
+	assert.Equal(t, "evt-top", ExtractEventID([]byte(`{"event_id":"evt-top"}`)))
+	assert.Equal(t, "evt-camel", ExtractEventID([]byte(`{"eventId":"evt-camel"}`)))
+	assert.Equal(t, "evt-nested", ExtractEventID([]byte(`{"type":"OrderCreated","payload":{"event_id":"evt-nested"}}`)))
+	assert.Equal(t, "evt-nested-str", ExtractEventID([]byte(`{"type":"OrderCreated","payload":"{\"id\":\"evt-nested-str\"}"}`)))
+	assert.Equal(t, "", ExtractEventID([]byte(`{"type":"OrderCreated"}`)))
+	assert.Equal(t, "", ExtractEventID(nil))
+}

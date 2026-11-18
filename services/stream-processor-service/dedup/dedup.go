@@ -29,27 +29,19 @@ type dedupMetrics struct {
 	errorsTotal  prometheus.Counter
 }
 
-var (
-	metricsInstance *dedupMetrics
-	metricsOnce     sync.Once
-)
+var getDedupMetrics = sync.OnceValue(func() *dedupMetrics {
+	return &dedupMetrics{
+		skippedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "dedup_skipped_total",
+			Help: "Total duplicate messages skipped by topic",
+		}, []string{"topic"}),
 
-func getDedupMetrics() *dedupMetrics {
-	metricsOnce.Do(func() {
-		metricsInstance = &dedupMetrics{
-			skippedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-				Name: "dedup_skipped_total",
-				Help: "Total duplicate messages skipped by topic",
-			}, []string{"topic"}),
-
-			errorsTotal: promauto.NewCounter(prometheus.CounterOpts{
-				Name: "dedup_errors_total",
-				Help: "Total dedup Redis check errors (fail-open)",
-			}),
-		}
-	})
-	return metricsInstance
-}
+		errorsTotal: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "dedup_errors_total",
+			Help: "Total dedup Redis check errors (fail-open)",
+		}),
+	}
+})
 
 // RedisClient interface abstraction allowing mock clients for unit tests.
 type RedisClient interface {
@@ -93,7 +85,7 @@ func (c *Checker) WithCustomTTL(ttl time.Duration) *Checker {
 	return c
 }
 
-// ExtractEventID extracts event_id / eventId / id from a JSON envelope if present.
+// ExtractEventID extracts event_id / eventId / id from a JSON envelope (including nested payload) if present.
 func ExtractEventID(payload []byte) string {
 	if len(payload) == 0 {
 		return ""
@@ -102,19 +94,26 @@ func ExtractEventID(payload []byte) string {
 	if err := json.Unmarshal(payload, &raw); err != nil || raw == nil {
 		return ""
 	}
-	for _, k := range []string{"event_id", "eventId", "id"} {
-		if v, ok := raw[k].(string); ok {
-			if trimmed := strings.TrimSpace(v); trimmed != "" {
-				return trimmed
-			}
+	if id := firstEventID(raw); id != "" {
+		return id
+	}
+	switch nested := raw["payload"].(type) {
+	case map[string]any:
+		return firstEventID(nested)
+	case string:
+		var inner map[string]any
+		if err := json.Unmarshal([]byte(nested), &inner); err == nil && inner != nil {
+			return firstEventID(inner)
 		}
 	}
-	if nested, ok := raw["payload"].(map[string]any); ok {
-		for _, k := range []string{"event_id", "eventId", "id"} {
-			if v, ok := nested[k].(string); ok {
-				if trimmed := strings.TrimSpace(v); trimmed != "" {
-					return trimmed
-				}
+	return ""
+}
+
+func firstEventID(m map[string]any) string {
+	for _, k := range []string{"event_id", "eventId", "id"} {
+		if v, ok := m[k].(string); ok {
+			if trimmed := strings.TrimSpace(v); trimmed != "" {
+				return trimmed
 			}
 		}
 	}

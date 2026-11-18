@@ -6,17 +6,17 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 var (
-	// ErrOutOfOrderPing indicates the incoming update has a timestamp older than the current position.
+	// ErrOutOfOrderPing indicates the incoming update has a timestamp older than or equal to the current position.
 	ErrOutOfOrderPing = errors.New("store: incoming position is older than latest known location")
 )
 
@@ -24,15 +24,18 @@ var (
 // avoid a circular import. In a larger codebase this would live in a shared
 // domain package.
 type LocationUpdate struct {
-	RiderID    string    `json:"rider_id"`
-	Lat        float64   `json:"lat"`
-	Lng        float64   `json:"lng"`
-	Accuracy   float64   `json:"accuracy_meters"`
-	Speed      float64   `json:"speed_kmh"`
-	Heading    float64   `json:"heading_degrees"`
-	Timestamp  time.Time `json:"timestamp"`
-	BatteryPct float64   `json:"battery_pct"`
-	H3Index    string    `json:"h3_index,omitempty"`
+	RiderID     string    `json:"rider_id"`
+	Lat         float64   `json:"lat"`
+	Lng         float64   `json:"lng"`
+	Accuracy    float64   `json:"accuracy_meters"`
+	Speed       float64   `json:"speed_kmh"`
+	Heading     float64   `json:"heading_degrees"`
+	Timestamp   time.Time `json:"timestamp"`
+	BatteryPct  float64   `json:"battery_pct"`
+	H3Index     string    `json:"h3_index,omitempty"`
+	HasSpeed    bool      `json:"-"`
+	HasHeading  bool      `json:"-"`
+	HasAccuracy bool      `json:"-"`
 }
 
 const (
@@ -44,37 +47,81 @@ const (
 	H3Resolution8HexDiameterKm = 0.8
 )
 
+// updatePositionScript atomically compares timestamp_ms against the stored latest position
+// and writes the updated hash fields + H3 spatial set membership without TOCTOU races.
+var updatePositionScript = redis.NewScript(`
+local existing = tonumber(redis.call('HGET', KEYS[1], 'timestamp_ms'))
+if existing ~= nil and existing > 0 and tonumber(ARGV[1]) <= existing then
+	return {0, tostring(existing)}
+end
+local old_h3 = redis.call('HGET', KEYS[1], 'h3_index')
+local ttl_ms = tonumber(ARGV[2])
+for i = 5, #ARGV, 2 do
+	redis.call('HSET', KEYS[1], ARGV[i], ARGV[i+1])
+end
+if ttl_ms ~= nil and ttl_ms > 0 then
+	redis.call('PEXPIRE', KEYS[1], ttl_ms)
+end
+local new_h3 = ARGV[3]
+local rider_id = ARGV[4]
+if new_h3 ~= '' then
+	if old_h3 and old_h3 ~= '' and old_h3 ~= new_h3 then
+		redis.call('SREM', 'riders:h3:' .. old_h3, rider_id)
+	end
+	local h3_key = 'riders:h3:' .. new_h3
+	redis.call('SADD', h3_key, rider_id)
+	if ttl_ms ~= nil and ttl_ms > 0 then
+		redis.call('PEXPIRE', h3_key, ttl_ms * 2)
+	end
+end
+return {1, ''}
+`)
+
 // LatestPositionStore persists the most recent GPS position for each rider in
-// Redis. Keys follow the pattern rider:{rider_id}:location and expire after
-// ttl to automatically mark riders as offline when no updates arrive.
-//
-// Used by dispatch-optimizer and routing-eta services for real-time queries.
+// Redis. Default keys follow rider:{rider_id}:location unless a custom prefix
+// (such as "rider:location:") is configured.
 type LatestPositionStore struct {
-	client *redis.Client
-	ttl    time.Duration
+	client    *redis.Client
+	ttl       time.Duration
+	keyPrefix string
 }
 
 // NewLatestPositionStore creates a store backed by the given Redis client.
 // ttl controls how long a position is retained before the rider is considered
 // offline (default: 60 seconds).
 func NewLatestPositionStore(client *redis.Client, ttl time.Duration) (*LatestPositionStore, error) {
+	return NewLatestPositionStoreWithPrefix(client, "", ttl)
+}
+
+// NewLatestPositionStoreWithPrefix creates a store with an explicit Redis hash key prefix
+// (for example "rider:location:") and TTL.
+func NewLatestPositionStoreWithPrefix(client *redis.Client, keyPrefix string, ttl time.Duration) (*LatestPositionStore, error) {
 	if client == nil {
 		return nil, fmt.Errorf("store: redis client must not be nil")
 	}
 	if ttl <= 0 {
 		ttl = DefaultRiderHeartbeatTTL
 	}
-	return &LatestPositionStore{client: client, ttl: ttl}, nil
+	return &LatestPositionStore{client: client, ttl: ttl, keyPrefix: keyPrefix}, nil
 }
 
-// keyFor returns the Redis key for a rider's latest position.
+// keyFor returns the default Redis key for a rider's latest position.
 func keyFor(riderID string) string {
 	return "rider:" + riderID + ":location"
 }
 
-// h3KeyFor returns the Redis key for a rider's current H3 cell.
-func h3KeyFor(riderID string) string {
-	return "rider:" + riderID + ":h3"
+func (s *LatestPositionStore) positionKey(riderID string) string {
+	if s.keyPrefix != "" {
+		return s.keyPrefix + riderID
+	}
+	return keyFor(riderID)
+}
+
+func (s *LatestPositionStore) scanPattern() string {
+	if s.keyPrefix != "" {
+		return s.keyPrefix + "*"
+	}
+	return "rider:*:location"
 }
 
 // h3SetKey returns the Redis set key for all active riders in an H3 index.
@@ -82,63 +129,136 @@ func h3SetKey(h3Index string) string {
 	return "riders:h3:" + h3Index
 }
 
-// Update stores (or overwrites) the latest position for a rider. The key's
-// TTL is refreshed on every call so that active riders remain visible.
-// Rejects out-of-order pings (Issue #597) and indexes by H3 Resolution 8 (Issue #607).
+// Update atomically stores (or updates) the latest position for a rider via Lua CAS.
+// Rejects out-of-order pings (Issue #597) and maintains H3 Resolution 8 rider sets (Issue #607).
 func (s *LatestPositionStore) Update(ctx context.Context, update LocationUpdate) error {
-	// 1. Check existing position to prevent out-of-order regression (Issue #597)
-	existing, err := s.Get(ctx, update.RiderID)
-	if err == nil && existing != nil && !existing.Timestamp.IsZero() {
-		if !update.Timestamp.After(existing.Timestamp) {
-			return fmt.Errorf("%w: incoming %s <= stored %s",
-				ErrOutOfOrderPing, update.Timestamp.Format(time.RFC3339Nano), existing.Timestamp.Format(time.RFC3339Nano))
-		}
+	if update.Timestamp.IsZero() {
+		update.Timestamp = time.Now().UTC()
 	}
-
-	// 2. Compute H3 index if not already present (Issue #607)
 	if update.H3Index == "" {
 		update.H3Index = latLngToH3Res8(update.Lat, update.Lng)
 	}
 
-	data, err := json.Marshal(&update)
+	incomingMs := update.Timestamp.UnixMilli()
+	ttlMs := s.ttl.Milliseconds()
+
+	args := []any{
+		incomingMs,
+		ttlMs,
+		update.H3Index,
+		update.RiderID,
+		"lat", strconv.FormatFloat(update.Lat, 'f', -1, 64),
+		"lng", strconv.FormatFloat(update.Lng, 'f', -1, 64),
+		"timestamp_ms", strconv.FormatInt(incomingMs, 10),
+	}
+	if update.HasSpeed || update.Speed != 0 {
+		args = append(args, "speed", strconv.FormatFloat(update.Speed, 'f', -1, 64))
+	}
+	if update.HasHeading || update.Heading != 0 {
+		args = append(args, "heading", strconv.FormatFloat(update.Heading, 'f', -1, 64))
+	}
+	if update.HasAccuracy || update.Accuracy != 0 {
+		args = append(args, "accuracy", strconv.FormatFloat(update.Accuracy, 'f', -1, 64))
+	}
+	if update.BatteryPct != 0 {
+		args = append(args, "battery_pct", strconv.FormatFloat(update.BatteryPct, 'f', -1, 64))
+	}
+	if update.H3Index != "" {
+		args = append(args, "h3_index", update.H3Index)
+	}
+
+	rawRes, err := updatePositionScript.Run(ctx, s.client, []string{s.positionKey(update.RiderID)}, args...).Result()
 	if err != nil {
-		return fmt.Errorf("store: marshal position: %w", err)
+		return fmt.Errorf("store: update position for rider %s: %w", update.RiderID, err)
 	}
 
-	key := keyFor(update.RiderID)
-	if err := s.client.Set(ctx, key, data, s.ttl).Err(); err != nil {
-		return fmt.Errorf("store: set position for rider %s: %w", update.RiderID, err)
+	vals, ok := rawRes.([]any)
+	if ok && len(vals) >= 1 {
+		accepted, _ := toInt64(vals[0])
+		if accepted == 0 {
+			existing := ""
+			if len(vals) >= 2 {
+				existing = fmt.Sprint(vals[1])
+			}
+			return fmt.Errorf("%w: %d <= %s", ErrOutOfOrderPing, incomingMs, existing)
+		}
 	}
-
-	// 3. Maintain active rider sets in Redis keyed by H3 index (Issue #607)
-	oldH3, _ := s.client.Get(ctx, h3KeyFor(update.RiderID)).Result()
-	if oldH3 != "" && oldH3 != update.H3Index {
-		_ = s.client.SRem(ctx, h3SetKey(oldH3), update.RiderID).Err()
-	}
-
-	_ = s.client.SAdd(ctx, h3SetKey(update.H3Index), update.RiderID).Err()
-	_ = s.client.Expire(ctx, h3SetKey(update.H3Index), s.ttl*2).Err()
-	_ = s.client.Set(ctx, h3KeyFor(update.RiderID), update.H3Index, s.ttl).Err()
-
 	return nil
+}
+
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case string:
+		parsed, err := strconv.ParseInt(n, 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 // Get retrieves the latest known position for riderID. Returns nil if the
 // rider is not found (key expired or never set).
 func (s *LatestPositionStore) Get(ctx context.Context, riderID string) (*LocationUpdate, error) {
-	data, err := s.client.Get(ctx, keyFor(riderID)).Bytes()
+	return s.getByKey(ctx, s.positionKey(riderID), riderID)
+}
+
+func (s *LatestPositionStore) getByKey(ctx context.Context, key, riderID string) (*LocationUpdate, error) {
+	fields, err := s.client.HGetAll(ctx, key).Result()
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("store: get position for rider %s: %w", riderID, err)
+		return nil, fmt.Errorf("store: get position for key %s: %w", key, err)
+	}
+	if len(fields) == 0 {
+		return nil, nil
 	}
 
-	var update LocationUpdate
-	if err := json.Unmarshal(data, &update); err != nil {
-		return nil, fmt.Errorf("store: unmarshal position for rider %s: %w", riderID, err)
+	lat, err := strconv.ParseFloat(fields["lat"], 64)
+	if err != nil {
+		return nil, fmt.Errorf("store: invalid lat for %s: %w", key, err)
 	}
-	return &update, nil
+	lng, err := strconv.ParseFloat(fields["lng"], 64)
+	if err != nil {
+		return nil, fmt.Errorf("store: invalid lng for %s: %w", key, err)
+	}
+	tsMs, err := strconv.ParseInt(fields["timestamp_ms"], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("store: invalid timestamp_ms for %s: %w", key, err)
+	}
+
+	update := &LocationUpdate{
+		RiderID:   riderID,
+		Lat:       lat,
+		Lng:       lng,
+		Timestamp: time.UnixMilli(tsMs).UTC(),
+		H3Index:   fields["h3_index"],
+	}
+	if v, ok := fields["speed"]; ok {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			update.Speed = parsed
+			update.HasSpeed = true
+		}
+	}
+	if v, ok := fields["heading"]; ok {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			update.Heading = parsed
+			update.HasHeading = true
+		}
+	}
+	if v, ok := fields["accuracy"]; ok {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			update.Accuracy = parsed
+			update.HasAccuracy = true
+		}
+	}
+	if v, ok := fields["battery_pct"]; ok {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			update.BatteryPct = parsed
+		}
+	}
+	return update, nil
 }
 
 // GetNearby returns all riders whose latest known position is within radiusKm
@@ -153,29 +273,25 @@ func (s *LatestPositionStore) GetNearby(ctx context.Context, lat, lng, radiusKm 
 
 	var cursor uint64
 	var results []LocationUpdate
+	pattern := s.scanPattern()
 
 	for {
-		keys, nextCursor, err := s.client.Scan(ctx, cursor, "rider:*:location", 100).Result()
+		keys, nextCursor, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
 		if err != nil {
 			return nil, fmt.Errorf("store: scan rider keys: %w", err)
 		}
 
 		for _, key := range keys {
-			data, err := s.client.Get(ctx, key).Bytes()
+			update, err := s.getByKey(ctx, key, key)
 			if err != nil {
-				if errors.Is(err, redis.Nil) {
-					continue
-				}
-				return nil, fmt.Errorf("store: get key %s: %w", key, err)
-			}
-
-			var update LocationUpdate
-			if err := json.Unmarshal(data, &update); err != nil {
 				continue // skip corrupt entries
+			}
+			if update == nil {
+				continue
 			}
 
 			if haversineKm(lat, lng, update.Lat, update.Lng) <= radiusKm {
-				results = append(results, update)
+				results = append(results, *update)
 			}
 		}
 

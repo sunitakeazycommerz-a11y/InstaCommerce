@@ -269,10 +269,10 @@ func TestLoadConfig_RedisTTLDefault10MinutesWhenNonPositive(t *testing.T) {
 func TestNewHTTPMux_EnforcesInternalAuthOnIngestAndBatch(t *testing.T) {
 	t.Setenv("INTERNAL_SERVICE_TOKEN", "secret-loc-token")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	service := &IngestService{
-		cfg:    Config{RedisTTL: 10 * time.Minute, MaxBodyBytes: defaultMaxBodyBytes, ProcessTimeout: time.Second},
-		logger: logger,
-	}
+	service := handler.NewIngestHandler(
+		handler.IngestConfig{MaxBodyBytes: defaultMaxBodyBytes, ProcessTimeout: time.Second},
+		nil, nil, nil, logger, nil,
+	)
 	healthHandler := health.NewHandler()
 	healthHandler.SetReady(true)
 	mux := newHTTPMux(service, healthHandler, logger)
@@ -308,14 +308,16 @@ func TestProcessInput_PublishesGeofenceTransitions(t *testing.T) {
 		RadiusKm:  0.2,
 	})
 	pub := &stubGeofencePublisher{}
-	service := &IngestService{
-		cfg:         Config{ProcessTimeout: time.Second},
-		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		geofencer:   geofencer,
-		geofencePub: pub,
-	}
+	service := handler.NewIngestHandler(
+		handler.IngestConfig{ProcessTimeout: time.Second},
+		nil, nil, geofencer,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+		handler.WithGeofencePublisher(pub),
+		handler.WithSynchronousGeofence(true),
+	)
 
-	err := service.processInput(context.Background(), LocationInput{
+	err := service.ProcessInput(context.Background(), handler.LocationInput{
 		RiderID: "rider-geo-1",
 		Lat:     12.9716,
 		Lng:     77.5946,
@@ -333,11 +335,10 @@ func TestProcessInput_PublishesGeofenceTransitions(t *testing.T) {
 func TestCloseWebSockets_WaitsForActiveConnectionGoroutines(t *testing.T) {
 	t.Setenv("INTERNAL_SERVICE_TOKEN", "ws-secret")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	service := &IngestService{
-		cfg:     Config{WebSocketReadMax: 1 << 20, ProcessTimeout: time.Second},
-		logger:  logger,
-		wsConns: make(map[*websocket.Conn]struct{}),
-	}
+	service := handler.NewIngestHandler(
+		handler.IngestConfig{WebSocketReadMax: 1 << 20, ProcessTimeout: time.Second},
+		nil, nil, nil, logger, nil,
+	)
 	hh := health.NewHandler()
 	hh.SetReady(true)
 	srv := httptest.NewServer(newHTTPMux(service, hh, logger))
@@ -352,15 +353,10 @@ func TestCloseWebSockets_WaitsForActiveConnectionGoroutines(t *testing.T) {
 	defer conn.Close()
 
 	require.Eventually(t, func() bool {
-		service.wsMu.Lock()
-		defer service.wsMu.Unlock()
-		return len(service.wsConns) == 1
+		return service.ActiveWebSockets() == 1
 	}, time.Second, 5*time.Millisecond)
 
 	service.CloseWebSockets()
 
-	service.wsMu.Lock()
-	remaining := len(service.wsConns)
-	service.wsMu.Unlock()
-	assert.Equal(t, 0, remaining)
+	assert.Equal(t, 0, service.ActiveWebSockets())
 }

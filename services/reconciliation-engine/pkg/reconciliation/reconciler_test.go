@@ -3,6 +3,7 @@ package reconciliation
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -305,6 +306,9 @@ func TestApplyFix_ClearsManualReviewAndWritesAdjustment(t *testing.T) {
 	for _, stmt := range state.recorded() {
 		if strings.Contains(stmt.Query, "INSERT INTO payment_ledger") {
 			sawAdjustment = true
+			require.Len(t, stmt.Args, 2)
+			assert.Equal(t, "txn-adj-1", stmt.Args[0].Value)
+			assert.Equal(t, int64(2550), stmt.Args[1].Value)
 		}
 		if strings.Contains(stmt.Query, "UPDATE reconciliation_mismatches") &&
 			strings.Contains(stmt.Query, "manual_review_required = false") {
@@ -313,4 +317,58 @@ func TestApplyFix_ClearsManualReviewAndWritesAdjustment(t *testing.T) {
 	}
 	assert.True(t, sawAdjustment, "ApplyFix must write adjustment row to payment_ledger")
 	assert.True(t, sawManualReviewClear, "ApplyFix must set manual_review_required = false")
+}
+
+func TestApplyFix_PropagatesQueryAndScanErrorsWithoutZeroAdjustment(t *testing.T) {
+	t.Run("query error aborts without writing ledger adjustment", func(t *testing.T) {
+		dbErr := errors.New("connection lost")
+		queryFn := func(_ int64, query string, _ []driver.NamedValue) (driver.Rows, error) {
+			if strings.Contains(query, "FROM reconciliation_mismatches") {
+				return nil, dbErr
+			}
+			return &stubRows{}, nil
+		}
+
+		db, state := newStubDB(queryFn, nil)
+		defer db.Close()
+
+		r := NewDBReconciler(db, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+		err := r.ApplyFix(context.Background(), 99, "adjust_ledger", nil, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, dbErr)
+		assert.Contains(t, err.Error(), "failed to get mismatch")
+
+		for _, stmt := range state.recorded() {
+			assert.NotContains(t, stmt.Query, "INSERT INTO payment_ledger")
+			assert.NotContains(t, stmt.Query, "INSERT INTO reconciliation_fixes")
+		}
+	})
+
+	t.Run("2-column scan mismatch errors instead of falling back to 0 cents", func(t *testing.T) {
+		queryCount := 0
+		queryFn := func(_ int64, query string, _ []driver.NamedValue) (driver.Rows, error) {
+			if strings.Contains(query, "FROM reconciliation_mismatches") {
+				queryCount++
+				return &stubRows{
+					columns: []string{"run_id", "transaction_id"},
+					data:    [][]driver.Value{{int64(77), "txn-adj-1"}},
+				}, nil
+			}
+			return &stubRows{}, nil
+		}
+
+		db, state := newStubDB(queryFn, nil)
+		defer db.Close()
+
+		r := NewDBReconciler(db, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+		err := r.ApplyFix(context.Background(), 99, "adjust_ledger", nil, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get mismatch")
+		assert.Equal(t, 1, queryCount, "must not retry with a 2-column fallback query")
+
+		for _, stmt := range state.recorded() {
+			assert.NotContains(t, stmt.Query, "INSERT INTO payment_ledger")
+			assert.NotContains(t, stmt.Query, "INSERT INTO reconciliation_fixes")
+		}
+	})
 }

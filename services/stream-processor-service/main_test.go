@@ -120,6 +120,16 @@ func TestFailedAndPanickedOffsetsReprocessedOnReplayAfterRestart(t *testing.T) {
 	assert.Equal(t, int32(2), callsOffset1.Load(), "failed offset must not be skipped on replay after restart")
 	assert.Equal(t, int32(2), callsOffset2.Load(), "panicked offset must not be skipped on replay after restart")
 
+	committedMu.Lock()
+	replayPhase1 := append([]int64(nil), committed...)
+	committed = nil
+	committedMu.Unlock()
+	require.NotEmpty(t, replayPhase1, "disp2 must commit resolved offsets up to 2")
+	assert.Equal(t, int64(2), replayPhase1[len(replayPhase1)-1])
+	for i := 1; i < len(replayPhase1); i++ {
+		assert.Greater(t, replayPhase1[i], replayPhase1[i-1])
+	}
+
 	disp3 := processor.NewStreamDispatcher(cfg, logger, wrapHandlerWithDedup(deduper2, logger, handler), commitFn)
 	disp3.Start(ctx)
 	require.NoError(t, dispatchMessage(ctx, logger, deduper2, disp3, kafka.Message{Topic: "orders.events", Partition: 0, Offset: 1}))
@@ -130,6 +140,6 @@ func TestFailedAndPanickedOffsetsReprocessedOnReplayAfterRestart(t *testing.T) {
 	assert.Equal(t, int32(2), callsOffset2.Load(), "succeeded offset must be deduplicated on subsequent replay")
 
 	committedMu.Lock()
-	assert.Equal(t, []int64{1, 2, 1, 2}, committed)
+	assert.Equal(t, []int64{1, 2}, committed)
 	committedMu.Unlock()
 }

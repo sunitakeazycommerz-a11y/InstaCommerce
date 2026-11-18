@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -47,21 +46,25 @@ func (e *RiderEvent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+var riderEventAliases = map[string]string{
+	"RIDERONLINE":     "RiderOnline",
+	"RIDER_ONLINE":    "RiderOnline",
+	"RIDERACTIVATED":  "RiderOnline",
+	"RIDER_ACTIVATED": "RiderOnline",
+	"RIDERIDLE":       "RiderIdle",
+	"RIDER_IDLE":      "RiderIdle",
+	"RIDERASSIGNED":   "RiderAssigned",
+	"RIDER_ASSIGNED":  "RiderAssigned",
+	"RIDEROFFLINE":    "RiderOffline",
+	"RIDER_OFFLINE":   "RiderOffline",
+	"RIDERSUSPENDED":  "RiderOffline",
+	"RIDER_SUSPENDED": "RiderOffline",
+	"RIDERDELIVERED":  "RiderDelivered",
+	"RIDER_DELIVERED": "RiderDelivered",
+}
+
 func normalizeRiderEventType(raw string) string {
-	switch strings.ToUpper(strings.TrimSpace(raw)) {
-	case "RIDERONLINE", "RIDER_ONLINE", "RIDERACTIVATED", "RIDER_ACTIVATED":
-		return "RiderOnline"
-	case "RIDERIDLE", "RIDER_IDLE":
-		return "RiderIdle"
-	case "RIDERASSIGNED", "RIDER_ASSIGNED":
-		return "RiderAssigned"
-	case "RIDEROFFLINE", "RIDER_OFFLINE", "RIDERSUSPENDED", "RIDER_SUSPENDED":
-		return "RiderOffline"
-	case "RIDERDELIVERED", "RIDER_DELIVERED":
-		return "RiderDelivered"
-	default:
-		return strings.TrimSpace(raw)
-	}
+	return normalizeEventType(raw, riderEventAliases)
 }
 
 type LocationUpdate struct {
@@ -100,6 +103,7 @@ func (u *LocationUpdate) UnmarshalJSON(data []byte) error {
 type riderState struct {
 	Status    string
 	ZoneID    string
+	zoneLabel string
 	UpdatedAt time.Time
 }
 
@@ -111,42 +115,34 @@ type riderMetrics struct {
 	processingErrors prometheus.Counter
 }
 
-var (
-	riderMetricsInstance *riderMetrics
-	riderMetricsOnce     sync.Once
-)
+var newRiderMetrics = sync.OnceValue(func() *riderMetrics {
+	return &riderMetrics{
+		ridersByStatus: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "riders_by_status",
+			Help: "Number of riders by status and zone",
+		}, []string{"status", "zone_id"}),
 
-func newRiderMetrics() *riderMetrics {
-	riderMetricsOnce.Do(func() {
-		riderMetricsInstance = &riderMetrics{
-			ridersByStatus: promauto.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "riders_by_status",
-				Help: "Number of riders by status and zone",
-			}, []string{"status", "zone_id"}),
+		deliveriesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "rider_deliveries_total",
+			Help: "Total deliveries completed per rider",
+		}, []string{"rider_id", "zone_id"}),
 
-			deliveriesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-				Name: "rider_deliveries_total",
-				Help: "Total deliveries completed per rider",
-			}, []string{"rider_id", "zone_id"}),
+		earningsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "rider_earnings_total_cents",
+			Help: "Total rider earnings in cents",
+		}, []string{"rider_id", "zone_id"}),
 
-			earningsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-				Name: "rider_earnings_total_cents",
-				Help: "Total rider earnings in cents",
-			}, []string{"rider_id", "zone_id"}),
+		locationUpdates: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "rider_location_updates_total",
+			Help: "Total rider location updates processed",
+		}),
 
-			locationUpdates: promauto.NewCounter(prometheus.CounterOpts{
-				Name: "rider_location_updates_total",
-				Help: "Total rider location updates processed",
-			}),
-
-			processingErrors: promauto.NewCounter(prometheus.CounterOpts{
-				Name: "rider_processing_errors_total",
-				Help: "Total rider event processing errors",
-			}),
-		}
-	})
-	return riderMetricsInstance
-}
+		processingErrors: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "rider_processing_errors_total",
+			Help: "Total rider event processing errors",
+		}),
+	}
+})
 
 type RiderProcessor struct {
 	redis      *redis.Client
@@ -190,27 +186,30 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 
 	// Decrement old status gauge if rider had a previous state
 	if prev, ok := p.states[event.RiderID]; ok {
-		p.metrics.ridersByStatus.WithLabelValues(prev.Status, prev.ZoneID).Dec()
+		prevZoneLabel := prev.zoneLabel
+		if prevZoneLabel == "" {
+			prevZoneLabel = p.zoneGuard.normalize(prev.ZoneID, "unknown")
+		}
+		p.metrics.ridersByStatus.WithLabelValues(prev.Status, prevZoneLabel).Dec()
 	}
 
 	// Map event type to rider status
 	var status string
 	switch event.EventType {
-	case "RiderOnline", "RiderIdle":
+	case "RiderOnline", "RiderIdle", "RiderDelivered":
 		status = "idle"
 	case "RiderAssigned":
 		status = "active"
 	case "RiderOffline":
 		status = "offline"
-	case "RiderDelivered":
-		status = "idle"
 	default:
 		status = "unknown"
 	}
 
 	p.states[event.RiderID] = &riderState{
 		Status:    status,
-		ZoneID:    zoneLabel,
+		ZoneID:    event.ZoneID,
+		zoneLabel: zoneLabel,
 		UpdatedAt: event.Timestamp,
 	}
 
@@ -232,17 +231,17 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 
 	pipe := p.redis.Pipeline()
 
-	// Store rider status in Redis
+	// Store rider status in Redis using raw ZoneID.
 	riderKey := fmt.Sprintf("rider:status:%s", event.RiderID)
 	pipe.HSet(ctx, riderKey, map[string]interface{}{
 		"status":  status,
-		"zone_id": zoneLabel,
+		"zone_id": event.ZoneID,
 		"updated": event.Timestamp.Unix(),
 	})
 	pipe.Expire(ctx, riderKey, redisMetricsTTL)
 
-	// Zone-level rider counts
-	zoneKey := fmt.Sprintf("riders:zone:%s:%s", zoneLabel, status)
+	// Zone-level rider counts using raw ZoneID.
+	zoneKey := fmt.Sprintf("riders:zone:%s:%s", event.ZoneID, status)
 	pipe.Incr(ctx, zoneKey)
 	pipe.Expire(ctx, zoneKey, redisMetricsTTL)
 
@@ -264,7 +263,6 @@ func (p *RiderProcessor) ProcessLocationUpdate(ctx context.Context, update Locat
 	if update.Timestamp.IsZero() {
 		update.Timestamp = time.Now().UTC()
 	}
-	zoneLabel := p.zoneGuard.normalize(update.ZoneID, "unknown")
 	p.metrics.locationUpdates.Inc()
 
 	if p.redis == nil {
@@ -273,19 +271,19 @@ func (p *RiderProcessor) ProcessLocationUpdate(ctx context.Context, update Locat
 
 	pipe := p.redis.Pipeline()
 
-	// Store latest location in Redis (for real-time map)
+	// Store latest location in Redis (for real-time map) using raw ZoneID.
 	locKey := fmt.Sprintf("rider:location:%s", update.RiderID)
 	pipe.HSet(ctx, locKey, map[string]interface{}{
 		"lat":       update.Latitude,
 		"lng":       update.Longitude,
-		"zone_id":   zoneLabel,
+		"zone_id":   update.ZoneID,
 		"speed":     update.Speed,
 		"timestamp": update.Timestamp.Unix(),
 	})
 	pipe.Expire(ctx, locKey, 10*time.Minute)
 
-	// Add to zone's active riders geo set with 24h TTL
-	geoKey := fmt.Sprintf("riders:geo:%s", zoneLabel)
+	// Add to zone's active riders geo set with 24h TTL using raw ZoneID.
+	geoKey := fmt.Sprintf("riders:geo:%s", update.ZoneID)
 	pipe.GeoAdd(ctx, geoKey, &redis.GeoLocation{
 		Name:      update.RiderID,
 		Longitude: update.Longitude,

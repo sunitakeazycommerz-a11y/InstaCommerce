@@ -6,9 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/instacommerce/location-ingestion-service/handler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type LocationInput = handler.LocationInput
+
+var normalizeLocation = handler.NormalizeLocation
 
 func TestLocationEventIngestionWithValidCoordinates(t *testing.T) {
 	// Test that valid location events are accepted
@@ -48,12 +53,12 @@ func TestLocationEventWithCompleteMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "rider-456", update.RiderID)
-	assert.NotNil(t, update.Speed)
-	assert.Equal(t, 25.5, *update.Speed)
-	assert.NotNil(t, update.Heading)
-	assert.Equal(t, 180.0, *update.Heading)
-	assert.NotNil(t, update.Accuracy)
-	assert.Equal(t, 5.0, *update.Accuracy)
+	assert.True(t, update.HasSpeed)
+	assert.Equal(t, 25.5, update.Speed)
+	assert.True(t, update.HasHeading)
+	assert.Equal(t, 180.0, update.Heading)
+	assert.True(t, update.HasAccuracy)
+	assert.Equal(t, 5.0, update.Accuracy)
 }
 
 func TestLocationValidationRejectsInvalidLatitude(t *testing.T) {

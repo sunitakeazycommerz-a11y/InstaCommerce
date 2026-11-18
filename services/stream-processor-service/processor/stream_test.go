@@ -58,7 +58,7 @@ func TestStreamDispatcherBackpressure80And30Percent(t *testing.T) {
 		err := dispatcher.Submit(ctx, kafka.Message{
 			Topic:  "test.topic",
 			Offset: int64(i),
-			Value:  []byte(fmt.Sprintf("msg-%d", i)),
+			Value:  fmt.Appendf(nil, "msg-%d", i),
 		})
 		assert.NoError(t, err)
 	}

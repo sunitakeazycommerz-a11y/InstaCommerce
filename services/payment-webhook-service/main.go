@@ -2,24 +2,16 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
+	"github.com/instacommerce/go-shared/pkg/observability"
 	"github.com/instacommerce/payment-webhook-service/handler"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -27,125 +19,11 @@ import (
 	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
-	"go.opentelemetry.io/otel/trace"
 )
-
-const (
-	defaultPort               = "8106"
-	defaultSignatureHeader    = "Stripe-Signature"
-	defaultSignatureTolerance = 300
-	defaultMaxBodyBytes       = 1 << 20
-	defaultDedupeTTLSeconds   = 86400
-	defaultCleanupSeconds     = 60
-	defaultPublishQueueSize   = 1000
-	defaultPublishTimeoutMS   = 5000
-	defaultShutdownSeconds    = 15
-)
-
-type Config struct {
-	Port                 string
-	WebhookSecret        string
-	SignatureHeader      string
-	SignatureTolerance   time.Duration
-	MaxBodyBytes         int64
-	DedupeTTL            time.Duration
-	DedupeCleanup        time.Duration
-	RedisAddr            string
-	RedisPassword        string
-	RedisDB              int
-	RedisTimeout         time.Duration
-	KafkaBrokers         []string
-	KafkaTopic           string
-	PublishQueueSize     int
-	PublishTimeout       time.Duration
-	ShutdownTimeout      time.Duration
-	ReadHeaderTimeout    time.Duration
-	ReadTimeout          time.Duration
-	WriteTimeout         time.Duration
-	IdleTimeout          time.Duration
-	RequireKafka         bool
-	RequireWebhookSecret bool
-}
-
-type metrics struct {
-	requestsTotal     *prometheus.CounterVec
-	requestDuration   *prometheus.HistogramVec
-	signatureFailures prometheus.Counter
-	payloadFailures   prometheus.Counter
-	dedupeDuplicates  prometheus.Counter
-	dedupeErrors      prometheus.Counter
-	publishEnqueued   prometheus.Counter
-	publishDropped    prometheus.Counter
-	publishSuccess    prometheus.Counter
-	publishErrors     prometheus.Counter
-	queueDepth        prometheus.Gauge
-}
-
-type DedupeStore interface {
-	Check(ctx context.Context, eventID string) (bool, error)
-	Set(ctx context.Context, eventID string) error
-	CheckAndSet(ctx context.Context, eventID string) (bool, error)
-	Remove(ctx context.Context, eventID string) error
-	Close() error
-}
-
-type inMemoryDedupe struct {
-	ttl       time.Duration
-	entries   map[string]time.Time
-	mu        sync.Mutex
-	stop      chan struct{}
-	closeOnce sync.Once
-}
-
-type redisDedupe struct {
-	client  *redis.Client
-	ttl     time.Duration
-	prefix  string
-	timeout time.Duration
-}
-
-type messageWriter interface {
-	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
-	Close() error
-}
-
-type webhookHandler struct {
-	cfg            Config
-	logger         *slog.Logger
-	metrics        *metrics
-	dedupe         DedupeStore
-	writer         messageWriter
-	publishTimeout time.Duration
-	tracer         trace.Tracer
-}
-
-type readiness struct {
-	secretSet       bool
-	kafkaConfigured bool
-	redisClient     *redis.Client
-	redisTimeout    time.Duration
-}
-
-type errorResponse struct {
-	Error string `json:"error"`
-}
-
-type statusResponse struct {
-	Status    string `json:"status"`
-	EventID   string `json:"event_id,omitempty"`
-	Duplicate bool   `json:"duplicate,omitempty"`
-}
 
 func main() {
 	cfg := loadConfig()
-	logger := newLogger()
-	metrics := newMetrics()
+	logger := observability.NewLogger(os.Getenv("LOG_LEVEL"))
 
 	shutdownTracer, err := initTracing(cfg, logger)
 	if err != nil {
@@ -159,19 +37,25 @@ func main() {
 		}
 	}()
 
-	var dedupe DedupeStore
+	var dedupe handler.DedupeStore
 	var redisClient *redis.Client
 	if cfg.RedisAddr != "" {
-		redisDedupeStore, err := newRedisDedupe(cfg)
+		redisStore, err := handler.NewRedisIdempotencyStore(handler.RedisDedupeConfig{
+			Addr:     cfg.RedisAddr,
+			Password: cfg.RedisPassword,
+			DB:       cfg.RedisDB,
+			TTL:      cfg.DedupeTTL,
+			Timeout:  cfg.RedisTimeout,
+		})
 		if err != nil {
 			logger.Error("failed to initialize redis dedupe", "error", err)
 		} else {
-			dedupe = redisDedupeStore
-			redisClient = redisDedupeStore.client
+			dedupe = redisStore
+			redisClient = redisStore.Client()
 		}
 	}
 	if dedupe == nil {
-		dedupe = newInMemoryDedupe(cfg.DedupeTTL, cfg.DedupeCleanup)
+		dedupe = handler.NewInMemoryIdempotencyStore(cfg.DedupeTTL, 10000, cfg.DedupeCleanup)
 	}
 	defer func() {
 		if err := dedupe.Close(); err != nil {
@@ -179,7 +63,8 @@ func main() {
 		}
 	}()
 
-	var writer messageWriter
+	var writer handler.MessageWriter
+	var producer handler.KafkaProducer = handler.UnconfiguredKafkaProducer{}
 	if len(cfg.KafkaBrokers) > 0 {
 		writer = kafka.NewWriter(kafka.WriterConfig{
 			Brokers:      cfg.KafkaBrokers,
@@ -189,66 +74,37 @@ func main() {
 			Async:        false,
 			BatchTimeout: 5 * time.Millisecond,
 		})
+		producer = handler.NewKafkaWriterProducer(writer)
 	}
 
-	ready := readiness{
-		secretSet:       cfg.WebhookSecret != "",
-		kafkaConfigured: writer != nil,
-		redisClient:     redisClient,
-		redisTimeout:    cfg.RedisTimeout,
+	whMetrics := handler.NewWebhookMetrics(prometheus.DefaultRegisterer)
+	whHandler, err := handler.NewWebhookHandler(
+		buildVerifiers(cfg),
+		dedupe,
+		producer,
+		cfg.KafkaTopic,
+		logger,
+		whMetrics,
+		handler.WithMaxBodyBytes(cfg.MaxBodyBytes),
+		handler.WithPublishTimeout(cfg.PublishTimeout),
+		handler.WithStripeSignatureHeader(cfg.SignatureHeader),
+		handler.WithTracer(otel.Tracer("payment-webhook-service")),
+	)
+	if err != nil {
+		logger.Error("failed to initialize webhook handler", "error", err)
+		os.Exit(1)
 	}
 
-	whHandler := &webhookHandler{
-		cfg:            cfg,
-		logger:         logger,
-		metrics:        metrics,
-		dedupe:         dedupe,
-		writer:         writer,
-		publishTimeout: cfg.PublishTimeout,
-		tracer:         otel.Tracer("payment-webhook-service"),
-	}
-
-	var healthChecks []health.Check
-	if !ready.secretSet {
-		healthChecks = append(healthChecks, health.Check{
-			Name: "secret",
-			Check: func(ctx context.Context) error {
-				return errors.New("webhook secret not configured")
-			},
-		})
-	}
-	if !ready.kafkaConfigured {
-		healthChecks = append(healthChecks, health.Check{
-			Name: "kafka",
-			Check: func(ctx context.Context) error {
-				return errors.New("kafka not configured")
-			},
-		})
-	}
-	if ready.redisClient != nil {
-		healthChecks = append(healthChecks, health.Check{
-			Name: "redis",
-			Check: func(ctx context.Context) error {
-				return ready.redisClient.Ping(ctx).Err()
-			},
-		})
-	}
-	healthHandler := health.NewHandler(healthChecks...)
-	healthHandler.SetReady(ready.secretSet && ready.kafkaConfigured)
-
-	mux := http.NewServeMux()
-	mux.Handle("/payments/webhook", whHandler)
-	mux.Handle("/metrics", promhttp.Handler())
-	healthHandler.RegisterRoutes(mux)
-	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
+	healthHandler := newHealthHandler(cfg.WebhookSecret != "", writer != nil, redisClient)
+	mux := newHTTPMux(whHandler, healthHandler)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           otelhttp.NewHandler(correlation.Middleware(mux), "payment-webhook"),
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-		ReadTimeout:       cfg.ReadTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
@@ -262,7 +118,6 @@ func main() {
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
 	select {
 	case sig := <-quit:
 		logger.Info("received signal, shutting down", "signal", sig.String())
@@ -271,16 +126,9 @@ func main() {
 			logger.Error("server error", "error", err)
 		}
 	}
-
 	signal.Stop(quit)
-	healthHandler.SetReady(false)
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("server shutdown failed", "error", err)
-	}
-
+	health.ShutdownServer(server, healthHandler, cfg.ShutdownTimeout, logger)
 	if writer != nil {
 		if err := writer.Close(); err != nil {
 			logger.Error("failed to close kafka writer", "error", err)
@@ -289,583 +137,39 @@ func main() {
 	logger.Info("shutdown complete")
 }
 
-func loadConfig() Config {
-	port := envOr("PORT", "")
-	if port == "" {
-		port = envOr("SERVER_PORT", "")
-	}
-	if port == "" {
-		port = defaultPort
-	}
-	secret := envOr("WEBHOOK_SECRET", "")
-	if secret == "" {
-		secret = envOr("STRIPE_WEBHOOK_SECRET", "")
-	}
-	brokers := strings.FieldsFunc(envOr("KAFKA_BROKERS", ""), func(r rune) bool {
-		return r == ',' || r == ' ' || r == ';'
-	})
-	for i := 0; i < len(brokers); i++ {
-		brokers[i] = strings.TrimSpace(brokers[i])
-	}
-	brokers = filterEmpty(brokers)
-	return Config{
-		Port:                 port,
-		WebhookSecret:        secret,
-		SignatureHeader:      envOr("WEBHOOK_SIGNATURE_HEADER", defaultSignatureHeader),
-		SignatureTolerance:   time.Duration(envInt("WEBHOOK_TOLERANCE_SECONDS", defaultSignatureTolerance)) * time.Second,
-		MaxBodyBytes:         int64(envInt("MAX_BODY_BYTES", defaultMaxBodyBytes)),
-		DedupeTTL:            time.Duration(envInt("DEDUPE_TTL_SECONDS", defaultDedupeTTLSeconds)) * time.Second,
-		DedupeCleanup:        time.Duration(envInt("DEDUPE_CLEANUP_SECONDS", defaultCleanupSeconds)) * time.Second,
-		RedisAddr:            envOr("REDIS_ADDR", ""),
-		RedisPassword:        envOr("REDIS_PASSWORD", ""),
-		RedisDB:              envInt("REDIS_DB", 0),
-		RedisTimeout:         time.Duration(envInt("REDIS_TIMEOUT_MS", 50)) * time.Millisecond,
-		KafkaBrokers:         brokers,
-		KafkaTopic:           envOr("KAFKA_TOPIC", "payment.webhooks"),
-		PublishQueueSize:     envInt("PUBLISH_QUEUE_SIZE", defaultPublishQueueSize),
-		PublishTimeout:       time.Duration(envInt("PUBLISH_TIMEOUT_MS", defaultPublishTimeoutMS)) * time.Millisecond,
-		ShutdownTimeout:      time.Duration(envInt("SHUTDOWN_TIMEOUT_SECONDS", defaultShutdownSeconds)) * time.Second,
-		ReadHeaderTimeout:    5 * time.Second,
-		ReadTimeout:          10 * time.Second,
-		WriteTimeout:         10 * time.Second,
-		IdleTimeout:          60 * time.Second,
-		RequireKafka:         true,
-		RequireWebhookSecret: true,
-	}
+func newHTTPMux(wh *handler.WebhookHandler, hh *health.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/payments/webhook", wh.HandleStripe)
+	mux.HandleFunc("/webhooks/stripe", wh.HandleStripe)
+	mux.HandleFunc("/webhooks/razorpay", wh.HandleRazorpay)
+	mux.HandleFunc("/webhooks/phonepe", wh.HandlePhonePe)
+	mux.Handle("/metrics", promhttp.Handler())
+	hh.RegisterRoutes(mux)
+	mux.HandleFunc("/ready", hh.ReadyHandler())
+	return mux
 }
 
-func newLogger() *slog.Logger {
-	level := slog.LevelInfo
-	switch strings.ToLower(envOr("LOG_LEVEL", "info")) {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn", "warning":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
+func newHealthHandler(secretSet, kafkaConfigured bool, redisClient *redis.Client) *health.Handler {
+	var checks []health.Check
+	if !secretSet {
+		checks = append(checks, health.Check{
+			Name:  "secret",
+			Check: func(context.Context) error { return errors.New("webhook secret not configured") },
+		})
 	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
-}
-
-func newMetrics() *metrics {
-	return newMetricsWithRegisterer(prometheus.DefaultRegisterer)
-}
-
-func newMetricsWithRegisterer(reg prometheus.Registerer) *metrics {
-	requestsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "payment_webhook_requests_total",
-		Help: "Total webhook requests",
-	}, []string{"endpoint", "status"})
-	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "payment_webhook_request_duration_seconds",
-		Help:    "Webhook request latency",
-		Buckets: []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
-	}, []string{"endpoint"})
-	signatureFailures := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "payment_webhook_signature_failures_total",
-		Help: "Webhook signature verification failures",
-	})
-	payloadFailures := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "payment_webhook_payload_failures_total",
-		Help: "Webhook payload decoding failures",
-	})
-	dedupeDuplicates := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "payment_webhook_duplicates_total",
-		Help: "Webhook duplicate events",
-	})
-	dedupeErrors := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "payment_webhook_dedupe_errors_total",
-		Help: "Webhook dedupe storage errors",
-	})
-	publishEnqueued := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "payment_webhook_publish_enqueued_total",
-		Help: "Webhook events queued for Kafka",
-	})
-	publishDropped := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "payment_webhook_publish_dropped_total",
-		Help: "Webhook events dropped before Kafka",
-	})
-	publishSuccess := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "payment_webhook_publish_success_total",
-		Help: "Webhook events published to Kafka",
-	})
-	publishErrors := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "payment_webhook_publish_errors_total",
-		Help: "Webhook events failed to publish to Kafka",
-	})
-	queueDepth := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "payment_webhook_publish_queue_depth",
-		Help: "Publish queue depth",
-	})
-	reg.MustRegister(
-		requestsTotal,
-		requestDuration,
-		signatureFailures,
-		payloadFailures,
-		dedupeDuplicates,
-		dedupeErrors,
-		publishEnqueued,
-		publishDropped,
-		publishSuccess,
-		publishErrors,
-		queueDepth,
-	)
-	return &metrics{
-		requestsTotal:     requestsTotal,
-		requestDuration:   requestDuration,
-		signatureFailures: signatureFailures,
-		payloadFailures:   payloadFailures,
-		dedupeDuplicates:  dedupeDuplicates,
-		dedupeErrors:      dedupeErrors,
-		publishEnqueued:   publishEnqueued,
-		publishDropped:    publishDropped,
-		publishSuccess:    publishSuccess,
-		publishErrors:     publishErrors,
-		queueDepth:        queueDepth,
+	if !kafkaConfigured {
+		checks = append(checks, health.Check{
+			Name:  "kafka",
+			Check: func(context.Context) error { return errors.New("kafka not configured") },
+		})
 	}
-}
-
-func initTracing(cfg Config, logger *slog.Logger) (func(context.Context) error, error) {
-	endpoint := envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	traceEndpoint := envOr("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
-	if endpoint == "" && traceEndpoint == "" {
-		otel.SetTracerProvider(trace.NewNoopTracerProvider())
-		return func(context.Context) error { return nil }, nil
+	if redisClient != nil {
+		checks = append(checks, health.Check{
+			Name:  "redis",
+			Check: func(ctx context.Context) error { return redisClient.Ping(ctx).Err() },
+		})
 	}
-	if traceEndpoint != "" {
-		endpoint = traceEndpoint
-	}
-	opts := []otlptracehttp.Option{}
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		opts = append(opts, otlptracehttp.WithEndpointURL(endpoint))
-	} else {
-		opts = append(opts, otlptracehttp.WithEndpoint(endpoint))
-		opts = append(opts, otlptracehttp.WithInsecure())
-	}
-	exporter, err := otlptracehttp.New(context.Background(), opts...)
-	if err != nil {
-		return func(context.Context) error { return nil }, err
-	}
-	res, err := resource.New(context.Background(),
-		resource.WithAttributes(
-			semconv.ServiceName("payment-webhook-service"),
-			attribute.String("service.port", cfg.Port),
-		),
-	)
-	if err != nil {
-		return func(context.Context) error { return nil }, err
-	}
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithResource(res),
-		sdktrace.WithBatcher(exporter),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
-	logger.Info("otel tracing enabled")
-	return tp.Shutdown, nil
-}
-
-func newInMemoryDedupe(ttl, cleanupInterval time.Duration) *inMemoryDedupe {
-	if ttl <= 0 {
-		ttl = defaultDedupeTTLSeconds * time.Second
-	}
-	if cleanupInterval <= 0 {
-		cleanupInterval = defaultCleanupSeconds * time.Second
-	}
-	store := &inMemoryDedupe{
-		ttl:     ttl,
-		entries: make(map[string]time.Time),
-		stop:    make(chan struct{}),
-	}
-	go store.cleanupLoop(cleanupInterval)
-	return store
-}
-
-func (d *inMemoryDedupe) Check(_ context.Context, eventID string) (bool, error) {
-	now := time.Now()
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if exp, ok := d.entries[eventID]; ok && exp.After(now) {
-		return true, nil
-	}
-	return false, nil
-}
-
-func (d *inMemoryDedupe) Set(_ context.Context, eventID string) error {
-	d.mu.Lock()
-	d.entries[eventID] = time.Now().Add(d.ttl)
-	d.mu.Unlock()
-	return nil
-}
-
-func (d *inMemoryDedupe) CheckAndSet(_ context.Context, eventID string) (bool, error) {
-	now := time.Now()
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if exp, ok := d.entries[eventID]; ok && exp.After(now) {
-		return false, nil
-	}
-	d.entries[eventID] = now.Add(d.ttl)
-	return true, nil
-}
-
-func (d *inMemoryDedupe) Remove(_ context.Context, eventID string) error {
-	d.mu.Lock()
-	delete(d.entries, eventID)
-	d.mu.Unlock()
-	return nil
-}
-
-func (d *inMemoryDedupe) Close() error {
-	d.closeOnce.Do(func() {
-		close(d.stop)
-	})
-	return nil
-}
-
-func (d *inMemoryDedupe) cleanupLoop(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			now := time.Now()
-			d.mu.Lock()
-			for key, exp := range d.entries {
-				if exp.Before(now) {
-					delete(d.entries, key)
-				}
-			}
-			d.mu.Unlock()
-		case <-d.stop:
-			return
-		}
-	}
-}
-
-func newRedisDedupe(cfg Config) (*redisDedupe, error) {
-	client := redis.NewClient(&redis.Options{
-		Addr:         cfg.RedisAddr,
-		Password:     cfg.RedisPassword,
-		DB:           cfg.RedisDB,
-		DialTimeout:  cfg.RedisTimeout,
-		ReadTimeout:  cfg.RedisTimeout,
-		WriteTimeout: cfg.RedisTimeout,
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.RedisTimeout)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		_ = client.Close()
-		return nil, err
-	}
-	return &redisDedupe{
-		client:  client,
-		ttl:     cfg.DedupeTTL,
-		prefix:  "payment-webhook:event:",
-		timeout: cfg.RedisTimeout,
-	}, nil
-}
-
-func (d *redisDedupe) Check(ctx context.Context, eventID string) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, d.timeout)
-	defer cancel()
-	n, err := d.client.Exists(ctx, d.prefix+eventID).Result()
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
-func (d *redisDedupe) Set(ctx context.Context, eventID string) error {
-	ctx, cancel := context.WithTimeout(ctx, d.timeout)
-	defer cancel()
-	return d.client.Set(ctx, d.prefix+eventID, "1", d.ttl).Err()
-}
-
-func (d *redisDedupe) CheckAndSet(ctx context.Context, eventID string) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, d.timeout)
-	defer cancel()
-	return d.client.SetNX(ctx, d.prefix+eventID, "1", d.ttl).Result()
-}
-
-func (d *redisDedupe) Remove(ctx context.Context, eventID string) error {
-	ctx, cancel := context.WithTimeout(ctx, d.timeout)
-	defer cancel()
-	return d.client.Del(ctx, d.prefix+eventID).Err()
-}
-
-func (d *redisDedupe) Close() error {
-	return d.client.Close()
-}
-
-func (h *webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	status := http.StatusOK
-	endpoint := "webhook"
-	defer func() {
-		h.metrics.requestsTotal.WithLabelValues(endpoint, strconv.Itoa(status)).Inc()
-		h.metrics.requestDuration.WithLabelValues(endpoint).Observe(time.Since(start).Seconds())
-	}()
-
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		status = http.StatusMethodNotAllowed
-		writeError(w, status, "method not allowed")
-		return
-	}
-	if h.cfg.RequireWebhookSecret && h.cfg.WebhookSecret == "" {
-		status = http.StatusServiceUnavailable
-		writeError(w, status, "webhook secret not configured")
-		return
-	}
-	if h.cfg.RequireKafka && h.writer == nil {
-		status = http.StatusServiceUnavailable
-		writeError(w, status, "kafka not configured")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, h.cfg.MaxBodyBytes)
-	defer r.Body.Close()
-	payload, err := io.ReadAll(r.Body)
-	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			status = http.StatusRequestEntityTooLarge
-			writeError(w, status, "request body too large")
-			return
-		}
-		status = http.StatusBadRequest
-		h.metrics.payloadFailures.Inc()
-		writeError(w, status, "failed to read request body")
-		return
-	}
-	if len(payload) == 0 {
-		status = http.StatusBadRequest
-		h.metrics.payloadFailures.Inc()
-		writeError(w, status, "empty payload")
-		return
-	}
-	signatureHeader := r.Header.Get(h.cfg.SignatureHeader)
-	if !verifySignature(payload, signatureHeader, h.cfg.WebhookSecret, h.cfg.SignatureTolerance) {
-		status = http.StatusUnauthorized
-		h.metrics.signatureFailures.Inc()
-		writeError(w, status, "invalid signature")
-		return
-	}
-
-	event, err := handler.ParseEvent(handler.Stripe, payload)
-	if err != nil {
-		status = http.StatusBadRequest
-		h.metrics.payloadFailures.Inc()
-		if errors.Is(err, handler.ErrMissingEventID) {
-			writeError(w, status, "missing event id")
-			return
-		}
-		writeError(w, status, "invalid event payload")
-		return
-	}
-	if event.EventType == "" {
-		event.EventType = "unknown"
-	}
-
-	envelopeBytes, err := json.Marshal(event)
-	if err != nil {
-		status = http.StatusInternalServerError
-		h.metrics.payloadFailures.Inc()
-		writeError(w, status, "failed to encode event")
-		return
-	}
-
-	ctx := r.Context()
-	acquired, err := h.dedupe.CheckAndSet(ctx, event.ID)
-	if err != nil {
-		status = http.StatusServiceUnavailable
-		h.metrics.dedupeErrors.Inc()
-		writeError(w, status, "dedupe unavailable")
-		return
-	}
-	if !acquired {
-		status = http.StatusOK
-		h.metrics.dedupeDuplicates.Inc()
-		writeJSON(w, status, statusResponse{Status: "duplicate", EventID: event.ID, Duplicate: true})
-		return
-	}
-
-	headers := []kafka.Header{
-		{Key: "event_id", Value: []byte(event.ID)},
-		{Key: "event_type", Value: []byte(event.EventType)},
-	}
-	otel.GetTextMapPropagator().Inject(ctx, kafkaHeaderCarrier{headers: &headers})
-
-	kafkaKey := event.PaymentID
-	if kafkaKey == "" {
-		kafkaKey = event.ID
-	}
-	msg := kafka.Message{
-		Key:     []byte(kafkaKey),
-		Value:   envelopeBytes,
-		Time:    event.ReceivedAt,
-		Headers: headers,
-	}
-
-	publishCtx, publishCancel := context.WithTimeout(ctx, h.publishTimeout)
-	defer publishCancel()
-	_, span := h.tracer.Start(publishCtx, "kafka.publish", trace.WithAttributes(
-		attribute.String("messaging.system", "kafka"),
-		attribute.String("messaging.destination", h.cfg.KafkaTopic),
-		attribute.String("messaging.operation", "publish"),
-		attribute.String("event.id", event.ID),
-		attribute.String("event.type", event.EventType),
-	))
-	publishErr := h.writer.WriteMessages(publishCtx, msg)
-	span.End()
-
-	if publishErr != nil {
-		removeCtx, removeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = h.dedupe.Remove(removeCtx, event.ID)
-		removeCancel()
-		h.metrics.publishErrors.Inc()
-		status = http.StatusServiceUnavailable
-		writeError(w, status, "failed to publish event")
-		loggerWithTrace(ctx, h.logger).Error("failed to publish to kafka", "error", publishErr, "event_id", event.ID)
-		return
-	}
-	h.metrics.publishSuccess.Inc()
-
-	status = http.StatusAccepted
-	writeJSON(w, status, statusResponse{Status: "accepted", EventID: event.ID})
-	loggerWithTrace(ctx, h.logger).Info("webhook accepted", "event_id", event.ID, "event_type", event.EventType)
-}
-
-func verifySignature(payload []byte, signatureHeader, secret string, tolerance time.Duration) bool {
-	if secret == "" || signatureHeader == "" {
-		return false
-	}
-	timestamp, signatures := parseSignatureHeader(signatureHeader)
-	if timestamp == "" || len(signatures) == 0 {
-		return false
-	}
-	parsedTime, err := strconv.ParseInt(timestamp, 10, 64)
-	if err != nil {
-		return false
-	}
-	if tolerance > 0 {
-		now := time.Now().Unix()
-		diff := now - parsedTime
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff > int64(tolerance.Seconds()) {
-			return false
-		}
-	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(timestamp))
-	_, _ = mac.Write([]byte("."))
-	_, _ = mac.Write(payload)
-	expected := hex.EncodeToString(mac.Sum(nil))
-	for _, signature := range signatures {
-		if hmac.Equal([]byte(signature), []byte(expected)) {
-			return true
-		}
-	}
-	return false
-}
-
-func parseSignatureHeader(header string) (string, []string) {
-	var timestamp string
-	var signatures []string
-	parts := strings.Split(header, ",")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		pair := strings.SplitN(part, "=", 2)
-		if len(pair) != 2 {
-			continue
-		}
-		switch pair[0] {
-		case "t":
-			timestamp = pair[1]
-		case "v1":
-			signatures = append(signatures, pair[1])
-		}
-	}
-	return timestamp, signatures
-}
-
-func loggerWithTrace(ctx context.Context, logger *slog.Logger) *slog.Logger {
-	span := trace.SpanFromContext(ctx)
-	sc := span.SpanContext()
-	if !sc.IsValid() {
-		return logger
-	}
-	return logger.With("trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(payload)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, errorResponse{Error: message})
-}
-
-func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func envInt(key string, fallback int) int {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func filterEmpty(values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if value != "" {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-type kafkaHeaderCarrier struct {
-	headers *[]kafka.Header
-}
-
-func (c kafkaHeaderCarrier) Get(key string) string {
-	for _, header := range *c.headers {
-		if strings.EqualFold(header.Key, key) {
-			return string(header.Value)
-		}
-	}
-	return ""
-}
-
-func (c kafkaHeaderCarrier) Set(key, value string) {
-	*c.headers = append(*c.headers, kafka.Header{Key: key, Value: []byte(value)})
-}
-
-func (c kafkaHeaderCarrier) Keys() []string {
-	keys := make([]string, 0, len(*c.headers))
-	for _, header := range *c.headers {
-		keys = append(keys, header.Key)
-	}
-	return keys
+	hh := health.NewHandler(checks...)
+	hh.SetReady(secretSet && kafkaConfigured)
+	return hh
 }

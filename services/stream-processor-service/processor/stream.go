@@ -2,15 +2,14 @@ package processor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/instacommerce/stream-processor-service/dedup"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -37,21 +36,7 @@ func DefaultStreamConfig() StreamConfig {
 
 // ExtractMessageEventID extracts event_id / eventId / id from a Kafka message JSON envelope.
 func ExtractMessageEventID(msg kafka.Message) string {
-	if len(msg.Value) == 0 {
-		return ""
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(msg.Value, &raw); err != nil || raw == nil {
-		return ""
-	}
-	for _, k := range []string{"event_id", "eventId", "id"} {
-		if v, ok := raw[k].(string); ok {
-			if s := strings.TrimSpace(v); s != "" {
-				return s
-			}
-		}
-	}
-	return ""
+	return dedup.ExtractEventID(msg.Value)
 }
 
 // StreamDispatcher orchestrates bounded message queuing, worker concurrency, backpressure, and monotonic per-partition offset commits.

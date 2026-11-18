@@ -592,13 +592,6 @@ func (r *DBReconciler) ApplyFix(ctx context.Context, mismatchID int64, fixAction
 		`SELECT run_id, transaction_id, COALESCE(psp_amount::text, '0.00') FROM reconciliation_mismatches WHERE mismatch_id = $1`,
 		mismatchID).Scan(&runID, &txnID, &pspAmountStr)
 	if err != nil {
-		// Fallback for 2-column stub drivers in unit tests
-		err = tx.QueryRowContext(ctx,
-			`SELECT run_id, transaction_id FROM reconciliation_mismatches WHERE mismatch_id = $1`,
-			mismatchID).Scan(&runID, &txnID)
-	}
-
-	if err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to get mismatch: %w", err)
 	}

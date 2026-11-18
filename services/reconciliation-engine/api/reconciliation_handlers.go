@@ -140,20 +140,7 @@ func (h *ReconciliationHandler) HandleGetRunMismatches(w http.ResponseWriter, r 
 		return
 	}
 
-	dtos := make([]MismatchDTO, len(mismatches))
-	for i, m := range mismatches {
-		dtos[i] = MismatchDTO{
-			MismatchID:           m.MismatchID,
-			TransactionID:        m.TransactionID,
-			LedgerAmount:         m.LedgerAmount,
-			PSPAmount:            m.PSPAmount,
-			DiscrepancyAmount:    m.DiscrepancyAmount,
-			DiscrepancyReason:    m.DiscrepancyReason,
-			AutoFixed:            m.AutoFixed,
-			ManualReviewRequired: m.ManualReviewRequired,
-			FixAppliedAt:         formatTimestamp(m.FixAppliedAt),
-		}
-	}
+	dtos := toMismatchDTOs(mismatches)
 
 	h.writeJSON(w, http.StatusOK, ListMismatchesResponse{
 		Mismatches: dtos,
@@ -187,25 +174,34 @@ func (h *ReconciliationHandler) HandleGetPendingMismatches(w http.ResponseWriter
 		return
 	}
 
-	dtos := make([]MismatchDTO, len(mismatches))
-	for i, m := range mismatches {
-		dtos[i] = MismatchDTO{
-			MismatchID:           m.MismatchID,
-			TransactionID:        m.TransactionID,
-			LedgerAmount:         m.LedgerAmount,
-			PSPAmount:            m.PSPAmount,
-			DiscrepancyAmount:    m.DiscrepancyAmount,
-			DiscrepancyReason:    m.DiscrepancyReason,
-			AutoFixed:            m.AutoFixed,
-			ManualReviewRequired: m.ManualReviewRequired,
-			FixAppliedAt:         formatTimestamp(m.FixAppliedAt),
-		}
-	}
+	dtos := toMismatchDTOs(mismatches)
 
 	h.writeJSON(w, http.StatusOK, ListMismatchesResponse{
 		Mismatches: dtos,
 		Count:      len(dtos),
 	})
+}
+
+func toMismatchDTO(m reconciliation.ReconciliationMismatch) MismatchDTO {
+	return MismatchDTO{
+		MismatchID:           m.MismatchID,
+		TransactionID:        m.TransactionID,
+		LedgerAmount:         m.LedgerAmount,
+		PSPAmount:            m.PSPAmount,
+		DiscrepancyAmount:    m.DiscrepancyAmount,
+		DiscrepancyReason:    m.DiscrepancyReason,
+		AutoFixed:            m.AutoFixed,
+		ManualReviewRequired: m.ManualReviewRequired,
+		FixAppliedAt:         formatTimestamp(m.FixAppliedAt),
+	}
+}
+
+func toMismatchDTOs(mismatches []reconciliation.ReconciliationMismatch) []MismatchDTO {
+	dtos := make([]MismatchDTO, len(mismatches))
+	for i, m := range mismatches {
+		dtos[i] = toMismatchDTO(m)
+	}
+	return dtos
 }
 
 func (h *ReconciliationHandler) HandleReviewMismatch(w http.ResponseWriter, r *http.Request) {

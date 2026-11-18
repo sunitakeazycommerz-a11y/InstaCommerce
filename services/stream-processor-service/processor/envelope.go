@@ -50,6 +50,14 @@ func (g *labelCardinalityGuard) normalize(val, fallback string) string {
 	return val
 }
 
+func normalizeEventType(raw string, aliases map[string]string) string {
+	trimmed := strings.TrimSpace(raw)
+	if canonical, ok := aliases[strings.ToUpper(trimmed)]; ok {
+		return canonical
+	}
+	return trimmed
+}
+
 // unwrapEnvelope extracts both outer envelope metadata and inner payload map when an EventEnvelope is used,
 // or returns the flat object as both meta and body when no nested payload object is present.
 func unwrapEnvelope(data []byte) (map[string]any, map[string]any, error) {

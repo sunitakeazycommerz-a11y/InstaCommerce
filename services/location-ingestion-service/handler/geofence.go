@@ -151,6 +151,7 @@ type GeofenceChecker struct {
 	resolution           int             // H3 resolution (9 ≈ 174 m hexagons)
 	deduplicator         GeofenceDeduplicator
 	tracking             map[riderZoneKey]*riderZoneTracking
+	lastPingTime         map[string]time.Time // rider_id -> latest ping timestamp evaluated
 	defaultHysteresis    time.Duration
 	defaultRequiredPings int
 }
@@ -162,6 +163,7 @@ func NewGeofenceChecker(resolution int) *GeofenceChecker {
 		resolution:           resolution,
 		deduplicator:         NewInMemoryGeofenceDeduplicator(),
 		tracking:             make(map[riderZoneKey]*riderZoneTracking),
+		lastPingTime:         make(map[string]time.Time),
 		defaultHysteresis:    DefaultHysteresisWindow,
 		defaultRequiredPings: 1,
 	}
@@ -199,6 +201,24 @@ func (g *GeofenceChecker) RemoveZone(zoneID string) {
 func (g *GeofenceChecker) Check(update LocationUpdate) []GeofenceEvent {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
+	// Out-of-order guard: reject stale pings before touching any zone tracking state or Redis dedup locks.
+	for _, zone := range g.zones {
+		if track, exists := g.tracking[riderZoneKey{riderID: update.RiderID, zoneID: zone.ID}]; exists {
+			if !track.lastEventTime.IsZero() && !update.Timestamp.After(track.lastEventTime) {
+				return nil
+			}
+		}
+	}
+	if !update.Timestamp.IsZero() {
+		if g.lastPingTime == nil {
+			g.lastPingTime = make(map[string]time.Time)
+		}
+		if lastTs, exists := g.lastPingTime[update.RiderID]; exists && update.Timestamp.Before(lastTs) {
+			return nil
+		}
+		g.lastPingTime[update.RiderID] = update.Timestamp
+	}
 
 	h3Index := h3IndexStub(update.Lat, update.Lng, g.resolution)
 	var events []GeofenceEvent

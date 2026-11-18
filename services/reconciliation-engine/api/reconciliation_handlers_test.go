@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/instacommerce/reconciliation-engine/pkg/reconciliation"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,4 +116,35 @@ func TestWriteJSONAndErrorHelpers(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&errResp)
 	require.NoError(t, err)
 	assert.Equal(t, "entity not found", errResp.Error)
+}
+
+func TestToMismatchDTO(t *testing.T) {
+	fixAt := time.Date(2026, 11, 18, 9, 30, 0, 0, time.UTC)
+	m := reconciliation.ReconciliationMismatch{
+		MismatchID:           101,
+		TransactionID:        "txn-dto-1",
+		LedgerAmount:         "100.00",
+		PSPAmount:            "105.00",
+		DiscrepancyAmount:    "-5.00",
+		DiscrepancyReason:    "amount_mismatch_manual_review",
+		AutoFixed:            false,
+		ManualReviewRequired: true,
+		FixAppliedAt:         &fixAt,
+	}
+
+	dto := toMismatchDTO(m)
+	assert.Equal(t, int64(101), dto.MismatchID)
+	assert.Equal(t, "txn-dto-1", dto.TransactionID)
+	assert.Equal(t, "100.00", dto.LedgerAmount)
+	assert.Equal(t, "105.00", dto.PSPAmount)
+	assert.Equal(t, "-5.00", dto.DiscrepancyAmount)
+	assert.Equal(t, "amount_mismatch_manual_review", dto.DiscrepancyReason)
+	assert.False(t, dto.AutoFixed)
+	assert.True(t, dto.ManualReviewRequired)
+	require.NotNil(t, dto.FixAppliedAt)
+	assert.Equal(t, "2026-11-18T09:30:00Z", *dto.FixAppliedAt)
+
+	list := toMismatchDTOs([]reconciliation.ReconciliationMismatch{m})
+	require.Len(t, list, 1)
+	assert.Equal(t, dto, list[0])
 }

@@ -66,25 +66,27 @@ func (e *OrderEvent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+var orderEventAliases = map[string]string{
+	"ORDERCREATED":     "OrderCreated",
+	"ORDER_CREATED":    "OrderCreated",
+	"ORDERPLACED":      "OrderPlaced",
+	"ORDER_PLACED":     "OrderPlaced",
+	"ORDERCONFIRMED":   "OrderConfirmed",
+	"ORDER_CONFIRMED":  "OrderConfirmed",
+	"ORDERPACKED":      "OrderPacked",
+	"ORDER_PACKED":     "OrderPacked",
+	"ORDERDISPATCHED":  "OrderDispatched",
+	"ORDER_DISPATCHED": "OrderDispatched",
+	"ORDERDELIVERED":   "OrderDelivered",
+	"ORDER_DELIVERED":  "OrderDelivered",
+	"ORDERCANCELLED":   "OrderCancelled",
+	"ORDER_CANCELLED":  "OrderCancelled",
+	"ORDERCANCELED":    "OrderCancelled",
+	"ORDER_CANCELED":   "OrderCancelled",
+}
+
 func normalizeOrderEventType(raw string) string {
-	switch strings.ToUpper(strings.TrimSpace(raw)) {
-	case "ORDERCREATED", "ORDER_CREATED":
-		return "OrderCreated"
-	case "ORDERPLACED", "ORDER_PLACED":
-		return "OrderPlaced"
-	case "ORDERCONFIRMED", "ORDER_CONFIRMED":
-		return "OrderConfirmed"
-	case "ORDERPACKED", "ORDER_PACKED":
-		return "OrderPacked"
-	case "ORDERDISPATCHED", "ORDER_DISPATCHED":
-		return "OrderDispatched"
-	case "ORDERDELIVERED", "ORDER_DELIVERED":
-		return "OrderDelivered"
-	case "ORDERCANCELLED", "ORDER_CANCELLED", "ORDERCANCELED", "ORDER_CANCELED":
-		return "OrderCancelled"
-	default:
-		return strings.TrimSpace(raw)
-	}
+	return normalizeEventType(raw, orderEventAliases)
 }
 
 type OrderMetrics struct {
@@ -96,47 +98,43 @@ type OrderMetrics struct {
 	ProcessingErrors  prometheus.Counter
 }
 
-var (
-	orderMetricsInstance *OrderMetrics
-	orderMetricsOnce     sync.Once
-)
+var orderMetricsLoader = sync.OnceValue(func() *OrderMetrics {
+	return &OrderMetrics{
+		OrdersTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "orders_total",
+			Help: "Total orders processed by event type",
+		}, []string{"event_type", "store_id", "zone_id"}),
+
+		GMVTotalCents: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "gmv_total_cents",
+			Help: "Gross merchandise value running total in cents",
+		}),
+
+		DeliveryDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "delivery_duration_minutes",
+			Help:    "Delivery duration in minutes",
+			Buckets: []float64{5, 7, 8, 9, 10, 12, 15, 20, 30, 45, 60},
+		}, []string{"zone_id", "store_id"}),
+
+		SLACompliance: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "sla_compliance_ratio",
+			Help: "SLA compliance ratio (delivered within 10 min) per zone",
+		}, []string{"zone_id"}),
+
+		CancellationTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "order_cancellations_total",
+			Help: "Total order cancellations",
+		}, []string{"store_id", "zone_id"}),
+
+		ProcessingErrors: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "order_processing_errors_total",
+			Help: "Total order processing errors",
+		}),
+	}
+})
 
 func NewOrderMetrics() *OrderMetrics {
-	orderMetricsOnce.Do(func() {
-		orderMetricsInstance = &OrderMetrics{
-			OrdersTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-				Name: "orders_total",
-				Help: "Total orders processed by event type",
-			}, []string{"event_type", "store_id", "zone_id"}),
-
-			GMVTotalCents: promauto.NewCounter(prometheus.CounterOpts{
-				Name: "gmv_total_cents",
-				Help: "Gross merchandise value running total in cents",
-			}),
-
-			DeliveryDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
-				Name:    "delivery_duration_minutes",
-				Help:    "Delivery duration in minutes",
-				Buckets: []float64{5, 7, 8, 9, 10, 12, 15, 20, 30, 45, 60},
-			}, []string{"zone_id", "store_id"}),
-
-			SLACompliance: promauto.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "sla_compliance_ratio",
-				Help: "SLA compliance ratio (delivered within 10 min) per zone",
-			}, []string{"zone_id"}),
-
-			CancellationTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-				Name: "order_cancellations_total",
-				Help: "Total order cancellations",
-			}, []string{"store_id", "zone_id"}),
-
-			ProcessingErrors: promauto.NewCounter(prometheus.CounterOpts{
-				Name: "order_processing_errors_total",
-				Help: "Total order processing errors",
-			}),
-		}
-	})
-	return orderMetricsInstance
+	return orderMetricsLoader()
 }
 
 type OrderProcessor struct {
@@ -183,73 +181,74 @@ func (p *OrderProcessor) Process(ctx context.Context, event OrderEvent) error {
 	// Increment order counter (per store, per zone, total)
 	p.metrics.OrdersTotal.WithLabelValues(eventLabel, storeLabel, zoneLabel).Inc()
 
+	now := time.Now()
+	minuteKey := now.Format("2006-01-02T15:04")
+
+	var pipe redis.Pipeliner
+	if p.redis != nil {
+		pipe = p.redis.Pipeline()
+
+		// Per-minute order count
+		orderMinuteKey := fmt.Sprintf("orders:count:%s", minuteKey)
+		pipe.Incr(ctx, orderMinuteKey)
+		pipe.Expire(ctx, orderMinuteKey, redisMetricsTTL)
+
+		// Per-store per-minute (raw StoreID)
+		storeMinuteKey := fmt.Sprintf("orders:store:%s:%s", event.StoreID, minuteKey)
+		pipe.Incr(ctx, storeMinuteKey)
+		pipe.Expire(ctx, storeMinuteKey, redisMetricsTTL)
+
+		// Per-zone per-minute (raw ZoneID)
+		zoneMinuteKey := fmt.Sprintf("orders:zone:%s:%s", event.ZoneID, minuteKey)
+		pipe.Incr(ctx, zoneMinuteKey)
+		pipe.Expire(ctx, zoneMinuteKey, redisMetricsTTL)
+	}
+
 	switch event.EventType {
 	case "OrderPlaced", "OrderCreated":
 		if event.TotalCents > 0 {
 			p.metrics.GMVTotalCents.Add(float64(event.TotalCents))
 		}
+		if pipe != nil {
+			gmvKey := fmt.Sprintf("gmv:total:%s", now.Format("2006-01-02"))
+			pipe.IncrBy(ctx, gmvKey, event.TotalCents)
+			pipe.Expire(ctx, gmvKey, 48*time.Hour)
+		}
+
+	case "OrderPacked", "OrderDispatched", "OrderConfirmed":
+		if pipe != nil {
+			stageKey := fmt.Sprintf("orders:stage:%s:%s", strings.ToLower(event.EventType), minuteKey)
+			pipe.Incr(ctx, stageKey)
+			pipe.Expire(ctx, stageKey, redisMetricsTTL)
+		}
+
 	case "OrderDelivered":
 		if event.DeliveredAt != nil && !event.PlacedAt.IsZero() {
 			deliveryMinutes := event.DeliveredAt.Sub(event.PlacedAt).Minutes()
 			if deliveryMinutes >= 0 {
 				p.metrics.DeliveryDuration.WithLabelValues(zoneLabel, storeLabel).Observe(deliveryMinutes)
 				if p.slaMonitor != nil {
-					p.slaMonitor.RecordDelivery(zoneLabel, deliveryMinutes)
+					p.slaMonitor.RecordDelivery(event.ZoneID, deliveryMinutes)
+				}
+				if pipe != nil {
+					deliveryKey := fmt.Sprintf("delivery:time:%s:%s", event.ZoneID, minuteKey)
+					pipe.LPush(ctx, deliveryKey, deliveryMinutes)
+					pipe.Expire(ctx, deliveryKey, redisMetricsTTL)
 				}
 			}
 		}
+
 	case "OrderCancelled":
 		p.metrics.CancellationTotal.WithLabelValues(storeLabel, zoneLabel).Inc()
-	}
-
-	if p.redis == nil {
-		return nil
-	}
-
-	now := time.Now()
-	minuteKey := now.Format("2006-01-02T15:04")
-	pipe := p.redis.Pipeline()
-
-	// Per-minute order count
-	orderMinuteKey := fmt.Sprintf("orders:count:%s", minuteKey)
-	pipe.Incr(ctx, orderMinuteKey)
-	pipe.Expire(ctx, orderMinuteKey, redisMetricsTTL)
-
-	// Per-store per-minute
-	storeMinuteKey := fmt.Sprintf("orders:store:%s:%s", storeLabel, minuteKey)
-	pipe.Incr(ctx, storeMinuteKey)
-	pipe.Expire(ctx, storeMinuteKey, redisMetricsTTL)
-
-	// Per-zone per-minute
-	zoneMinuteKey := fmt.Sprintf("orders:zone:%s:%s", zoneLabel, minuteKey)
-	pipe.Incr(ctx, zoneMinuteKey)
-	pipe.Expire(ctx, zoneMinuteKey, redisMetricsTTL)
-
-	switch event.EventType {
-	case "OrderPlaced", "OrderCreated":
-		gmvKey := fmt.Sprintf("gmv:total:%s", now.Format("2006-01-02"))
-		pipe.IncrBy(ctx, gmvKey, event.TotalCents)
-		pipe.Expire(ctx, gmvKey, 48*time.Hour)
-
-	case "OrderPacked", "OrderDispatched", "OrderConfirmed":
-		stageKey := fmt.Sprintf("orders:stage:%s:%s", strings.ToLower(event.EventType), minuteKey)
-		pipe.Incr(ctx, stageKey)
-		pipe.Expire(ctx, stageKey, redisMetricsTTL)
-
-	case "OrderDelivered":
-		if event.DeliveredAt != nil && !event.PlacedAt.IsZero() {
-			deliveryMinutes := event.DeliveredAt.Sub(event.PlacedAt).Minutes()
-			if deliveryMinutes >= 0 {
-				deliveryKey := fmt.Sprintf("delivery:time:%s:%s", zoneLabel, minuteKey)
-				pipe.LPush(ctx, deliveryKey, deliveryMinutes)
-				pipe.Expire(ctx, deliveryKey, redisMetricsTTL)
-			}
+		if pipe != nil {
+			cancelKey := fmt.Sprintf("orders:cancelled:%s:%s", event.ZoneID, minuteKey)
+			pipe.Incr(ctx, cancelKey)
+			pipe.Expire(ctx, cancelKey, redisMetricsTTL)
 		}
+	}
 
-	case "OrderCancelled":
-		cancelKey := fmt.Sprintf("orders:cancelled:%s:%s", zoneLabel, minuteKey)
-		pipe.Incr(ctx, cancelKey)
-		pipe.Expire(ctx, cancelKey, redisMetricsTTL)
+	if pipe == nil {
+		return nil
 	}
 
 	if _, err := pipe.Exec(ctx); err != nil {

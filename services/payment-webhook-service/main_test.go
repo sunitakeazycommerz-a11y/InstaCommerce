@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,31 +44,63 @@ func (s *stubMessageWriter) Close() error {
 	return nil
 }
 
-func newTestWebhookHandler(t *testing.T, writer messageWriter, secret string) (*webhookHandler, *inMemoryDedupe) {
+type failingDedupeStore struct {
+	err error
+}
+
+func (f *failingDedupeStore) Check(context.Context, string) (bool, error) { return false, f.err }
+func (f *failingDedupeStore) CheckAndMark(context.Context, string) (bool, error) {
+	return false, f.err
+}
+func (f *failingDedupeStore) Remove(context.Context, string) error { return nil }
+func (f *failingDedupeStore) Close() error                         { return nil }
+
+func newTestWebhookHandler(t *testing.T, writer handler.MessageWriter, secret string, maxBodyBytes ...int64) (*handler.WebhookHandler, *handler.InMemoryIdempotencyStore) {
 	t.Helper()
-	dedupe := newInMemoryDedupe(time.Minute, time.Minute)
+	dedupe := handler.NewInMemoryIdempotencyStore(time.Minute, 1000, time.Minute)
 	t.Cleanup(func() { _ = dedupe.Close() })
-	h := &webhookHandler{
-		cfg: Config{
-			WebhookSecret:        secret,
-			SignatureHeader:      "Stripe-Signature",
-			SignatureTolerance:   30 * time.Second,
-			MaxBodyBytes:         1 << 20,
-			KafkaTopic:           "payment.webhooks",
-			RequireKafka:         true,
-			RequireWebhookSecret: true,
-		},
-		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		metrics:        newMetricsWithRegisterer(prometheus.NewRegistry()),
-		dedupe:         dedupe,
-		writer:         writer,
-		publishTimeout: 2 * time.Second,
-		tracer:         otel.Tracer("test"),
+
+	bodyLimit := int64(1 << 20)
+	if len(maxBodyBytes) > 0 && maxBodyBytes[0] > 0 {
+		bodyLimit = maxBodyBytes[0]
+	}
+
+	cfg := Config{
+		WebhookSecret:      secret,
+		RazorpaySecret:     "rzp_test_secret",
+		PhonePeSaltKey:     "phonepe_salt",
+		PhonePeSaltIndex:   "1",
+		SignatureHeader:    "Stripe-Signature",
+		SignatureTolerance: 30 * time.Second,
+		MaxBodyBytes:       bodyLimit,
+		KafkaTopic:         "payment.webhooks",
+		PublishTimeout:     2 * time.Second,
+	}
+
+	var producer handler.KafkaProducer = handler.UnconfiguredKafkaProducer{}
+	if writer != nil {
+		producer = handler.NewKafkaWriterProducer(writer)
+	}
+
+	h, err := handler.NewWebhookHandler(
+		buildVerifiers(cfg),
+		dedupe,
+		producer,
+		cfg.KafkaTopic,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handler.NewWebhookMetrics(prometheus.NewRegistry()),
+		handler.WithMaxBodyBytes(cfg.MaxBodyBytes),
+		handler.WithPublishTimeout(cfg.PublishTimeout),
+		handler.WithStripeSignatureHeader(cfg.SignatureHeader),
+		handler.WithTracer(otel.Tracer("test")),
+	)
+	if err != nil {
+		t.Fatalf("NewWebhookHandler failed: %v", err)
 	}
 	return h, dedupe
 }
 
-func sendSignedWebhook(t *testing.T, h *webhookHandler, secret string, ts int64, payload []byte) *httptest.ResponseRecorder {
+func sendSignedWebhook(t *testing.T, h http.Handler, secret string, ts int64, payload []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/payments/webhook", bytes.NewReader(payload))
 	req.Header.Set("Stripe-Signature", generateStripeHeader(secret, ts, payload))
@@ -78,7 +111,7 @@ func sendSignedWebhook(t *testing.T, h *webhookHandler, secret string, ts int64,
 
 func generateStripeHeader(secret string, timestamp int64, payload []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(fmt.Sprintf("%d", timestamp)))
+	_, _ = mac.Write(fmt.Appendf(nil, "%d", timestamp))
 	_, _ = mac.Write([]byte("."))
 	_, _ = mac.Write(payload)
 	sig := hex.EncodeToString(mac.Sum(nil))
@@ -88,14 +121,17 @@ func generateStripeHeader(secret string, timestamp int64, payload []byte) string
 func TestVerifySignature(t *testing.T) {
 	secret := "whsec_test_secret_12345"
 	payload := []byte(`{"id":"evt_123","type":"payment_intent.succeeded"}`)
-	tolerance := 30 * time.Second
+	verifier, err := handler.NewStripeVerifier(secret, 30*time.Second)
+	if err != nil {
+		t.Fatalf("NewStripeVerifier failed: %v", err)
+	}
 
 	t.Run("valid signature within tolerance", func(t *testing.T) {
 		ts := time.Now().Unix() - 10 // 10s old
 		header := generateStripeHeader(secret, ts, payload)
 
-		if !verifySignature(payload, header, secret, tolerance) {
-			t.Errorf("expected signature to be valid within 30s tolerance")
+		if err := verifier.Verify(payload, header); err != nil {
+			t.Errorf("expected signature to be valid within 30s tolerance, got %v", err)
 		}
 	})
 
@@ -103,7 +139,7 @@ func TestVerifySignature(t *testing.T) {
 		ts := time.Now().Unix() - 35 // 35s old, beyond 30s tolerance
 		header := generateStripeHeader(secret, ts, payload)
 
-		if verifySignature(payload, header, secret, tolerance) {
+		if err := verifier.Verify(payload, header); err == nil {
 			t.Errorf("expected signature to be rejected when older than 30s tolerance")
 		}
 	})
@@ -112,7 +148,7 @@ func TestVerifySignature(t *testing.T) {
 		ts := time.Now().Unix() + 35 // 35s in future, beyond 30s tolerance
 		header := generateStripeHeader(secret, ts, payload)
 
-		if verifySignature(payload, header, secret, tolerance) {
+		if err := verifier.Verify(payload, header); err == nil {
 			t.Errorf("expected signature to be rejected when future diff exceeds tolerance")
 		}
 	})
@@ -122,7 +158,7 @@ func TestVerifySignature(t *testing.T) {
 		header := generateStripeHeader(secret, ts, payload)
 		tampered := []byte(`{"id":"evt_123","type":"payment_intent.failed"}`)
 
-		if verifySignature(tampered, header, secret, tolerance) {
+		if err := verifier.Verify(tampered, header); err == nil {
 			t.Errorf("expected signature to fail on tampered payload")
 		}
 	})
@@ -131,7 +167,7 @@ func TestVerifySignature(t *testing.T) {
 		ts := time.Now().Unix()
 		header := generateStripeHeader("wrong_secret", ts, payload)
 
-		if verifySignature(payload, header, secret, tolerance) {
+		if err := verifier.Verify(payload, header); err == nil {
 			t.Errorf("expected signature to fail with incorrect secret")
 		}
 	})
@@ -153,9 +189,10 @@ func TestWebhookHandler_PublishesWebhookEventEnvelope(t *testing.T) {
 	secret := "whsec_test_secret_12345"
 	writer := &stubMessageWriter{}
 	h, _ := newTestWebhookHandler(t, writer, secret)
+	mux := newHTTPMux(h, newHealthHandler(true, true, nil))
 
 	rawPayload := []byte(`{"id":"evt_envelope_1","type":"payment_intent.succeeded","data":{"object":{"id":"pi_123","amount":2500,"currency":"usd","status":"succeeded","metadata":{"order_id":"ord_456"}}}}`)
-	rec := sendSignedWebhook(t, h, secret, time.Now().Unix(), rawPayload)
+	rec := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected status 202 Accepted, got %d: %s", rec.Code, rec.Body.String())
@@ -221,14 +258,76 @@ func TestWebhookHandler_PublishesWebhookEventEnvelope(t *testing.T) {
 	}
 }
 
+func TestWebhookHandler_RoutesAndSecurity(t *testing.T) {
+	secret := "whsec_test_secret_12345"
+	writer := &stubMessageWriter{}
+	h, _ := newTestWebhookHandler(t, writer, secret)
+	mux := newHTTPMux(h, newHealthHandler(true, true, nil))
+
+	for _, ep := range []string{"/health", "/health/live", "/health/ready", "/ready", "/metrics"} {
+		req := httptest.NewRequest(http.MethodGet, ep, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s expected 200, got %d", ep, rec.Code)
+		}
+	}
+
+	// /webhooks/stripe
+	stripePayload := []byte(`{"id":"evt_route_stripe","type":"payment_intent.succeeded","data":{"object":{"id":"pi_s1"}}}`)
+	sReq := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", bytes.NewReader(stripePayload))
+	sReq.Header.Set("Stripe-Signature", generateStripeHeader(secret, time.Now().Unix(), stripePayload))
+	sRec := httptest.NewRecorder()
+	mux.ServeHTTP(sRec, sReq)
+	if sRec.Code != http.StatusAccepted {
+		t.Fatalf("/webhooks/stripe expected 202, got %d: %s", sRec.Code, sRec.Body.String())
+	}
+
+	// /webhooks/razorpay
+	rzpPayload := []byte(`{"event":"payment.captured","payload":{"payment":{"entity":{"id":"pay_rzp_1","order_id":"ord_1","amount":1200,"currency":"INR","status":"captured"}}}}`)
+	mac := hmac.New(sha256.New, []byte("rzp_test_secret"))
+	mac.Write(rzpPayload)
+	rReq := httptest.NewRequest(http.MethodPost, "/webhooks/razorpay", bytes.NewReader(rzpPayload))
+	rReq.Header.Set("X-Razorpay-Signature", hex.EncodeToString(mac.Sum(nil)))
+	rRec := httptest.NewRecorder()
+	mux.ServeHTTP(rRec, rReq)
+	if rRec.Code != http.StatusAccepted {
+		t.Fatalf("/webhooks/razorpay expected 202, got %d: %s", rRec.Code, rRec.Body.String())
+	}
+
+	// /webhooks/phonepe
+	ppPayload := []byte(`{"transactionId":"txn_pp_1","event":"PAYMENT_SUCCESS","merchantOrderId":"ord_2","amount":1500,"state":"COMPLETED"}`)
+	sum := sha256.New()
+	sum.Write(ppPayload)
+	sum.Write([]byte("phonepe_salt1"))
+	pReq := httptest.NewRequest(http.MethodPost, "/webhooks/phonepe", bytes.NewReader(ppPayload))
+	pReq.Header.Set("X-Verify", hex.EncodeToString(sum.Sum(nil))+"###1")
+	pRec := httptest.NewRecorder()
+	mux.ServeHTTP(pRec, pReq)
+	if pRec.Code != http.StatusAccepted {
+		t.Fatalf("/webhooks/phonepe expected 202, got %d: %s", pRec.Code, pRec.Body.String())
+	}
+
+	// Oversized body -> 413 Payload Too Large
+	smallHandler, _ := newTestWebhookHandler(t, writer, secret, 32)
+	smallMux := newHTTPMux(smallHandler, newHealthHandler(true, true, nil))
+	bigReq := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", strings.NewReader(`{"id":"`+strings.Repeat("x", 64)+`"}`))
+	bigRec := httptest.NewRecorder()
+	smallMux.ServeHTTP(bigRec, bigReq)
+	if bigRec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 RequestEntityTooLarge, got %d", bigRec.Code)
+	}
+}
+
 func TestWebhookHandler_GuardsAndFallbacks(t *testing.T) {
 	secret := "whsec_test_secret_12345"
 
 	t.Run("missing event type defaults to unknown inside envelope", func(t *testing.T) {
 		writer := &stubMessageWriter{}
 		h, _ := newTestWebhookHandler(t, writer, secret)
+		mux := newHTTPMux(h, newHealthHandler(true, true, nil))
 		rawPayload := []byte(`{"id":"evt_no_type","data":{"object":{"id":"pi_no_type"}}}`)
-		rec := sendSignedWebhook(t, h, secret, time.Now().Unix(), rawPayload)
+		rec := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
 
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("expected 202, got %d", rec.Code)
@@ -251,8 +350,9 @@ func TestWebhookHandler_GuardsAndFallbacks(t *testing.T) {
 	t.Run("rejects replay beyond 30s tolerance", func(t *testing.T) {
 		writer := &stubMessageWriter{}
 		h, _ := newTestWebhookHandler(t, writer, secret)
+		mux := newHTTPMux(h, newHealthHandler(true, true, nil))
 		rawPayload := []byte(`{"id":"evt_stale","type":"payment_intent.succeeded"}`)
-		rec := sendSignedWebhook(t, h, secret, time.Now().Unix()-35, rawPayload)
+		rec := sendSignedWebhook(t, mux, secret, time.Now().Unix()-35, rawPayload)
 
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("expected 401 Unauthorized, got %d", rec.Code)
@@ -265,8 +365,9 @@ func TestWebhookHandler_GuardsAndFallbacks(t *testing.T) {
 	t.Run("rejects missing event id", func(t *testing.T) {
 		writer := &stubMessageWriter{}
 		h, _ := newTestWebhookHandler(t, writer, secret)
+		mux := newHTTPMux(h, newHealthHandler(true, true, nil))
 		rawPayload := []byte(`{"type":"payment_intent.succeeded"}`)
-		rec := sendSignedWebhook(t, h, secret, time.Now().Unix(), rawPayload)
+		rec := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 Bad Request, got %d", rec.Code)
@@ -279,18 +380,19 @@ func TestWebhookHandler_GuardsAndFallbacks(t *testing.T) {
 	t.Run("deduplicates repeated event id", func(t *testing.T) {
 		writer := &stubMessageWriter{}
 		h, _ := newTestWebhookHandler(t, writer, secret)
+		mux := newHTTPMux(h, newHealthHandler(true, true, nil))
 		rawPayload := []byte(`{"id":"evt_dup","type":"payment_intent.succeeded"}`)
 
-		first := sendSignedWebhook(t, h, secret, time.Now().Unix(), rawPayload)
+		first := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
 		if first.Code != http.StatusAccepted {
 			t.Fatalf("expected first request 202, got %d", first.Code)
 		}
 
-		second := sendSignedWebhook(t, h, secret, time.Now().Unix(), rawPayload)
+		second := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
 		if second.Code != http.StatusOK {
 			t.Fatalf("expected duplicate request 200, got %d", second.Code)
 		}
-		var resp statusResponse
+		var resp handler.StatusResponse
 		if err := json.Unmarshal(second.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("unmarshal duplicate response: %v", err)
 		}
@@ -302,12 +404,33 @@ func TestWebhookHandler_GuardsAndFallbacks(t *testing.T) {
 		}
 	})
 
+	t.Run("returns 503 when dedupe store errors", func(t *testing.T) {
+		writer := &stubMessageWriter{}
+		verifier, _ := handler.NewStripeVerifier(secret, 30*time.Second)
+		h, err := handler.NewWebhookHandler(
+			map[handler.PSPType]handler.SignatureVerifier{handler.Stripe: verifier},
+			&failingDedupeStore{err: errors.New("redis down")},
+			handler.NewKafkaWriterProducer(writer),
+			"payment.webhooks",
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			handler.NewWebhookMetrics(prometheus.NewRegistry()),
+		)
+		if err != nil {
+			t.Fatalf("NewWebhookHandler: %v", err)
+		}
+		rec := sendSignedWebhook(t, http.HandlerFunc(h.HandleStripe), secret, time.Now().Unix(), []byte(`{"id":"evt_dedup_err","type":"payment_intent.succeeded"}`))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", rec.Code)
+		}
+	})
+
 	t.Run("rolls back dedupe on publish error so retry succeeds", func(t *testing.T) {
 		writer := &stubMessageWriter{err: errors.New("broker down")}
 		h, dedupe := newTestWebhookHandler(t, writer, secret)
+		mux := newHTTPMux(h, newHealthHandler(true, true, nil))
 		rawPayload := []byte(`{"id":"evt_retry","type":"payment_intent.succeeded"}`)
 
-		failed := sendSignedWebhook(t, h, secret, time.Now().Unix(), rawPayload)
+		failed := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
 		if failed.Code != http.StatusServiceUnavailable {
 			t.Fatalf("expected 503, got %d", failed.Code)
 		}
@@ -320,7 +443,7 @@ func TestWebhookHandler_GuardsAndFallbacks(t *testing.T) {
 		writer.err = nil
 		writer.mu.Unlock()
 
-		retried := sendSignedWebhook(t, h, secret, time.Now().Unix(), rawPayload)
+		retried := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
 		if retried.Code != http.StatusAccepted {
 			t.Fatalf("expected retry 202, got %d", retried.Code)
 		}

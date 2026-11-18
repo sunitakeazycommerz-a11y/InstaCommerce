@@ -423,3 +423,43 @@ func TestHandleDispatchAssign_LockNormalReleaseAndLockErrorHandling(t *testing.T
 		assert.Nil(t, pub.publishedEvent)
 	})
 }
+
+func TestHandleRiderResponse_ReDispatchValidationAndPanicLockRelease(t *testing.T) {
+	matcher := optimizer.NewBipartiteMatcher(nil, nil)
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	t.Run("missing store_id returns 400", func(t *testing.T) {
+		h := HandleRiderResponse(matcher, &mockPublisher{}, NewInMemoryRiderMutex(), logger)
+		body, _ := json.Marshal(RiderResponseRequest{
+			OrderID:       "order-1",
+			RiderID:       "rider-1",
+			Accepted:      false,
+			OrderPosition: optimizer.Position{Lat: 12.9716, Lng: 77.5946},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/dispatch/response", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("panic during re-dispatch releases rider lock", func(t *testing.T) {
+		spy := &spyMutex{}
+		h := HandleRiderResponse(matcher, &panickingPublisher{}, spy, logger)
+		body, _ := json.Marshal(RiderResponseRequest{
+			OrderID:       "order-1",
+			StoreID:       "store-1",
+			RiderID:       "rider-1",
+			Accepted:      false,
+			OrderPosition: optimizer.Position{Lat: 12.9716, Lng: 77.5946},
+			AvailableRiders: []optimizer.RiderState{
+				{ID: "rider-2", Position: optimizer.Position{Lat: 12.9720, Lng: 77.5950}, IsAvailable: true},
+			},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/dispatch/response", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		assert.NotPanics(t, func() { h.ServeHTTP(rec, req) })
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Equal(t, 1, spy.lockCount)
+		assert.Equal(t, 1, spy.unlockCount)
+	})
+}
