@@ -100,11 +100,6 @@ groups:
           pagerduty_severity: "critical"
 
       # Order Service: 99.5% SLO (0.995 target)
-      - record: slo:availability_target:ratio
-        labels:
-          service: order-service
-        expr: "0.995"
-
       - alert: OrderServiceFastBurn
         expr: |
           (
@@ -115,7 +110,7 @@ groups:
         labels:
           severity: critical
           service: order-service
-          slo: "0.995"
+          slo: "99.5"
           slo_window: fast_burn
           tier: tier-1
         annotations:
@@ -133,7 +128,7 @@ groups:
         labels:
           severity: warning
           service: order-service
-          slo: "0.995"
+          slo: "99.5"
           slo_window: medium_burn
           tier: tier-1
         annotations:
@@ -149,7 +144,7 @@ groups:
         labels:
           severity: info
           service: order-service
-          slo: "0.995"
+          slo: "99.5"
           slo_window: slow_burn
 
       # Checkout Orchestrator: 99.9% SLO

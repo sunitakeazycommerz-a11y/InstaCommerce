@@ -19,6 +19,10 @@ scrape_configs:
           - http://inventory-service:8083/actuator/health/readiness
           - http://payment-service:8085/actuator/health/readiness
           - http://pricing-service:8089/actuator/health/readiness
+          - http://catalog-service:8082/actuator/health/readiness
+          - http://routing-eta-service:8094/actuator/health/readiness
+          - http://dispatch-optimizer-service:8102/health
+          - http://ai-inference-service:8101/health
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -33,13 +37,9 @@ scrape_configs:
     params:
       module: [grpc_health]
     static_configs:
-      - targets:
-          - catalog-service:8082
-          - inventory-service:8083
-          - pricing-service:8089
-          - routing-eta-service:8094
-          - dispatch-optimizer-service:8102
-          - ai-inference-service:8101
+      # All current services expose HTTP/REST health endpoints probed by blackbox-http.
+      # Add host:port targets here only for services implementing grpc.health.v1.Health.
+      - targets: []
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

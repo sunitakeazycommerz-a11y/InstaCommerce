@@ -79,6 +79,7 @@ jobs:
               - 'build.gradle.kts'
               - 'settings.gradle.kts'
               - 'gradle/**'
+              - 'libs/**'
             go-shared: 'services/go-shared/**'
             cdc-consumer-service: 'services/cdc-consumer-service/**'
             dispatch-optimizer-service: 'services/dispatch-optimizer-service/**'
@@ -491,17 +492,14 @@ jobs:
             fi
           )
           for test_dir in \
-            ml/tests \
             ml \
-            data-platform/quality/tests \
             data-platform/quality \
-            data-platform/streaming/tests \
-            data-platform/airflow/tests \
-            data-platform-jobs/tests \
-            monitoring/synthetics/tests \
+            data-platform/streaming \
+            data-platform/airflow \
+            data-platform-jobs \
             monitoring/synthetics \
-            scripts/lsp/tests; do
-            if [ -d "$test_dir" ] && find "$test_dir" -maxdepth 3 -name "test_*.py" | grep -q .; then
+            tests/chaos; do
+            if [ -d "$test_dir" ] && find "$test_dir" -maxdepth 4 \( -name "test_*.py" -o -name "*_test.py" \) | grep -q .; then
               PYTHONPATH=. pytest -v "$test_dir"
             fi
           done

@@ -1,50 +1,9 @@
-# SLO Recording & Alert Rules - InstaCommerce Platform
+# SLO Alert Rules - InstaCommerce Platform
+# Canonical SLI/SLO recording rules live in monitoring/prometheus-rules.yaml.
 groups:
   - name: instacommerce-slo-rules
     interval: 30s
     rules:
-      - record: slo:availability_target:ratio
-        labels:
-          service: order-service
-          slo: "99.5"
-        expr: "0.995"
-
-      - record: sli:http_availability:rate5m
-        expr: |
-          1 - (
-            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[5m])) by (service)
-            /
-            sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[5m])) by (service)
-          )
-
-      - record: sli:http_availability:rate30m
-        expr: |
-          1 - (
-            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[30m])) by (service)
-            /
-            sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[30m])) by (service)
-          )
-
-      - record: sli:http_availability:rate1h
-        expr: |
-          1 - (
-            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[1h])) by (service)
-            /
-            sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[1h])) by (service)
-          )
-
-      - record: sli:http_availability:rate6h
-        expr: |
-          1 - (
-            sum(rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[6h])) by (service)
-            /
-            sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[6h])) by (service)
-          )
-
-      - record: sli:http_latency_p99:rate5m
-        expr: |
-          histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m])) by (le, service))
-
       - alert: OrderServiceBurnRate_Critical
         expr: |
           (

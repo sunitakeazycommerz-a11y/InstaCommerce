@@ -15,25 +15,27 @@ spec:
       {{- toYaml .selector | nindent 6 }}
       {{- end }}
   action: {{ .action | default "ALLOW" }}
-  {{- if .rules }}
+  {{- if or .rules .notPrincipals .principals }}
   rules:
+    {{- if .rules }}
     {{- toYaml .rules | nindent 4 }}
-  {{- else if .notPrincipals }}
-  rules:
+    {{- end }}
+    {{- if .notPrincipals }}
     - from:
         - source:
             notPrincipals:
               {{- range .notPrincipals }}
               - {{ tpl . $ | quote }}
               {{- end }}
-  {{- else if .principals }}
-  rules:
+    {{- end }}
+    {{- if .principals }}
     - from:
         - source:
             principals:
               {{- range .principals }}
               - {{ tpl . $ | quote }}
               {{- end }}
+    {{- end }}
   {{- end }}
 ---
 {{- end }}

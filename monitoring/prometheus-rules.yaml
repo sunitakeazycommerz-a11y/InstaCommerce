@@ -109,6 +109,7 @@ groups:
       - record: slo:availability_target:ratio
         labels:
           service: order-service
+          slo: "99.5"
         expr: "0.995"
 
       # Kafka consumer lag SLI
@@ -485,8 +486,9 @@ groups:
           runbook_url: "https://runbooks.instacommerce.internal/ops/cloudsql-wal-latency"
 
       # ── Synthetic Checks & Blackbox Probing (#636) ──
+      # Guard against non-gRPC HTTP/REST endpoints in case REST targets are misconfigured.
       - alert: GRPCHealthCheckFailed
-        expr: probe_success{job="blackbox-grpc"} == 0
+        expr: probe_success{job="blackbox-grpc",instance!~"^(https?://.*|catalog-service:8082|inventory-service:8083|pricing-service:8089|routing-eta-service:8094|dispatch-optimizer-service:8102|ai-inference-service:8101)$"} == 0
         for: 30s
         labels:
           severity: critical

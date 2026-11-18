@@ -183,10 +183,6 @@ istio:
       action: DENY
       notPrincipals:
         - "*"
-      rules:
-        - from:
-            - source:
-                notPrincipals: ["*"]
   denyDefault:
     enabled: true
   servicePolicies:
@@ -380,13 +376,6 @@ istio:
     admin-gateway-service:
       allowFrom:
         - istio-ingressgateway
-    outbox-relay:
-      allowFrom:
-        - admin-gateway-service
-        - order-service
-        - payment-service
-        - inventory-service
-        - fulfillment-service
     outbox-relay-service:
       allowFrom:
         - admin-gateway-service
@@ -394,11 +383,6 @@ istio:
         - payment-service
         - inventory-service
         - fulfillment-service
-    payment-webhook:
-      allowFrom:
-        - istio-ingressgateway
-        - admin-gateway-service
-        - payment-service
     payment-webhook-service:
       allowFrom:
         - istio-ingressgateway
@@ -417,13 +401,6 @@ istio:
         - rider-fleet-service
         - routing-eta-service
         - admin-gateway-service
-    location-ingestion:
-      allowFrom:
-        - istio-ingressgateway
-        - mobile-bff-service
-        - rider-fleet-service
-        - routing-eta-service
-        - admin-gateway-service
     location-ingestion-service:
       allowFrom:
         - istio-ingressgateway
@@ -431,25 +408,12 @@ istio:
         - rider-fleet-service
         - routing-eta-service
         - admin-gateway-service
-    cdc-consumer:
-      allowFrom:
-        - admin-gateway-service
-        - order-service
-        - payment-service
-        - inventory-service
     cdc-consumer-service:
       allowFrom:
         - admin-gateway-service
         - order-service
         - payment-service
         - inventory-service
-    stream-processor:
-      allowFrom:
-        - admin-gateway-service
-        - location-ingestion
-        - location-ingestion-service
-        - routing-eta-service
-        - rider-fleet-service
     stream-processor-service:
       allowFrom:
         - admin-gateway-service

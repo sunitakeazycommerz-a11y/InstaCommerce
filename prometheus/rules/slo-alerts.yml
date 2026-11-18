@@ -10,11 +10,6 @@ groups:
   - name: slo_fast_burn
     interval: 30s
     rules:
-      - record: slo:availability_target:ratio
-        labels:
-          service: order-service
-        expr: "0.995"
-
       - alert: FastBurnHighErrorRate
         expr: |
           (
