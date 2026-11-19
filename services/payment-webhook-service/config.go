@@ -33,9 +33,12 @@ const (
 type Config struct {
 	Port               string
 	WebhookSecret      string
+	WebhookSecrets     []string
 	RazorpaySecret     string
+	RazorpaySecrets    []string
 	PhonePeSaltKey     string
 	PhonePeSaltIndex   string
+	PhonePeSaltKeys    []handler.PhonePeSaltKey
 	SignatureHeader    string
 	SignatureTolerance time.Duration
 	MaxBodyBytes       int64
@@ -53,16 +56,27 @@ type Config struct {
 
 func loadConfig() Config {
 	port := config.GetEnv("PORT", config.GetEnv("SERVER_PORT", defaultPort))
-	secret := config.GetEnv("WEBHOOK_SECRET", config.GetEnv("STRIPE_WEBHOOK_SECRET", ""))
+	secret := strings.TrimSpace(config.GetEnv("WEBHOOK_SECRET", config.GetEnv("STRIPE_WEBHOOK_SECRET", "")))
+	razorpaySecret := strings.TrimSpace(os.Getenv("RAZORPAY_WEBHOOK_SECRET"))
+	phonepeKey := strings.TrimSpace(os.Getenv("PHONEPE_SALT_KEY"))
+	phonepeIdx := strings.TrimSpace(os.Getenv("PHONEPE_SALT_INDEX"))
+
+	stripeRotated := parseSecretList(os.Getenv("WEBHOOK_SECRETS"), secret)
+	razorpayRotated := parseSecretList(os.Getenv("RAZORPAY_WEBHOOK_SECRETS"), razorpaySecret)
+	phonepeRotated := parsePhonePeSaltKeys(os.Getenv("PHONEPE_SALT_KEYS"), phonepeKey, phonepeIdx)
+
 	brokers := strings.FieldsFunc(os.Getenv("KAFKA_BROKERS"), func(r rune) bool {
 		return r == ',' || r == ' ' || r == ';'
 	})
 	return Config{
 		Port:               port,
-		WebhookSecret:      strings.TrimSpace(secret),
-		RazorpaySecret:     strings.TrimSpace(os.Getenv("RAZORPAY_WEBHOOK_SECRET")),
-		PhonePeSaltKey:     strings.TrimSpace(os.Getenv("PHONEPE_SALT_KEY")),
-		PhonePeSaltIndex:   strings.TrimSpace(os.Getenv("PHONEPE_SALT_INDEX")),
+		WebhookSecret:      secret,
+		WebhookSecrets:     stripeRotated,
+		RazorpaySecret:     razorpaySecret,
+		RazorpaySecrets:    razorpayRotated,
+		PhonePeSaltKey:     phonepeKey,
+		PhonePeSaltIndex:   phonepeIdx,
+		PhonePeSaltKeys:    phonepeRotated,
 		SignatureHeader:    config.GetEnv("WEBHOOK_SIGNATURE_HEADER", defaultSignatureHeader),
 		SignatureTolerance: time.Duration(config.GetEnvInt("WEBHOOK_TOLERANCE_SECONDS", defaultSignatureTolerance)) * time.Second,
 		MaxBodyBytes:       int64(config.GetEnvInt("MAX_BODY_BYTES", defaultMaxBodyBytes)),
@@ -79,22 +93,83 @@ func loadConfig() Config {
 	}
 }
 
+func parseSecretList(csv string, fallback string) []string {
+	var out []string
+	seen := make(map[string]struct{})
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, dup := seen[s]; !dup {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	for _, item := range strings.Split(csv, ",") {
+		add(item)
+	}
+	add(fallback)
+	return out
+}
+
+func parsePhonePeSaltKeys(raw, fallbackKey, fallbackIndex string) []handler.PhonePeSaltKey {
+	var out []handler.PhonePeSaltKey
+	for _, entry := range strings.Split(raw, ",") {
+		parts := strings.SplitN(strings.TrimSpace(entry), ":", 2)
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != "" {
+			out = append(out, handler.PhonePeSaltKey{
+				Key:   strings.TrimSpace(parts[0]),
+				Index: strings.TrimSpace(parts[1]),
+			})
+		}
+	}
+	if strings.TrimSpace(fallbackKey) != "" && strings.TrimSpace(fallbackIndex) != "" {
+		out = append(out, handler.PhonePeSaltKey{
+			Key:   strings.TrimSpace(fallbackKey),
+			Index: strings.TrimSpace(fallbackIndex),
+		})
+	}
+	return out
+}
+
 func buildVerifiers(cfg Config) map[handler.PSPType]handler.SignatureVerifier {
 	verifiers := map[handler.PSPType]handler.SignatureVerifier{
 		handler.Stripe:   &handler.UnconfiguredVerifier{Reason: "stripe webhook secret not configured"},
 		handler.Razorpay: &handler.UnconfiguredVerifier{Reason: "razorpay webhook secret not configured"},
 		handler.PhonePe:  &handler.UnconfiguredVerifier{Reason: "phonepe salt not configured"},
 	}
-	if v, err := handler.NewStripeVerifier(cfg.WebhookSecret, cfg.SignatureTolerance); err == nil {
+
+	stripeSecrets := cfg.WebhookSecrets
+	if len(stripeSecrets) == 0 && cfg.WebhookSecret != "" {
+		stripeSecrets = []string{cfg.WebhookSecret}
+	}
+	if v, err := handler.NewStripeVerifierWithRotation(stripeSecrets, cfg.SignatureTolerance); err == nil {
 		verifiers[handler.Stripe] = v
 	}
-	if v, err := handler.NewRazorpayVerifier(cfg.RazorpaySecret); err == nil {
+
+	rzpSecrets := cfg.RazorpaySecrets
+	if len(rzpSecrets) == 0 && cfg.RazorpaySecret != "" {
+		rzpSecrets = []string{cfg.RazorpaySecret}
+	}
+	if v, err := handler.NewRazorpayVerifierWithRotation(rzpSecrets); err == nil {
 		verifiers[handler.Razorpay] = v
 	}
-	if v, err := handler.NewPhonePeVerifier(cfg.PhonePeSaltKey, cfg.PhonePeSaltIndex); err == nil {
+
+	phonepeSalts := cfg.PhonePeSaltKeys
+	if len(phonepeSalts) == 0 && cfg.PhonePeSaltKey != "" && cfg.PhonePeSaltIndex != "" {
+		phonepeSalts = []handler.PhonePeSaltKey{{Key: cfg.PhonePeSaltKey, Index: cfg.PhonePeSaltIndex}}
+	}
+	if v, err := handler.NewPhonePeVerifierWithRotation(phonepeSalts); err == nil {
 		verifiers[handler.PhonePe] = v
 	}
 	return verifiers
+}
+
+func hasAnyVerifierSecret(cfg Config) bool {
+	return cfg.WebhookSecret != "" || len(cfg.WebhookSecrets) > 0 ||
+		cfg.RazorpaySecret != "" || len(cfg.RazorpaySecrets) > 0 ||
+		(cfg.PhonePeSaltKey != "" && cfg.PhonePeSaltIndex != "") || len(cfg.PhonePeSaltKeys) > 0
 }
 
 func initTracing(cfg Config, logger *slog.Logger) (func(context.Context) error, error) {

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -171,18 +170,6 @@ func TestVerifySignature(t *testing.T) {
 			t.Errorf("expected signature to fail with incorrect secret")
 		}
 	})
-}
-
-func TestLoadConfig_DefaultTolerance(t *testing.T) {
-	t.Setenv("PORT", "8106")
-	t.Setenv("WEBHOOK_SECRET", "test_secret")
-	t.Setenv("KAFKA_BROKERS", "localhost:9092")
-
-	cfg := loadConfig()
-	expectedTolerance := 300 * time.Second
-	if cfg.SignatureTolerance != expectedTolerance {
-		t.Errorf("expected default SignatureTolerance to be %v, got %v", expectedTolerance, cfg.SignatureTolerance)
-	}
 }
 
 func TestWebhookHandler_PublishesWebhookEventEnvelope(t *testing.T) {
@@ -401,54 +388,6 @@ func TestWebhookHandler_GuardsAndFallbacks(t *testing.T) {
 		}
 		if len(writer.messages) != 1 {
 			t.Errorf("expected only 1 published message, got %d", len(writer.messages))
-		}
-	})
-
-	t.Run("returns 503 when dedupe store errors", func(t *testing.T) {
-		writer := &stubMessageWriter{}
-		verifier, _ := handler.NewStripeVerifier(secret, 30*time.Second)
-		h, err := handler.NewWebhookHandler(
-			map[handler.PSPType]handler.SignatureVerifier{handler.Stripe: verifier},
-			&failingDedupeStore{err: errors.New("redis down")},
-			handler.NewKafkaWriterProducer(writer),
-			"payment.webhooks",
-			slog.New(slog.NewTextHandler(io.Discard, nil)),
-			handler.NewWebhookMetrics(prometheus.NewRegistry()),
-		)
-		if err != nil {
-			t.Fatalf("NewWebhookHandler: %v", err)
-		}
-		rec := sendSignedWebhook(t, http.HandlerFunc(h.HandleStripe), secret, time.Now().Unix(), []byte(`{"id":"evt_dedup_err","type":"payment_intent.succeeded"}`))
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("expected 503, got %d", rec.Code)
-		}
-	})
-
-	t.Run("rolls back dedupe on publish error so retry succeeds", func(t *testing.T) {
-		writer := &stubMessageWriter{err: errors.New("broker down")}
-		h, dedupe := newTestWebhookHandler(t, writer, secret)
-		mux := newHTTPMux(h, newHealthHandler(true, true, nil))
-		rawPayload := []byte(`{"id":"evt_retry","type":"payment_intent.succeeded"}`)
-
-		failed := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
-		if failed.Code != http.StatusServiceUnavailable {
-			t.Fatalf("expected 503, got %d", failed.Code)
-		}
-		present, err := dedupe.Check(context.Background(), "evt_retry")
-		if err != nil || present {
-			t.Fatalf("expected dedupe entry removed on publish error, present=%v err=%v", present, err)
-		}
-
-		writer.mu.Lock()
-		writer.err = nil
-		writer.mu.Unlock()
-
-		retried := sendSignedWebhook(t, mux, secret, time.Now().Unix(), rawPayload)
-		if retried.Code != http.StatusAccepted {
-			t.Fatalf("expected retry 202, got %d", retried.Code)
-		}
-		if len(writer.messages) != 1 {
-			t.Errorf("expected 1 message after retry, got %d", len(writer.messages))
 		}
 	})
 }

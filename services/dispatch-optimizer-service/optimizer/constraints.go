@@ -6,62 +6,45 @@ import (
 	"time"
 )
 
-// ConstraintViolation describes a single reason why a rider cannot be assigned
-// a particular order.
+// ConstraintViolation describes a single reason why a rider cannot be assigned an order.
 type ConstraintViolation struct {
-	// Constraint is the canonical name of the violated constraint
-	// (e.g. "capacity", "zone", "battery").
 	Constraint string `json:"constraint"`
-	// Rider is the ID of the rider involved.
-	Rider string `json:"rider"`
-	// Order is the ID of the order involved.
-	Order string `json:"order"`
-	// Reason is a human-readable explanation of the violation.
-	Reason string `json:"reason"`
+	Rider      string `json:"rider"`
+	Order      string `json:"order"`
+	Reason     string `json:"reason"`
 }
 
-// ConstraintChecker validates rider–order feasibility against production
-// constraints. It is safe for concurrent use; all methods are read-only after
-// construction.
+// ConstraintChecker validates rider-order feasibility against production constraints.
 type ConstraintChecker struct {
 	config SolverConfig
 }
 
-// NewConstraintChecker creates a ConstraintChecker with the given solver
-// configuration.
+// NewConstraintChecker creates a ConstraintChecker with cfg.
 func NewConstraintChecker(cfg SolverConfig) *ConstraintChecker {
 	return &ConstraintChecker{config: cfg}
 }
 
-// CheckAll runs every hard constraint and returns whether the assignment is
-// feasible together with a (possibly empty) list of violations.
+// CheckAll runs every hard constraint and returns feasibility plus any violations.
 func (c *ConstraintChecker) CheckAll(rider RiderState, order OrderRequest) (bool, []ConstraintViolation) {
 	var violations []ConstraintViolation
-
-	if v := c.checkCapacity(rider, order); v != nil {
-		violations = append(violations, *v)
+	checks := []func(RiderState, OrderRequest) *ConstraintViolation{
+		c.checkCapacity,
+		c.checkZone,
+		c.checkBattery,
+		c.checkConsecutiveLimit,
+		c.checkNewRiderDistance,
+		c.checkVehicleSuitability,
+		c.checkBagCapacity,
+		c.checkColdChain,
 	}
-	if v := c.checkZone(rider, order); v != nil {
-		violations = append(violations, *v)
+	for _, fn := range checks {
+		if v := fn(rider, order); v != nil {
+			violations = append(violations, *v)
+		}
 	}
-	if v := c.checkBattery(rider, order); v != nil {
-		violations = append(violations, *v)
-	}
-	if v := c.checkConsecutiveLimit(rider, order); v != nil {
-		violations = append(violations, *v)
-	}
-	if v := c.checkNewRiderDistance(rider, order); v != nil {
-		violations = append(violations, *v)
-	}
-	if v := c.checkVehicleSuitability(rider, order); v != nil {
-		violations = append(violations, *v)
-	}
-
 	return len(violations) == 0, violations
 }
 
-// checkCapacity ensures the rider has not exceeded the maximum number of
-// concurrent active orders.
 func (c *ConstraintChecker) checkCapacity(rider RiderState, order OrderRequest) *ConstraintViolation {
 	max := c.config.MaxOrdersPerRider
 	if max <= 0 {
@@ -78,34 +61,22 @@ func (c *ConstraintChecker) checkCapacity(rider RiderState, order OrderRequest) 
 	return nil
 }
 
-// checkZone verifies that both rider and order belong to the same operational
-// zone. If either zone is empty the constraint is treated as satisfied (zone
-// info unavailable).
 func (c *ConstraintChecker) checkZone(rider RiderState, order OrderRequest) *ConstraintViolation {
-	if rider.Zone == "" || order.Zone == "" {
+	if rider.Zone == "" || order.Zone == "" || rider.Zone == order.Zone {
 		return nil
 	}
-	if rider.Zone != order.Zone {
-		return &ConstraintViolation{
-			Constraint: "zone",
-			Rider:      rider.ID,
-			Order:      order.ID,
-			Reason:     fmt.Sprintf("rider zone %q != order zone %q", rider.Zone, order.Zone),
-		}
+	return &ConstraintViolation{
+		Constraint: "zone",
+		Rider:      rider.ID,
+		Order:      order.ID,
+		Reason:     fmt.Sprintf("rider zone %q != order zone %q", rider.Zone, order.Zone),
 	}
-	return nil
 }
 
-// checkBattery ensures riders on electric vehicles have enough battery to
-// complete the delivery. A minimum of 15% charge is required for short trips,
-// and riders with < 20% battery are filtered from assignments exceeding 3 km (Issue #587).
 func (c *ConstraintChecker) checkBattery(rider RiderState, order OrderRequest) *ConstraintViolation {
 	if !isElectricVehicle(rider.VehicleType) {
-		// Non-electric vehicles (human-powered bicycles, petrol scooters/motorcycles, cars)
-		// are not battery-constrained.
 		return nil
 	}
-
 	dist := HaversineDistance(rider.Position, order.Position)
 	if dist > 3.0 && rider.BatteryPercent < 20.0 {
 		return &ConstraintViolation{
@@ -118,7 +89,6 @@ func (c *ConstraintChecker) checkBattery(rider RiderState, order OrderRequest) *
 			),
 		}
 	}
-
 	const minBattery = 15.0
 	if rider.BatteryPercent < minBattery {
 		return &ConstraintViolation{
@@ -134,34 +104,6 @@ func (c *ConstraintChecker) checkBattery(rider RiderState, order OrderRequest) *
 	return nil
 }
 
-func normalizeVehicleType(vType string) string {
-	s := strings.ToLower(strings.TrimSpace(vType))
-	s = strings.NewReplacer("-", "_", " ", "_").Replace(s)
-	return s
-}
-
-func isElectricVehicle(vType string) bool {
-	switch normalizeVehicleType(vType) {
-	case "electric_scooter", "e_scooter", "escooter",
-		"electric_bicycle", "e_bike", "ebike", "electric_bike",
-		"ev_2w", "ev":
-		return true
-	default:
-		return false
-	}
-}
-
-func isBicycleVehicle(vType string) bool {
-	switch normalizeVehicleType(vType) {
-	case "bicycle", "bike", "cycle", "e_bike", "ebike", "electric_bicycle", "electric_bike":
-		return true
-	default:
-		return false
-	}
-}
-
-// checkConsecutiveLimit enforces a mandatory 30-minute break after a
-// configurable number of consecutive deliveries (default 8).
 func (c *ConstraintChecker) checkConsecutiveLimit(rider RiderState, order OrderRequest) *ConstraintViolation {
 	max := c.config.MaxConsecutive
 	if max <= 0 {
@@ -182,8 +124,6 @@ func (c *ConstraintChecker) checkConsecutiveLimit(rider RiderState, order OrderR
 	return nil
 }
 
-// checkNewRiderDistance limits assignment distance for new riders (those with
-// fewer than 50 total deliveries) to a configurable cap (default 3 km).
 func (c *ConstraintChecker) checkNewRiderDistance(rider RiderState, order OrderRequest) *ConstraintViolation {
 	const newRiderThreshold = 50
 	if rider.TotalDeliveries >= newRiderThreshold {
@@ -191,7 +131,7 @@ func (c *ConstraintChecker) checkNewRiderDistance(rider RiderState, order OrderR
 	}
 	maxKm := c.config.NewRiderMaxKm
 	if maxKm <= 0 {
-		maxKm = 3.0
+		maxKm = DefaultNewRiderMaxKm
 	}
 	dist := HaversineDistance(rider.Position, order.Position)
 	if dist > maxKm {
@@ -208,8 +148,6 @@ func (c *ConstraintChecker) checkNewRiderDistance(rider RiderState, order OrderR
 	return nil
 }
 
-// checkVehicleSuitability ensures that heavy or bulky orders are not assigned
-// to bicycle riders. Orders above 8 kg require a scooter or car.
 func (c *ConstraintChecker) checkVehicleSuitability(rider RiderState, order OrderRequest) *ConstraintViolation {
 	const maxBicycleWeightKg = 8.0
 	if isBicycleVehicle(rider.VehicleType) && order.Weight > maxBicycleWeightKg {
@@ -224,4 +162,68 @@ func (c *ConstraintChecker) checkVehicleSuitability(rider RiderState, order Orde
 		}
 	}
 	return nil
+}
+
+func (c *ConstraintChecker) checkBagCapacity(rider RiderState, order OrderRequest) *ConstraintViolation {
+	maxWeight, maxVolume := effectiveBagLimits(rider)
+	if order.Weight > 0 && rider.CurrentBagWeightKg+order.Weight > maxWeight {
+		return &ConstraintViolation{
+			Constraint: "bag_capacity",
+			Rider:      rider.ID,
+			Order:      order.ID,
+			Reason: fmt.Sprintf(
+				"bag weight %.2f kg + order %.2f kg exceeds limit %.2f kg",
+				rider.CurrentBagWeightKg, order.Weight, maxWeight,
+			),
+		}
+	}
+	if order.VolumeLiters > 0 && rider.CurrentBagVolumeLiters+order.VolumeLiters > maxVolume {
+		return &ConstraintViolation{
+			Constraint: "bag_capacity",
+			Rider:      rider.ID,
+			Order:      order.ID,
+			Reason: fmt.Sprintf(
+				"bag volume %.2f L + order %.2f L exceeds limit %.2f L",
+				rider.CurrentBagVolumeLiters, order.VolumeLiters, maxVolume,
+			),
+		}
+	}
+	return nil
+}
+
+func (c *ConstraintChecker) checkColdChain(rider RiderState, order OrderRequest) *ConstraintViolation {
+	if !order.isColdChain() || rider.HasThermalBag {
+		return nil
+	}
+	return &ConstraintViolation{
+		Constraint: "cold_chain",
+		Rider:      rider.ID,
+		Order:      order.ID,
+		Reason:     "order requires cold-chain handling but rider lacks thermal bag",
+	}
+}
+
+func normalizeVehicleType(vType string) string {
+	s := strings.ToLower(strings.TrimSpace(vType))
+	return strings.NewReplacer("-", "_", " ", "_").Replace(s)
+}
+
+func isElectricVehicle(vType string) bool {
+	switch normalizeVehicleType(vType) {
+	case "electric_scooter", "e_scooter", "escooter",
+		"electric_bicycle", "e_bike", "ebike", "electric_bike",
+		"ev_2w", "ev":
+		return true
+	default:
+		return false
+	}
+}
+
+func isBicycleVehicle(vType string) bool {
+	switch normalizeVehicleType(vType) {
+	case "bicycle", "bike", "cycle", "e_bike", "ebike", "electric_bicycle", "electric_bike":
+		return true
+	default:
+		return false
+	}
 }

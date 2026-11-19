@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/correlation"
 	kafkago "github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/compress"
 )
@@ -45,6 +46,9 @@ type Producer struct {
 // NewProducer creates a new Kafka producer from the supplied configuration.
 // The caller must call Close when the producer is no longer needed.
 func NewProducer(cfg ProducerConfig, logger *slog.Logger) (*Producer, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if len(cfg.Brokers) == 0 {
 		return nil, fmt.Errorf("kafka producer: at least one broker address is required")
 	}
@@ -98,11 +102,12 @@ func NewProducer(cfg ProducerConfig, logger *slog.Logger) (*Producer, error) {
 // The call blocks until the message is acknowledged by the required number
 // of replicas or an error occurs.
 func (p *Producer) Publish(ctx context.Context, topic string, key, value []byte, headers map[string]string) error {
+	enrichedHeaders := InjectCorrelationHeaders(ctx, headers)
 	msg := kafkago.Message{
 		Topic:   topic,
 		Key:     key,
 		Value:   value,
-		Headers: mapToHeaders(headers),
+		Headers: mapToHeaders(enrichedHeaders),
 	}
 
 	if err := p.writer.WriteMessages(ctx, msg); err != nil {
@@ -129,7 +134,29 @@ func (p *Producer) Close() error {
 	return nil
 }
 
-// mapToHeaders converts a string map to kafka-go message headers.
+// InjectCorrelationHeaders returns a non-mutating copy of headers with the
+// context correlation ID set when not already provided.
+func InjectCorrelationHeaders(ctx context.Context, headers map[string]string) map[string]string {
+	cid := correlation.FromContext(ctx)
+	if cid == "" && len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers)+1)
+	hasCorrelation := false
+	for k, v := range headers {
+		out[k] = v
+		if strings.EqualFold(k, correlation.Header) || k == "correlation_id" || k == "correlationId" {
+			if strings.TrimSpace(v) != "" {
+				hasCorrelation = true
+			}
+		}
+	}
+	if cid != "" && !hasCorrelation {
+		out[correlation.Header] = cid
+	}
+	return out
+}
+
 func mapToHeaders(m map[string]string) []kafkago.Header {
 	if len(m) == 0 {
 		return nil

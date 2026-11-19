@@ -215,3 +215,34 @@ func TestAPINotFoundReturns404(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, rec.Code, "%s %s must return 404 when not found", tc.method, tc.path)
 	}
 }
+
+func TestAPIInvalidStateTransitionReturns409(t *testing.T) {
+	mgr := newMockSubscriptionManager()
+	mgr.subscriptions["sub-draft"] = &subscription.Subscription{
+		ID:    "sub-draft",
+		Name:  "Draft Sub",
+		State: subscription.StateDraft,
+	}
+	r := setupTestRouter(&conflictManager{mockSubscriptionManager: mgr})
+
+	req := httptest.NewRequest("POST", "/api/v1/subscriptions/sub-draft/pause", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var body ErrorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, "invalid_state_transition", body.Error)
+}
+
+type conflictManager struct {
+	*mockSubscriptionManager
+}
+
+func (c *conflictManager) Pause(ctx context.Context, id string) error {
+	sub, ok := c.subscriptions[id]
+	if !ok {
+		return subscription.ErrSubscriptionNotFound
+	}
+	return subscription.ValidateTransition(sub.State, subscription.StatePaused)
+}

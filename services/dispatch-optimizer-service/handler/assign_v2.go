@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 
 	"github.com/instacommerce/dispatch-optimizer-service/optimizer"
@@ -46,6 +47,9 @@ type v2ErrorResponse struct {
 // If the V2AssignRequest includes a non-nil Config, a temporary solver with
 // those overrides is used for the call.
 func HandleAssignV2(solver *optimizer.Solver, logger *slog.Logger) http.HandlerFunc {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
@@ -139,6 +143,12 @@ func validateV2Request(req V2AssignRequest) error {
 		if err := validatePos(rider.Position); err != nil {
 			return fmt.Errorf("rider %s: %w", rider.ID, err)
 		}
+		if err := validateNonNegativeFinite("current_bag_weight_kg", rider.CurrentBagWeightKg); err != nil {
+			return fmt.Errorf("rider %s: %w", rider.ID, err)
+		}
+		if err := validateNonNegativeFinite("current_bag_volume_liters", rider.CurrentBagVolumeLiters); err != nil {
+			return fmt.Errorf("rider %s: %w", rider.ID, err)
+		}
 		riderIDs[rider.ID] = struct{}{}
 	}
 
@@ -153,6 +163,17 @@ func validateV2Request(req V2AssignRequest) error {
 		if err := validatePos(order.Position); err != nil {
 			return fmt.Errorf("order %s: %w", order.ID, err)
 		}
+		if order.StorePosition != nil {
+			if err := validatePos(*order.StorePosition); err != nil {
+				return fmt.Errorf("order %s store_position: %w", order.ID, err)
+			}
+		}
+		if err := validateNonNegativeFinite("weight", order.Weight); err != nil {
+			return fmt.Errorf("order %s: %w", order.ID, err)
+		}
+		if err := validateNonNegativeFinite("volume_liters", order.VolumeLiters); err != nil {
+			return fmt.Errorf("order %s: %w", order.ID, err)
+		}
 		orderIDs[order.ID] = struct{}{}
 	}
 
@@ -161,11 +182,11 @@ func validateV2Request(req V2AssignRequest) error {
 
 // validatePos validates a geographic coordinate.
 func validatePos(p optimizer.Position) error {
-	if p.Lat < -90 || p.Lat > 90 {
-		return errors.New("lat must be between -90 and 90")
+	if math.IsNaN(p.Lat) || math.IsInf(p.Lat, 0) || p.Lat < -90 || p.Lat > 90 {
+		return errors.New("lat must be a finite number between -90 and 90")
 	}
-	if p.Lng < -180 || p.Lng > 180 {
-		return errors.New("lng must be between -180 and 180")
+	if math.IsNaN(p.Lng) || math.IsInf(p.Lng, 0) || p.Lng < -180 || p.Lng > 180 {
+		return errors.New("lng must be a finite number between -180 and 180")
 	}
 	return nil
 }

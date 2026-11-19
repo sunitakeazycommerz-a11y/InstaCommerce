@@ -118,3 +118,45 @@ func TestHandleAssignV2_Success(t *testing.T) {
 		t.Fatalf("expected assignment to rider-1, got %s", result.Assignments[0].RiderID)
 	}
 }
+
+func TestHandleAssignV2_RejectsInvalidCoordinatesAndNegativeBagFields(t *testing.T) {
+	solver := optimizer.NewSolver(optimizer.SolverConfig{})
+	handler := HandleAssignV2(solver, nil)
+
+	tests := []struct {
+		name string
+		req  V2AssignRequest
+	}{
+		{
+			name: "out-of-range latitude",
+			req: V2AssignRequest{
+				Riders: []optimizer.RiderState{{ID: "r1", Position: optimizer.Position{Lat: 91, Lng: 77}}},
+			},
+		},
+		{
+			name: "negative order weight",
+			req: V2AssignRequest{
+				Riders: []optimizer.RiderState{{ID: "r1", Position: optimizer.Position{Lat: 12.97, Lng: 77.59}}},
+				Orders: []optimizer.OrderRequest{{ID: "o1", Position: optimizer.Position{Lat: 12.97, Lng: 77.59}, Weight: -0.5}},
+			},
+		},
+		{
+			name: "negative rider bag volume",
+			req: V2AssignRequest{
+				Riders: []optimizer.RiderState{{ID: "r1", Position: optimizer.Position{Lat: 12.97, Lng: 77.59}, CurrentBagVolumeLiters: -2}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(tc.req)
+			req := httptest.NewRequest(http.MethodPost, "/v2/optimize/assign", bytes.NewReader(data))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 Bad Request, got %d (%s)", rr.Code, rr.Body.String())
+			}
+		})
+	}
+}

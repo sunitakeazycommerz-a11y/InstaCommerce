@@ -98,6 +98,19 @@ func isNotFoundError(err error) bool {
 		strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
+func writeTransitionError(w http.ResponseWriter, err error, action, id string) {
+	if isNotFoundError(err) {
+		writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
+		return
+	}
+	if errors.Is(err, subscription.ErrInvalidStateTransition) {
+		writeError(w, http.StatusConflict, "invalid_state_transition", err.Error())
+		return
+	}
+	slog.Error("failed subscription operation", "action", action, "error", err, "id", id)
+	writeError(w, http.StatusInternalServerError, "internal_error", "Failed to "+action+" subscription")
+}
+
 // CreateSubscription handles POST /api/v1/subscriptions.
 func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -121,6 +134,10 @@ func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 
 	sub, err := h.subscriptionSvc.Create(r.Context(), req, createdBy)
 	if err != nil {
+		if errors.Is(err, subscription.ErrInvalidSubscription) {
+			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
 		slog.Error("failed to create subscription", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create subscription")
 		return
@@ -159,12 +176,7 @@ func (h *Handler) DeleteSubscription(w http.ResponseWriter, r *http.Request) {
 	id := vars["id"]
 
 	if err := h.subscriptionSvc.Archive(r.Context(), id); err != nil {
-		if isNotFoundError(err) {
-			writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
-			return
-		}
-		slog.Error("failed to archive subscription", "error", err, "id", id)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to archive subscription")
+		writeTransitionError(w, err, "archive", id)
 		return
 	}
 
@@ -177,12 +189,7 @@ func (h *Handler) ActivateSubscription(w http.ResponseWriter, r *http.Request) {
 	id := vars["id"]
 
 	if err := h.subscriptionSvc.Activate(r.Context(), id); err != nil {
-		if isNotFoundError(err) {
-			writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
-			return
-		}
-		slog.Error("failed to activate subscription", "error", err, "id", id)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to activate subscription")
+		writeTransitionError(w, err, "activate", id)
 		return
 	}
 
@@ -198,12 +205,7 @@ func (h *Handler) PauseSubscription(w http.ResponseWriter, r *http.Request) {
 	id := vars["id"]
 
 	if err := h.subscriptionSvc.Pause(r.Context(), id); err != nil {
-		if isNotFoundError(err) {
-			writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
-			return
-		}
-		slog.Error("failed to pause subscription", "error", err, "id", id)
-		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to pause subscription")
+		writeTransitionError(w, err, "pause", id)
 		return
 	}
 

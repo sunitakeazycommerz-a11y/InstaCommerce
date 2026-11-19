@@ -1,54 +1,42 @@
-// Package store provides persistence backends for the location-ingestion
-// service. The primary implementation stores the latest rider position in
-// Redis so that dispatch-optimizer and routing-eta services can query it
-// with sub-millisecond latency.
+// Package store provides persistence backends for the location-ingestion service.
 package store
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-var (
-	// ErrOutOfOrderPing indicates the incoming update has a timestamp older than or equal to the current position.
-	ErrOutOfOrderPing = errors.New("store: incoming position is older than latest known location")
-)
+// ErrOutOfOrderPing indicates the incoming update has a timestamp <= the current position.
+var ErrOutOfOrderPing = errors.New("store: incoming position is older than latest known location")
 
-// LocationUpdate mirrors handler.LocationUpdate and is duplicated here to
-// avoid a circular import. In a larger codebase this would live in a shared
-// domain package.
+// LocationUpdate mirrors handler.LocationUpdate for the persistence package.
 type LocationUpdate struct {
-	RiderID     string    `json:"rider_id"`
-	Lat         float64   `json:"lat"`
-	Lng         float64   `json:"lng"`
-	Accuracy    float64   `json:"accuracy_meters"`
-	Speed       float64   `json:"speed_kmh"`
-	Heading     float64   `json:"heading_degrees"`
-	Timestamp   time.Time `json:"timestamp"`
-	BatteryPct  float64   `json:"battery_pct"`
-	H3Index     string    `json:"h3_index,omitempty"`
-	HasSpeed    bool      `json:"-"`
-	HasHeading  bool      `json:"-"`
-	HasAccuracy bool      `json:"-"`
+	RiderID       string    `json:"rider_id"`
+	Lat           float64   `json:"lat"`
+	Lng           float64   `json:"lng"`
+	Accuracy      float64   `json:"accuracy_meters"`
+	Speed         float64   `json:"speed_kmh"`
+	Heading       float64   `json:"heading_degrees"`
+	Timestamp     time.Time `json:"timestamp"`
+	BatteryPct    float64   `json:"battery_pct"`
+	H3Index       string    `json:"h3_index,omitempty"`
+	HasSpeed      bool      `json:"-"`
+	HasHeading    bool      `json:"-"`
+	HasAccuracy   bool      `json:"-"`
+	HasBatteryPct bool      `json:"-"`
 }
 
 const (
-	// DefaultRiderHeartbeatTTL is the 60-second TTL on rider heartbeat keys in Redis
-	// to eliminate ghost offline riders when battery dies or signal is lost (Issue #578).
-	DefaultRiderHeartbeatTTL = 60 * time.Second
-
-	// H3Resolution8HexDiameterKm is the approximate diameter of an H3 Resolution 8 hexagon (~800m).
+	DefaultRiderHeartbeatTTL   = 60 * time.Second
 	H3Resolution8HexDiameterKm = 0.8
 )
 
-// updatePositionScript atomically compares timestamp_ms against the stored latest position
-// and writes the updated hash fields + H3 spatial set membership without TOCTOU races.
 var updatePositionScript = redis.NewScript(`
 local existing = tonumber(redis.call('HGET', KEYS[1], 'timestamp_ms'))
 if existing ~= nil and existing > 0 and tonumber(ARGV[1]) <= existing then
@@ -77,24 +65,19 @@ end
 return {1, ''}
 `)
 
-// LatestPositionStore persists the most recent GPS position for each rider in
-// Redis. Default keys follow rider:{rider_id}:location unless a custom prefix
-// (such as "rider:location:") is configured.
+// LatestPositionStore persists the most recent GPS position for each rider in Redis.
 type LatestPositionStore struct {
 	client    *redis.Client
 	ttl       time.Duration
 	keyPrefix string
 }
 
-// NewLatestPositionStore creates a store backed by the given Redis client.
-// ttl controls how long a position is retained before the rider is considered
-// offline (default: 60 seconds).
+// NewLatestPositionStore creates a store backed by client with default key layout.
 func NewLatestPositionStore(client *redis.Client, ttl time.Duration) (*LatestPositionStore, error) {
 	return NewLatestPositionStoreWithPrefix(client, "", ttl)
 }
 
-// NewLatestPositionStoreWithPrefix creates a store with an explicit Redis hash key prefix
-// (for example "rider:location:") and TTL.
+// NewLatestPositionStoreWithPrefix creates a store with an explicit Redis hash key prefix and TTL.
 func NewLatestPositionStoreWithPrefix(client *redis.Client, keyPrefix string, ttl time.Duration) (*LatestPositionStore, error) {
 	if client == nil {
 		return nil, fmt.Errorf("store: redis client must not be nil")
@@ -105,7 +88,6 @@ func NewLatestPositionStoreWithPrefix(client *redis.Client, keyPrefix string, tt
 	return &LatestPositionStore{client: client, ttl: ttl, keyPrefix: keyPrefix}, nil
 }
 
-// keyFor returns the default Redis key for a rider's latest position.
 func keyFor(riderID string) string {
 	return "rider:" + riderID + ":location"
 }
@@ -124,13 +106,20 @@ func (s *LatestPositionStore) scanPattern() string {
 	return "rider:*:location"
 }
 
-// h3SetKey returns the Redis set key for all active riders in an H3 index.
+func (s *LatestPositionStore) extractRiderID(key string) string {
+	if s.keyPrefix != "" {
+		return strings.TrimPrefix(key, s.keyPrefix)
+	}
+	trimmed := strings.TrimPrefix(key, "rider:")
+	trimmed = strings.TrimSuffix(trimmed, ":location")
+	return trimmed
+}
+
 func h3SetKey(h3Index string) string {
 	return "riders:h3:" + h3Index
 }
 
-// Update atomically stores (or updates) the latest position for a rider via Lua CAS.
-// Rejects out-of-order pings (Issue #597) and maintains H3 Resolution 8 rider sets (Issue #607).
+// Update atomically stores the latest position for a rider via Lua CAS.
 func (s *LatestPositionStore) Update(ctx context.Context, update LocationUpdate) error {
 	if update.Timestamp.IsZero() {
 		update.Timestamp = time.Now().UTC()
@@ -160,7 +149,7 @@ func (s *LatestPositionStore) Update(ctx context.Context, update LocationUpdate)
 	if update.HasAccuracy || update.Accuracy != 0 {
 		args = append(args, "accuracy", strconv.FormatFloat(update.Accuracy, 'f', -1, 64))
 	}
-	if update.BatteryPct != 0 {
+	if update.HasBatteryPct || update.BatteryPct != 0 {
 		args = append(args, "battery_pct", strconv.FormatFloat(update.BatteryPct, 'f', -1, 64))
 	}
 	if update.H3Index != "" {
@@ -200,8 +189,7 @@ func toInt64(v any) (int64, bool) {
 	}
 }
 
-// Get retrieves the latest known position for riderID. Returns nil if the
-// rider is not found (key expired or never set).
+// Get retrieves the latest known position for riderID, returning nil if absent.
 func (s *LatestPositionStore) Get(ctx context.Context, riderID string) (*LocationUpdate, error) {
 	return s.getByKey(ctx, s.positionKey(riderID), riderID)
 }
@@ -256,13 +244,13 @@ func (s *LatestPositionStore) getByKey(ctx context.Context, key, riderID string)
 	if v, ok := fields["battery_pct"]; ok {
 		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
 			update.BatteryPct = parsed
+			update.HasBatteryPct = true
 		}
 	}
 	return update, nil
 }
 
-// GetNearby returns all riders whose latest known position is within radiusKm
-// of the given coordinate. Uses H3 spatial indexing for fast O(catchment) lookups (Issue #607).
+// GetNearby returns all riders within radiusKm of (lat, lng).
 func (s *LatestPositionStore) GetNearby(ctx context.Context, lat, lng, radiusKm float64) ([]LocationUpdate, error) {
 	if radiusKm <= 3.0 {
 		h3Results, err := s.GetNearbyH3(ctx, lat, lng, radiusKm)
@@ -282,14 +270,11 @@ func (s *LatestPositionStore) GetNearby(ctx context.Context, lat, lng, radiusKm 
 		}
 
 		for _, key := range keys {
-			update, err := s.getByKey(ctx, key, key)
-			if err != nil {
-				continue // skip corrupt entries
-			}
-			if update == nil {
+			riderID := s.extractRiderID(key)
+			update, err := s.getByKey(ctx, key, riderID)
+			if err != nil || update == nil {
 				continue
 			}
-
 			if haversineKm(lat, lng, update.Lat, update.Lng) <= radiusKm {
 				results = append(results, *update)
 			}
@@ -303,7 +288,7 @@ func (s *LatestPositionStore) GetNearby(ctx context.Context, lat, lng, radiusKm 
 	return results, nil
 }
 
-// GetNearbyH3 queries riders in the target H3 index and its 1-ring neighbors (Issue #607).
+// GetNearbyH3 queries riders in the target H3 index and its 1-ring neighbors.
 func (s *LatestPositionStore) GetNearbyH3(ctx context.Context, lat, lng, radiusKm float64) ([]LocationUpdate, error) {
 	centerH3 := latLngToH3Res8(lat, lng)
 	cells := kRingRes8(centerH3)
@@ -334,91 +319,5 @@ func (s *LatestPositionStore) GetNearbyH3(ctx context.Context, lat, lng, radiusK
 			results = append(results, *pos)
 		}
 	}
-
 	return results, nil
-}
-
-// latLngToH3Res8 computes an Uber H3 Resolution 8 index string.
-func latLngToH3Res8(lat, lng float64) string {
-	scale := 111.32 / (H3Resolution8HexDiameterKm * math.Sqrt(3) / 2)
-	radLat := lat * math.Pi / 180.0
-	x := lng * math.Cos(radLat) * scale
-	y := lat * scale
-
-	qFrac := (math.Sqrt(3)/3.0)*x - (1.0/3.0)*y
-	rFrac := (2.0 / 3.0) * y
-	sFrac := -qFrac - rFrac
-
-	q := int(math.Round(qFrac))
-	r := int(math.Round(rFrac))
-	s := int(math.Round(sFrac))
-
-	qDiff := math.Abs(float64(q) - qFrac)
-	rDiff := math.Abs(float64(r) - rFrac)
-	sDiff := math.Abs(float64(s) - sFrac)
-
-	if qDiff > rDiff && qDiff > sDiff {
-		q = -r - s
-	} else if rDiff > sDiff {
-		r = -q - s
-	}
-
-	qPart := uint32(q + 1000000)
-	rPart := uint32(r + 1000000)
-	index64 := (uint64(0x88) << 56) | (uint64(qPart&0xFFFFFF) << 28) | uint64(rPart&0xFFFFFF)
-	return fmt.Sprintf("%016x", index64)
-}
-
-func kRingRes8(h3Index string) []string {
-	var val uint64
-	_, err := fmt.Sscanf(h3Index, "%x", &val)
-	if err != nil {
-		return []string{h3Index}
-	}
-
-	prefix := (val >> 56) & 0xFF
-	qPart := uint32((val >> 28) & 0xFFFFFF)
-	rPart := uint32(val & 0xFFFFFF)
-	q := int(qPart) - 1000000
-	r := int(rPart) - 1000000
-
-	directions := [][2]int{
-		{0, 0}, {1, 0}, {1, -1}, {0, -1}, {-1, 0}, {-1, 1}, {0, 1},
-	}
-
-	result := make([]string, 0, len(directions))
-	for _, dir := range directions {
-		adjQ := uint32(q + dir[0] + 1000000)
-		adjR := uint32(r + dir[1] + 1000000)
-		adjVal := (prefix << 56) | (uint64(adjQ&0xFFFFFF) << 28) | uint64(adjR&0xFFFFFF)
-		result = append(result, fmt.Sprintf("%016x", adjVal))
-	}
-	return result
-}
-
-// earthRadiusKm is the mean radius of the Earth.
-const earthRadiusKm = 6371.0
-
-// haversineKm computes the great-circle distance in kilometres between two
-// geographic coordinates using the Haversine formula.
-func haversineKm(lat1, lng1, lat2, lng2 float64) float64 {
-	dLat := degToRad(lat2 - lat1)
-	dLng := degToRad(lng2 - lng1)
-
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(degToRad(lat1))*math.Cos(degToRad(lat2))*
-			math.Sin(dLng/2)*math.Sin(dLng/2)
-	if a < 0 {
-		a = 0
-	} else if a > 1 {
-		a = 1
-	}
-
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return earthRadiusKm * c
-}
-
-// degToRad converts degrees to radians.
-func degToRad(deg float64) float64 {
-	return deg * math.Pi / 180
 }

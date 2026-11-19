@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/correlation"
 	kafkago "github.com/segmentio/kafka-go"
 )
+
+const defaultConsumerErrorBackoff = 250 * time.Millisecond
 
 // ConsumerConfig holds all tunables for the Kafka consumer group.
 type ConsumerConfig struct {
@@ -24,6 +28,10 @@ type ConsumerConfig struct {
 	MaxBytes int
 	// MaxWait is the maximum time the broker waits before returning a batch.
 	MaxWait time.Duration
+	// StartOffset configures the initial offset when no committed offset exists (default LastOffset).
+	StartOffset int64
+	// ErrorBackoff pauses before fetching again after a handler failure (default 250ms; <0 disables).
+	ErrorBackoff time.Duration
 	// SessionTimeout sets the length of time that may pass without a heartbeat before rebalancing (default 45s).
 	SessionTimeout time.Duration
 	// HeartbeatInterval sets the frequency at which consumer heartbeats are sent (default 3s).
@@ -54,14 +62,18 @@ type MessageHandler func(ctx context.Context, msg Message) error
 // graceful shutdown. It processes messages sequentially per partition within
 // a single goroutine, which keeps the handler free from concurrency concerns.
 type Consumer struct {
-	reader  *kafkago.Reader
-	handler MessageHandler
-	logger  *slog.Logger
+	reader       *kafkago.Reader
+	handler      MessageHandler
+	logger       *slog.Logger
+	errorBackoff time.Duration
 }
 
 // NewConsumer creates a Kafka consumer group reader. Call Start to begin
 // consuming messages and Close to shut down gracefully.
 func NewConsumer(cfg ConsumerConfig, handler MessageHandler, logger *slog.Logger) (*Consumer, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if len(cfg.Brokers) == 0 {
 		return nil, fmt.Errorf("kafka consumer: at least one broker address is required")
 	}
@@ -84,6 +96,15 @@ func NewConsumer(cfg ConsumerConfig, handler MessageHandler, logger *slog.Logger
 	if cfg.MaxWait == 0 {
 		cfg.MaxWait = 3 * time.Second
 	}
+	if cfg.StartOffset == 0 {
+		cfg.StartOffset = kafkago.LastOffset
+	}
+	errorBackoff := cfg.ErrorBackoff
+	if errorBackoff == 0 {
+		errorBackoff = defaultConsumerErrorBackoff
+	} else if errorBackoff < 0 {
+		errorBackoff = 0
+	}
 	if cfg.SessionTimeout == 0 {
 		cfg.SessionTimeout = 45 * time.Second
 	}
@@ -105,7 +126,7 @@ func NewConsumer(cfg ConsumerConfig, handler MessageHandler, logger *slog.Logger
 		MaxBytes:          cfg.MaxBytes,
 		MaxWait:           cfg.MaxWait,
 		CommitInterval:    0,
-		StartOffset:       kafkago.LastOffset,
+		StartOffset:       cfg.StartOffset,
 		SessionTimeout:    cfg.SessionTimeout,
 		HeartbeatInterval: cfg.HeartbeatInterval,
 		RebalanceTimeout:  cfg.RebalanceTimeout,
@@ -122,7 +143,12 @@ func NewConsumer(cfg ConsumerConfig, handler MessageHandler, logger *slog.Logger
 		slog.Any("brokers", cfg.Brokers),
 	)
 
-	return &Consumer{reader: reader, handler: handler, logger: logger}, nil
+	return &Consumer{
+		reader:       reader,
+		handler:      handler,
+		logger:       logger,
+		errorBackoff: errorBackoff,
+	}, nil
 }
 
 // Start blocks while consuming messages until ctx is cancelled. On context
@@ -151,14 +177,23 @@ func (c *Consumer) Start(ctx context.Context) error {
 			Timestamp: msg.Time,
 		}
 
-		if err := c.handler(ctx, m); err != nil {
+		msgCtx := ContextWithMessageHeaders(ctx, m.Headers)
+		if err := c.handler(msgCtx, m); err != nil {
 			c.logger.Error("message handler failed",
 				slog.String("topic", m.Topic),
 				slog.Int("partition", m.Partition),
 				slog.Int64("offset", m.Offset),
 				slog.String("error", err.Error()),
 			)
-			// Do not commit; the message will be redelivered.
+			if c.errorBackoff > 0 {
+				timer := time.NewTimer(c.errorBackoff)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return nil
+				case <-timer.C:
+				}
+			}
 			continue
 		}
 
@@ -189,7 +224,6 @@ func (c *Consumer) Close() error {
 	return nil
 }
 
-// headersToMap converts kafka-go headers to a simple string map.
 func headersToMap(headers []kafkago.Header) map[string]string {
 	if len(headers) == 0 {
 		return nil
@@ -199,4 +233,22 @@ func headersToMap(headers []kafkago.Header) map[string]string {
 		m[h.Key] = string(h.Value)
 	}
 	return m
+}
+
+// ContextWithMessageHeaders extracts correlation IDs from Kafka headers into ctx.
+func ContextWithMessageHeaders(ctx context.Context, headers map[string]string) context.Context {
+	if correlation.FromContext(ctx) != "" || len(headers) == 0 {
+		return ctx
+	}
+	for _, key := range []string{correlation.Header, "correlation_id", "correlationId"} {
+		if val := strings.TrimSpace(headers[key]); val != "" {
+			return context.WithValue(ctx, correlation.ContextKey, val)
+		}
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, correlation.Header) && strings.TrimSpace(v) != "" {
+			return context.WithValue(ctx, correlation.ContextKey, strings.TrimSpace(v))
+		}
+	}
+	return ctx
 }

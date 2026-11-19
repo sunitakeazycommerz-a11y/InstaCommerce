@@ -2,7 +2,6 @@ package optimizer
 
 import "math"
 
-// earthRadiusKm is the mean radius of the Earth in kilometres.
 const earthRadiusKm = 6371.0
 
 // Position represents a WGS-84 geographic coordinate.
@@ -21,8 +20,7 @@ func clamp(val, min, max float64) float64 {
 	return val
 }
 
-// HaversineDistance returns the great-circle distance in kilometres between two
-// geographic positions using the Haversine formula.
+// HaversineDistance returns the great-circle distance in kilometres between a and b.
 func HaversineDistance(a, b Position) float64 {
 	dLat := degToRad(b.Lat - a.Lat)
 	dLng := degToRad(b.Lng - a.Lng)
@@ -35,11 +33,7 @@ func HaversineDistance(a, b Position) float64 {
 	return 2 * earthRadiusKm * math.Asin(math.Sqrt(h))
 }
 
-// EstimateETAMinutes returns the estimated travel time in minutes given a
-// distance in kilometres, a rider speed in km/h and a multiplicative traffic
-// factor (1.0 = free-flow, >1.0 = congested).
-//
-// If speedKmh is ≤ 0 the function returns +Inf to signal an impossible trip.
+// EstimateETAMinutes returns estimated travel time in minutes, or +Inf if speedKmh <= 0.
 func EstimateETAMinutes(distanceKm float64, speedKmh float64, trafficFactor float64) float64 {
 	if speedKmh <= 0 {
 		return math.Inf(1)
@@ -50,14 +44,22 @@ func EstimateETAMinutes(distanceKm float64, speedKmh float64, trafficFactor floa
 	return (distanceKm / speedKmh) * 60.0 * trafficFactor
 }
 
-// BatchCompatible groups order indices that can be served in a single trip
-// without adding more than maxExtraMinutes to any individual order's ETA.
-// Orders are considered batch-compatible when they are within 1 km of each
-// other. The returned slices contain indices into the supplied orders slice.
+// BatchCompatible groups order indices eligible for single-trip batching using
+// the default detour distance cap.
 func BatchCompatible(orders []OrderRequest, maxExtraMinutes float64) [][]int {
+	return BatchCompatibleWithDetour(orders, maxExtraMinutes, DefaultMaxBatchDetourKm)
+}
+
+// BatchCompatibleWithDetour groups orders that share a co-located dark store,
+// stay within 1 km pairwise / maxExtraMinutes ETA delta, and do not exceed
+// maxDetourKm cumulative dropoff detour.
+func BatchCompatibleWithDetour(orders []OrderRequest, maxExtraMinutes, maxDetourKm float64) [][]int {
 	n := len(orders)
 	if n == 0 {
 		return nil
+	}
+	if maxDetourKm <= 0 {
+		maxDetourKm = DefaultMaxBatchDetourKm
 	}
 
 	used := make([]bool, n)
@@ -74,17 +76,7 @@ func BatchCompatible(orders []OrderRequest, maxExtraMinutes float64) [][]int {
 			if used[j] {
 				continue
 			}
-			compatible := true
-			for _, idx := range group {
-				dist := HaversineDistance(orders[idx].Position, orders[j].Position)
-				// Assume a conservative 20 km/h average speed for ETA impact.
-				eta := EstimateETAMinutes(dist, 20.0, 1.0)
-				if dist > 1.0 || eta > maxExtraMinutes {
-					compatible = false
-					break
-				}
-			}
-			if compatible {
+			if canJoinBatch(orders, group, j, maxExtraMinutes, maxDetourKm) {
 				group = append(group, j)
 				used[j] = true
 			}
@@ -94,7 +86,41 @@ func BatchCompatible(orders []OrderRequest, maxExtraMinutes float64) [][]int {
 	return groups
 }
 
-// degToRad converts degrees to radians.
+func canJoinBatch(orders []OrderRequest, group []int, candidate int, maxExtraMinutes, maxDetourKm float64) bool {
+	cand := orders[candidate]
+	for _, idx := range group {
+		existing := orders[idx]
+		if !storesColocated(existing, cand) {
+			return false
+		}
+		dist := HaversineDistance(existing.Position, cand.Position)
+		eta := EstimateETAMinutes(dist, 20.0, 1.0)
+		if dist > 1.0 || eta > maxExtraMinutes {
+			return false
+		}
+	}
+
+	chainDist := 0.0
+	prev := orders[group[0]].Position
+	for _, idx := range group[1:] {
+		cur := orders[idx].Position
+		chainDist += HaversineDistance(prev, cur)
+		prev = cur
+	}
+	chainDist += HaversineDistance(prev, cand.Position)
+	return chainDist <= maxDetourKm
+}
+
+func storesColocated(a, b OrderRequest) bool {
+	if a.StoreID != "" && b.StoreID != "" && a.StoreID != b.StoreID {
+		return false
+	}
+	if a.StorePosition != nil && b.StorePosition != nil {
+		return HaversineDistance(*a.StorePosition, *b.StorePosition) <= DefaultMaxStoreColocationKm
+	}
+	return true
+}
+
 func degToRad(deg float64) float64 {
 	return deg * math.Pi / 180.0
 }

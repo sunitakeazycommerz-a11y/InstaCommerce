@@ -145,6 +145,7 @@ type OrderProcessor struct {
 	storeGuard *labelCardinalityGuard
 	zoneGuard  *labelCardinalityGuard
 	eventGuard *labelCardinalityGuard
+	watermarks *WatermarkTracker
 }
 
 func NewOrderProcessor(rdb *redis.Client, metrics *OrderMetrics, slaMonitor *SLAMonitor, logger *slog.Logger) *OrderProcessor {
@@ -162,7 +163,13 @@ func NewOrderProcessor(rdb *redis.Client, metrics *OrderMetrics, slaMonitor *SLA
 		storeGuard: newLabelCardinalityGuard(maxBoundedLabelValues),
 		zoneGuard:  newLabelCardinalityGuard(maxBoundedLabelValues),
 		eventGuard: newLabelCardinalityGuard(64),
+		watermarks: NewWatermarkTracker(DefaultAllowedLateness),
 	}
+}
+
+// WatermarkTracker exposes the event-time watermark tracker for order events.
+func (p *OrderProcessor) WatermarkTracker() *WatermarkTracker {
+	return p.watermarks
 }
 
 func (p *OrderProcessor) Process(ctx context.Context, event OrderEvent) error {
@@ -178,10 +185,15 @@ func (p *OrderProcessor) Process(ctx context.Context, event OrderEvent) error {
 		"zoneId", event.ZoneID,
 	)
 
-	// Increment order counter (per store, per zone, total)
 	p.metrics.OrdersTotal.WithLabelValues(eventLabel, storeLabel, zoneLabel).Inc()
 
-	now := time.Now()
+	now := time.Now().UTC()
+	if event.DeliveredAt != nil && !event.DeliveredAt.IsZero() {
+		now = event.DeliveredAt.UTC()
+	} else if !event.PlacedAt.IsZero() {
+		now = event.PlacedAt.UTC()
+	}
+	p.watermarks.Observe("order.events", now)
 	minuteKey := now.Format("2006-01-02T15:04")
 
 	var pipe redis.Pipeliner

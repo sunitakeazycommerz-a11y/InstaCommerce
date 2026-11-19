@@ -3,160 +3,16 @@ package subscription
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// mockRedisClient implements RedisClient for unit testing in-memory.
-type mockRedisClient struct {
-	mu        sync.RWMutex
-	hashes    map[string]map[string]any
-	values    map[string]string
-	ttls      map[string]time.Duration
-	expireErr error
-}
-
-func newMockRedisClient() *mockRedisClient {
-	return &mockRedisClient{
-		hashes: make(map[string]map[string]any),
-		values: make(map[string]string),
-		ttls:   make(map[string]time.Duration),
-	}
-}
-
-func (m *mockRedisClient) HSet(ctx context.Context, key string, values ...any) *redis.IntCmd {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, ok := m.hashes[key]; !ok {
-		m.hashes[key] = make(map[string]any)
-	}
-
-	var count int64
-	for i := 0; i < len(values); i += 2 {
-		if i+1 < len(values) {
-			field := fmt.Sprintf("%v", values[i])
-			m.hashes[key][field] = values[i+1]
-			count++
-		}
-	}
-	cmd := redis.NewIntCmd(ctx)
-	cmd.SetVal(count)
-	return cmd
-}
-
-func (m *mockRedisClient) Rename(ctx context.Context, key, newKey string) *redis.StatusCmd {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	cmd := redis.NewStatusCmd(ctx)
-	if hash, ok := m.hashes[key]; ok {
-		m.hashes[newKey] = hash
-		delete(m.hashes, key)
-		cmd.SetVal("OK")
-		return cmd
-	}
-
-	if val, ok := m.values[key]; ok {
-		m.values[newKey] = val
-		delete(m.values, key)
-		if ttl, hasTTL := m.ttls[key]; hasTTL {
-			m.ttls[newKey] = ttl
-			delete(m.ttls, key)
-		}
-		cmd.SetVal("OK")
-		return cmd
-	}
-
-	cmd.SetErr(redis.Nil)
-	return cmd
-}
-
-func (m *mockRedisClient) Set(ctx context.Context, key string, value any, expiration time.Duration) *redis.StatusCmd {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.values[key] = fmt.Sprintf("%v", value)
-	if expiration > 0 {
-		m.ttls[key] = expiration
-	}
-	cmd := redis.NewStatusCmd(ctx)
-	cmd.SetVal("OK")
-	return cmd
-}
-
-func (m *mockRedisClient) Get(ctx context.Context, key string) *redis.StringCmd {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	cmd := redis.NewStringCmd(ctx)
-	if val, ok := m.values[key]; ok {
-		cmd.SetVal(val)
-	} else {
-		cmd.SetErr(redis.Nil)
-	}
-	return cmd
-}
-
-func (m *mockRedisClient) Expire(ctx context.Context, key string, expiration time.Duration) *redis.BoolCmd {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	cmd := redis.NewBoolCmd(ctx)
-	if m.expireErr != nil {
-		cmd.SetErr(m.expireErr)
-		return cmd
-	}
-	if _, ok := m.values[key]; ok {
-		m.ttls[key] = expiration
-		cmd.SetVal(true)
-		return cmd
-	}
-	if _, ok := m.hashes[key]; ok {
-		m.ttls[key] = expiration
-		cmd.SetVal(true)
-		return cmd
-	}
-	cmd.SetVal(false)
-	return cmd
-}
-
-func (m *mockRedisClient) Del(ctx context.Context, keys ...string) *redis.IntCmd {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var deleted int64
-	for _, k := range keys {
-		if _, ok := m.values[k]; ok {
-			delete(m.values, k)
-			deleted++
-		}
-		if _, ok := m.hashes[k]; ok {
-			delete(m.hashes, k)
-			deleted++
-		}
-	}
-	cmd := redis.NewIntCmd(ctx)
-	cmd.SetVal(deleted)
-	return cmd
-}
-
-func (m *mockRedisClient) Ping(ctx context.Context) *redis.StatusCmd {
-	cmd := redis.NewStatusCmd(ctx)
-	cmd.SetVal("PONG")
-	return cmd
-}
-
 func TestSyncUserFeaturesIdempotencyAtomicRename(t *testing.T) {
-	// Test #649: Synced features written to temporary key then atomically renamed to user:features:{userId}
 	client := newMockRedisClient()
 	pool := NewWorkerPool(WorkerPoolConfig{
 		Concurrency:     5,
@@ -165,7 +21,6 @@ func TestSyncUserFeaturesIdempotencyAtomicRename(t *testing.T) {
 	})
 	defer pool.Close()
 
-	ctx := context.Background()
 	records := []UserFeatureRecord{
 		{
 			UserID:            "user-456",
@@ -180,12 +35,11 @@ func TestSyncUserFeaturesIdempotencyAtomicRename(t *testing.T) {
 		},
 	}
 
-	result, err := pool.SyncUserFeatures(ctx, "job-sync-100", "sub-1", records)
+	result, err := pool.SyncUserFeatures(context.Background(), "job-sync-100", "sub-1", records)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), result.RowsProcessed)
 	assert.Equal(t, "COMPLETED", result.Status)
 
-	// Verify temporary key was cleaned up and production key contains all feature fields
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 
@@ -202,7 +56,6 @@ func TestSyncUserFeaturesIdempotencyAtomicRename(t *testing.T) {
 }
 
 func TestSyncCustomerFraudScores36HourTTL(t *testing.T) {
-	// Test #659: Customer fraud risk scores synced with 36-hour TTL and atomic rename
 	client := newMockRedisClient()
 	pool := NewWorkerPool(WorkerPoolConfig{
 		Concurrency:     5,
@@ -211,7 +64,6 @@ func TestSyncCustomerFraudScores36HourTTL(t *testing.T) {
 	})
 	defer pool.Close()
 
-	ctx := context.Background()
 	scores := []CustomerFraudScoreRecord{
 		{
 			UserID:         "user-suspicious-99",
@@ -222,7 +74,7 @@ func TestSyncCustomerFraudScores36HourTTL(t *testing.T) {
 		},
 	}
 
-	result, err := pool.SyncCustomerFraudScores(ctx, "job-fraud-101", "sub-fraud-1", scores)
+	result, err := pool.SyncCustomerFraudScores(context.Background(), "job-fraud-101", "sub-fraud-1", scores)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), result.RowsProcessed)
 	assert.Equal(t, "COMPLETED", result.Status)
@@ -230,21 +82,18 @@ func TestSyncCustomerFraudScores36HourTTL(t *testing.T) {
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 
-	// Verify temp key is removed, production key fraud:score:user-suspicious-99 exists
 	assert.NotContains(t, client.values, "fraud:score:temp:job-fraud-101:user-suspicious-99")
 	val, exists := client.values["fraud:score:user-suspicious-99"]
 	require.True(t, exists)
 	assert.Contains(t, val, "0.94")
 	assert.Contains(t, val, "VELOCITY_SPIKE")
 
-	// Verify 36-hour TTL
 	ttl, hasTTL := client.ttls["fraud:score:user-suspicious-99"]
 	require.True(t, hasTTL)
 	assert.Equal(t, 36*time.Hour, ttl)
 }
 
 func TestSyncDarkStoreInventoryParallelConcurrency(t *testing.T) {
-	// Test #670: 50 dark stores synced concurrently with 10 worker goroutines without starvation
 	client := newMockRedisClient()
 	pool := NewWorkerPool(WorkerPoolConfig{
 		Concurrency:     10,
@@ -253,7 +102,6 @@ func TestSyncDarkStoreInventoryParallelConcurrency(t *testing.T) {
 	})
 	defer pool.Close()
 
-	ctx := context.Background()
 	storeIDs := make([]string, 50)
 	for i := 0; i < 50; i++ {
 		storeIDs[i] = fmt.Sprintf("store-%03d", i+1)
@@ -273,92 +121,65 @@ func TestSyncDarkStoreInventoryParallelConcurrency(t *testing.T) {
 			}
 		}
 
-		time.Sleep(5 * time.Millisecond) // Simulate brief I/O
+		time.Sleep(5 * time.Millisecond)
 		return []InventoryRecord{
 			{StoreID: storeID, SKU: "SKU-APPLE", Available: 100, Reserved: 5, UpdatedAt: time.Now()},
 			{StoreID: storeID, SKU: "SKU-MILK", Available: 50, Reserved: 0, UpdatedAt: time.Now()},
 		}, nil
 	}
 
-	result, err := pool.SyncDarkStoreInventoryParallel(ctx, "job-inv-500", "sub-inv-1", storeIDs, fetchInventory)
+	result, err := pool.SyncDarkStoreInventoryParallel(context.Background(), "job-inv-500", "sub-inv-1", storeIDs, fetchInventory)
 	require.NoError(t, err)
 	assert.Equal(t, 50, result.StoresSynced)
-	assert.Equal(t, int64(100), result.RowsProcessed) // 50 stores * 2 SKUs
+	assert.Equal(t, int64(100), result.RowsProcessed)
 	assert.Equal(t, "COMPLETED", result.Status)
+	assert.GreaterOrEqual(t, maxObservedWorkers, int64(2))
+	assert.LessOrEqual(t, maxObservedWorkers, int64(10))
 
-	// Verify parallel execution (multiple concurrent workers observed)
-	assert.GreaterOrEqual(t, maxObservedWorkers, int64(2), "Expected parallel store processing")
-	assert.LessOrEqual(t, maxObservedWorkers, int64(10), "Workers must be bounded by concurrency limit")
-
-	// Verify production keys exist in Redis
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 	for _, storeID := range storeIDs {
-		key := fmt.Sprintf("store:inventory:%s", storeID)
-		assert.Contains(t, client.hashes, key)
+		assert.Contains(t, client.hashes, fmt.Sprintf("store:inventory:%s", storeID))
 	}
 }
 
+func TestSyncDarkStoreInventoryParallelCancellationMarksCancelled(t *testing.T) {
+	capture := &auditCaptureDB{}
+	db := sql.OpenDB(capture)
+	defer db.Close()
+
+	pool := NewWorkerPool(WorkerPoolConfig{
+		Concurrency:     4,
+		RateLimitPerSec: 5000,
+		RedisClient:     newMockRedisClient(),
+		DB:              db,
+	})
+	defer pool.Close()
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res, err := pool.SyncDarkStoreInventoryParallel(canceledCtx, "job-inv-cancel", "sub-inv-1", []string{"store-1", "store-2"}, func(context.Context, string) ([]InventoryRecord, error) {
+		return nil, nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, "CANCELLED", res.Status)
+
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	require.Len(t, capture.execs, 1)
+	assert.Equal(t, "CANCELLED", capture.execs[0].args[4].Value)
+}
+
 func TestRateLimiter(t *testing.T) {
-	// Test rate limiter allows token consumption and stops idempotently across multiple callers
 	rl := NewRateLimiter(100)
 	ctx := context.Background()
 
 	for i := 0; i < 10; i++ {
-		err := rl.Acquire(ctx)
-		require.NoError(t, err)
+		require.NoError(t, rl.Acquire(ctx))
 	}
 	rl.Stop()
 	rl.Stop()
-}
-
-type recordedAuditExec struct {
-	query       string
-	args        []driver.NamedValue
-	ctxErr      error
-	hasDeadline bool
-}
-
-type auditCaptureDB struct {
-	mu    sync.Mutex
-	execs []recordedAuditExec
-}
-
-func (a *auditCaptureDB) Connect(_ context.Context) (driver.Conn, error) {
-	return a, nil
-}
-
-func (a *auditCaptureDB) Driver() driver.Driver {
-	return a
-}
-
-func (a *auditCaptureDB) Open(_ string) (driver.Conn, error) {
-	return a, nil
-}
-
-func (a *auditCaptureDB) Prepare(_ string) (driver.Stmt, error) {
-	return nil, driver.ErrSkip
-}
-
-func (a *auditCaptureDB) Close() error {
-	return nil
-}
-
-func (a *auditCaptureDB) Begin() (driver.Tx, error) {
-	return nil, driver.ErrSkip
-}
-
-func (a *auditCaptureDB) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	_, hasDeadline := ctx.Deadline()
-	a.mu.Lock()
-	a.execs = append(a.execs, recordedAuditExec{
-		query:       query,
-		args:        args,
-		ctxErr:      ctx.Err(),
-		hasDeadline: hasDeadline,
-	})
-	a.mu.Unlock()
-	return driver.RowsAffected(1), nil
 }
 
 func TestSyncUserFeaturesApplies36HourTTL(t *testing.T) {
@@ -388,7 +209,7 @@ func TestSyncUserFeaturesApplies36HourTTL(t *testing.T) {
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 	ttl, hasTTL := client.ttls["user:features:user-456"]
-	require.True(t, hasTTL, "user:features:{id} must have an explicit Redis TTL")
+	require.True(t, hasTTL)
 	assert.Equal(t, 36*time.Hour, ttl)
 }
 
@@ -397,11 +218,10 @@ func TestRecordAuditPersistsCancelledRowWithCanceledContext(t *testing.T) {
 	db := sql.OpenDB(capture)
 	defer db.Close()
 
-	client := newMockRedisClient()
 	pool := NewWorkerPool(WorkerPoolConfig{
 		Concurrency:     5,
 		RateLimitPerSec: 5000,
-		RedisClient:     client,
+		RedisClient:     newMockRedisClient(),
 		DB:              db,
 	})
 	defer pool.Close()
@@ -419,10 +239,10 @@ func TestRecordAuditPersistsCancelledRowWithCanceledContext(t *testing.T) {
 
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
-	require.Len(t, capture.execs, 1, "CANCELLED audit row must still be executed against DB when sync context is canceled")
+	require.Len(t, capture.execs, 1)
 	exec := capture.execs[0]
-	assert.NoError(t, exec.ctxErr, "audit DB execution must use a detached non-canceled context")
-	assert.True(t, exec.hasDeadline, "audit DB execution must apply a bounded timeout")
+	assert.NoError(t, exec.ctxErr)
+	assert.True(t, exec.hasDeadline)
 	assert.Contains(t, exec.query, "INSERT INTO reverse_etl_sync_audit")
 	require.GreaterOrEqual(t, len(exec.args), 5)
 	assert.Equal(t, "job-cancel-1", exec.args[0].Value)
@@ -450,4 +270,17 @@ func TestSyncUserFeaturesFailsWhenExpireErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "FAILED", res.Status)
 	assert.Contains(t, err.Error(), "set TTL on user features")
+}
+
+func TestWorkerPoolNilGuards(t *testing.T) {
+	pool := NewWorkerPool(WorkerPoolConfig{Concurrency: 2, RateLimitPerSec: 100})
+	defer pool.Close()
+
+	res, err := pool.SyncDarkStoreInventoryParallel(context.Background(), "job-nil", "sub-nil", []string{"s1"}, nil)
+	require.Error(t, err)
+	assert.Equal(t, "FAILED", res.Status)
+
+	res, err = pool.SyncUserFeatures(context.Background(), "job-nil-uf", "sub-nil", []UserFeatureRecord{{UserID: "u1"}})
+	require.Error(t, err)
+	assert.Equal(t, "FAILED", res.Status)
 }

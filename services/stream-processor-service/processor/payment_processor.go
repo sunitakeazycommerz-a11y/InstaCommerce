@@ -130,6 +130,7 @@ type PaymentProcessor struct {
 	methodGuard *labelCardinalityGuard
 	codeGuard   *labelCardinalityGuard
 	eventGuard  *labelCardinalityGuard
+	watermarks  *WatermarkTracker
 }
 
 func NewPaymentProcessor(rdb *redis.Client, logger *slog.Logger) *PaymentProcessor {
@@ -144,7 +145,13 @@ func NewPaymentProcessor(rdb *redis.Client, logger *slog.Logger) *PaymentProcess
 		methodGuard: newLabelCardinalityGuard(64),
 		codeGuard:   newLabelCardinalityGuard(128),
 		eventGuard:  newLabelCardinalityGuard(64),
+		watermarks:  NewWatermarkTracker(DefaultAllowedLateness),
 	}
+}
+
+// WatermarkTracker exposes the event-time watermark tracker for payment events.
+func (p *PaymentProcessor) WatermarkTracker() *WatermarkTracker {
+	return p.watermarks
 }
 
 func (p *PaymentProcessor) Process(ctx context.Context, event PaymentEvent) error {
@@ -160,12 +167,16 @@ func (p *PaymentProcessor) Process(ctx context.Context, event PaymentEvent) erro
 
 	p.metrics.paymentsTotal.WithLabelValues(eventLabel, methodLabel).Inc()
 
+	now := time.Now().UTC()
+	if !event.Timestamp.IsZero() {
+		now = event.Timestamp.UTC()
+	}
+	p.watermarks.Observe("payment.events", now)
+
 	var pipe redis.Pipeliner
-	var now time.Time
 	var minuteKey string
 	if p.redis != nil {
 		pipe = p.redis.Pipeline()
-		now = time.Now()
 		minuteKey = now.Format("2006-01-02T15:04")
 	}
 

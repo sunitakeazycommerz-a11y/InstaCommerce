@@ -145,13 +145,15 @@ var newRiderMetrics = sync.OnceValue(func() *riderMetrics {
 })
 
 type RiderProcessor struct {
-	redis      *redis.Client
-	logger     *slog.Logger
-	metrics    *riderMetrics
-	states     map[string]*riderState // riderId -> state
-	mu         sync.RWMutex
-	riderGuard *labelCardinalityGuard
-	zoneGuard  *labelCardinalityGuard
+	redis          *redis.Client
+	logger         *slog.Logger
+	metrics        *riderMetrics
+	states         map[string]*riderState
+	lastLocationAt map[string]time.Time
+	mu             sync.RWMutex
+	riderGuard     *labelCardinalityGuard
+	zoneGuard      *labelCardinalityGuard
+	watermarks     *WatermarkTracker
 }
 
 func NewRiderProcessor(rdb *redis.Client, logger *slog.Logger) *RiderProcessor {
@@ -159,13 +161,20 @@ func NewRiderProcessor(rdb *redis.Client, logger *slog.Logger) *RiderProcessor {
 		logger = slog.Default()
 	}
 	return &RiderProcessor{
-		redis:      rdb,
-		logger:     logger.With("processor", "rider"),
-		metrics:    newRiderMetrics(),
-		states:     make(map[string]*riderState),
-		riderGuard: newLabelCardinalityGuard(maxBoundedLabelValues),
-		zoneGuard:  newLabelCardinalityGuard(maxBoundedLabelValues),
+		redis:          rdb,
+		logger:         logger.With("processor", "rider"),
+		metrics:        newRiderMetrics(),
+		states:         make(map[string]*riderState),
+		lastLocationAt: make(map[string]time.Time),
+		riderGuard:     newLabelCardinalityGuard(maxBoundedLabelValues),
+		zoneGuard:      newLabelCardinalityGuard(maxBoundedLabelValues),
+		watermarks:     NewWatermarkTracker(DefaultAllowedLateness),
 	}
+}
+
+// WatermarkTracker exposes the event-time watermark tracker for rider streams.
+func (p *RiderProcessor) WatermarkTracker() *WatermarkTracker {
+	return p.watermarks
 }
 
 func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent) error {
@@ -173,6 +182,7 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
+	p.watermarks.Observe("rider.events", event.Timestamp)
 	zoneLabel := p.zoneGuard.normalize(event.ZoneID, "unknown")
 	riderLabel := p.riderGuard.normalize(event.RiderID, "unknown")
 
@@ -182,18 +192,6 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 		"zoneId", event.ZoneID,
 	)
 
-	p.mu.Lock()
-
-	// Decrement old status gauge if rider had a previous state
-	if prev, ok := p.states[event.RiderID]; ok {
-		prevZoneLabel := prev.zoneLabel
-		if prevZoneLabel == "" {
-			prevZoneLabel = p.zoneGuard.normalize(prev.ZoneID, "unknown")
-		}
-		p.metrics.ridersByStatus.WithLabelValues(prev.Status, prevZoneLabel).Dec()
-	}
-
-	// Map event type to rider status
 	var status string
 	switch event.EventType {
 	case "RiderOnline", "RiderIdle", "RiderDelivered":
@@ -206,16 +204,29 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 		status = "unknown"
 	}
 
-	p.states[event.RiderID] = &riderState{
-		Status:    status,
-		ZoneID:    event.ZoneID,
-		zoneLabel: zoneLabel,
-		UpdatedAt: event.Timestamp,
+	p.mu.Lock()
+	staleState := false
+	if prev, ok := p.states[event.RiderID]; ok {
+		if !prev.UpdatedAt.IsZero() && event.Timestamp.Before(prev.UpdatedAt) {
+			staleState = true
+		} else {
+			prevZoneLabel := prev.zoneLabel
+			if prevZoneLabel == "" {
+				prevZoneLabel = p.zoneGuard.normalize(prev.ZoneID, "unknown")
+			}
+			p.metrics.ridersByStatus.WithLabelValues(prev.Status, prevZoneLabel).Dec()
+		}
 	}
 
-	// Increment new status gauge
-	p.metrics.ridersByStatus.WithLabelValues(status, zoneLabel).Inc()
-
+	if !staleState {
+		p.states[event.RiderID] = &riderState{
+			Status:    status,
+			ZoneID:    event.ZoneID,
+			zoneLabel: zoneLabel,
+			UpdatedAt: event.Timestamp,
+		}
+		p.metrics.ridersByStatus.WithLabelValues(status, zoneLabel).Inc()
+	}
 	p.mu.Unlock()
 
 	if event.EventType == "RiderDelivered" {
@@ -230,23 +241,22 @@ func (p *RiderProcessor) ProcessRiderEvent(ctx context.Context, event RiderEvent
 	}
 
 	pipe := p.redis.Pipeline()
+	if !staleState {
+		riderKey := fmt.Sprintf("rider:status:%s", event.RiderID)
+		pipe.HSet(ctx, riderKey, map[string]interface{}{
+			"status":  status,
+			"zone_id": event.ZoneID,
+			"updated": event.Timestamp.Unix(),
+		})
+		pipe.Expire(ctx, riderKey, redisMetricsTTL)
 
-	// Store rider status in Redis using raw ZoneID.
-	riderKey := fmt.Sprintf("rider:status:%s", event.RiderID)
-	pipe.HSet(ctx, riderKey, map[string]interface{}{
-		"status":  status,
-		"zone_id": event.ZoneID,
-		"updated": event.Timestamp.Unix(),
-	})
-	pipe.Expire(ctx, riderKey, redisMetricsTTL)
-
-	// Zone-level rider counts using raw ZoneID.
-	zoneKey := fmt.Sprintf("riders:zone:%s:%s", event.ZoneID, status)
-	pipe.Incr(ctx, zoneKey)
-	pipe.Expire(ctx, zoneKey, redisMetricsTTL)
+		zoneKey := fmt.Sprintf("riders:zone:%s:%s", event.ZoneID, status)
+		pipe.Incr(ctx, zoneKey)
+		pipe.Expire(ctx, zoneKey, redisMetricsTTL)
+	}
 
 	if event.EventType == "RiderDelivered" && event.EarningsCents > 0 {
-		earningsKey := fmt.Sprintf("rider:earnings:%s:%s", event.RiderID, time.Now().Format("2006-01-02"))
+		earningsKey := fmt.Sprintf("rider:earnings:%s:%s", event.RiderID, event.Timestamp.UTC().Format("2006-01-02"))
 		pipe.IncrBy(ctx, earningsKey, event.EarningsCents)
 		pipe.Expire(ctx, earningsKey, 48*time.Hour)
 	}
@@ -263,6 +273,19 @@ func (p *RiderProcessor) ProcessLocationUpdate(ctx context.Context, update Locat
 	if update.Timestamp.IsZero() {
 		update.Timestamp = time.Now().UTC()
 	}
+	p.watermarks.Observe("rider.location.updates", update.Timestamp)
+
+	p.mu.Lock()
+	if p.lastLocationAt == nil {
+		p.lastLocationAt = make(map[string]time.Time)
+	}
+	if lastTS, ok := p.lastLocationAt[update.RiderID]; ok && update.Timestamp.Before(lastTS) {
+		p.mu.Unlock()
+		return nil
+	}
+	p.lastLocationAt[update.RiderID] = update.Timestamp
+	p.mu.Unlock()
+
 	p.metrics.locationUpdates.Inc()
 
 	if p.redis == nil {

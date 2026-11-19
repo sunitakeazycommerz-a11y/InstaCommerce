@@ -26,6 +26,9 @@ type ReconciliationMismatch struct {
 	PSPAmount            string
 	DiscrepancyAmount    string
 	DiscrepancyReason    string
+	Severity             string
+	AgeHours             float64
+	AgeBucket            string
 	AutoFixed            bool
 	ManualReviewRequired bool
 	FixAppliedAt         *time.Time
@@ -43,12 +46,16 @@ type ReconciliationFix struct {
 }
 
 type MismatchDetail struct {
-	TransactionID string
-	LedgerAmount  string
-	PSPAmount     string
-	Reason        string
-	AutoFixed     bool
-	ManualReview  bool
+	TransactionID    string
+	LedgerAmount     string
+	PSPAmount        string
+	DiscrepancyCents int64
+	Reason           string
+	Severity         string
+	AgeHours         float64
+	AgeBucket        string
+	AutoFixed        bool
+	ManualReview     bool
 }
 
 type FixRequest struct {

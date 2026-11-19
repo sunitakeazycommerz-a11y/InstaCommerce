@@ -65,17 +65,21 @@ func (p *KafkaWriterProducer) PublishBatch(ctx context.Context, _ string, messag
 
 // LocationEvent is the canonical JSON payload emitted to the rider.location.updates topic.
 type LocationEvent struct {
-	RiderID     string   `json:"rider_id"`
-	Lat         float64  `json:"lat"`
-	Lng         float64  `json:"lng"`
-	TimestampMS int64    `json:"timestamp_ms"`
-	Speed       *float64 `json:"speed,omitempty"`
-	Heading     *float64 `json:"heading,omitempty"`
-	Accuracy    *float64 `json:"accuracy,omitempty"`
-	H3Index     string   `json:"h3_index,omitempty"`
-	GeofenceHit bool     `json:"geofence_hit,omitempty"`
-	Source      string   `json:"source,omitempty"`
-	IngestedAt  string   `json:"ingested_at"`
+	RiderID        string   `json:"rider_id"`
+	Lat            float64  `json:"lat"`
+	Lng            float64  `json:"lng"`
+	TimestampMS    int64    `json:"timestamp_ms"`
+	Speed          *float64 `json:"speed,omitempty"`
+	Heading        *float64 `json:"heading,omitempty"`
+	Accuracy       *float64 `json:"accuracy,omitempty"`
+	BatteryPct     *float64 `json:"battery_pct,omitempty"`
+	H3Index        string   `json:"h3_index,omitempty"`
+	GeofenceHit    bool     `json:"geofence_hit,omitempty"`
+	LowBattery     bool     `json:"low_battery,omitempty"`
+	WeakAccuracy   bool     `json:"weak_accuracy,omitempty"`
+	TelemetryFlags []string `json:"telemetry_flags,omitempty"`
+	Source         string   `json:"source,omitempty"`
+	IngestedAt     string   `json:"ingested_at"`
 }
 
 // LocationBatcherOption configures optional behavior on LocationBatcher.
@@ -315,14 +319,17 @@ func (b *LocationBatcher) flush(ctx context.Context) bool {
 
 func toLocationEvent(u LocationUpdate, ingestedAt string) LocationEvent {
 	ev := LocationEvent{
-		RiderID:     u.RiderID,
-		Lat:         u.Lat,
-		Lng:         u.Lng,
-		TimestampMS: u.Timestamp.UnixMilli(),
-		H3Index:     u.H3Index,
-		GeofenceHit: u.Geofence,
-		Source:      u.Source,
-		IngestedAt:  ingestedAt,
+		RiderID:        u.RiderID,
+		Lat:            u.Lat,
+		Lng:            u.Lng,
+		TimestampMS:    u.Timestamp.UnixMilli(),
+		H3Index:        u.H3Index,
+		GeofenceHit:    u.Geofence,
+		LowBattery:     u.LowBattery,
+		WeakAccuracy:   u.WeakAccuracy,
+		TelemetryFlags: u.TelemetryFlags,
+		Source:         u.Source,
+		IngestedAt:     ingestedAt,
 	}
 	if u.HasSpeed || u.Speed != 0 {
 		v := u.Speed
@@ -335,6 +342,10 @@ func toLocationEvent(u LocationUpdate, ingestedAt string) LocationEvent {
 	if u.HasAccuracy || u.Accuracy != 0 {
 		v := u.Accuracy
 		ev.Accuracy = &v
+	}
+	if u.HasBatteryPct || u.BatteryPct != 0 {
+		v := u.BatteryPct
+		ev.BatteryPct = &v
 	}
 	return ev
 }

@@ -124,7 +124,7 @@ func main() {
 		logger,
 		metrics,
 		handler.WithGeofencePublisher(geofencePub),
-		handler.WithTelemetrySmoother(nil),
+		handler.WithTelemetrySmoother(handler.NewRiderTelemetrySmoother()),
 		handler.WithTracer(otel.Tracer(cfg.ServiceName)),
 	)
 

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,8 +15,14 @@ import (
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/config"
 )
 
-// ErrSubscriptionNotFound indicates that the requested subscription does not exist.
-var ErrSubscriptionNotFound = errors.New("subscription not found")
+var (
+	// ErrSubscriptionNotFound indicates that the requested subscription does not exist.
+	ErrSubscriptionNotFound = errors.New("subscription not found")
+	// ErrInvalidStateTransition indicates a disallowed subscription lifecycle transition.
+	ErrInvalidStateTransition = errors.New("invalid subscription state transition")
+	// ErrInvalidSubscription indicates invalid subscription input fields.
+	ErrInvalidSubscription = errors.New("invalid subscription request")
+)
 
 // State represents the subscription lifecycle state.
 type State string
@@ -27,6 +34,47 @@ const (
 	StatePaused    State = "PAUSED"
 	StateArchived  State = "ARCHIVED"
 )
+
+var allowedStateTransitions = map[State]map[State]bool{
+	StateDraft: {
+		StateValidated: true,
+		StateActive:    true,
+		StateArchived:  true,
+	},
+	StateValidated: {
+		StateActive:   true,
+		StateArchived: true,
+	},
+	StateActive: {
+		StatePaused:   true,
+		StateArchived: true,
+	},
+	StatePaused: {
+		StateActive:   true,
+		StateArchived: true,
+	},
+	StateArchived: {},
+}
+
+// CanTransition returns true if transitioning from -> to is permitted.
+func CanTransition(from, to State) bool {
+	if from == to {
+		return from == StateDraft || from == StateValidated || from == StateActive || from == StatePaused || from == StateArchived
+	}
+	next, ok := allowedStateTransitions[from]
+	if !ok {
+		return false
+	}
+	return next[to]
+}
+
+// ValidateTransition checks whether a subscription may move from current to next.
+func ValidateTransition(current, next State) error {
+	if !CanTransition(current, next) {
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidStateTransition, current, next)
+	}
+	return nil
+}
 
 // Subscription represents a reverse ETL subscription.
 type Subscription struct {
@@ -70,15 +118,14 @@ func NewService(cfg *config.Config) (*Service, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// Configure connection pool
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	// Verify connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
@@ -88,13 +135,24 @@ func NewService(cfg *config.Config) (*Service, error) {
 	}, nil
 }
 
+// NewServiceWithDB constructs a Service from an existing database handle.
+func NewServiceWithDB(db *sql.DB, cfg *config.Config) *Service {
+	return &Service{db: db, cfg: cfg}
+}
+
 // Close closes the service resources.
 func (s *Service) Close() error {
+	if s.db == nil {
+		return nil
+	}
 	return s.db.Close()
 }
 
 // Ping checks database connectivity.
 func (s *Service) Ping(ctx context.Context) error {
+	if s.db == nil {
+		return errors.New("database not initialized")
+	}
 	return s.db.PingContext(ctx)
 }
 
@@ -103,27 +161,35 @@ func (s *Service) DB() *sql.DB {
 	return s.db
 }
 
-// Create creates a new subscription.
+// Create creates a new subscription in DRAFT state.
 func (s *Service) Create(ctx context.Context, req CreateRequest, createdBy string) (*Subscription, error) {
+	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.SourceDomain) == "" || strings.TrimSpace(req.SinkType) == "" {
+		return nil, fmt.Errorf("%w: name, source_domain, and sink_type are required", ErrInvalidSubscription)
+	}
+	if s.db == nil {
+		return nil, errors.New("database not initialized")
+	}
+
+	now := time.Now().UTC()
 	sub := &Subscription{
 		ID:            uuid.New().String(),
-		Name:          req.Name,
+		Name:          strings.TrimSpace(req.Name),
 		Description:   req.Description,
-		SourceDomain:  req.SourceDomain,
+		SourceDomain:  strings.TrimSpace(req.SourceDomain),
 		SourceEvents:  req.SourceEvents,
-		SinkType:      req.SinkType,
+		SinkType:      strings.TrimSpace(req.SinkType),
 		SinkConfig:    req.SinkConfig,
 		TransformSpec: req.TransformSpec,
 		Schedule:      req.Schedule,
 		State:         StateDraft,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 		CreatedBy:     createdBy,
 	}
 
-	query := `
+	const query = `
 		INSERT INTO subscriptions (
-			subscription_id, name, description, source_domain, 
+			subscription_id, name, description, source_domain,
 			sink_type, sink_config, transform_spec, schedule,
 			state, created_at, updated_at, created_by
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -143,7 +209,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, createdBy strin
 
 // Get retrieves a subscription by ID.
 func (s *Service) Get(ctx context.Context, id string) (*Subscription, error) {
-	query := `
+	if s.db == nil {
+		return nil, errors.New("database not initialized")
+	}
+
+	const query = `
 		SELECT subscription_id, name, description, source_domain,
 			sink_type, sink_config, transform_spec, schedule,
 			state, created_at, updated_at, created_by
@@ -157,7 +227,7 @@ func (s *Service) Get(ctx context.Context, id string) (*Subscription, error) {
 		&sub.SinkType, &sub.SinkConfig, &sub.TransformSpec, &sub.Schedule,
 		&sub.State, &sub.CreatedAt, &sub.UpdatedAt, &sub.CreatedBy,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -169,7 +239,11 @@ func (s *Service) Get(ctx context.Context, id string) (*Subscription, error) {
 
 // List retrieves all subscriptions with optional filters.
 func (s *Service) List(ctx context.Context, sourceDomain, sinkType string, state State) ([]*Subscription, error) {
-	query := `
+	if s.db == nil {
+		return nil, errors.New("database not initialized")
+	}
+
+	const query = `
 		SELECT subscription_id, name, description, source_domain,
 			sink_type, sink_config, transform_spec, schedule,
 			state, created_at, updated_at, created_by
@@ -206,6 +280,11 @@ func (s *Service) List(ctx context.Context, sourceDomain, sinkType string, state
 	return subs, nil
 }
 
+// Validate marks a DRAFT subscription as VALIDATED.
+func (s *Service) Validate(ctx context.Context, id string) error {
+	return s.transition(ctx, id, StateValidated)
+}
+
 // Activate transitions a subscription to ACTIVE state.
 func (s *Service) Activate(ctx context.Context, id string) error {
 	return s.transition(ctx, id, StateActive)
@@ -222,13 +301,37 @@ func (s *Service) Archive(ctx context.Context, id string) error {
 }
 
 func (s *Service) transition(ctx context.Context, id string, newState State) error {
-	query := `
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("%w: empty id", ErrSubscriptionNotFound)
+	}
+	if s.db == nil {
+		return errors.New("database not initialized")
+	}
+
+	var currentStateRaw string
+	err := s.db.QueryRowContext(ctx, `SELECT state FROM subscriptions WHERE subscription_id = $1`, id).Scan(&currentStateRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", ErrSubscriptionNotFound, id)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to load subscription state: %w", err)
+	}
+
+	currentState := State(currentStateRaw)
+	if err := ValidateTransition(currentState, newState); err != nil {
+		return err
+	}
+	if currentState == newState {
+		return nil
+	}
+
+	const updateQuery = `
 		UPDATE subscriptions
 		SET state = $1, updated_at = $2
-		WHERE subscription_id = $3
+		WHERE subscription_id = $3 AND state = $4
 	`
 
-	result, err := s.db.ExecContext(ctx, query, newState, time.Now(), id)
+	result, err := s.db.ExecContext(ctx, updateQuery, newState, time.Now().UTC(), id, currentState)
 	if err != nil {
 		return fmt.Errorf("failed to transition subscription: %w", err)
 	}
@@ -238,7 +341,7 @@ func (s *Service) transition(ctx context.Context, id string, newState State) err
 		return fmt.Errorf("rows affected for subscription transition: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("%w: %s", ErrSubscriptionNotFound, id)
+		return fmt.Errorf("%w: concurrent modification for %s", ErrInvalidStateTransition, id)
 	}
 
 	return nil

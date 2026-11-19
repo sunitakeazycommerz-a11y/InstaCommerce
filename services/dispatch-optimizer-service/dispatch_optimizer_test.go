@@ -261,3 +261,16 @@ func TestNaNHandlingInDistance(t *testing.T) {
 		})
 	}
 }
+
+func TestValidatePositionRejectsNaNAndInf(t *testing.T) {
+	bad := []Position{
+		{Lat: math.NaN(), Lng: 77.5},
+		{Lat: 12.9, Lng: math.Inf(1)},
+		{Lat: math.Inf(-1), Lng: 77.5},
+		{Lat: 90.1, Lng: 0},
+	}
+	for _, p := range bad {
+		assert.Error(t, validatePosition(p))
+	}
+	assert.NoError(t, validatePosition(Position{Lat: 12.9716, Lng: 77.5946}))
+}

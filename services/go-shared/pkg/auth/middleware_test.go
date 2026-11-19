@@ -144,3 +144,20 @@ func TestInternalAuthMiddleware_SharedTokenFallback_RejectedInStrictMode(t *test
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
+
+func TestInternalAuthMiddleware_NilLoggerAndEmptyPerServiceToken(t *testing.T) {
+	t.Setenv("INTERNAL_SERVICE_ALLOWED_CALLERS", `{"broken-service":""}`)
+	t.Setenv("INTERNAL_SERVICE_TOKEN", "shared-fallback")
+
+	m := NewInternalAuthMiddleware(nil)
+	handler := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set(HeaderService, "broken-service")
+	req.Header.Set(HeaderToken, "shared-fallback")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}

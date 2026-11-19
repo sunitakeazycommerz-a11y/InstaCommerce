@@ -43,6 +43,9 @@ type InternalAuthMiddleware struct {
 //
 // Health and metrics endpoints are excluded from authentication by default.
 func NewInternalAuthMiddleware(logger *slog.Logger) *InternalAuthMiddleware {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	m := &InternalAuthMiddleware{
 		expectedToken:    os.Getenv("INTERNAL_SERVICE_TOKEN"),
 		allowedCallers:   make(map[string]string),
@@ -125,18 +128,18 @@ func writeForbidden(w http.ResponseWriter) {
 // isValidToken checks per-service tokens first, then falls back to the shared
 // token during migration.
 func (m *InternalAuthMiddleware) isValidToken(callingService, token string) bool {
-	// Per-service token takes precedence
 	if perServiceToken, ok := m.allowedCallers[callingService]; ok {
-		return subtle.ConstantTimeCompare([]byte(token), []byte(perServiceToken)) == 1
+		return perServiceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(perServiceToken)) == 1
 	}
-	// Under strict per-service mode, fallback to shared token is rejected
 	if m.strictPerService {
 		m.logger.Warn("STRICT_PER_SERVICE_REJECTION: Caller attempted shared token fallback, but strict per-service tokens are enforced",
 			slog.String("calling_service", callingService),
 		)
 		return false
 	}
-	// Fall back to shared token during migration
+	if m.expectedToken == "" {
+		return false
+	}
 	isValid := subtle.ConstantTimeCompare([]byte(token), []byte(m.expectedToken)) == 1
 	if isValid {
 		m.logger.Warn("DEPRECATION WARNING: Caller authenticated via legacy flat shared token! Per-service token required under ADR-010/ADR-012.",

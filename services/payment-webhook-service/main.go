@@ -88,6 +88,7 @@ func main() {
 		handler.WithMaxBodyBytes(cfg.MaxBodyBytes),
 		handler.WithPublishTimeout(cfg.PublishTimeout),
 		handler.WithStripeSignatureHeader(cfg.SignatureHeader),
+		handler.WithReplayTolerance(cfg.SignatureTolerance),
 		handler.WithTracer(otel.Tracer("payment-webhook-service")),
 	)
 	if err != nil {
@@ -95,7 +96,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	healthHandler := newHealthHandler(cfg.WebhookSecret != "", writer != nil, redisClient)
+	healthHandler := newHealthHandler(hasAnyVerifierSecret(cfg), writer != nil, redisClient)
 	mux := newHTTPMux(whHandler, healthHandler)
 
 	server := &http.Server{
