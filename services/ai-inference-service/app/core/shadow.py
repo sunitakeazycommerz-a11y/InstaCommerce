@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import inspect
 import logging
 import time
-from typing import Any, Callable, Dict, Optional, Set, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 
 from prometheus_client import Counter, Histogram
 
@@ -73,12 +74,19 @@ def compare_shadow_output(
 class ShadowRunner:
     """Dispatches shadow predictions via asyncio.create_task and tracks agreement."""
 
-    def __init__(self, tolerance: float = 0.1) -> None:
+    def __init__(
+        self,
+        tolerance: float = 0.1,
+        timeout_seconds: float = 0.25,
+        max_history: int = 200,
+    ) -> None:
         self.tolerance = tolerance
+        self.timeout_seconds = max(0.001, timeout_seconds)
         self.agreement_count: int = 0
         self.divergence_count: int = 0
         self.error_count: int = 0
         self._pending_tasks: Set[asyncio.Task[Any]] = set()
+        self._comparisons: Deque[Dict[str, Any]] = deque(maxlen=max(1, max_history))
 
     @property
     def stats(self) -> Dict[str, Any]:
@@ -90,6 +98,10 @@ class ShadowRunner:
             "errors": self.error_count,
             "agreement_rate": (self.agreement_count / total) if total > 0 else 1.0,
         }
+
+    @property
+    def recent_comparisons(self) -> List[Dict[str, Any]]:
+        return list(self._comparisons)
 
     def _record_comparison(
         self,
@@ -110,6 +122,18 @@ class ShadowRunner:
         else:
             self.divergence_count += 1
             SHADOW_DIVERGENCE_TOTAL.labels(model=model_name, version=shadow_version).inc()
+        entry = {
+            "model": model_name,
+            "shadow_version": shadow_version,
+            "primary_score": _extract_score(primary_output),
+            "shadow_score": _extract_score(shadow_output),
+            "delta": round(delta, 6),
+            "tolerance": self.tolerance,
+            "agreed": agreed,
+            "elapsed_ms": round(elapsed_s * 1000.0, 3),
+        }
+        self._comparisons.append(entry)
+        logger.info("shadow.comparison", extra=entry)
         return agreed, delta
 
     def _record_error(self, model_name: str, shadow_version: str, reason: str) -> None:
@@ -133,7 +157,10 @@ class ShadowRunner:
         start = time.perf_counter()
         try:
             res = shadow_fn(*args, **kwargs)
-            shadow_output = await res if inspect.isawaitable(res) else res
+            if inspect.isawaitable(res):
+                shadow_output = await asyncio.wait_for(res, timeout=self.timeout_seconds)
+            else:
+                shadow_output = res
             agreed, delta = self._record_comparison(
                 model_name,
                 shadow_version,
@@ -148,6 +175,9 @@ class ShadowRunner:
                 "delta": delta,
                 "shadow_output": shadow_output,
             }
+        except asyncio.TimeoutError:
+            self._record_error(model_name, shadow_version, "TimeoutError")
+            return None
         except Exception as exc:
             self._record_error(model_name, shadow_version, exc.__class__.__name__)
             return None

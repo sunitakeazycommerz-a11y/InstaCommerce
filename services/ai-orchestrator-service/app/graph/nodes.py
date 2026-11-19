@@ -13,13 +13,14 @@ the graph always reaches ``respond`` or ``escalate``.
 
 from __future__ import annotations
 
+import asyncio
 from collections import OrderedDict
 import logging
-import re
 import time
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings
+from app.core.redaction import scrub_pii_and_secrets
 from app.graph.budgets import BudgetExceededError, BudgetTracker
 from app.graph.checkpoints import CheckpointSaver, run_agent_graph
 from app.graph.state import (
@@ -28,6 +29,11 @@ from app.graph.state import (
     RetrievalResult,
     RiskLevel,
     ToolResult,
+)
+from app.graph.substitution import (
+    format_substitution_summary,
+    plan_candidate_inventory_check,
+    recommend_substitutions,
 )
 from app.graph.tools import ToolRegistry
 from app.guardrails import (
@@ -76,21 +82,6 @@ _RISK_INTENTS: Dict[IntentType, RiskLevel] = {
     IntentType.ORDER_STATUS: RiskLevel.LOW,
     IntentType.UNKNOWN: RiskLevel.HIGH,
 }
-
-# PII patterns for output validation
-_PII_PATTERNS = [
-    (re.compile(r"[\w\.-]+@[\w\.-]+\.\w+"), "[REDACTED_EMAIL]"),
-    (re.compile(r"\b\d{3}-?\d{2}-?\d{4}\b"), "[REDACTED_SSN]"),
-    (re.compile(r"\b(?:\d[ -]*?){13,16}\b"), "[REDACTED_CARD]"),
-    (
-        re.compile(r"(?:\+91[\-\s]?)?[0]?(?:91)?[6789]\d{9}\b"),
-        "[REDACTED_PHONE]",
-    ),
-    (
-        re.compile(r"\b(?:\+?\d{1,3}[ -]?)?(?:\(?\d{3}\)?[ -]?)\d{3}[ -]?\d{4}\b"),
-        "[REDACTED_PHONE]",
-    ),
-]
 
 
 def budget_tracker_from_state(
@@ -576,6 +567,38 @@ async def retrieve_context(state: AgentState) -> AgentState:
 # Node: execute_tools
 # ---------------------------------------------------------------------------
 
+async def _call_tool_within_deadline(
+    registry: ToolRegistry,
+    plan: Dict[str, Any],
+    deadline_mono: float,
+    total_timeout: float,
+) -> ToolResult:
+    remaining = deadline_mono - time.monotonic()
+    if remaining <= 0:
+        return ToolResult(
+            tool_name=str(plan["tool"]),
+            success=False,
+            error=f"Aggregate tool timeout exceeded ({total_timeout:.2f}s)",
+        )
+    try:
+        return await asyncio.wait_for(
+            registry.call(
+                plan["tool"],
+                params=plan.get("params"),
+                body=plan.get("body"),
+                path_params=plan.get("path_params"),
+            ),
+            timeout=remaining,
+        )
+    except asyncio.TimeoutError:
+        return ToolResult(
+            tool_name=str(plan["tool"]),
+            success=False,
+            error=f"Aggregate tool timeout exceeded ({total_timeout:.2f}s)",
+            latency_ms=remaining * 1000.0,
+        )
+
+
 async def execute_tools(
     state: AgentState,
     registry: Optional[ToolRegistry] = None,
@@ -637,18 +660,31 @@ async def execute_tools(
                 }
             )
 
+        total_timeout = float(registry.settings.tool_total_timeout_seconds)
+        deadline_mono = time.monotonic() + max(0.001, total_timeout)
+        timeout_errors: List[str] = []
+
         for plan in tool_plan:
             if not tracker.can_proceed():
                 break
 
-            result = await registry.call(
-                plan["tool"],
-                params=plan.get("params"),
-                body=plan.get("body"),
-                path_params=plan.get("path_params"),
-            )
+            result = await _call_tool_within_deadline(registry, plan, deadline_mono, total_timeout)
             results.append(result)
             tracker.record_tool_call()
+            if result.error and "Aggregate tool timeout exceeded" in result.error:
+                timeout_errors.append(result.error)
+                break
+
+        if not timeout_errors and tracker.can_proceed():
+            follow_up = plan_candidate_inventory_check(state, results)
+            if follow_up is not None:
+                follow_res = await _call_tool_within_deadline(
+                    registry, follow_up, deadline_mono, total_timeout
+                )
+                results.append(follow_res)
+                tracker.record_tool_call()
+                if follow_res.error and "Aggregate tool timeout exceeded" in follow_res.error:
+                    timeout_errors.append(follow_res.error)
 
         logger.info(
             "node.execute_tools",
@@ -666,6 +702,7 @@ async def execute_tools(
                 "total_cost_usd": tracker.total_cost_usd,
                 "total_tokens_used": tracker.total_tokens,
                 "elapsed_ms": max(state.elapsed_ms, tracker.elapsed_ms),
+                "errors": state.errors + timeout_errors if timeout_errors else state.errors,
                 "current_node": "execute_tools",
                 "completed_nodes": state.completed_nodes + ["execute_tools"],
             }
@@ -735,9 +772,7 @@ def validate_output(state: AgentState) -> AgentState:
         response = state.response
         citations = list(state.response_citations)
 
-        # PII scrubbing
-        for pattern, replacement in _PII_PATTERNS:
-            response = pattern.sub(replacement, response)
+        response = scrub_pii_and_secrets(response, include_secrets=False)
 
         vault = PIIVault()
         response, _ = vault.redact(response)
@@ -854,6 +889,12 @@ def respond(state: AgentState) -> AgentState:
             if tr.success and tr.data:
                 parts.append(f"[{tr.tool_name}]: retrieved data successfully.")
 
+        updated_context = dict(state.context)
+        if state.intent == IntentType.SUBSTITUTE and state.tool_results:
+            substitutions = recommend_substitutions(state, state.tool_results)
+            updated_context["substitutions"] = [cand.to_dict() for cand in substitutions]
+            parts.append(format_substitution_summary(substitutions))
+
         if parts:
             response = "Based on available information: " + " ".join(parts)
         else:
@@ -876,6 +917,7 @@ def respond(state: AgentState) -> AgentState:
             update={
                 "response": response,
                 "response_citations": citations,
+                "context": updated_context,
                 "current_node": "respond",
                 "completed_nodes": state.completed_nodes + ["respond"],
             }

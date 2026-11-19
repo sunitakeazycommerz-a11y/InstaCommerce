@@ -1,7 +1,9 @@
+import time
 from unittest.mock import MagicMock, patch
 
 from monitoring.synthetics.checkout_canary import (
     CANARY_CONSECUTIVE_FAILURES,
+    CANARY_STEP_FAILURE_TOTAL,
     CANARY_SUCCESS,
     SyntheticCheckoutCanary,
 )
@@ -92,3 +94,38 @@ def test_synthetic_canary_live_mode_fails_on_404_while_mock_mode_passes(monkeypa
     ):
         assert mock_canary.run_checkout_journey() is True
         assert mock_canary.consecutive_failures == 0
+
+
+def test_synthetic_canary_rejects_broken_json_contracts_and_step_sla_breach():
+    base_url = "http://mock-api.instacommerce.dev"
+    canary = SyntheticCheckoutCanary(base_url=base_url, allow_mock=False)
+
+    empty_search = MagicMock(status_code=200)
+    empty_search.json.return_value = {"results": []}
+    before_search = CANARY_STEP_FAILURE_TOTAL.labels(journey="checkout", step="search")._value.get()
+    with patch("requests.get", return_value=empty_search):
+        assert canary.run_checkout_journey() is False
+    assert CANARY_STEP_FAILURE_TOTAL.labels(journey="checkout", step="search")._value.get() == before_search + 1.0
+
+    ok_search = MagicMock(status_code=200)
+    ok_search.json.return_value = {"results": [{"id": "00000000-0000-0000-0000-000000000002"}]}
+    ok_cart = MagicMock(status_code=201)
+    ok_cart.json.return_value = {"productId": "00000000-0000-0000-0000-000000000002", "quantity": 1}
+    bad_reserve = MagicMock(status_code=200)
+    bad_reserve.json.return_value = {"reserved": False, "sufficient": False}
+    before_reserve = CANARY_STEP_FAILURE_TOTAL.labels(journey="checkout", step="inventory_reserve")._value.get()
+    with (
+        patch("requests.get", return_value=ok_search),
+        patch("requests.post", side_effect=[ok_cart, bad_reserve]),
+    ):
+        assert canary.run_checkout_journey() is False
+    assert CANARY_STEP_FAILURE_TOTAL.labels(journey="checkout", step="inventory_reserve")._value.get() == before_reserve + 1.0
+
+    slow_canary = SyntheticCheckoutCanary(base_url=base_url, allow_mock=False, step_sla_seconds=0.02)
+
+    def _slow_get(*_args, **_kwargs):
+        time.sleep(0.05)
+        return ok_search
+
+    with patch("requests.get", side_effect=_slow_get):
+        assert slow_canary.run_checkout_journey() is False

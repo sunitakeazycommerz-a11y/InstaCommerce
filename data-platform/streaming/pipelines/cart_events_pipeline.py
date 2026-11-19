@@ -20,6 +20,7 @@ from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, 
 import json
 import logging
 
+from pipelines.validation import coerce_int, coerce_str_list, require_non_empty_str
 from pipelines.common import (
     first_present as _first_present,
     parse_event_ts as _parse_event_ts,
@@ -73,19 +74,36 @@ class CartEventParser(beam.DoFn):
                 event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
             )
             parsed = {
-                "cart_id": _first_present(payload, "cartId", "cart_id")
-                or _first_present(event, "cartId", "cart_id", "aggregateId", "aggregate_id"),
-                "user_id": _first_present(payload, "userId", "user_id")
-                or _first_present(event, "userId", "user_id"),
+                "cart_id": require_non_empty_str(
+                    _first_present(payload, "cartId", "cart_id")
+                    or _first_present(event, "cartId", "cart_id", "aggregateId", "aggregate_id"),
+                    "cart_id",
+                ),
+                "user_id": require_non_empty_str(
+                    _first_present(payload, "userId", "user_id")
+                    or _first_present(event, "userId", "user_id"),
+                    "user_id",
+                ),
                 "event_type": _first_present(event, "eventType", "event_type"),
-                "zone_id": _first_present(payload, "zoneId", "zone_id", default=""),
-                "cart_value_cents": _first_present(payload, "cartValueCents", "cart_value_cents", default=0),
-                "item_count": _first_present(payload, "itemCount", "item_count", default=0),
-                "sku_ids": _first_present(payload, "skuIds", "sku_ids", default=[]),
+                "zone_id": str(_first_present(payload, "zoneId", "zone_id", default="") or ""),
+                "cart_value_cents": coerce_int(
+                    _first_present(payload, "cartValueCents", "cart_value_cents", default=0),
+                    "cart_value_cents",
+                    default=0,
+                    min_value=0,
+                ),
+                "item_count": coerce_int(
+                    _first_present(payload, "itemCount", "item_count", default=0),
+                    "item_count",
+                    default=0,
+                    min_value=0,
+                ),
+                "sku_ids": coerce_str_list(
+                    _first_present(payload, "skuIds", "sku_ids", default=[]),
+                    "sku_ids",
+                ),
                 "event_time": event_time_str,
             }
-            if not parsed["cart_id"] or not parsed["user_id"]:
-                raise ValueError("Missing cartId or userId")
             event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue(parsed, event_ts)
         except Exception as e:
@@ -114,11 +132,16 @@ class CartSessionAggregator(beam.CombineFn):
 
     def add_input(self, acc, element):
         acc["event_types"].append(element.get("event_type", ""))
-        cart_val = element.get("cart_value_cents", 0)
+        raw_val = element.get("cart_value_cents", 0)
+        cart_val = int(raw_val) if isinstance(raw_val, (int, float)) and not isinstance(raw_val, bool) else 0
         if cart_val > acc["max_cart_value_cents"]:
             acc["max_cart_value_cents"] = cart_val
-        acc["total_items"] = max(acc["total_items"], element.get("item_count", 0))
-        acc["sku_ids"].extend(element.get("sku_ids", []))
+        raw_items = element.get("item_count", 0)
+        item_count = int(raw_items) if isinstance(raw_items, (int, float)) and not isinstance(raw_items, bool) else 0
+        acc["total_items"] = max(acc["total_items"], item_count)
+        raw_skus = element.get("sku_ids", [])
+        if isinstance(raw_skus, list):
+            acc["sku_ids"].extend(s for s in raw_skus if isinstance(s, str))
         if element.get("zone_id"):
             acc["zone_id"] = element["zone_id"]
         return acc

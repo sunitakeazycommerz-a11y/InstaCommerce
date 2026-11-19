@@ -79,6 +79,18 @@ class _MockDAG:
         _MockDAG._current = self._previous
 
 
+class _MockTaskGroup:
+    def __init__(self, group_id: str = "", **kwargs: Any) -> None:
+        self.group_id = group_id
+        self.kwargs = kwargs
+
+    def __enter__(self) -> "_MockTaskGroup":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        return None
+
+
 if "airflow" not in sys.modules:
     mock_bash = _stub_module("airflow.operators.bash", BashOperator=_MockOperator)
     mock_python = _stub_module(
@@ -121,6 +133,8 @@ if "airflow" not in sys.modules:
     )
     mock_slack = _stub_module("airflow.providers.slack", hooks=mock_slack_hooks)
     mock_providers = _stub_module("airflow.providers", slack=mock_slack)
+    mock_task_group = _stub_module("airflow.utils.task_group", TaskGroup=_MockTaskGroup)
+    mock_utils = _stub_module("airflow.utils", task_group=mock_task_group)
     mock_airflow = _stub_module(
         "airflow",
         DAG=_MockDAG,
@@ -129,6 +143,7 @@ if "airflow" not in sys.modules:
         hooks=mock_hooks,
         models=mock_models,
         providers=mock_providers,
+        utils=mock_utils,
     )
 
     sys.modules["airflow"] = mock_airflow
@@ -145,6 +160,8 @@ if "airflow" not in sys.modules:
     sys.modules["airflow.providers.slack"] = mock_slack
     sys.modules["airflow.providers.slack.hooks"] = mock_slack_hooks
     sys.modules["airflow.providers.slack.hooks.slack_webhook"] = mock_slack_webhook
+    sys.modules["airflow.utils"] = mock_utils
+    sys.modules["airflow.utils.task_group"] = mock_task_group
 
 airflow_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if airflow_dir not in sys.path:
@@ -153,7 +170,7 @@ if airflow_dir not in sys.path:
 import plugins.kafka_lag_sensor as kafka_lag_sensor_mod  # noqa: E402
 from plugins.kafka_lag_sensor import KafkaLagSensor  # noqa: E402
 from plugins.slack_alerts import build_block_kit_payload  # noqa: E402
-from dags import data_quality, dbt_marts, dbt_staging, monitoring_alerts  # noqa: E402
+from dags import data_quality, dbt_marts, dbt_staging, ml_training, monitoring_alerts  # noqa: E402
 from dags.historical_backfill import _prepare_backfill_params  # noqa: E402
 
 
@@ -449,3 +466,20 @@ def test_dbt_marts_alert_on_failure_wired_to_all_upstreams():
         "dbt_test_marts",
     }
     assert dbt_marts.dag.task_dict["notify_completion"].upstream_task_ids == {"dbt_test_marts"}
+
+
+def test_ml_training_promotion_gate_evaluates_full_gate_suite():
+    gate_fn = ml_training.dag.task_dict["gate_fraud_detection"].python_callable
+    config = ml_training.MODEL_CONFIGS["fraud_detection"]
+
+    ti_pass = MagicMock()
+    ti_pass.xcom_pull.return_value = {"f1_score": 0.94, "false_positive_rate": 0.02}
+    assert gate_fn(model_name="fraud_detection", config=config, ti=ti_pass) == "fraud_detection_group.promote_fraud_detection"
+
+    ti_fail_fpr = MagicMock()
+    ti_fail_fpr.xcom_pull.return_value = {"f1_score": 0.94, "false_positive_rate": 0.12}
+    assert gate_fn(model_name="fraud_detection", config=config, ti=ti_fail_fpr) == "fraud_detection_group.skip_promote_fraud_detection"
+
+    ti_missing_fpr = MagicMock()
+    ti_missing_fpr.xcom_pull.return_value = {"f1_score": 0.94}
+    assert gate_fn(model_name="fraud_detection", config=config, ti=ti_missing_fpr) == "fraud_detection_group.skip_promote_fraud_detection"

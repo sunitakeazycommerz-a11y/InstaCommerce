@@ -48,7 +48,6 @@ logger = logging.getLogger("ai_orchestrator.api.v1")
 router = APIRouter(tags=["agent-v1"])
 
 _v1_injection_detector = InjectionDetector()
-_v1_pii_vault = PIIVault()
 _settings = Settings()
 
 
@@ -184,13 +183,14 @@ async def assist(request: AssistRequest) -> AssistResponse:
             ),
         )
 
-    redacted_query, _ = _v1_pii_vault.redact(request.query)
+    pii_vault = PIIVault()
+    redacted_query, _ = pii_vault.redact(request.query)
     sanitized_request = request.model_copy(update={"query": redacted_query})
     payload = sanitized_request.model_dump(mode="json")
     request_id = derive_request_id(request.request_id, payload, "assist")
 
     raw_context = sanitized_request.context.model_dump(mode="json", exclude_none=True)
-    redacted_context = _v1_pii_vault.redact_value(raw_context)
+    redacted_context = pii_vault.redact_value(raw_context)
     context_dict = redacted_context if isinstance(redacted_context, dict) else {}
 
     initial_state = AgentState(

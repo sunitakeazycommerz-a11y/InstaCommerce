@@ -14,6 +14,14 @@ from prometheus_client import Counter, Histogram
 from pydantic import ValidationError
 
 from app.core.config import InferenceCache, ModelConfig, ModelRegistry, settings
+from app.core.guardrails import (
+    MODEL_OUTPUT_STD,
+    assess_feature_health,
+    build_cold_start_output,
+    compute_confidence_interval,
+    enforce_sync_sla,
+    is_cold_start_context,
+)
 from app.core.shadow import dispatch_shadow_prediction
 from app.features.extractors import (
     build_features_for_model,
@@ -63,34 +71,92 @@ def safe_sigmoid(value: float) -> float:
 
 
 def perform_inference(
-    model_name: str, features: Dict[str, float], model_config: ModelConfig
+    model_name: str,
+    features: Dict[str, float],
+    model_config: ModelConfig,
+    *,
+    entity_metadata: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
+    health = assess_feature_health(
+        model_name,
+        features,
+        expected_features=model_config.weights.keys() if model_config.weights else None,
+        z_threshold=settings.ood_z_threshold,
+        max_missing_ratio=settings.max_missing_feature_ratio,
+    )
+    cold_start, cold_reason = is_cold_start_context(
+        model_name,
+        features,
+        missing_ratio=health.missing_ratio,
+        entity_metadata=entity_metadata,
+    )
+    if cold_start:
+        return build_cold_start_output(
+            model_name,
+            model_config.version,
+            reason=cold_reason or "insufficient_history",
+            drift_detected=health.drift_detected,
+        )
+
     raw_score, contributions = linear_score(features, model_config.weights, model_config.bias)
     if model_name == "eta":
         eta_minutes = max(0.0, raw_score)
+        ci_lo, ci_hi = compute_confidence_interval(
+            eta_minutes,
+            std=MODEL_OUTPUT_STD["eta"],
+            lower_bound=0.0,
+            upper_bound=None,
+        )
         return {
             "eta_minutes": eta_minutes,
             "feature_contributions": contributions,
             "bias": model_config.bias,
             "model_version": model_config.version,
+            "is_cold_start": False,
+            "confidence_lower": ci_lo,
+            "confidence_upper": ci_hi,
+            "drift_detected": health.drift_detected,
+            "sla_breached": False,
         }
     if model_name == "ranking":
         ranking_score = safe_sigmoid(raw_score)
+        ci_lo, ci_hi = compute_confidence_interval(
+            ranking_score,
+            std=MODEL_OUTPUT_STD["ranking"],
+            lower_bound=0.0,
+            upper_bound=1.0,
+        )
         return {
             "ranking_score": ranking_score,
             "raw_score": raw_score,
             "feature_contributions": contributions,
             "bias": model_config.bias,
             "model_version": model_config.version,
+            "is_cold_start": False,
+            "confidence_lower": ci_lo,
+            "confidence_upper": ci_hi,
+            "drift_detected": health.drift_detected,
+            "sla_breached": False,
         }
     if model_name == "fraud":
         fraud_probability = safe_sigmoid(raw_score)
+        ci_lo, ci_hi = compute_confidence_interval(
+            fraud_probability,
+            std=MODEL_OUTPUT_STD["fraud"],
+            lower_bound=0.0,
+            upper_bound=1.0,
+        )
         return {
             "fraud_probability": fraud_probability,
             "raw_score": raw_score,
             "feature_contributions": contributions,
             "bias": model_config.bias,
             "model_version": model_config.version,
+            "is_cold_start": False,
+            "confidence_lower": ci_lo,
+            "confidence_upper": ci_hi,
+            "drift_detected": health.drift_detected,
+            "sla_breached": False,
         }
     raise ValueError("unknown_model")
 
@@ -138,19 +204,37 @@ def execute_inference(
     registry: ModelRegistry,
 ) -> tuple[Dict[str, Any], bool]:
     cache_hit = False
+    budget_ms = settings.sla_budgets_ms.get(model_name)
     if cache:
         key = build_cache_key(model_name, model_config.version, features)
         cached = cache.get(key)
         if cached is not None:
             cache_hit = True
             CACHE_EVENTS.labels(model=model_name, version=model_config.version, result="hit").inc()
-            result = cached
+            result = {**cached, "sla_breached": False}
         else:
             CACHE_EVENTS.labels(model=model_name, version=model_config.version, result="miss").inc()
-            result = perform_inference(model_name, features, model_config)
-            cache.set(key, result)
+            computed, sla_breached, _ = enforce_sync_sla(
+                model_name,
+                lambda: perform_inference(model_name, features, model_config),
+                budget_ms=budget_ms,
+                strict=settings.strict_sla_timeout,
+                model_version=model_config.version,
+                fallback_on_timeout=True,
+            )
+            result = {**computed, "sla_breached": sla_breached}
+            if not sla_breached:
+                cache.set(key, result)
     else:
-        result = perform_inference(model_name, features, model_config)
+        computed, sla_breached, _ = enforce_sync_sla(
+            model_name,
+            lambda: perform_inference(model_name, features, model_config),
+            budget_ms=budget_ms,
+            strict=settings.strict_sla_timeout,
+            model_version=model_config.version,
+            fallback_on_timeout=True,
+        )
+        result = {**computed, "sla_breached": sla_breached}
     maybe_run_shadow(model_name, features, model_config.version, registry, primary_output=result)
     return result, cache_hit
 

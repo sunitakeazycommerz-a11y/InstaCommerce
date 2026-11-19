@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 
 from app.config import Settings
+from app.core.redaction import scrub_pii_and_secrets, scrub_structured_value
 
 logger = logging.getLogger("ai_orchestrator")
 
@@ -41,38 +41,16 @@ STANDARD_LOG_RECORD_ATTRS = {
 class PiiRedactor:
     def __init__(self, enabled: bool = True) -> None:
         self._enabled = enabled
-        self._patterns: Tuple[Tuple[re.Pattern[str], str], ...] = (
-            (re.compile(r"[\w\.-]+@[\w\.-]+\.\w+"), "[REDACTED_EMAIL]"),
-            (re.compile(r"\b\d{3}-?\d{2}-?\d{4}\b"), "[REDACTED_SSN]"),
-            (re.compile(r"\b(?:\d[ -]*?){13,16}\b"), "[REDACTED_CARD]"),
-            (
-                re.compile(r"(?:\+91[\-\s]?)?[0]?(?:91)?[6789]\d{9}\b"),
-                "[REDACTED_PHONE]",
-            ),
-            (
-                re.compile(r"\b(?:\+?\d{1,3}[ -]?)?(?:\(?\d{3}\)?[ -]?)\d{3}[ -]?\d{4}\b"),
-                "[REDACTED_PHONE]",
-            ),
-        )
 
     def redact_text(self, value: str) -> str:
         if not self._enabled:
             return value
-        redacted = value
-        for pattern, replacement in self._patterns:
-            redacted = pattern.sub(replacement, redacted)
-        return redacted
+        return scrub_pii_and_secrets(value, include_secrets=True)
 
     def redact(self, value: Any) -> Any:
         if not self._enabled:
             return value
-        if isinstance(value, str):
-            return self.redact_text(value)
-        if isinstance(value, dict):
-            return {key: self.redact(val) for key, val in value.items()}
-        if isinstance(value, list):
-            return [self.redact(item) for item in value]
-        return value
+        return scrub_structured_value(value, include_secrets=True)
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -90,7 +68,7 @@ class JsonLogFormatter(logging.Formatter):
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         for key, value in record.__dict__.items():
-            if key in STANDARD_LOG_RECORD_ATTRS:
+            if key in STANDARD_LOG_RECORD_ATTRS or key == "pii_vault_mapping":
                 continue
             payload[key] = value
         payload = self._redactor.redact(payload)

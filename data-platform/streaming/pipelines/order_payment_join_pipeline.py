@@ -17,6 +17,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from pipelines.validation import coerce_int, coerce_optional_int, require_non_empty_str
 from pipelines.common import (
     first_present as _first_present,
     parse_event_ts as _parse_event_ts,
@@ -68,11 +69,11 @@ class ParseOrderFn(beam.DoFn):
         try:
             event = json.loads(value.decode("utf-8"))
             payload = event.get("payload") or {}
-            order_id = _first_present(
-                event, "orderId", "order_id", "aggregateId", "aggregate_id"
-            ) or _first_present(payload, "orderId", "order_id")
-            if not order_id:
-                raise ValueError("Missing orderId in order event")
+            order_id = require_non_empty_str(
+                _first_present(event, "orderId", "order_id", "aggregateId", "aggregate_id")
+                or _first_present(payload, "orderId", "order_id"),
+                "orderId",
+            )
             event_time_str = _first_present(
                 event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
             )
@@ -80,11 +81,19 @@ class ParseOrderFn(beam.DoFn):
                 "order_id": order_id,
                 "user_id": _first_present(payload, "userId", "user_id")
                 or _first_present(event, "userId", "user_id"),
-                "store_id": _first_present(payload, "storeId", "store_id")
-                or _first_present(event, "storeId", "store_id"),
-                "zone_id": _first_present(payload, "zoneId", "zone_id", default=""),
-                "total_cents": _first_present(
-                    payload, "totalCents", "total_amount_cents", "total_cents", default=0
+                "store_id": require_non_empty_str(
+                    _first_present(payload, "storeId", "store_id")
+                    or _first_present(event, "storeId", "store_id"),
+                    "storeId",
+                ),
+                "zone_id": str(_first_present(payload, "zoneId", "zone_id", default="") or ""),
+                "total_cents": coerce_int(
+                    _first_present(
+                        payload, "totalCents", "total_amount_cents", "total_cents", default=0
+                    ),
+                    "total_cents",
+                    default=0,
+                    min_value=0,
                 ),
                 "event_type": _first_present(event, "eventType", "event_type"),
                 "placed_at": _first_present(payload, "placedAt", "placed_at"),
@@ -110,24 +119,33 @@ class ParsePaymentFn(beam.DoFn):
         try:
             event = json.loads(value.decode("utf-8"))
             payload = event.get("payload") or {}
-            order_id = _first_present(payload, "orderId", "order_id") or _first_present(
-                event, "orderId", "order_id"
+            order_id = require_non_empty_str(
+                _first_present(payload, "orderId", "order_id")
+                or _first_present(event, "orderId", "order_id"),
+                "orderId",
             )
             payment_id = _first_present(payload, "paymentId", "payment_id") or _first_present(
                 event, "paymentId", "payment_id", "aggregateId", "aggregate_id"
             )
-            if not order_id:
-                raise ValueError("Missing orderId in payment event")
             event_time_str = _first_present(
                 event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
             )
             parsed = {
                 "order_id": order_id,
                 "payment_id": payment_id,
-                "method": _first_present(payload, "method", "paymentMethod", "payment_method", default="UNKNOWN"),
-                "status": _first_present(payload, "status", default="UNKNOWN"),
-                "amount_cents": _first_present(payload, "amountCents", "amount_cents", default=0),
-                "latency_ms": _first_present(payload, "latencyMs", "latency_ms"),
+                "method": str(_first_present(payload, "method", "paymentMethod", "payment_method", default="UNKNOWN") or "UNKNOWN"),
+                "status": str(_first_present(payload, "status", default="UNKNOWN") or "UNKNOWN"),
+                "amount_cents": coerce_int(
+                    _first_present(payload, "amountCents", "amount_cents", default=0),
+                    "amount_cents",
+                    default=0,
+                    min_value=0,
+                ),
+                "latency_ms": coerce_optional_int(
+                    _first_present(payload, "latencyMs", "latency_ms"),
+                    "latency_ms",
+                    min_value=0,
+                ),
                 "event_type": _first_present(event, "eventType", "event_type"),
                 "event_time": event_time_str,
             }

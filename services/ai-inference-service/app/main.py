@@ -20,6 +20,11 @@ from app.core.config import (
     load_registry_data,
     settings,
 )
+from app.core.guardrails import (
+    MODEL_LATENCY_MS,
+    SLA_BREACH_TOTAL,
+    enforce_async_sla,
+)
 from app.core.inference import (
     REQUEST_COUNT,
     REQUEST_LATENCY,
@@ -149,6 +154,11 @@ def _run_model_endpoint(
         model = get_model()
         version_label = model.version
         response = model.predict(features)
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        MODEL_LATENCY_MS.labels(model=model_name).observe(elapsed_ms)
+        budget_ms = settings.sla_budgets_ms.get(model_name, 25.0)
+        if elapsed_ms > budget_ms:
+            SLA_BREACH_TOTAL.labels(model=model_name, action="observed_breach").inc()
         status = "success"
         return response
     finally:
@@ -169,7 +179,23 @@ async def dynamic_batch_endpoint(
     registry = app.state.registry
     batcher: DynamicBatcher = app.state.batcher
     model_config = resolve_model_config(registry, model_name, model_version)
-    return await batcher.submit(model_name, features, model_config)
+    budget_ms = settings.sla_budgets_ms.get(model_name, 25.0)
+    if settings.strict_sla_timeout:
+        output, sla_breached, _ = await enforce_async_sla(
+            model_name,
+            batcher.submit(model_name, features, model_config),
+            budget_ms=budget_ms,
+            model_version=model_config.version,
+            fallback_on_timeout=True,
+        )
+        return {**output, "sla_breached": sla_breached}
+    start = time.perf_counter()
+    output = await batcher.submit(model_name, features, model_config)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    MODEL_LATENCY_MS.labels(model=model_name).observe(elapsed_ms)
+    if elapsed_ms > budget_ms:
+        SLA_BREACH_TOTAL.labels(model=model_name, action="observed_breach").inc()
+    return output
 
 
 @app.get("/metrics")

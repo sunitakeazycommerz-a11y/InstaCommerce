@@ -13,7 +13,7 @@ import os
 import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Sequence
 
 try:
     import mlflow as _mlflow  # type: ignore
@@ -32,17 +32,13 @@ except Exception:
     xgb: Any = None
 import numpy as np
 import pandas as pd
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    precision_score,
-    r2_score,
-    recall_score,
-    roc_auc_score,
-)
 import yaml
+
+from ml.eval.metrics import (
+    compute_evaluation_metrics,
+    compute_fairness_metrics,
+    evaluate_promotion_gates,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -100,10 +96,11 @@ class ModelEvaluator:
     """Unified evaluator for all InstaCommerce ML models."""
 
     SUPPORTED_METRICS = {
-        "auc_roc", "auc_pr", "f1_score", "precision", "recall",
+        "auc_roc", "auc_pr", "f1_score", "precision", "recall", "accuracy",
+        "false_positive_rate", "precision_at_95_recall",
         "ndcg_at_10", "map_at_10", "mrr", "hit_at_10",
-        "mae", "rmse", "mape", "r2_score",
-        "accuracy_pct", "correlation",
+        "mae", "mae_min", "rmse", "mape", "r2_score",
+        "within_2min_pct", "accuracy_pct", "correlation",
     }
 
     NON_FEATURE_COLUMNS = {
@@ -158,27 +155,15 @@ class ModelEvaluator:
         model_name: str = "unknown",
         version: str = "v0",
         task_type: str | None = None,
+        extra_metrics: dict[str, float] | None = None,
     ) -> EvalReport:
-        """Run metrics, check promotion gates, and generate report.
-
-        Args:
-            model: Trained model object with a predict method.
-            test_data: Test DataFrame with features and labels.
-            gates_config: Config dict with promotion_gates section.
-            model_name: Name of the model.
-            version: Model version string.
-            task_type: Optional explicit task type ('classification' or 'regression').
-
-        Returns:
-            EvalReport with metrics, gate results, and metadata.
-        """
+        """Run metrics, check promotion gates, and generate report."""
         logger.info("Evaluating model: %s %s", model_name, version)
         gates_config = gates_config or {}
         report = EvalReport(model_name=model_name, version=version)
 
         resolved_task_type = task_type or gates_config.get("task_type")
 
-        # Compute predictions excluding label/group/ID columns
         feature_cols = self._select_feature_columns(model, test_data)
         if hasattr(model, "predict_proba") and resolved_task_type != "regression":
             y_pred_proba = model.predict_proba(test_data[feature_cols])[:, 1]
@@ -189,7 +174,6 @@ class ModelEvaluator:
         else:
             raise ValueError("Model must have predict or predict_proba method")
 
-        # Detect label column
         label_col = None
         for candidate in ("label", "target", "y", "is_fraud", "relevance_label"):
             if candidate in test_data.columns:
@@ -198,22 +182,35 @@ class ModelEvaluator:
         if label_col is None:
             raise ValueError("No label column found in test data")
 
-        y_true = np.asarray(test_data[label_col].values)
+        group_values = None
+        for group_col in ("query_id", "group_id", "group", "user_id"):
+            if group_col in test_data.columns:
+                group_values = list(test_data[group_col].values)
+                break
 
-        # Compute metrics based on task type
-        metrics = self._compute_metrics(y_true, y_pred, y_pred_proba, task_type=resolved_task_type)
+        y_true = np.asarray(test_data[label_col].values)
+        metrics = self._compute_metrics(
+            y_true,
+            y_pred,
+            y_pred_proba,
+            task_type=resolved_task_type,
+            groups=group_values,
+        )
+        if extra_metrics:
+            metrics.update(extra_metrics)
         report.metrics = metrics
 
-        # Check promotion gates
         gates = gates_config.get("promotion_gates", {})
         report.promotion_gates = gates
-        report.gates_passed = self._check_gates(metrics, gates)
+        passed, gate_failures = evaluate_promotion_gates(metrics, gates)
+        report.gates_passed = passed
 
         report.metadata = {
             "test_samples": len(test_data),
             "label_column": label_col,
             "feature_count": len(feature_cols),
             "task_type": resolved_task_type,
+            "gate_failures": gate_failures,
         }
 
         logger.info("Evaluation complete. Gates passed: %s", report.gates_passed)
@@ -225,61 +222,20 @@ class ModelEvaluator:
         y_pred: np.ndarray,
         y_pred_proba: np.ndarray | None,
         task_type: str | None = None,
+        groups: Sequence[Any] | None = None,
     ) -> dict[str, float]:
         """Compute appropriate metrics based on prediction type."""
-        metrics = {}
-
-        # Determine if classification or regression
-        unique_labels = np.unique(y_true)
-        if task_type is not None:
-            is_classification = task_type.lower() in ("classification", "binary", "multiclass")
-        else:
-            is_classification = len(unique_labels) <= 20 and all(
-                float(v).is_integer() for v in unique_labels
-            )
-
-        if is_classification:
-            metrics["accuracy"] = float(accuracy_score(y_true, y_pred))
-            metrics["f1_score"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0)))
-            metrics["precision"] = float(precision_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0)))
-            metrics["recall"] = float(recall_score(y_true, y_pred, average="weighted", zero_division=cast(Any, 0)))
-
-            if y_pred_proba is not None and len(unique_labels) == 2:
-                metrics["auc_roc"] = float(roc_auc_score(y_true, y_pred_proba))
-        else:
-            metrics["mae"] = float(mean_absolute_error(y_true, y_pred))
-            metrics["rmse"] = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-            metrics["r2_score"] = float(r2_score(y_true, y_pred))
-
-            # MAPE (avoid division by zero)
-            mask = y_true != 0
-            if mask.sum() > 0:
-                metrics["mape"] = float(np.mean(np.abs(y_true[mask] - y_pred[mask]) / np.abs(y_true[mask])))
-
-        return metrics
+        return compute_evaluation_metrics(
+            y_true,
+            y_pred,
+            y_pred_proba,
+            task_type=task_type,
+            groups=groups,
+        )
 
     def _check_gates(self, metrics: dict, gates: dict) -> bool:
-        """Check if all promotion gates are met."""
-        passed = True
-        for gate_key, gate_value in gates.items():
-            if gate_key.startswith("min_"):
-                metric_name = gate_key[4:]
-                actual = metrics.get(metric_name, metrics.get(gate_key, None))
-                if actual is not None and actual < gate_value:
-                    logger.warning(
-                        "Gate FAILED: %s = %.4f < %.4f (min)",
-                        metric_name, actual, gate_value,
-                    )
-                    passed = False
-            elif gate_key.startswith("max_"):
-                metric_name = gate_key[4:]
-                actual = metrics.get(metric_name, metrics.get(gate_key, None))
-                if actual is not None and actual > gate_value:
-                    logger.warning(
-                        "Gate FAILED: %s = %.4f > %.4f (max)",
-                        metric_name, actual, gate_value,
-                    )
-                    passed = False
+        """Check if all promotion gates are met (fail-closed on missing gate metrics)."""
+        passed, _ = evaluate_promotion_gates(metrics, gates)
         return passed
 
     def bias_check(
@@ -331,44 +287,18 @@ class ModelEvaluator:
                 label_col = candidate
                 break
 
-        y_true = test_data[label_col].values if label_col else None
-
-        for attr in protected_attributes:
-            if attr not in test_data.columns:
-                continue
-
-            groups = test_data[attr].unique()
-            selection_rates = {}
-
-            for group in groups:
-                mask = test_data[attr] == group
-                group_pred = y_pred[mask]
-                selection_rates[str(group)] = float(group_pred.mean())
-
-                if y_true is not None:
-                    group_true = y_true[mask]
-                    tp = ((group_pred == 1) & (group_true == 1)).sum()
-                    fn = ((group_pred == 0) & (group_true == 1)).sum()
-                    fp = ((group_pred == 1) & (group_true == 0)).sum()
-                    tn = ((group_pred == 0) & (group_true == 0)).sum()
-
-                    tpr = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
-                    fpr = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
-                    report.equalized_odds[f"{attr}_{group}_tpr"] = tpr
-                    report.equalized_odds[f"{attr}_{group}_fpr"] = fpr
-
-            report.demographic_parity[attr] = selection_rates
-
-            # Disparate impact (4/5 rule)
-            rates = list(selection_rates.values())
-            if max(rates) > 0:
-                di_ratio = min(rates) / max(rates)
-                report.disparate_impact[attr] = float(di_ratio)
-                if di_ratio < 0.8:
-                    report.passed = False
-                    report.details.append(
-                        f"Disparate impact for {attr}: {di_ratio:.4f} < 0.8"
-                    )
+        y_true = np.asarray(test_data[label_col].values) if label_col else None
+        dp, eo, di, passed, details = compute_fairness_metrics(
+            test_data=test_data,
+            y_pred=y_pred,
+            y_true=y_true,
+            protected_attributes=protected_attributes,
+        )
+        report.demographic_parity = dp
+        report.equalized_odds = eo
+        report.disparate_impact = di
+        report.passed = passed
+        report.details.extend(details)
 
         logger.info("Bias check complete. Passed: %s", report.passed)
         return report

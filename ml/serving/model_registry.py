@@ -73,6 +73,8 @@ class ModelRegistry:
         self._shadow: Dict[str, BasePredictor] = {}
         self._ab_routing: Dict[str, Dict[str, float]] = {}  # model -> {version: weight}
         self._kill_switches: Dict[str, bool] = {}
+        self._previous_versions: Dict[str, str] = {}
+        self._version_history: Dict[str, List[str]] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -85,8 +87,15 @@ class ModelRegistry:
         on re-registration.
         """
         name = predictor.model_name
+        existing = self._models.get(name)
+        if existing is not None and existing._version and existing._version != predictor._version:
+            self._previous_versions[name] = existing._version
         self._models[name] = predictor
         self._kill_switches.pop(name, None)
+        if predictor._version:
+            history = self._version_history.setdefault(name, [])
+            if not history or history[-1] != predictor._version:
+                history.append(predictor._version)
         logger.info("Model registered", extra={"model": name, "status": predictor.status.value})
 
     def unregister(self, model_name: str) -> None:
@@ -95,6 +104,8 @@ class ModelRegistry:
         self._shadow.pop(model_name, None)
         self._ab_routing.pop(model_name, None)
         self._kill_switches.pop(model_name, None)
+        self._previous_versions.pop(model_name, None)
+        self._version_history.pop(model_name, None)
         logger.info("Model unregistered", extra={"model": model_name})
 
     # ------------------------------------------------------------------
@@ -135,6 +146,7 @@ class ModelRegistry:
             target_version = self.resolve_version(model_name, user_id=user_id)
 
         if target_version is not None and target_version != "latest":
+            previous_version = predictor._version
             model_path = Path(predictor.model_dir)
             version_dir = model_path / target_version
             if version_dir.exists() and predictor._version != target_version:
@@ -144,7 +156,32 @@ class ModelRegistry:
                     predictor.status = ModelStatus.READY
             elif predictor._version != target_version:
                 predictor._version = target_version
+            if previous_version and previous_version != target_version:
+                self._previous_versions[model_name] = previous_version
+                history = self._version_history.setdefault(model_name, [])
+                if not history or history[-1] != target_version:
+                    history.append(target_version)
 
+        return predictor
+
+    def rollback(
+        self,
+        model_name: str,
+        target_version: Optional[str] = None,
+    ) -> BasePredictor:
+        """Roll back an active model predictor to a prior known-good version."""
+        if model_name not in self._models:
+            raise KeyError(f"Model '{model_name}' is not registered in the registry")
+        resolved = target_version or self._previous_versions.get(model_name)
+        if not resolved:
+            raise ValueError(f"No previous version recorded for '{model_name}'")
+        self._ab_routing.pop(model_name, None)
+        self._kill_switches.pop(model_name, None)
+        predictor = self.get(model_name, version=resolved)
+        logger.warning(
+            "Model rolled back",
+            extra={"model": model_name, "version": resolved},
+        )
         return predictor
 
     def list_models(self) -> List[str]:
@@ -271,6 +308,8 @@ class ModelRegistry:
             entry["killed"] = self.is_killed(name)
             entry["has_shadow"] = name in self._shadow
             entry["ab_routing"] = self._ab_routing.get(name)
+            entry["previous_version"] = self._previous_versions.get(name)
+            entry["version_history"] = list(self._version_history.get(name, []))
             # Integrity: check whether a CHECKSUMS.sha256 manifest exists
             checksums_present = (predictor.model_dir / CHECKSUM_FILENAME).exists()
             entry["integrity_checksums_present"] = checksums_present

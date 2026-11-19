@@ -39,3 +39,10 @@ expectation_suite:
         column: item_count
         min_value: 1
         max_value: 500
+    - expectation_type: expect_column_to_exist
+      kwargs:
+        column: total_cents
+    - expectation_type: expect_column_values_to_be_of_type
+      kwargs:
+        column: total_cents
+        type_: integer

@@ -20,6 +20,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from pipelines.validation import coerce_int, coerce_optional_int, require_non_empty_str
 from pipelines.common import (
     first_present as _first_present,
     parse_event_ts as _parse_event_ts,
@@ -78,17 +79,29 @@ class InventoryEventParser(beam.DoFn):
                 event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
             )
             parsed = {
-                "sku_id": _first_present(payload, "skuId", "sku_id", "sku"),
-                "store_id": _first_present(payload, "storeId", "store_id")
-                or _first_present(event, "storeId", "store_id"),
+                "sku_id": require_non_empty_str(
+                    _first_present(payload, "skuId", "sku_id", "sku"),
+                    "sku_id",
+                ),
+                "store_id": require_non_empty_str(
+                    _first_present(payload, "storeId", "store_id")
+                    or _first_present(event, "storeId", "store_id"),
+                    "store_id",
+                ),
                 "event_type": _first_present(event, "eventType", "event_type"),
-                "quantity_change": _first_present(payload, "quantityChange", "quantity_change", default=0),
-                "quantity_on_hand": _first_present(payload, "quantityOnHand", "quantity_on_hand"),
-                "category": _first_present(payload, "category", default="UNKNOWN"),
+                "quantity_change": coerce_int(
+                    _first_present(payload, "quantityChange", "quantity_change", default=0),
+                    "quantity_change",
+                    default=0,
+                ),
+                "quantity_on_hand": coerce_optional_int(
+                    _first_present(payload, "quantityOnHand", "quantity_on_hand"),
+                    "quantity_on_hand",
+                    min_value=0,
+                ),
+                "category": str(_first_present(payload, "category", default="UNKNOWN") or "UNKNOWN"),
                 "event_time": event_time_str,
             }
-            if not parsed["sku_id"] or not parsed["store_id"]:
-                raise ValueError("Missing skuId or storeId")
             event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue(parsed, event_ts)
         except Exception as e:
@@ -106,7 +119,8 @@ class InventoryVelocityAggregator(beam.CombineFn):
         return {"units_sold": 0, "units_restocked": 0, "event_count": 0}
 
     def add_input(self, acc, element):
-        change = element.get("quantity_change", 0)
+        raw_change = element.get("quantity_change", 0)
+        change = int(raw_change) if isinstance(raw_change, (int, float)) and not isinstance(raw_change, bool) else 0
         if change < 0:
             acc["units_sold"] += abs(change)
         elif change > 0:

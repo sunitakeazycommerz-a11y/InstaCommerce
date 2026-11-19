@@ -1,7 +1,16 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Iterable
+
+BQ_IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$")
+
+
+def validate_bq_identifier(value: str, field_name: str = "identifier") -> str:
+    if not isinstance(value, str) or not value or ".." in value or not BQ_IDENTIFIER_RE.match(value):
+        raise ValueError(f"Invalid BigQuery {field_name}: {value!r}")
+    return value
 
 try:
     from google.cloud import bigquery  # type: ignore

@@ -37,7 +37,6 @@ _retriever: Optional[CachedRetrievalProvider] = None
 _semantic_cache: Optional[SemanticCache] = None
 
 _injection_detector = InjectionDetector()
-_pii_vault = PIIVault()
 _output_policy = OutputPolicy()
 _execution_runner = AgentExecutionRunner()
 
@@ -213,8 +212,10 @@ async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
                 elapsed_ms=round(elapsed_ms, 1),
             )
 
-        redacted_query, _ = _pii_vault.redact(request.query)
-        redacted_context = _pii_vault.redact_value(request.context)
+        pii_vault = PIIVault()
+        redacted_query, _ = pii_vault.redact(request.query)
+        redacted_context = pii_vault.redact_value(request.context)
+        redacted_history = pii_vault.redact_value(request.conversation_history)
 
         graph = await _get_graph()
 
@@ -223,7 +224,7 @@ async def _execute_guarded_agent(request: AgentRequest) -> AgentResponse:
             user_id=request.user_id,
             session_id=request.session_id,
             context=redacted_context if isinstance(redacted_context, dict) else {},
-            conversation_history=request.conversation_history,
+            conversation_history=redacted_history if isinstance(redacted_history, list) else [],
             max_cost_usd=min(request.max_cost_usd, 0.50),
             max_tokens=request.max_tokens,
             max_latency_ms=request.max_latency_ms,

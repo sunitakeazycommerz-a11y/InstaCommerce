@@ -13,6 +13,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.config import Settings
+from app.core.logging import sanitize_llm_payload
 from app.guardrails.injection import wrap_user_input
 from app.schemas import ToolCall
 
@@ -92,7 +93,7 @@ class LlmClient:
         if not self._enabled or not self._client or not self._url:
             return None
         try:
-            sanitized_payload = dict(payload)
+            sanitized_payload = sanitize_llm_payload(dict(payload))
             if "query" in sanitized_payload and isinstance(sanitized_payload["query"], str):
                 sanitized_payload["query"] = wrap_user_input(sanitized_payload["query"])
             response = await self._client.post(

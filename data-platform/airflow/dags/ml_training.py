@@ -20,6 +20,31 @@ except ImportError:
     aiplatform = None  # type: ignore[assignment]
     storage = None  # type: ignore[assignment]
 
+try:
+    from ml.eval.metrics import (  # type: ignore[import-not-found]
+        evaluate_promotion_gates as _shared_evaluate_gates,
+    )
+except ImportError:
+    _shared_evaluate_gates = None
+
+
+def _evaluate_model_gates(metrics: dict, gates: dict) -> bool:
+    if _shared_evaluate_gates is not None:
+        passed, _ = _shared_evaluate_gates(metrics, gates)
+        return passed
+    for gate_key, threshold in gates.items():
+        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+            continue
+        if gate_key.startswith("min_"):
+            val = metrics.get(gate_key[4:], metrics.get(gate_key))
+            if not isinstance(val, (int, float)) or float(val) < float(threshold):
+                return False
+        elif gate_key.startswith("max_"):
+            val = metrics.get(gate_key[4:], metrics.get(gate_key))
+            if not isinstance(val, (int, float)) or float(val) > float(threshold):
+                return False
+    return True
+
 
 def failure_alert(context):
     try:
@@ -51,6 +76,7 @@ MODEL_CONFIGS = {
         "metric": "rmse",
         "threshold": 0.15,
         "direction": "minimize",
+        "promotion_gates": {"max_rmse": 0.15, "max_mape": 0.08, "min_accuracy_pct": 92.0},
     },
     "delivery_eta": {
         "training_image": f"gcr.io/{PROJECT_ID}/delivery-eta:latest",
@@ -60,6 +86,7 @@ MODEL_CONFIGS = {
         "metric": "mae_minutes",
         "threshold": 3.0,
         "direction": "minimize",
+        "promotion_gates": {"max_mae_minutes": 3.0, "min_within_2min_pct": 0.85},
     },
     "search_ranking": {
         "training_image": f"gcr.io/{PROJECT_ID}/search-ranking:latest",
@@ -69,6 +96,7 @@ MODEL_CONFIGS = {
         "metric": "ndcg@10",
         "threshold": 0.75,
         "direction": "maximize",
+        "promotion_gates": {"min_ndcg@10": 0.75},
     },
     "fraud_detection": {
         "training_image": f"gcr.io/{PROJECT_ID}/fraud-detection:latest",
@@ -78,6 +106,7 @@ MODEL_CONFIGS = {
         "metric": "f1_score",
         "threshold": 0.90,
         "direction": "maximize",
+        "promotion_gates": {"min_f1_score": 0.90, "max_false_positive_rate": 0.05},
     },
 }
 
@@ -171,9 +200,22 @@ with DAG(
             context["ti"].xcom_push(
                 key=f"{model_name}_primary_metric", value=primary_metric
             )
+            context["ti"].xcom_push(
+                key=f"{model_name}_metrics", value=metrics
+            )
 
     def _check_promotion_gate(model_name: str, config: dict, **context):
-        """Decide whether to promote the model based on quality gates."""
+        """Decide whether to promote the model based on complete quality gates."""
+        metrics = context["ti"].xcom_pull(
+            task_ids=f"{model_name}_group.evaluate_{model_name}",
+            key=f"{model_name}_metrics",
+        )
+        gates = config.get("promotion_gates")
+        if isinstance(metrics, dict) and isinstance(gates, dict) and gates:
+            if _evaluate_model_gates(metrics, gates):
+                return f"{model_name}_group.promote_{model_name}"
+            return f"{model_name}_group.skip_promote_{model_name}"
+
         primary_metric = context["ti"].xcom_pull(
             task_ids=f"{model_name}_group.evaluate_{model_name}",
             key=f"{model_name}_primary_metric",

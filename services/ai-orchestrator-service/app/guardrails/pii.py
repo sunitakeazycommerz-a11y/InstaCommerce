@@ -13,6 +13,8 @@ import re
 import threading
 from typing import Any, Dict, List, Tuple
 
+from app.core.redaction import OTP_PREFIX_PATTERN, OTP_SUFFIX_PATTERN
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -22,6 +24,8 @@ _PII_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
     (re.compile(r"[\w\.-]+@[\w\.-]+\.\w{2,}"), "EMAIL"),
     (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "SSN"),
     (re.compile(r"\b(?:\d[ \-]*?){13,16}\b"), "CARD"),
+    (OTP_PREFIX_PATTERN, "OTP"),
+    (OTP_SUFFIX_PATTERN, "OTP"),
     # Indian mobile numbers (+91-9876543210, 09876543210, 9876543210) and international numbers (#601)
     (
         re.compile(

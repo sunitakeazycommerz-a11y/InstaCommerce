@@ -147,3 +147,61 @@ def test_run_suite_bigquery_rejects_invalid_project_and_table(monkeypatch):
     )
     with pytest.raises(ValueError, match="Invalid BigQuery"):
         run_suite_bigquery(mock_context, suite_config, "instacommerce-prod")
+
+
+def test_validate_expectation_pair_type_mean_gap_and_fail_closed():
+    ok_pair, _ = validate_expectation(
+        {
+            "expectation_type": "expect_column_pair_values_a_to_be_greater_than_or_equal_to_b",
+            "kwargs": {"column_A": "order_count", "column_B": "on_time_orders", "or_equal": True},
+        },
+        [{"order_count": 10, "on_time_orders": 10}, {"order_count": 5, "on_time_orders": 3}],
+    )
+    assert ok_pair is True
+
+    bad_pair, pair_detail = validate_expectation(
+        {
+            "expectation_type": "expect_column_pair_values_a_to_be_greater_than_or_equal_to_b",
+            "kwargs": {"column_A": "order_count", "column_B": "on_time_orders"},
+        },
+        [{"order_count": 4, "on_time_orders": 9}],
+    )
+    assert bad_pair is False
+    assert pair_detail is not None and pair_detail["column_A"] == "order_count"
+
+    bad_type, _ = validate_expectation(
+        {
+            "expectation_type": "expect_column_values_to_be_of_type",
+            "kwargs": {"column": "total_cents", "type_": "integer"},
+        },
+        [{"total_cents": True}],
+    )
+    assert bad_type is False
+
+    bad_mean, _ = validate_expectation(
+        {
+            "expectation_type": "expect_column_mean_to_be_between",
+            "kwargs": {"column": "latency_ms", "min_value": 10, "max_value": 200},
+        },
+        [{"latency_ms": 500}, {"latency_ms": 600}],
+    )
+    assert bad_mean is False
+
+    bad_gap, _ = validate_expectation(
+        {
+            "expectation_type": "expect_no_event_time_gaps",
+            "kwargs": {"column": "event_time", "max_gap_minutes": 15},
+        },
+        [
+            {"event_time": "2026-10-18T10:00:00Z"},
+            {"event_time": "2026-10-18T10:45:00Z"},
+        ],
+    )
+    assert bad_gap is False
+
+    unsupported_ok, unsupported_detail = validate_expectation(
+        {"expectation_type": "expect_nonexistent_custom_rule", "kwargs": {"column": "id"}},
+        [{"id": "a"}],
+    )
+    assert unsupported_ok is False
+    assert unsupported_detail is not None and "Unsupported" in unsupported_detail["error"]

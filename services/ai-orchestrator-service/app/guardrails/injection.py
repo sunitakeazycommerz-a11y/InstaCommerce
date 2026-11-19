@@ -199,12 +199,15 @@ class InjectionDetector:
         return False, ""
 
 
+_USER_INPUT_TAG_RE = re.compile(r"<(/?)\s*user_input\s*>", re.IGNORECASE)
+
+
 def wrap_user_input(text: str) -> str:
     """Isolate user input within strict XML boundaries to prevent prompt breakout attacks (#606).
-    
-    Escapes any existing user_input tags so user content cannot close or spoof the XML container.
+
+    Escapes any existing user_input tags case-insensitively so user content cannot close or spoof the XML container.
     """
     if not isinstance(text, str):
         text = str(text)
-    sanitized = text.replace("<user_input>", "&lt;user_input&gt;").replace("</user_input>", "&lt;/user_input&gt;")
+    sanitized = _USER_INPUT_TAG_RE.sub(r"&lt;\1user_input&gt;", text)
     return f"<user_input>{sanitized}</user_input>"

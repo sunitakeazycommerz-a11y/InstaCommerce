@@ -23,6 +23,11 @@ class EtaResponse(InferenceBaseModel):
     feature_contributions: Dict[str, float]
     bias: float
     model_version: str
+    is_cold_start: bool = False
+    confidence_lower: Optional[float] = None
+    confidence_upper: Optional[float] = None
+    drift_detected: bool = False
+    sla_breached: bool = False
 
 
 class RankingRequest(InferenceBaseModel):
@@ -39,6 +44,11 @@ class RankingResponse(InferenceBaseModel):
     feature_contributions: Dict[str, float]
     bias: float
     model_version: str
+    is_cold_start: bool = False
+    confidence_lower: Optional[float] = None
+    confidence_upper: Optional[float] = None
+    drift_detected: bool = False
+    sla_breached: bool = False
 
 
 class FraudRequest(InferenceBaseModel):
@@ -55,6 +65,11 @@ class FraudResponse(InferenceBaseModel):
     feature_contributions: Dict[str, float]
     bias: float
     model_version: str
+    is_cold_start: bool = False
+    confidence_lower: Optional[float] = None
+    confidence_upper: Optional[float] = None
+    drift_detected: bool = False
+    sla_breached: bool = False
 
 
 class BatchInferenceItem(InferenceBaseModel):

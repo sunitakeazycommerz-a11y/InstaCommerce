@@ -27,3 +27,8 @@ expectation_suite:
         column: on_time_pct
         min_value: 0.0
         max_value: 100.0
+    - expectation_type: expect_column_pair_values_a_to_be_greater_than_or_equal_to_b
+      kwargs:
+        column_A: order_count
+        column_B: on_time_orders
+        or_equal: true

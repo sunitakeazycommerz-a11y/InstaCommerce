@@ -20,6 +20,7 @@ from pipelines.common import (
     parse_event_ts as _parse_event_ts,
     window_end_iso as _window_end_iso,
 )
+from pipelines.validation import coerce_int, coerce_optional_int, require_non_empty_str
 
 logger = logging.getLogger(__name__)
 
@@ -94,27 +95,33 @@ class OrderEventParser(beam.DoFn):
             )
             parsed = {
                 "event_type": _first_present(event, "eventType", "event_type"),
-                "order_id": _first_present(event, "orderId", "order_id", "aggregateId", "aggregate_id")
-                or _first_present(payload, "orderId", "order_id"),
+                "order_id": require_non_empty_str(
+                    _first_present(event, "orderId", "order_id", "aggregateId", "aggregate_id")
+                    or _first_present(payload, "orderId", "order_id"),
+                    "order_id",
+                ),
                 "user_id": _first_present(payload, "userId", "user_id")
                 or _first_present(event, "userId", "user_id"),
-                "store_id": _first_present(payload, "storeId", "store_id")
-                or _first_present(event, "storeId", "store_id"),
-                "total_cents": _first_present(
-                    payload,
-                    "totalCents",
-                    "total_amount_cents",
+                "store_id": require_non_empty_str(
+                    _first_present(payload, "storeId", "store_id")
+                    or _first_present(event, "storeId", "store_id"),
+                    "store_id",
+                ),
+                "total_cents": coerce_int(
+                    _first_present(payload, "totalCents", "total_amount_cents", "total_cents", "totalAmountCents", default=0),
                     "total_cents",
-                    "totalAmountCents",
                     default=0,
+                    min_value=0,
                 ),
                 "placed_at": _first_present(payload, "placedAt", "placed_at"),
-                "zone_id": _first_present(payload, "zoneId", "zone_id", default=""),
-                "delivery_seconds": _first_present(payload, "deliverySeconds", "delivery_seconds"),
+                "zone_id": str(_first_present(payload, "zoneId", "zone_id", default="") or ""),
+                "delivery_seconds": coerce_optional_int(
+                    _first_present(payload, "deliverySeconds", "delivery_seconds"),
+                    "delivery_seconds",
+                    min_value=0,
+                ),
                 "event_time": event_time_str,
             }
-            if not parsed["order_id"]:
-                raise ValueError("Missing order_id in event")
             if parsed["event_type"] and parsed["event_type"] not in self.VALID_EVENT_TYPES:
                 raise ValueError(f"Unsupported event_type in event: {parsed['event_type']}")
             event_ts = _parse_event_ts(event_time_str)

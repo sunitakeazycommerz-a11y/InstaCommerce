@@ -4,7 +4,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from data_platform_jobs.bigquery import get_client
+from data_platform_jobs.bigquery import get_client, validate_bq_identifier
 
 try:
     from kafka import KafkaConsumer  # type: ignore
@@ -32,7 +32,9 @@ def run_batch_loader(context: JobContext) -> None:
     if KafkaConsumer is None:
         logger.warning("kafka-python not installed; skipping Kafka batch load.")
         return
-    client = get_client(settings.project_id, logger)
+    project_id = validate_bq_identifier(settings.project_id, "project_id")
+    raw_ds = validate_bq_identifier(settings.bq_raw_dataset, "bq_raw_dataset")
+    client = get_client(project_id, logger)
     if client is None:
         logger.warning("BigQuery client unavailable; skipping Kafka batch load.")
         return
@@ -46,12 +48,20 @@ def run_batch_loader(context: JobContext) -> None:
         consumer_timeout_ms=1000,
     )
     try:
-        rows = _collect_rows(consumer, settings.batch_window_minutes, settings.kafka_max_messages)
+        rows = _collect_rows(consumer, settings.batch_window_minutes, settings.kafka_max_messages, logger=logger)
         if not rows:
             logger.info("No Kafka messages collected in batch window.")
             return
-        target_table = f"{settings.project_id}.{settings.bq_raw_dataset}.kafka_events"
-        errors = client.insert_rows_json(target_table, rows)
+        target_table = f"{project_id}.{raw_ds}.kafka_events"
+        has_offsets = all(
+            r.get("topic") and r.get("partition") is not None and r.get("offset") is not None
+            for r in rows
+        )
+        if has_offsets:
+            row_ids = [f"{r['topic']}:{r['partition']}:{r['offset']}" for r in rows]
+            errors = client.insert_rows_json(target_table, rows, row_ids=row_ids)
+        else:
+            errors = client.insert_rows_json(target_table, rows)
         if errors:
             logger.error("BigQuery insert errors: %s", errors)
             raise RuntimeError(f"BigQuery insert_rows_json failed: {errors}")
@@ -61,14 +71,38 @@ def run_batch_loader(context: JobContext) -> None:
         consumer.close()
 
 
-def _collect_rows(consumer, window_minutes: int, max_messages: int) -> List[Dict[str, Any]]:
+def validate_kafka_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    topic = row.get("topic")
+    partition = row.get("partition")
+    offset = row.get("offset")
+    if not isinstance(topic, str) or not topic.strip():
+        raise ValueError("Missing required Kafka topic")
+    if isinstance(partition, bool) or not isinstance(partition, int) or partition < 0:
+        raise ValueError(f"Invalid Kafka partition: {partition!r}")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError(f"Invalid Kafka offset: {offset!r}")
+    return row
+
+
+def _collect_rows(
+    consumer,
+    window_minutes: int,
+    max_messages: int,
+    logger: Any = None,
+) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     deadline = time.monotonic() + (window_minutes * 60)
     while time.monotonic() < deadline and len(rows) < max_messages:
         records = consumer.poll(timeout_ms=1000)
-        for topic_partition, messages in records.items():
+        for _topic_partition, messages in records.items():
             for message in messages:
-                rows.append(_format_message(message))
+                try:
+                    row = validate_kafka_row(_format_message(message))
+                except ValueError as exc:
+                    if logger is not None:
+                        logger.warning("Skipping invalid Kafka message: %s", exc)
+                    continue
+                rows.append(row)
                 if len(rows) >= max_messages:
                     break
             if len(rows) >= max_messages:

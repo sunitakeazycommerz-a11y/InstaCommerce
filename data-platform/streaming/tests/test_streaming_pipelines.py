@@ -178,18 +178,22 @@ from pipelines.order_events_pipeline import (  # noqa: E402
     format_volume_row,
 )
 from pipelines.cart_events_pipeline import (  # noqa: E402
+    CartEventParser,
     CartSessionAggregator,
     format_abandonment_row,
 )
 from pipelines.payment_events_pipeline import (  # noqa: E402
     FormatBigQueryInsertFailureFn,
+    PaymentEventParser,
     format_metrics_row,
 )
 from pipelines.inventory_events_pipeline import (  # noqa: E402
+    InventoryEventParser,
     InventoryVelocityAggregator,
     format_velocity_row,
 )
 from pipelines.rider_location_pipeline import (  # noqa: E402
+    RiderLocationParser,
     RiderPipelineOptions,
     compute_spatial_cell,
     SpatialPreAggregateFn,
@@ -608,3 +612,53 @@ def test_rider_location_default_topic():
     ]
     assert len(topic_calls) == 1
     assert topic_calls[0].kwargs["default"] == "rider.location.updates"
+
+
+def test_streaming_parsers_enforce_null_safety_and_schema_validation():
+    """Verify streaming parsers reject corrupt types/missing required fields to DLQ."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    order_parser = OrderEventParser()
+    missing_store = json.dumps({
+        "eventType": "ORDER_PLACED",
+        "orderId": "ord-no-store",
+        "eventTime": now_iso,
+        "payload": {"userId": "u1", "totalCents": 500},
+    }).encode("utf-8")
+    out_order = list(order_parser.process(("k", missing_store)))
+    assert len(out_order) == 1 and out_order[0].tag == OrderEventParser.DEAD_LETTER
+
+    pay_parser = PaymentEventParser()
+    bad_pay = json.dumps({
+        "paymentId": "pay-1",
+        "orderId": "ord-1",
+        "eventTime": now_iso,
+        "payload": {"status": "SUCCESS", "amountCents": "not-a-number"},
+    }).encode("utf-8")
+    out_pay = list(pay_parser.process(("k", bad_pay)))
+    assert len(out_pay) == 1 and out_pay[0].tag == PaymentEventParser.DEAD_LETTER
+
+    inv_parser = InventoryEventParser()
+    bad_inv = json.dumps({
+        "eventTime": now_iso,
+        "payload": {"skuId": "sku-1", "storeId": "s-1", "quantityChange": "bad"},
+    }).encode("utf-8")
+    out_inv = list(inv_parser.process(("k", bad_inv)))
+    assert len(out_inv) == 1 and out_inv[0].tag == InventoryEventParser.DEAD_LETTER
+
+    cart_parser = CartEventParser()
+    str_sku_cart = json.dumps({
+        "eventTime": now_iso,
+        "payload": {"cartId": "c-1", "userId": "u-1", "skuIds": "sku-should-be-list"},
+    }).encode("utf-8")
+    out_cart = list(cart_parser.process(("k", str_sku_cart)))
+    assert len(out_cart) == 1 and out_cart[0].tag == CartEventParser.DEAD_LETTER
+
+    rider_parser = RiderLocationParser()
+    bad_lat = json.dumps({
+        "eventTime": now_iso,
+        "payload": {"riderId": "r-1", "zoneId": "z-1", "latitude": 120.5, "longitude": 77.6},
+    }).encode("utf-8")
+    out_rider = list(rider_parser.process(("k", bad_lat)))
+    assert len(out_rider) == 1 and out_rider[0].tag == RiderLocationParser.DEAD_LETTER
+    assert compute_spatial_cell("bad", 77.6) == "UNKNOWN_CELL"

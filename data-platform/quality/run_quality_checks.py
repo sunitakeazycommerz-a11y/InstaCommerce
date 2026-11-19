@@ -17,9 +17,14 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import yaml
+
+try:
+    from .validators import validate_expectation
+except ImportError:
+    from validators import validate_expectation
 
 try:
     import great_expectations as gx
@@ -98,127 +103,6 @@ def load_fixture_data(fixtures_dir: Path, suite_name: str) -> List[Dict[str, Any
     if not isinstance(data, list):
         raise ValueError(f"Fixture data in {fixture_path} must be a JSON array of objects")
     return data
-
-
-def validate_expectation(
-    exp: Dict[str, Any],
-    records: List[Dict[str, Any]],
-    strict_row_count: bool = False,
-) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """Validate a single expectation against a list of record dicts.
-
-    Returns (passed, failure_detail).
-    """
-    exp_type = exp.get("expectation_type")
-    kwargs = exp.get("kwargs", {})
-    column = kwargs.get("column")
-
-    if exp_type == "expect_table_row_count_to_be_between":
-        row_count = len(records)
-        min_val = kwargs.get("min_value", 0)
-        max_val = kwargs.get("max_value", sys.maxsize)
-        if not strict_row_count:
-            # For test fixtures, verify the dataset is non-empty while respecting upper bound
-            min_val = 1
-        if not (min_val <= row_count <= max_val):
-            return False, {
-                "expectation_type": exp_type,
-                "error": f"Row count {row_count} outside expected range [{min_val}, {max_val}]",
-                "row_count": row_count,
-                "min_value": min_val,
-                "max_value": max_val,
-            }
-        return True, None
-
-    if column is None:
-        return True, None
-
-    # Column-level validations
-    values = [r.get(column) for r in records]
-
-    if exp_type == "expect_column_values_to_not_be_null":
-        null_indices = [i for i, v in enumerate(values) if v is None]
-        if null_indices:
-            return False, {
-                "expectation_type": exp_type,
-                "column": column,
-                "error": f"Found {len(null_indices)} null value(s) in column '{column}'",
-                "unexpected_indices": null_indices[:5],
-                "unexpected_count": len(null_indices),
-            }
-        return True, None
-
-    if exp_type == "expect_column_values_to_be_unique":
-        seen = set()
-        duplicates = set()
-        for v in values:
-            if v is not None:
-                if v in seen:
-                    duplicates.add(v)
-                seen.add(v)
-        if duplicates:
-            return False, {
-                "expectation_type": exp_type,
-                "column": column,
-                "error": f"Found duplicate values in unique column '{column}': {list(duplicates)[:5]}",
-                "unexpected_values": list(duplicates)[:5],
-                "duplicate_count": len(duplicates),
-            }
-        return True, None
-
-    if exp_type == "expect_column_values_to_be_between":
-        min_val = kwargs.get("min_value")
-        max_val = kwargs.get("max_value")
-        out_of_bounds = []
-        for i, v in enumerate(values):
-            if v is not None:
-                try:
-                    num_v = float(v)
-                    if min_val is not None and num_v < min_val:
-                        out_of_bounds.append((i, v))
-                    elif max_val is not None and num_v > max_val:
-                        out_of_bounds.append((i, v))
-                except (ValueError, TypeError):
-                    out_of_bounds.append((i, v))
-        if out_of_bounds:
-            return False, {
-                "expectation_type": exp_type,
-                "column": column,
-                "error": f"Found {len(out_of_bounds)} value(s) outside [{min_val}, {max_val}] in '{column}'",
-                "unexpected_samples": out_of_bounds[:5],
-            }
-        return True, None
-
-    if exp_type == "expect_column_values_to_be_in_set":
-        value_set = set(kwargs.get("value_set", []))
-        invalid_values = [v for v in values if v is not None and v not in value_set]
-        if invalid_values:
-            return False, {
-                "expectation_type": exp_type,
-                "column": column,
-                "error": f"Found invalid values not in set for column '{column}': {invalid_values[:5]}",
-                "allowed_set": list(value_set),
-                "unexpected_values": invalid_values[:5],
-            }
-        return True, None
-
-    if exp_type == "expect_column_values_to_match_regex":
-        regex_pattern = kwargs.get("regex", "")
-        compiled = re.compile(regex_pattern)
-        mismatches = [v for v in values if v is not None and not compiled.match(str(v))]
-        if mismatches:
-            return False, {
-                "expectation_type": exp_type,
-                "column": column,
-                "error": f"Found values in '{column}' not matching regex '{regex_pattern}': {mismatches[:5]}",
-                "regex": regex_pattern,
-                "unexpected_values": mismatches[:5],
-            }
-        return True, None
-
-    # Unsupported or pass-through expectation type
-    logger.debug("Skipping unhandled or custom expectation type: %s", exp_type)
-    return True, None
 
 
 def run_suite_on_fixture(

@@ -19,6 +19,7 @@ from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, 
 import json
 import logging
 
+from pipelines.validation import coerce_float, coerce_optional_float, require_non_empty_str
 from pipelines.common import (
     first_present as _first_present,
     parse_event_ts as _parse_event_ts,
@@ -64,19 +65,39 @@ class RiderLocationParser(beam.DoFn):
                 event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
             )
             parsed = {
-                "rider_id": _first_present(payload, "riderId", "rider_id")
-                or _first_present(event, "riderId", "rider_id", "aggregateId", "aggregate_id"),
-                "zone_id": _first_present(payload, "zoneId", "zone_id")
-                or _first_present(event, "zoneId", "zone_id"),
-                "latitude": _first_present(payload, "latitude", "lat"),
-                "longitude": _first_present(payload, "longitude", "lng", "lon"),
-                "speed_kmh": _first_present(payload, "speedKmh", "speed_kmh", "speed", default=0.0),
-                "status": _first_present(payload, "status", default="UNKNOWN"),
+                "rider_id": require_non_empty_str(
+                    _first_present(payload, "riderId", "rider_id")
+                    or _first_present(event, "riderId", "rider_id", "aggregateId", "aggregate_id"),
+                    "rider_id",
+                ),
+                "zone_id": require_non_empty_str(
+                    _first_present(payload, "zoneId", "zone_id")
+                    or _first_present(event, "zoneId", "zone_id"),
+                    "zone_id",
+                ),
+                "latitude": coerce_optional_float(
+                    _first_present(payload, "latitude", "lat"),
+                    "latitude",
+                    min_value=-90.0,
+                    max_value=90.0,
+                ),
+                "longitude": coerce_optional_float(
+                    _first_present(payload, "longitude", "lng", "lon"),
+                    "longitude",
+                    min_value=-180.0,
+                    max_value=180.0,
+                ),
+                "speed_kmh": coerce_float(
+                    _first_present(payload, "speedKmh", "speed_kmh", "speed", default=0.0),
+                    "speed_kmh",
+                    default=0.0,
+                    min_value=0.0,
+                    max_value=250.0,
+                ),
+                "status": str(_first_present(payload, "status", default="UNKNOWN") or "UNKNOWN"),
                 "heading": _first_present(payload, "heading"),
                 "event_time": event_time_str,
             }
-            if not parsed["rider_id"] or not parsed["zone_id"]:
-                raise ValueError("Missing riderId or zoneId")
             event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue(parsed, event_ts)
         except Exception as e:
@@ -89,9 +110,14 @@ class RiderLocationParser(beam.DoFn):
 
 def compute_spatial_cell(lat, lng):
     """Compute spatial cell index (~100m grid) from lat/lng to prevent high-cardinality OOM."""
-    if lat is None or lng is None:
+    try:
+        lat_val = coerce_optional_float(lat, "latitude", min_value=-90.0, max_value=90.0)
+        lng_val = coerce_optional_float(lng, "longitude", min_value=-180.0, max_value=180.0)
+    except ValueError:
         return "UNKNOWN_CELL"
-    return f"{round(lat, 3)}_{round(lng, 3)}"
+    if lat_val is None or lng_val is None:
+        return "UNKNOWN_CELL"
+    return f"{round(lat_val, 3)}_{round(lng_val, 3)}"
 
 
 class SpatialPreAggregateFn(beam.CombineFn):
@@ -114,7 +140,8 @@ class SpatialPreAggregateFn(beam.CombineFn):
             acc["active_riders"].add(rider_id)
         else:
             acc["idle_riders"].add(rider_id)
-        acc["total_speed_kmh"] += element.get("speed_kmh", 0.0)
+        raw_speed = element.get("speed_kmh", 0.0)
+        acc["total_speed_kmh"] += float(raw_speed) if isinstance(raw_speed, (int, float)) and not isinstance(raw_speed, bool) else 0.0
         acc["ping_count"] += 1
         return acc
 

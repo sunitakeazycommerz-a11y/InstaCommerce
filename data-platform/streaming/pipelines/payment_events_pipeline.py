@@ -21,6 +21,7 @@ import logging
 import statistics
 from datetime import datetime, timezone
 
+from pipelines.validation import coerce_int, coerce_optional_int, require_non_empty_str
 from pipelines.common import (
     first_present as _first_present,
     parse_event_ts as _parse_event_ts,
@@ -71,19 +72,35 @@ class PaymentEventParser(beam.DoFn):
                 event, "eventTime", "event_time", "timestamp", "occurredAt", "occurred_at", "event_timestamp"
             )
             parsed = {
-                "payment_id": _first_present(payload, "paymentId", "payment_id")
-                or _first_present(event, "paymentId", "payment_id", "aggregateId", "aggregate_id"),
-                "order_id": _first_present(payload, "orderId", "order_id")
-                or _first_present(event, "orderId", "order_id"),
-                "status": _first_present(payload, "status"),
-                "method": _first_present(payload, "method", "paymentMethod", "payment_method", default="UNKNOWN"),
-                "amount_cents": _first_present(payload, "amountCents", "amount_cents", default=0),
+                "payment_id": require_non_empty_str(
+                    _first_present(payload, "paymentId", "payment_id")
+                    or _first_present(event, "paymentId", "payment_id", "aggregateId", "aggregate_id"),
+                    "payment_id",
+                ),
+                "order_id": require_non_empty_str(
+                    _first_present(payload, "orderId", "order_id")
+                    or _first_present(event, "orderId", "order_id"),
+                    "order_id",
+                ),
+                "status": require_non_empty_str(_first_present(payload, "status"), "status"),
+                "method": str(
+                    _first_present(payload, "method", "paymentMethod", "payment_method", default="UNKNOWN")
+                    or "UNKNOWN"
+                ),
+                "amount_cents": coerce_int(
+                    _first_present(payload, "amountCents", "amount_cents", default=0),
+                    "amount_cents",
+                    default=0,
+                    min_value=0,
+                ),
                 "error_code": _first_present(payload, "errorCode", "error_code"),
-                "latency_ms": _first_present(payload, "latencyMs", "latency_ms"),
+                "latency_ms": coerce_optional_int(
+                    _first_present(payload, "latencyMs", "latency_ms"),
+                    "latency_ms",
+                    min_value=0,
+                ),
                 "event_time": event_time_str,
             }
-            if not parsed["payment_id"]:
-                raise ValueError("Missing paymentId")
             event_ts = _parse_event_ts(event_time_str)
             yield TimestampedValue(parsed, event_ts)
         except Exception as e:

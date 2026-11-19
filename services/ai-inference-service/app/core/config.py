@@ -51,6 +51,21 @@ class Settings:
     bigquery_project: str = os.getenv("AI_INFERENCE_BIGQUERY_PROJECT", "")
     bigquery_dataset: str = os.getenv("AI_INFERENCE_BIGQUERY_DATASET", "")
     bigquery_table: str = os.getenv("AI_INFERENCE_BIGQUERY_TABLE", "")
+    ood_z_threshold: float = float(os.getenv("AI_INFERENCE_OOD_Z_THRESHOLD", "4.0"))
+    max_missing_feature_ratio: float = float(os.getenv("AI_INFERENCE_MAX_MISSING_RATIO", "0.35"))
+    strict_sla_timeout: bool = parse_bool(os.getenv("AI_INFERENCE_STRICT_SLA_TIMEOUT"), False)
+    shadow_timeout_seconds: float = float(os.getenv("AI_INFERENCE_SHADOW_TIMEOUT_SECONDS", "0.25"))
+    sla_budgets_ms: Dict[str, float] = field(
+        default_factory=lambda: {
+            "eta": float(os.getenv("AI_INFERENCE_SLA_ETA_MS", "10.0")),
+            "fraud": float(os.getenv("AI_INFERENCE_SLA_FRAUD_MS", "15.0")),
+            "ranking": float(os.getenv("AI_INFERENCE_SLA_RANKING_MS", "20.0")),
+            "personalization": float(os.getenv("AI_INFERENCE_SLA_PERSONALIZATION_MS", "25.0")),
+            "clv": float(os.getenv("AI_INFERENCE_SLA_CLV_MS", "30.0")),
+            "demand": float(os.getenv("AI_INFERENCE_SLA_DEMAND_MS", "50.0")),
+            "pricing": float(os.getenv("AI_INFERENCE_SLA_PRICING_MS", "20.0")),
+        }
+    )
 
 
 settings = Settings()
