@@ -50,10 +50,21 @@ public class ProductService {
 
     @Transactional(readOnly = true)
     public Page<ProductResponse> listProducts(String categorySlug, Pageable pageable) {
+        return listProducts(categorySlug, null, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ProductResponse> listProducts(String categorySlug, UUID storeId, Pageable pageable) {
         Pageable sanitized = sanitize(pageable);
-        Page<Product> products = categorySlug == null || categorySlug.isBlank()
-            ? productRepository.findByIsActiveTrue(sanitized)
-            : productRepository.findByCategory_SlugAndIsActiveTrue(categorySlug, sanitized);
+        String normalizedCategory = (categorySlug == null || categorySlug.isBlank()) ? null : categorySlug.trim();
+        Page<Product> products;
+        if (storeId != null) {
+            products = productRepository.findActiveByOptionalCategoryAndStore(normalizedCategory, storeId, sanitized);
+        } else {
+            products = normalizedCategory == null
+                ? productRepository.findByIsActiveTrue(sanitized)
+                : productRepository.findByCategory_SlugAndIsActiveTrue(normalizedCategory, sanitized);
+        }
         return products.map(ProductMapper::toResponse);
     }
 
@@ -84,6 +95,9 @@ public class ProductService {
         }
         if (request.vatRateBps() != null) {
             product.setVatRateBps(request.vatRateBps());
+        }
+        if (request.storeId() != null) {
+            product.setStoreId(request.storeId());
         }
         product.replaceImages(ProductMapper.toImages(request.images(), product));
         Product saved = productRepository.save(product);
@@ -145,6 +159,9 @@ public class ProductService {
         }
         if (request.vatRateBps() != null) {
             product.setVatRateBps(request.vatRateBps());
+        }
+        if (request.storeId() != null) {
+            product.setStoreId(request.storeId());
         }
         if (request.isActive() != null) {
             product.setActive(request.isActive());

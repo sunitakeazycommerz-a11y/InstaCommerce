@@ -43,6 +43,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.POST, "/pricing/calculate", "/api/pricing/calculate", "/api/v1/pricing/calculate").permitAll()
                 .requestMatchers(HttpMethod.POST, "/pricing/tax", "/api/pricing/tax", "/api/v1/pricing/tax").permitAll()
+                .requestMatchers(HttpMethod.POST, "/pricing/products/batch", "/api/pricing/products/batch", "/api/v1/pricing/products/batch").permitAll()
                 .requestMatchers(HttpMethod.GET, "/pricing/products/**", "/api/pricing/products/**", "/api/v1/pricing/products/**").permitAll()
                 .requestMatchers(
                     "/pricing/coupons/**", "/api/pricing/coupons/**", "/api/v1/pricing/coupons/**",

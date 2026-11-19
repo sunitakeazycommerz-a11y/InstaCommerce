@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
@@ -28,6 +29,8 @@ import org.springframework.web.client.RestTemplate;
 public class AdminDashboardController {
     private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
         new ParameterizedTypeReference<>() {};
+    private static final Pattern SAFE_FLAG_ID = Pattern.compile("^[a-zA-Z0-9._:-]{1,128}$");
+    private static final long MAX_OVERRIDE_TTL_SECONDS = 31_536_000L;
 
     private final RestTemplate restTemplate;
     private final DashboardAggregationService dashboardAggregationService;
@@ -72,16 +75,17 @@ public class AdminDashboardController {
     @PostMapping("/flags/{id}/override")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public Map<String, Object> overrideFlag(@PathVariable String id, @RequestBody Map<String, Object> request) {
-        if (id == null || id.isBlank()) {
-            throw new IllegalArgumentException("Flag id must not be blank");
+        if (id == null || id.isBlank() || !SAFE_FLAG_ID.matcher(id.trim()).matches()) {
+            throw new IllegalArgumentException("Invalid flag id format");
         }
+        String sanitizedId = id.trim();
 
         Map<String, Object> downstreamPayload = new HashMap<>(request != null ? request : Map.of());
         if (!downstreamPayload.containsKey("expiresAt")
                 && downstreamPayload.get("ttlSeconds") instanceof Number ttlSeconds) {
             long ttl = ttlSeconds.longValue();
-            if (ttl <= 0) {
-                throw new IllegalArgumentException("ttlSeconds must be positive");
+            if (ttl <= 0 || ttl > MAX_OVERRIDE_TTL_SECONDS) {
+                throw new IllegalArgumentException("ttlSeconds must be between 1 and " + MAX_OVERRIDE_TTL_SECONDS);
             }
             downstreamPayload.put("expiresAt", Instant.now().plusSeconds(ttl).toString());
         }
@@ -95,7 +99,7 @@ public class AdminDashboardController {
             HttpMethod.POST,
             entity,
             MAP_TYPE,
-            id
+            sanitizedId
         );
 
         Map<String, Object> body = response.getBody();
@@ -103,7 +107,7 @@ public class AdminDashboardController {
             return body;
         }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("flagId", id);
+        result.put("flagId", sanitizedId);
         result.put("status", "applied");
         result.put("httpStatus", response.getStatusCode().value());
         return result;

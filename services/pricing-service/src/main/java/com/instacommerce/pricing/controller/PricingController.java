@@ -15,9 +15,13 @@ import com.instacommerce.pricing.service.PricingService;
 import com.instacommerce.pricing.service.QuoteTokenService;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Size;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@Validated
 @RequestMapping({"/pricing", "/api/pricing", "/api/v1/pricing"})
 public class PricingController {
 
@@ -62,6 +67,13 @@ public class PricingController {
         long priceCents = pricingService.calculatePrice(id);
         PricedItem item = new PricedItem(id, priceCents, 1, priceCents, "INR");
         return ResponseEntity.ok(item);
+    }
+
+    @PostMapping("/products/batch")
+    @RateLimiter(name = "pricingLimiter")
+    public ResponseEntity<List<PricedItem>> getBatchProductPrices(
+            @RequestBody @NotEmpty @Size(max = 200) List<UUID> productIds) {
+        return ResponseEntity.ok(pricingService.calculateBatchPrices(productIds));
     }
 
     @PostMapping("/coupons/redeem")

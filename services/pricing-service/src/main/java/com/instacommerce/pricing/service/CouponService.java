@@ -72,8 +72,12 @@ public class CouponService {
 
     @Transactional(readOnly = true)
     public CouponValidationResult validateCoupon(String code, UUID userId, long cartTotalCents) {
-        Coupon coupon = couponRepository.findByCodeIgnoreCase(code)
-                .orElseThrow(() -> new CouponNotFoundException(code));
+        String normalizedCode = normalizeCode(code);
+        if (normalizedCode.isEmpty()) {
+            throw new InvalidCouponException("Coupon code is required");
+        }
+        Coupon coupon = couponRepository.findByCodeIgnoreCase(normalizedCode)
+                .orElseThrow(() -> new CouponNotFoundException(normalizedCode));
 
         if (!coupon.isActive()) {
             throw new InvalidCouponException("Coupon is no longer active");
@@ -81,58 +85,79 @@ public class CouponService {
 
         Promotion promotion = coupon.getPromotion();
         Instant now = Instant.now();
-        if (!promotion.isActive()
-                || now.isBefore(promotion.getStartAt())
-                || (promotion.getEndAt() != null && now.isAfter(promotion.getEndAt()))) {
+        if (!isPromotionWindowActive(promotion, now)) {
             throw new InvalidCouponException("Coupon promotion has expired or is inactive");
+        }
+
+        if (promotion.getMaxUses() != null && promotion.getCurrentUses() >= promotion.getMaxUses()) {
+            throw new InvalidCouponException("Coupon promotion has reached its usage limit");
         }
 
         if (cartTotalCents < promotion.getMinOrderCents()) {
             throw new InvalidCouponException("Minimum order amount not met");
         }
 
-        // Check total limit
         if (coupon.getTotalLimit() != null && coupon.getTotalRedeemed() >= coupon.getTotalLimit()) {
             throw new InvalidCouponException("Coupon has reached its total redemption limit");
         }
 
-        // Check per-user limit
         long userRedemptions = couponRedemptionRepository.countByCouponIdAndUserId(coupon.getId(), userId);
-        if (userRedemptions >= coupon.getPerUserLimit()) {
+        if (coupon.getPerUserLimit() > 0 && userRedemptions >= coupon.getPerUserLimit()) {
             throw new InvalidCouponException("You have already used this coupon the maximum number of times");
         }
 
         long discount = promotionService.calculateDiscount(promotion, cartTotalCents);
-        return new CouponValidationResult(discount, code);
+        return new CouponValidationResult(discount, coupon.getCode());
     }
 
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public void redeemCoupon(String code, UUID userId, UUID orderId, long discountCents) {
-        if (promoReservationService != null && !promoReservationService.tryAcquire(code, userId)) {
+        String normalizedCode = normalizeCode(code);
+        if (normalizedCode.isEmpty()) {
+            throw new InvalidCouponException("Coupon code is required");
+        }
+        if (discountCents < 0) {
+            throw new InvalidCouponException("Discount cannot be negative");
+        }
+        if (promoReservationService != null && !promoReservationService.tryAcquire(normalizedCode, userId)) {
             throw new InvalidCouponException("Coupon redemption currently in progress for user");
         }
 
         try {
-            Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(code)
-                    .orElseThrow(() -> new CouponNotFoundException(code));
+            Coupon coupon = couponRepository.findByCodeIgnoreCaseForUpdate(normalizedCode)
+                    .orElseThrow(() -> new CouponNotFoundException(normalizedCode));
 
             if (orderId != null
                     && couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(coupon.getId(), userId, orderId)
                             .isPresent()) {
-                log.info("Idempotent coupon redemption replay for code={} userId={} orderId={}", code, userId, orderId);
+                log.info("Idempotent coupon redemption replay for code={} userId={} orderId={}",
+                        normalizedCode, userId, orderId);
                 return;
             }
 
-            // Thread-safe redemption: lock coupon row and check limits inside transaction
+            if (!coupon.isActive()) {
+                throw new InvalidCouponException("Coupon is no longer active");
+            }
+
+            Promotion promotion = coupon.getPromotion();
+            Instant now = Instant.now();
+            if (!isPromotionWindowActive(promotion, now)) {
+                throw new InvalidCouponException("Coupon promotion has expired or is inactive");
+            }
+
             if (coupon.getTotalLimit() != null && coupon.getTotalRedeemed() >= coupon.getTotalLimit()) {
                 throw new InvalidCouponException("Coupon has reached its total redemption limit");
             }
 
             long userRedemptions = couponRedemptionRepository.countByCouponIdAndUserId(coupon.getId(), userId);
-            if (userRedemptions >= coupon.getPerUserLimit()) {
+            if (coupon.getPerUserLimit() > 0 && userRedemptions >= coupon.getPerUserLimit()) {
                 throw new InvalidCouponException("You have already used this coupon the maximum number of times");
+            }
+
+            if (!promotionService.recordPromotionUsage(promotion.getId())) {
+                throw new InvalidCouponException("Coupon promotion has reached its usage limit");
             }
 
             CouponRedemption redemption = new CouponRedemption();
@@ -149,21 +174,18 @@ public class CouponService {
                         && couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(coupon.getId(), userId, orderId)
                                 .isPresent()) {
                     log.info("Idempotent concurrent coupon redemption replay for code={} userId={} orderId={}",
-                            code, userId, orderId);
+                            normalizedCode, userId, orderId);
                     return;
                 }
-                // Constraint violation for single-use coupon redemptions
                 throw new InvalidCouponException("Coupon has already been used");
             }
 
-            // Increment counter atomically
             coupon.setTotalRedeemed(coupon.getTotalRedeemed() + 1);
             couponRepository.save(coupon);
-            promotionService.recordPromotionUsage(coupon.getPromotion().getId());
 
             Map<String, Object> eventPayload = new LinkedHashMap<>();
             eventPayload.put("couponId", coupon.getId().toString());
-            eventPayload.put("couponCode", code);
+            eventPayload.put("couponCode", normalizedCode);
             eventPayload.put("userId", userId.toString());
             eventPayload.put("orderId", orderId != null ? orderId.toString() : null);
             eventPayload.put("discountCents", discountCents);
@@ -175,12 +197,27 @@ public class CouponService {
                 outboxService.recordEvent("pricing", coupon.getId().toString(), "CouponRedeemed", eventPayload);
             }
 
-            log.info("Redeemed coupon code={} userId={} orderId={} discount={}", code, userId, orderId, discountCents);
+            log.info("Redeemed coupon code={} userId={} orderId={} discount={}",
+                    normalizedCode, userId, orderId, discountCents);
         } finally {
             if (promoReservationService != null) {
-                promoReservationService.release(code, userId);
+                promoReservationService.release(normalizedCode, userId);
             }
         }
+    }
+
+    private boolean isPromotionWindowActive(Promotion promotion, Instant now) {
+        if (promotion == null || !promotion.isActive()) {
+            return false;
+        }
+        if (promotion.getStartAt() != null && now.isBefore(promotion.getStartAt())) {
+            return false;
+        }
+        return promotion.getEndAt() == null || now.isBefore(promotion.getEndAt());
+    }
+
+    private String normalizeCode(String code) {
+        return code == null ? "" : code.trim();
     }
 
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
@@ -226,7 +263,7 @@ public class CouponService {
                 .orElseThrow(() -> new PromotionNotFoundException(request.promotionId().toString()));
 
         Coupon coupon = new Coupon();
-        coupon.setCode(request.code().toUpperCase());
+        coupon.setCode(request.code().trim().toUpperCase());
         coupon.setPromotion(promotion);
         coupon.setSingleUse(request.singleUse());
         coupon.setPerUserLimit(request.perUserLimit() > 0 ? request.perUserLimit() : 1);

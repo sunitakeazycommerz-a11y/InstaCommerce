@@ -15,9 +15,18 @@ public record CartResponse(
     Instant expiresAt,
     boolean valid,
     String storeId,
-    Long version
+    Long version,
+    boolean priceChanged,
+    List<PriceChangeDetail> priceChanges
 ) {
     public static final String DEFAULT_STORE_ID = "00000000-0000-0000-0000-000000000001";
+
+    public record PriceChangeDetail(
+        UUID productId,
+        String productName,
+        long previousUnitPriceCents,
+        long currentUnitPriceCents
+    ) {}
 
     @JsonCreator
     public CartResponse(
@@ -29,7 +38,9 @@ public record CartResponse(
         @JsonProperty("expiresAt") Instant expiresAt,
         @JsonProperty("valid") boolean valid,
         @JsonProperty("storeId") String storeId,
-        @JsonProperty("version") Long version
+        @JsonProperty("version") Long version,
+        @JsonProperty("priceChanged") boolean priceChanged,
+        @JsonProperty("priceChanges") List<PriceChangeDetail> priceChanges
     ) {
         this.cartId = cartId;
         this.userId = userId;
@@ -40,6 +51,22 @@ public record CartResponse(
         this.valid = valid;
         this.storeId = storeId != null && !storeId.isBlank() ? storeId : DEFAULT_STORE_ID;
         this.version = version != null ? version : 0L;
+        this.priceChanged = priceChanged;
+        this.priceChanges = priceChanges != null ? priceChanges : List.of();
+    }
+
+    public CartResponse(
+        UUID cartId,
+        UUID userId,
+        List<CartItemResponse> items,
+        long subtotalCents,
+        int itemCount,
+        Instant expiresAt,
+        boolean valid,
+        String storeId,
+        Long version
+    ) {
+        this(cartId, userId, items, subtotalCents, itemCount, expiresAt, valid, storeId, version, false, List.of());
     }
 
     public CartResponse(
@@ -52,7 +79,7 @@ public record CartResponse(
         boolean valid,
         String storeId
     ) {
-        this(cartId, userId, items, subtotalCents, itemCount, expiresAt, valid, storeId, 0L);
+        this(cartId, userId, items, subtotalCents, itemCount, expiresAt, valid, storeId, 0L, false, List.of());
     }
 
     public CartResponse(
@@ -63,7 +90,7 @@ public record CartResponse(
         int itemCount,
         Instant expiresAt
     ) {
-        this(cartId, userId, items, subtotalCents, itemCount, expiresAt, items != null && !items.isEmpty(), DEFAULT_STORE_ID, 0L);
+        this(cartId, userId, items, subtotalCents, itemCount, expiresAt, items != null && !items.isEmpty(), DEFAULT_STORE_ID, 0L, false, List.of());
     }
 
     public CartResponse(
@@ -75,6 +102,6 @@ public record CartResponse(
         Instant expiresAt,
         Long version
     ) {
-        this(cartId, userId, items, subtotalCents, itemCount, expiresAt, items != null && !items.isEmpty(), DEFAULT_STORE_ID, version != null ? version : 0L);
+        this(cartId, userId, items, subtotalCents, itemCount, expiresAt, items != null && !items.isEmpty(), DEFAULT_STORE_ID, version != null ? version : 0L, false, List.of());
     }
 }

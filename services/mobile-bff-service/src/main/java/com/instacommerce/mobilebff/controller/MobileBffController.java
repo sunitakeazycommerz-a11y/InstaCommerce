@@ -4,6 +4,7 @@ import com.instacommerce.mobilebff.aggregator.HomeAggregator;
 import com.instacommerce.mobilebff.dto.HomeResponse;
 import com.instacommerce.mobilebff.service.CartSyncService;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -22,6 +23,8 @@ import reactor.core.publisher.Mono;
 @RestController
 @RequestMapping({"/bff/mobile/v1", "/m/v1"})
 public class MobileBffController {
+
+    private static final Pattern SAFE_STORE_ID = Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
 
     private final HomeAggregator homeAggregator;
     private final CartSyncService cartSyncService;
@@ -42,8 +45,20 @@ public class MobileBffController {
     public Mono<HomeResponse> home(
             @RequestParam(required = false) String storeId,
             Authentication authentication) {
+        String normalizedStoreId = sanitizeStoreId(storeId);
         String userId = isAuthenticatedUser(authentication) ? authentication.getName() : null;
-        return homeAggregator.aggregate(userId, storeId);
+        return homeAggregator.aggregate(userId, normalizedStoreId);
+    }
+
+    private String sanitizeStoreId(String storeId) {
+        if (storeId == null || storeId.isBlank()) {
+            return null;
+        }
+        String trimmed = storeId.trim();
+        if (!SAFE_STORE_ID.matcher(trimmed).matches()) {
+            throw new IllegalArgumentException("Invalid storeId format");
+        }
+        return trimmed;
     }
 
     @GetMapping("/profile")

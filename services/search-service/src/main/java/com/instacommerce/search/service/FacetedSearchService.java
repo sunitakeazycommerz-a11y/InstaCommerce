@@ -46,26 +46,38 @@ public class FacetedSearchService {
      */
     @Transactional(readOnly = true)
     public Map<String, List<FacetValue>> computeStoreScopedFacets(String query, UUID storeId) {
-        Map<String, List<FacetValue>> facets = new HashMap<>();
-        try {
-            List<Object[]> rawBrands = (storeId != null)
-                    ? searchDocumentRepository.facetByBrandAndStore(query, storeId)
-                    : searchDocumentRepository.facetByBrand(query);
+        return computeFilteredFacets(query, null, null, null, null, storeId);
+    }
 
-            List<FacetValue> brandFacets = rawBrands.stream()
-                    .filter(row -> row[0] != null && !((String) row[0]).isBlank())
-                    .map(row -> new FacetValue((String) row[0], ((Number) row[1]).longValue()))
-                    .collect(Collectors.toList());
+    @Transactional(readOnly = true)
+    public Map<String, List<FacetValue>> computeFilteredFacets(String query,
+                                                               String brand,
+                                                               String category,
+                                                               Long minPrice,
+                                                               Long maxPrice,
+                                                               UUID storeId) {
+        Map<String, List<FacetValue>> facets = new HashMap<>();
+        boolean hasAttributeFilters = brand != null || category != null || minPrice != null || maxPrice != null;
+        try {
+            List<Object[]> rawBrands;
+            List<Object[]> rawCategories;
+            if (hasAttributeFilters) {
+                rawBrands = searchDocumentRepository.facetByBrandFiltered(
+                        query, brand, category, minPrice, maxPrice, storeId);
+                rawCategories = searchDocumentRepository.facetByCategoryFiltered(
+                        query, brand, category, minPrice, maxPrice, storeId);
+            } else if (storeId != null) {
+                rawBrands = searchDocumentRepository.facetByBrandAndStore(query, storeId);
+                rawCategories = searchDocumentRepository.facetByCategoryAndStore(query, storeId);
+            } else {
+                rawBrands = searchDocumentRepository.facetByBrand(query);
+                rawCategories = searchDocumentRepository.facetByCategory(query);
+            }
+
+            List<FacetValue> brandFacets = mapFacetRows(rawBrands);
             facets.put("brand", brandFacets);
 
-            List<Object[]> rawCategories = (storeId != null)
-                    ? searchDocumentRepository.facetByCategoryAndStore(query, storeId)
-                    : searchDocumentRepository.facetByCategory(query);
-
-            List<FacetValue> categoryFacets = rawCategories.stream()
-                    .filter(row -> row[0] != null && !((String) row[0]).isBlank())
-                    .map(row -> new FacetValue((String) row[0], ((Number) row[1]).longValue()))
-                    .collect(Collectors.toList());
+            List<FacetValue> categoryFacets = mapFacetRows(rawCategories);
             facets.put("category", categoryFacets);
 
             log.debug("Computed facets for query='{}' storeId={}: brands={}, categories={}",
@@ -76,5 +88,15 @@ public class FacetedSearchService {
             facets.put("category", new ArrayList<>());
         }
         return facets;
+    }
+
+    private List<FacetValue> mapFacetRows(List<Object[]> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return new ArrayList<>();
+        }
+        return rows.stream()
+                .filter(row -> row[0] != null && !((String) row[0]).isBlank())
+                .map(row -> new FacetValue((String) row[0], ((Number) row[1]).longValue()))
+                .collect(Collectors.toList());
     }
 }

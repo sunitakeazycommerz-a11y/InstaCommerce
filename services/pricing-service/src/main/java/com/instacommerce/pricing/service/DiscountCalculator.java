@@ -93,49 +93,61 @@ public class DiscountCalculator {
             }
         }
 
-        if (promotions != null && !promotions.isEmpty()) {
-            long remainingAfterBundles = Math.max(0, grossSubtotal - bundleDiscounts);
-            Promotion bestPromo = null;
-            long promoDiscount = 0;
+        long remainingAfterBundles = Math.max(0, grossSubtotal - bundleDiscounts);
+        boolean hasCoupon = (couponDiscountPercentage != null && couponDiscountPercentage.compareTo(BigDecimal.ZERO) > 0)
+                || (couponValidationDiscount != null && couponValidationDiscount > 0);
 
+        Promotion bestStackablePromo = null;
+        long stackablePromoDiscount = 0;
+        Promotion bestExclusivePromo = null;
+        long exclusivePromoDiscount = 0;
+
+        if (promotions != null && !promotions.isEmpty()) {
             for (Promotion promo : promotions) {
                 if (remainingAfterBundles < promo.getMinOrderCents()) {
                     continue;
                 }
-                long discount;
-                if ("PERCENTAGE".equalsIgnoreCase(promo.getDiscountType())) {
-                    discount = calculatePercentDiscount(remainingAfterBundles, promo.getDiscountValue());
+                long discount = computePromotionDiscount(promo, remainingAfterBundles);
+                if (discount <= 0) {
+                    continue;
+                }
+                if (!hasCoupon || promo.isStackableWithCoupon()) {
+                    if (isBetterPromotion(promo, discount, bestStackablePromo, stackablePromoDiscount)) {
+                        stackablePromoDiscount = discount;
+                        bestStackablePromo = promo;
+                    }
                 } else {
-                    discount = promo.getDiscountValue() != null ? promo.getDiscountValue().longValue() : 0;
-                }
-                if (promo.getMaxDiscountCents() != null) {
-                    discount = Math.min(discount, promo.getMaxDiscountCents());
-                }
-                discount = Math.min(discount, remainingAfterBundles);
-                if (discount > promoDiscount) {
-                    promoDiscount = discount;
-                    bestPromo = promo;
+                    if (isBetterPromotion(promo, discount, bestExclusivePromo, exclusivePromoDiscount)) {
+                        exclusivePromoDiscount = discount;
+                        bestExclusivePromo = promo;
+                    }
                 }
             }
-            if (bestPromo != null) {
-                appliedPromotions.add(bestPromo.getName());
-                bundleDiscounts += promoDiscount;
+        }
+
+        long couponDiscountWithStackable = computeCouponDiscount(
+                Math.max(0, remainingAfterBundles - stackablePromoDiscount),
+                couponValidationDiscount,
+                couponDiscountPercentage);
+        long combinedStackableTotal = stackablePromoDiscount + couponDiscountWithStackable;
+
+        long couponDiscount;
+        if (bestExclusivePromo != null && exclusivePromoDiscount >= combinedStackableTotal) {
+            appliedPromotions.add(bestExclusivePromo.getName());
+            bundleDiscounts += exclusivePromoDiscount;
+            couponDiscount = 0;
+        } else {
+            if (bestStackablePromo != null) {
+                appliedPromotions.add(bestStackablePromo.getName());
+                bundleDiscounts += stackablePromoDiscount;
             }
+            bundleDiscounts = Math.min(bundleDiscounts, grossSubtotal);
+            long netSubtotalPostBundle = Math.max(0, grossSubtotal - bundleDiscounts);
+            couponDiscount = computeCouponDiscount(
+                    netSubtotalPostBundle, couponValidationDiscount, couponDiscountPercentage);
         }
 
         bundleDiscounts = Math.min(bundleDiscounts, grossSubtotal);
-
-        long netSubtotalPostBundle = Math.max(0, grossSubtotal - bundleDiscounts);
-        long couponDiscount = 0;
-
-        if (couponDiscountPercentage != null && couponDiscountPercentage.compareTo(BigDecimal.ZERO) > 0) {
-            couponDiscount = calculatePercentDiscount(netSubtotalPostBundle, couponDiscountPercentage);
-        } else if (couponValidationDiscount != null && couponValidationDiscount > 0) {
-            couponDiscount = couponValidationDiscount;
-        }
-
-        couponDiscount = Math.min(couponDiscount, netSubtotalPostBundle);
-
         long totalDiscount = Math.min(bundleDiscounts + couponDiscount, grossSubtotal);
         long netTotal = Math.max(0, grossSubtotal - totalDiscount);
 
@@ -183,12 +195,60 @@ public class DiscountCalculator {
         return result;
     }
 
+    private static long computePromotionDiscount(Promotion promo, long baseCents) {
+        if (baseCents <= 0 || promo.getDiscountValue() == null || promo.getDiscountValue().signum() <= 0) {
+            return 0;
+        }
+        long discount;
+        if ("PERCENTAGE".equalsIgnoreCase(promo.getDiscountType())) {
+            discount = calculatePercentDiscount(baseCents, promo.getDiscountValue());
+        } else {
+            discount = Math.max(0, promo.getDiscountValue().longValue());
+        }
+        if (promo.getMaxDiscountCents() != null) {
+            discount = Math.min(discount, Math.max(0, promo.getMaxDiscountCents()));
+        }
+        return Math.min(discount, baseCents);
+    }
+
+    private static boolean isBetterPromotion(Promotion candidate, long candidateDiscount,
+                                             Promotion currentBest, long currentDiscount) {
+        if (currentBest == null) {
+            return true;
+        }
+        if (candidateDiscount != currentDiscount) {
+            return candidateDiscount > currentDiscount;
+        }
+        if (candidate.getPriority() != currentBest.getPriority()) {
+            return candidate.getPriority() > currentBest.getPriority();
+        }
+        String candidateName = candidate.getName() != null ? candidate.getName() : "";
+        String currentName = currentBest.getName() != null ? currentBest.getName() : "";
+        return candidateName.compareTo(currentName) < 0;
+    }
+
+    private static long computeCouponDiscount(long netSubtotalPostBundle,
+                                              Long couponValidationDiscount,
+                                              BigDecimal couponDiscountPercentage) {
+        if (netSubtotalPostBundle <= 0) {
+            return 0;
+        }
+        long couponDiscount = 0;
+        if (couponDiscountPercentage != null && couponDiscountPercentage.compareTo(BigDecimal.ZERO) > 0) {
+            couponDiscount = calculatePercentDiscount(netSubtotalPostBundle, couponDiscountPercentage);
+        } else if (couponValidationDiscount != null && couponValidationDiscount > 0) {
+            couponDiscount = couponValidationDiscount;
+        }
+        return Math.min(couponDiscount, netSubtotalPostBundle);
+    }
+
     private static long applyBundleRule(BundleRule rule, PricedItem item, List<String> appliedPromotions) {
         if (item.quantity() >= rule.minQuantity()) {
             long discount = calculatePercentDiscount(item.lineTotalCents(), rule.discountPercent());
             if (rule.maxDiscountCents() != null) {
-                discount = Math.min(discount, rule.maxDiscountCents());
+                discount = Math.min(discount, Math.max(0, rule.maxDiscountCents()));
             }
+            discount = Math.min(discount, Math.max(0, item.lineTotalCents()));
             appliedPromotions.add(rule.targetProductId() != null ? "BUNDLE_" + rule.targetProductId() : PROMO_BUNDLE_CART);
             return discount;
         }
@@ -199,8 +259,9 @@ public class DiscountCalculator {
         if (baseCents <= 0 || percent == null || percent.signum() <= 0) {
             return 0;
         }
+        BigDecimal clampedPercent = percent.compareTo(ONE_HUNDRED) > 0 ? ONE_HUNDRED : percent;
         return BigDecimal.valueOf(baseCents)
-                .multiply(percent)
+                .multiply(clampedPercent)
                 .divide(ONE_HUNDRED, 0, RoundingMode.HALF_UP)
                 .longValue();
     }

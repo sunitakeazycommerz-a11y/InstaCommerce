@@ -120,6 +120,7 @@ class CouponConcurrencyTest {
 
         AtomicLong savedRedemptions = new AtomicLong(0);
         when(couponRepository.findByCodeIgnoreCaseForUpdate(code)).thenReturn(Optional.of(coupon));
+        when(promotionService.recordPromotionUsage(promoId)).thenReturn(true);
         when(couponRedemptionRepository.countByCouponIdAndUserId(couponId, userId))
                 .thenAnswer(inv -> savedRedemptions.get());
         when(couponRedemptionRepository.save(any(CouponRedemption.class))).thenAnswer(inv -> {

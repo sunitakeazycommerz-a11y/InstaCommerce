@@ -7,8 +7,12 @@ import com.instacommerce.cart.domain.model.CartItem;
 import com.instacommerce.cart.dto.request.AddItemRequest;
 import com.instacommerce.cart.dto.response.CartItemResponse;
 import com.instacommerce.cart.dto.response.CartResponse;
+import com.instacommerce.cart.exception.ApiException;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +22,7 @@ import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
@@ -58,6 +63,7 @@ public class CartService {
      */
     @CacheEvict(value = "carts", key = "#userId")
     public CartResponse addItem(UUID userId, AddItemRequest request) {
+        validateStoreServiceabilityIfPresent(request.storeId());
         validateBusinessRules(userId, request);
 
         PricingClient.PriceResponse priceResponse = pricingClient.getPrice(request.productId());
@@ -69,7 +75,7 @@ public class CartService {
         }
 
         AddItemRequest validatedRequest = new AddItemRequest(
-                request.productId(), request.productName(), serverPrice, request.quantity());
+                request.productId(), request.productName(), serverPrice, request.quantity(), request.storeId());
 
         Cart cart = executeAddWithRetry(userId, validatedRequest);
         log.info("Item added to cart for user={}, product={}, serverPrice={}", userId, request.productId(), serverPrice);
@@ -94,11 +100,19 @@ public class CartService {
 
     @CacheEvict(value = "carts", key = "#userId")
     public CartResponse updateQuantity(UUID userId, UUID productId, int quantity) {
+        return updateQuantity(userId, productId, quantity, null);
+    }
+
+    @CacheEvict(value = "carts", key = "#userId")
+    public CartResponse updateQuantity(UUID userId, UUID productId, int quantity, Long expectedVersion) {
+        if (quantity < 1) {
+            throw new IllegalArgumentException("Quantity must be at least 1");
+        }
         if (quantity > cartProperties.getMaxQuantityPerItem()) {
             throw new IllegalArgumentException(
                 "Quantity exceeds maximum of " + cartProperties.getMaxQuantityPerItem());
         }
-        Cart cart = cartStore.updateQuantity(userId, productId, quantity);
+        Cart cart = cartStore.updateQuantity(userId, productId, quantity, expectedVersion);
         log.info("Quantity updated for user={}, product={}, qty={}", userId, productId, quantity);
         CartResponse response = toResponse(cart);
         notifyCartUpdated(userId, response);
@@ -121,10 +135,47 @@ public class CartService {
         notifyCartUpdated(userId, emptyCartResponse(userId));
     }
 
+    @CacheEvict(value = "carts", key = "#userId", condition = "#result != null && #result.priceChanged()")
     public CartResponse validateCart(UUID userId) {
         Cart cart = cartStore.validateCart(userId);
-        log.info("Cart validated for checkout, user={}", userId);
-        return toResponse(cart);
+        validateStoreServiceabilityForCheckout(cart.getStoreId());
+
+        List<CartResponse.PriceChangeDetail> priceChanges = List.of();
+        if (pricingClient != null && !cart.getItems().isEmpty()) {
+            Map<UUID, Long> livePrices = fetchLatestUnitPrices(cart.getItems());
+            Map<UUID, Long> updatedPrices = new LinkedHashMap<>();
+            List<CartResponse.PriceChangeDetail> detectedChanges = new ArrayList<>();
+
+            for (CartItem item : cart.getItems()) {
+                Long latestPrice = livePrices.get(item.getProductId());
+                if (latestPrice != null && latestPrice >= 0 && latestPrice != item.getUnitPriceCents()) {
+                    detectedChanges.add(new CartResponse.PriceChangeDetail(
+                            item.getProductId(),
+                            item.getProductName(),
+                            item.getUnitPriceCents(),
+                            latestPrice));
+                    updatedPrices.put(item.getProductId(), latestPrice);
+                }
+            }
+            if (!updatedPrices.isEmpty()) {
+                cart = cartStore.updateItemPrices(userId, updatedPrices);
+                priceChanges = Collections.unmodifiableList(detectedChanges);
+                log.info("Detected {} price change(s) during checkout preview for user={}", priceChanges.size(), userId);
+            }
+        }
+
+        long subtotal = computeSubtotal(cart);
+        if (cartProperties.getMinOrderCents() > 0 && subtotal < cartProperties.getMinOrderCents()) {
+            throw new IllegalStateException(
+                "Cart subtotal must be at least " + cartProperties.getMinOrderCents() + " cents");
+        }
+        if (cartProperties.getMaxCartValueCents() > 0 && subtotal > cartProperties.getMaxCartValueCents()) {
+            throw new IllegalStateException(
+                "Cart value exceeds maximum allowed amount of " + cartProperties.getMaxCartValueCents() + " cents");
+        }
+
+        log.info("Cart validated for checkout, user={}, priceChanged={}", userId, !priceChanges.isEmpty());
+        return toResponse(cart, !priceChanges.isEmpty(), priceChanges);
     }
 
     @Caching(evict = {
@@ -148,8 +199,75 @@ public class CartService {
         }
     }
 
+    private Map<UUID, Long> fetchLatestUnitPrices(List<CartItem> items) {
+        List<UUID> productIds = items.stream().map(CartItem::getProductId).distinct().toList();
+        Map<UUID, Long> result = new LinkedHashMap<>();
+        if (productIds.size() > 1) {
+            Map<UUID, PricingClient.PriceResponse> batch = pricingClient.getPricesBatch(productIds);
+            if (batch != null) {
+                batch.forEach((id, resp) -> {
+                    if (resp != null) {
+                        result.put(id, resp.unitPriceCents());
+                    }
+                });
+            }
+        }
+        for (UUID productId : productIds) {
+            if (!result.containsKey(productId)) {
+                PricingClient.PriceResponse price = pricingClient.getPrice(productId);
+                if (price != null) {
+                    result.put(productId, price.unitPriceCents());
+                }
+            }
+        }
+        return result;
+    }
+
+    private void validateStoreServiceabilityIfPresent(String storeId) {
+        if (storeId == null || storeId.isBlank()) {
+            return;
+        }
+        List<String> serviceable = cartProperties.getServiceableStores();
+        if (serviceable != null && !serviceable.isEmpty()) {
+            String normalized = storeId.trim();
+            boolean supported = serviceable.stream().anyMatch(s -> s.equalsIgnoreCase(normalized));
+            if (!supported) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "UNSERVICEABLE_STORE",
+                    "Store or zone is currently not serviceable: " + normalized);
+            }
+        }
+    }
+
+    private void validateStoreServiceabilityForCheckout(String storeId) {
+        List<String> serviceable = cartProperties.getServiceableStores();
+        if (serviceable == null || serviceable.isEmpty()) {
+            return;
+        }
+        if (storeId == null || storeId.isBlank()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "UNSERVICEABLE_STORE",
+                "A serviceable store must be selected before checkout");
+        }
+        validateStoreServiceabilityIfPresent(storeId);
+    }
+
     private void validateBusinessRules(UUID userId, AddItemRequest request) {
+        if (request.quantity() == null || request.quantity() < 1) {
+            throw new IllegalArgumentException("Quantity must be at least 1");
+        }
+        if (request.quantity() > cartProperties.getMaxQuantityPerItem()) {
+            throw new IllegalArgumentException(
+                "Total quantity for this item would exceed maximum of " + cartProperties.getMaxQuantityPerItem());
+        }
         cartStore.getCart(userId).ifPresent(cart -> {
+            if (request.storeId() != null && !request.storeId().isBlank()
+                    && cart.getStoreId() != null && !cart.getStoreId().isBlank()
+                    && !cart.getItems().isEmpty()
+                    && !cart.getStoreId().equalsIgnoreCase(request.storeId().trim())) {
+                throw new ApiException(HttpStatus.CONFLICT, "STORE_MISMATCH",
+                    "Cart belongs to store " + cart.getStoreId()
+                        + "; clear cart before adding items from store " + request.storeId().trim());
+            }
+
             boolean productExists = cart.getItems().stream()
                 .anyMatch(item -> item.getProductId().equals(request.productId()));
             if (!productExists && cart.getItems().size() >= cartProperties.getMaxItemsPerCart()) {
@@ -171,17 +289,39 @@ public class CartService {
         });
     }
 
+    private long computeSubtotal(Cart cart) {
+        long subtotal = 0L;
+        for (CartItem item : cart.getItems()) {
+            long lineTotal = Math.multiplyExact(item.getUnitPriceCents(), (long) item.getQuantity());
+            subtotal = Math.addExact(subtotal, lineTotal);
+        }
+        return subtotal;
+    }
+
     private CartResponse toResponse(Cart cart) {
+        return toResponse(cart, false, List.of());
+    }
+
+    private CartResponse toResponse(Cart cart, boolean priceChanged, List<CartResponse.PriceChangeDetail> priceChanges) {
         List<CartItemResponse> items = cart.getItems().stream()
             .map(this::toItemResponse)
             .toList();
-        long subtotal = cart.getItems().stream()
-            .mapToLong(item -> item.getUnitPriceCents() * item.getQuantity())
-            .sum();
+        long subtotal = computeSubtotal(cart);
         int itemCount = cart.getItems().stream()
             .mapToInt(CartItem::getQuantity)
             .sum();
-        return new CartResponse(cart.getId(), cart.getUserId(), items, subtotal, itemCount, cart.getExpiresAt(), cart.getVersion());
+        return new CartResponse(
+            cart.getId(),
+            cart.getUserId(),
+            items,
+            subtotal,
+            itemCount,
+            cart.getExpiresAt(),
+            !items.isEmpty(),
+            cart.getStoreId(),
+            cart.getVersion(),
+            priceChanged,
+            priceChanges);
     }
 
     private CartItemResponse toItemResponse(CartItem item) {
@@ -190,7 +330,7 @@ public class CartService {
             item.getProductName(),
             item.getUnitPriceCents(),
             item.getQuantity(),
-            item.getUnitPriceCents() * item.getQuantity()
+            Math.multiplyExact(item.getUnitPriceCents(), (long) item.getQuantity())
         );
     }
 

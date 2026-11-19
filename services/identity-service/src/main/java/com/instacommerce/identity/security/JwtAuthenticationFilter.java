@@ -3,6 +3,7 @@ package com.instacommerce.identity.security;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.identity.dto.response.ErrorResponse;
 import com.instacommerce.identity.exception.TraceIdProvider;
+import com.instacommerce.identity.service.TokenBlocklistService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;
@@ -16,6 +17,8 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -31,11 +34,36 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
     private final TraceIdProvider traceIdProvider;
     private final ObjectMapper objectMapper;
+    private final TokenBlocklistService tokenBlocklistService;
+
+    @Autowired
+    public JwtAuthenticationFilter(JwtService jwtService,
+                                   TraceIdProvider traceIdProvider,
+                                   ObjectMapper objectMapper,
+                                   ObjectProvider<TokenBlocklistService> tokenBlocklistServiceProvider) {
+        this.jwtService = jwtService;
+        this.traceIdProvider = traceIdProvider;
+        this.objectMapper = objectMapper;
+        this.tokenBlocklistService = tokenBlocklistServiceProvider != null
+                ? tokenBlocklistServiceProvider.getIfAvailable()
+                : null;
+    }
 
     public JwtAuthenticationFilter(JwtService jwtService, TraceIdProvider traceIdProvider, ObjectMapper objectMapper) {
         this.jwtService = jwtService;
         this.traceIdProvider = traceIdProvider;
         this.objectMapper = objectMapper;
+        this.tokenBlocklistService = null;
+    }
+
+    public JwtAuthenticationFilter(JwtService jwtService,
+                                   TraceIdProvider traceIdProvider,
+                                   ObjectMapper objectMapper,
+                                   TokenBlocklistService tokenBlocklistService) {
+        this.jwtService = jwtService;
+        this.traceIdProvider = traceIdProvider;
+        this.objectMapper = objectMapper;
+        this.tokenBlocklistService = tokenBlocklistService;
     }
 
     @Override
@@ -66,30 +94,45 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = header.substring(7);
         try {
             Jws<Claims> jws = jwtService.validateAccessToken(token);
+            Claims claims = jws.getPayload();
+            Number iatMs = claims.get("iat_ms", Number.class);
+            if (tokenBlocklistService != null && tokenBlocklistService.isTokenRevoked(
+                    claims.getId(), claims.getSubject(), claims.getIssuedAt(),
+                    iatMs != null ? iatMs.longValue() : null)) {
+                writeUnauthorized(request, response, "TOKEN_REVOKED", "Token has been revoked");
+                return;
+            }
             List<GrantedAuthority> mergedAuthorities = mergeInternalAuthorities(
                     SecurityContextHolder.getContext().getAuthentication(),
-                    jwtService.extractAuthorities(jws.getPayload()));
+                    jwtService.extractAuthorities(claims));
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                    jws.getPayload().getSubject(),
+                    claims.getSubject(),
                     token,
                     mergedAuthorities);
             authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
             SecurityContextHolder.getContext().setAuthentication(authentication);
             filterChain.doFilter(request, response);
         } catch (JwtException | IllegalArgumentException ex) {
-            SecurityContextHolder.clearContext();
-            String traceId = traceIdProvider.resolveTraceId(request);
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            response.setHeader("X-Trace-Id", traceId);
-            ErrorResponse error = new ErrorResponse(
-                "TOKEN_INVALID",
-                "Token is invalid",
-                traceId,
-                Instant.now(),
-                List.of());
-            objectMapper.writeValue(response.getWriter(), error);
+            writeUnauthorized(request, response, "TOKEN_INVALID", "Token is invalid");
         }
+    }
+
+    private void writeUnauthorized(HttpServletRequest request,
+                                   HttpServletResponse response,
+                                   String code,
+                                   String message) throws IOException {
+        SecurityContextHolder.clearContext();
+        String traceId = traceIdProvider.resolveTraceId(request);
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setHeader("X-Trace-Id", traceId);
+        ErrorResponse error = new ErrorResponse(
+            code,
+            message,
+            traceId,
+            Instant.now(),
+            List.of());
+        objectMapper.writeValue(response.getWriter(), error);
     }
 
     private static List<GrantedAuthority> mergeInternalAuthorities(

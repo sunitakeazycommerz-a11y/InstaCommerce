@@ -1,7 +1,9 @@
 package com.instacommerce.admingateway.config;
 
+import com.instacommerce.admingateway.security.CorrelationIdFilter;
 import java.time.Duration;
 import java.util.List;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -36,6 +38,11 @@ public class UpstreamRestClientConfig {
             if (internalServiceToken != null && !internalServiceToken.isBlank()
                     && headers.getFirst(HEADER_INTERNAL_TOKEN) == null) {
                 headers.set(HEADER_INTERNAL_TOKEN, internalServiceToken);
+            }
+            String correlationId = MDC.get(CorrelationIdFilter.MDC_KEY);
+            if (correlationId != null && !correlationId.isBlank()
+                    && headers.getFirst(CorrelationIdFilter.HEADER_CORRELATION_ID) == null) {
+                headers.set(CorrelationIdFilter.HEADER_CORRELATION_ID, correlationId);
             }
             return execution.execute(request, body);
         };

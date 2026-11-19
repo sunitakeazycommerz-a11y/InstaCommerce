@@ -8,6 +8,8 @@ import com.instacommerce.identity.repository.UserRepository;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,15 +19,28 @@ public class UserDeletionService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final OutboxService outboxService;
     private final AuditService auditService;
+    private final TokenBlocklistService tokenBlocklistService;
+
+    @Autowired
+    public UserDeletionService(UserRepository userRepository,
+                               RefreshTokenRepository refreshTokenRepository,
+                               OutboxService outboxService,
+                               AuditService auditService,
+                               ObjectProvider<TokenBlocklistService> tokenBlocklistServiceProvider) {
+        this.userRepository = userRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.outboxService = outboxService;
+        this.auditService = auditService;
+        this.tokenBlocklistService = tokenBlocklistServiceProvider != null
+                ? tokenBlocklistServiceProvider.getIfAvailable()
+                : null;
+    }
 
     public UserDeletionService(UserRepository userRepository,
                                RefreshTokenRepository refreshTokenRepository,
                                OutboxService outboxService,
                                AuditService auditService) {
-        this.userRepository = userRepository;
-        this.refreshTokenRepository = refreshTokenRepository;
-        this.outboxService = outboxService;
-        this.auditService = auditService;
+        this(userRepository, refreshTokenRepository, outboxService, auditService, null);
     }
 
     @Transactional
@@ -42,6 +57,9 @@ public class UserDeletionService {
         userRepository.save(user);
 
         refreshTokenRepository.deleteAllByUser_Id(userId);
+        if (tokenBlocklistService != null) {
+            tokenBlocklistService.revokeAllUserTokens(userId);
+        }
 
         outboxService.publish("User", userId.toString(), "UserErased",
             Map.of("userId", userId, "erasedAt", erasedAt));

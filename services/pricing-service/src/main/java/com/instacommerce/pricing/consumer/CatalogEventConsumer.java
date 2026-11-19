@@ -65,17 +65,40 @@ public class CatalogEventConsumer {
             }
 
             Instant now = Instant.now();
-            // Only create a base price rule if none exists
-            if (priceRuleRepository.findActiveRuleByProductId(event.id(), now).isEmpty()) {
+            if (!event.active()) {
+                for (PriceRule existing : priceRuleRepository.findByProductIdAndActiveTrue(event.id())) {
+                    existing.setActive(false);
+                    if (existing.getEffectiveTo() == null || existing.getEffectiveTo().isAfter(now)) {
+                        existing.setEffectiveTo(now);
+                    }
+                    priceRuleRepository.save(existing);
+                }
+                logger.info("Deactivated price rules for inactive product id={}", event.id());
+                return;
+            }
+
+            Long incomingPriceCents = event.basePriceCents();
+            var existingOpt = priceRuleRepository.findActiveRuleByProductId(event.id(), now);
+            if (existingOpt.isEmpty()) {
+                long resolvedPrice = incomingPriceCents != null && incomingPriceCents >= 0 ? incomingPriceCents : 0L;
                 PriceRule rule = new PriceRule();
                 rule.setProductId(event.id());
-                rule.setBasePriceCents(0);
+                rule.setBasePriceCents(resolvedPrice);
                 rule.setEffectiveFrom(now);
                 rule.setRuleType("STANDARD");
                 rule.setMultiplier(BigDecimal.ONE);
                 rule.setActive(true);
                 priceRuleRepository.save(rule);
-                logger.info("Created base price rule for new product id={}", event.id());
+                logger.info("Created base price rule for product id={} basePriceCents={}", event.id(), resolvedPrice);
+            } else if (incomingPriceCents != null && incomingPriceCents >= 0) {
+                PriceRule currentRule = existingOpt.get();
+                if ("STANDARD".equalsIgnoreCase(currentRule.getRuleType())
+                        && currentRule.getBasePriceCents() != incomingPriceCents) {
+                    currentRule.setBasePriceCents(incomingPriceCents);
+                    priceRuleRepository.save(currentRule);
+                    logger.info("Updated standard base price rule for product id={} basePriceCents={}",
+                            event.id(), incomingPriceCents);
+                }
             }
         } catch (Exception ex) {
             logger.error("Failed to process catalog event: skipping record at offset={}, partition={}",

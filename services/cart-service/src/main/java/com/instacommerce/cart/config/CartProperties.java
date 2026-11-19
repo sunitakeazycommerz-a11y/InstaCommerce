@@ -1,5 +1,7 @@
 package com.instacommerce.cart.config;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "cart")
@@ -8,6 +10,9 @@ public class CartProperties {
     private final Kafka kafka = new Kafka();
     private int maxItemsPerCart = 50;
     private int maxQuantityPerItem = 10;
+    private long minOrderCents = 0L;
+    private long maxCartValueCents = 10_000_000L;
+    private List<String> serviceableStores = new ArrayList<>();
 
     public Jwt getJwt() {
         return jwt;
@@ -31,6 +36,30 @@ public class CartProperties {
 
     public void setMaxQuantityPerItem(int maxQuantityPerItem) {
         this.maxQuantityPerItem = maxQuantityPerItem;
+    }
+
+    public long getMinOrderCents() {
+        return minOrderCents;
+    }
+
+    public void setMinOrderCents(long minOrderCents) {
+        this.minOrderCents = minOrderCents;
+    }
+
+    public long getMaxCartValueCents() {
+        return maxCartValueCents;
+    }
+
+    public void setMaxCartValueCents(long maxCartValueCents) {
+        this.maxCartValueCents = maxCartValueCents;
+    }
+
+    public List<String> getServiceableStores() {
+        return serviceableStores;
+    }
+
+    public void setServiceableStores(List<String> serviceableStores) {
+        this.serviceableStores = serviceableStores != null ? serviceableStores : new ArrayList<>();
     }
 
     public static class Jwt {

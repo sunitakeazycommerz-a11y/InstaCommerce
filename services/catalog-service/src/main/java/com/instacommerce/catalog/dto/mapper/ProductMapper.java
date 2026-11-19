@@ -38,7 +38,8 @@ public final class ProductMapper {
             product.isPerishable(),
             product.getTemperatureZone(),
             product.getVatRateBps(),
-            product.getUnitOfMeasure());
+            product.getUnitOfMeasure(),
+            product.getStoreId());
     }
 
     public static CategorySummaryResponse toCategorySummary(Category category) {

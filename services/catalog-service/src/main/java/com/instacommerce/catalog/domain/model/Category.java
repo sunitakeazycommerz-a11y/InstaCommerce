@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -31,6 +32,9 @@ public class Category {
     @Column(name = "sort_order")
     private int sortOrder;
 
+    @Column(nullable = false)
+    private int depth = 0;
+
     @Column(name = "is_active")
     private boolean isActive = true;
 
@@ -39,6 +43,9 @@ public class Category {
 
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    @Version
+    private long version;
 
     @PrePersist
     void prePersist() {
@@ -104,6 +111,14 @@ public class Category {
         this.sortOrder = sortOrder;
     }
 
+    public int getDepth() {
+        return depth;
+    }
+
+    public void setDepth(int depth) {
+        this.depth = depth;
+    }
+
     public boolean isActive() {
         return isActive;
     }
@@ -126,5 +141,13 @@ public class Category {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
     }
 }

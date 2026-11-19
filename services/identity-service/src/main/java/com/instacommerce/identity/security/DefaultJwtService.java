@@ -38,6 +38,7 @@ public class DefaultJwtService implements JwtService {
             .subject(user.getId().toString())
             .issuedAt(Date.from(now))
             .expiration(Date.from(expiresAt))
+            .claim("iat_ms", now.toEpochMilli())
             .claim("roles", roles)
             .claim("aud", "instacommerce-api")
             .id(UUID.randomUUID().toString())

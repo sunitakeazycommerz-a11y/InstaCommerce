@@ -3,6 +3,7 @@ package com.instacommerce.catalog.exception;
 import com.instacommerce.catalog.dto.response.ErrorDetail;
 import com.instacommerce.catalog.dto.response.ErrorResponse;
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
+import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import java.time.Instant;
@@ -10,9 +11,11 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -71,6 +74,19 @@ public class GlobalExceptionHandler {
                                                         HttpServletRequest request) {
         return ResponseEntity.badRequest()
             .body(buildError("VALIDATION_ERROR", "Invalid input", List.of(), request));
+    }
+
+    @ExceptionHandler({OptimisticLockException.class, ObjectOptimisticLockingFailureException.class})
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(Exception ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(buildError("CONCURRENT_MODIFICATION", "Resource was modified concurrently. Please retry.", List.of(), request));
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrity(DataIntegrityViolationException ex,
+                                                             HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(buildError("CONFLICT", "Resource conflicts with an existing record", List.of(), request));
     }
 
     @ExceptionHandler(Exception.class)

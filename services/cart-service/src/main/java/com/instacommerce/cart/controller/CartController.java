@@ -67,23 +67,44 @@ public class CartController {
                                                        @Valid @RequestBody UpdateQuantityRequest request,
                                                        @RequestHeader(value = "If-Match", required = false) String ifMatch) {
         UUID userId = extractUserId(authentication);
-        if (ifMatch != null && !ifMatch.isBlank()) {
+        Long expectedVersion = parseIfMatchVersion(ifMatch);
+        if (expectedVersion != null) {
             CartResponse current = cartService.getCart(userId);
-            String rawVersion = ifMatch.replace("\"", "").trim();
-            try {
-                long expectedVersion = Long.parseLong(rawVersion);
-                if (current.version() != null && current.version() != expectedVersion) {
-                    throw new ApiException(HttpStatus.PRECONDITION_FAILED, "PRECONDITION_FAILED",
-                        "Cart version mismatch; client version is stale.");
-                }
-            } catch (NumberFormatException ignored) {
-                // Ignore non-numeric ETag format
+            if (current.version() != null && !current.version().equals(expectedVersion)) {
+                throw new ApiException(HttpStatus.PRECONDITION_FAILED, "PRECONDITION_FAILED",
+                    "Cart version mismatch; client version is stale.");
             }
         }
-        CartResponse response = cartService.updateQuantity(userId, productId, request.quantity());
+        CartResponse response = cartService.updateQuantity(userId, productId, request.quantity(), expectedVersion);
         return ResponseEntity.ok()
             .eTag("\"" + response.version() + "\"")
             .body(response);
+    }
+
+    private Long parseIfMatchVersion(String ifMatch) {
+        if (ifMatch == null || ifMatch.isBlank()) {
+            return null;
+        }
+        String normalized = ifMatch.trim();
+        if ("*".equals(normalized)) {
+            return null;
+        }
+        if (normalized.startsWith("W/")) {
+            normalized = normalized.substring(2).trim();
+        }
+        normalized = normalized.replace("\"", "").trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        try {
+            long version = Long.parseLong(normalized);
+            if (version < 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ETAG", "If-Match version must be non-negative");
+            }
+            return version;
+        } catch (NumberFormatException ex) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ETAG", "Invalid If-Match ETag header");
+        }
     }
 
     @PostMapping("/merge")

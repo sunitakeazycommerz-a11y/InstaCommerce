@@ -4,9 +4,13 @@ import com.instacommerce.search.dto.AutocompleteResult;
 import com.instacommerce.search.dto.FacetValue;
 import com.instacommerce.search.dto.SearchResponse;
 import com.instacommerce.search.dto.SearchResult;
+import com.instacommerce.search.exception.ApiException;
 import com.instacommerce.search.repository.SearchDocumentRepository;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -15,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -37,17 +42,41 @@ public class SearchService {
         this(searchDocumentRepository, trendingService, new FacetedSearchService(searchDocumentRepository));
     }
 
-    @Cacheable(value = "searchResults",
-               key = "#query + '_' + #brand + '_' + #category + '_' + #minPrice + '_' + #maxPrice + '_' + #page + '_' + #size",
-               condition = "#query != null && !#query.isBlank()")
     public SearchResponse search(String query, String brand, String category,
                                  Long minPrice, Long maxPrice, int page, int size) {
+        return search(query, brand, category, minPrice, maxPrice, null, page, size);
+    }
+
+    @Cacheable(value = "searchResults",
+               key = "#root.target.buildCacheKey(#query, #brand, #category, #minPrice, #maxPrice, #storeId, #page, #size)",
+               condition = "#query != null && !#query.isBlank()")
+    public SearchResponse search(String query, String brand, String category,
+                                 Long minPrice, Long maxPrice, UUID storeId, int page, int size) {
+        String normalizedQuery = normalizeQuery(query);
+        String normalizedBrand = trimToNull(brand);
+        String normalizedCategory = trimToNull(category);
+        if (minPrice != null && maxPrice != null && minPrice > maxPrice) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PRICE_RANGE",
+                    "minPriceCents cannot exceed maxPriceCents");
+        }
+
         int safePage = Math.min(Math.max(0, page), 50);
         int safeSize = Math.min(Math.max(1, size), 50);
-        log.info("Executing search query='{}' brand='{}' category='{}' page={} size={}", query, brand, category, safePage, safeSize);
 
-        Page<Object[]> results = searchDocumentRepository.fullTextSearch(
-                query, brand, category, minPrice, maxPrice, PageRequest.of(safePage, safeSize));
+        if (normalizedQuery.isEmpty()) {
+            return new SearchResponse(List.of(), 0L, safePage, 0,
+                    Map.of("brand", List.of(), "category", List.of()), null);
+        }
+
+        log.info("Executing search query='{}' brand='{}' category='{}' storeId={} page={} size={}",
+                normalizedQuery, normalizedBrand, normalizedCategory, storeId, safePage, safeSize);
+
+        PageRequest pageable = PageRequest.of(safePage, safeSize);
+        Page<Object[]> results = storeId != null
+                ? searchDocumentRepository.fullTextSearchScoped(
+                        normalizedQuery, normalizedBrand, normalizedCategory, minPrice, maxPrice, storeId, pageable)
+                : searchDocumentRepository.fullTextSearch(
+                        normalizedQuery, normalizedBrand, normalizedCategory, minPrice, maxPrice, pageable);
 
         List<SearchResult> searchResults = results.getContent().stream()
                 .map(this::mapToSearchResult)
@@ -57,11 +86,22 @@ public class SearchService {
         long totalResults = results.getTotalElements();
         int totalPages = results.getTotalPages();
 
-        // Zero-result query fallback: execute fuzzy spelling correction and prefix match
-        if (searchResults.isEmpty() && query != null && !query.isBlank()) {
-            String trimmed = query.trim();
-            Page<Object[]> fallbackResults = searchDocumentRepository.fuzzyFallbackSearch(
-                    trimmed, PageRequest.of(safePage, safeSize));
+        if (searchResults.isEmpty()) {
+            boolean hasFilters = normalizedBrand != null || normalizedCategory != null
+                    || minPrice != null || maxPrice != null || storeId != null;
+            String escaped = escapeLikePattern(normalizedQuery);
+            Page<Object[]> fallbackResults = runFuzzyFallback(
+                    escaped, normalizedBrand, normalizedCategory, minPrice, maxPrice, storeId, pageable, hasFilters);
+
+            if (fallbackResults.isEmpty() && normalizedQuery.contains(" ")) {
+                String fallbackToken = selectLongestSearchToken(normalizedQuery);
+                if (fallbackToken != null) {
+                    fallbackResults = runFuzzyFallback(
+                            escapeLikePattern(fallbackToken), normalizedBrand, normalizedCategory,
+                            minPrice, maxPrice, storeId, pageable, hasFilters);
+                }
+            }
+
             if (!fallbackResults.isEmpty()) {
                 searchResults = fallbackResults.getContent().stream()
                         .map(this::mapToSearchResult)
@@ -70,34 +110,97 @@ public class SearchService {
                 totalPages = fallbackResults.getTotalPages();
                 didYouMean = searchResults.get(0).name();
                 log.info("Zero exact matches for '{}'. Fallback found {} items, didYouMean='{}'",
-                        query, totalResults, didYouMean);
+                        normalizedQuery, totalResults, didYouMean);
             }
         }
 
-        Map<String, List<FacetValue>> facets = (facetedSearchService != null)
-                ? facetedSearchService.computeStoreScopedFacets(query, null)
-                : buildFacets(query);
+        Map<String, List<FacetValue>> facets;
+        if (facetedSearchService != null) {
+            boolean hasAttributeFilters = normalizedBrand != null || normalizedCategory != null
+                    || minPrice != null || maxPrice != null;
+            facets = hasAttributeFilters
+                    ? facetedSearchService.computeFilteredFacets(
+                            normalizedQuery, normalizedBrand, normalizedCategory, minPrice, maxPrice, storeId)
+                    : facetedSearchService.computeStoreScopedFacets(normalizedQuery, storeId);
+        } else {
+            facets = buildFacets(normalizedQuery);
+        }
 
-        // Record the query for trending asynchronously
-        trendingService.recordQuery(query);
+        trendingService.recordQuery(normalizedQuery);
 
-        return new SearchResponse(searchResults, totalResults, page, totalPages, facets, didYouMean);
+        return new SearchResponse(searchResults, totalResults, safePage, totalPages, facets, didYouMean);
     }
 
-    @Cacheable(value = "autocomplete", key = "#prefix + '_' + #limit",
-               condition = "#prefix != null && #prefix.length() >= 2")
+    public String buildCacheKey(String query, String brand, String category,
+                                Long minPrice, Long maxPrice, UUID storeId, int page, int size) {
+        return normalizeQuery(query).toLowerCase(Locale.ROOT)
+                + "_" + trimToNull(brand)
+                + "_" + trimToNull(category)
+                + "_" + minPrice
+                + "_" + maxPrice
+                + "_" + storeId
+                + "_" + Math.min(Math.max(0, page), 50)
+                + "_" + Math.min(Math.max(1, size), 50);
+    }
+
+    @Cacheable(value = "autocomplete",
+               key = "#root.target.buildAutocompleteKey(#prefix, #limit)",
+               condition = "#prefix != null && #prefix.trim().length() >= 2")
     public List<AutocompleteResult> autocomplete(String prefix, int limit) {
-        if (prefix == null || prefix.isBlank()) {
+        String normalized = normalizeQuery(prefix);
+        if (normalized.isEmpty()) {
             return List.of();
         }
-        log.debug("Autocomplete prefix='{}' limit={}", prefix, limit);
-        String safePrefix = escapeLikePattern(prefix);
-        return searchDocumentRepository.autocomplete(safePrefix, limit).stream()
+        int safeLimit = Math.min(Math.max(1, limit), 50);
+        log.debug("Autocomplete prefix='{}' limit={}", normalized, safeLimit);
+        String safePrefix = escapeLikePattern(normalized);
+        return searchDocumentRepository.autocomplete(safePrefix, safeLimit).stream()
                 .map(row -> new AutocompleteResult(
                         (String) row[0],
                         (String) row[1],
                         (UUID) row[2]))
                 .collect(Collectors.toList());
+    }
+
+    public String buildAutocompleteKey(String prefix, int limit) {
+        return normalizeQuery(prefix).toLowerCase(Locale.ROOT) + "_" + Math.min(Math.max(1, limit), 50);
+    }
+
+    private Page<Object[]> runFuzzyFallback(String escapedToken,
+                                            String brand,
+                                            String category,
+                                            Long minPrice,
+                                            Long maxPrice,
+                                            UUID storeId,
+                                            PageRequest pageable,
+                                            boolean hasFilters) {
+        if (!hasFilters) {
+            return searchDocumentRepository.fuzzyFallbackSearch(escapedToken, pageable);
+        }
+        return searchDocumentRepository.fuzzyFallbackSearchFiltered(
+                escapedToken, brand, category, minPrice, maxPrice, storeId, pageable);
+    }
+
+    private String normalizeQuery(String query) {
+        if (query == null) {
+            return "";
+        }
+        return query.trim().replaceAll("\\s+", " ");
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String selectLongestSearchToken(String normalizedQuery) {
+        return Arrays.stream(normalizedQuery.split(" "))
+                .filter(token -> token.length() >= 3)
+                .max(Comparator.comparingInt(String::length))
+                .orElse(null);
     }
 
     private Map<String, List<FacetValue>> buildFacets(String query) {

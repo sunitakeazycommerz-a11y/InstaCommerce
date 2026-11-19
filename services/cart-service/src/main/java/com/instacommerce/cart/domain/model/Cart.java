@@ -36,6 +36,9 @@ public class Cart {
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
+    @Column(name = "store_id", length = 64)
+    private String storeId;
+
     @Version
     private long version;
 
@@ -98,6 +101,14 @@ public class Cart {
 
     public void setExpiresAt(Instant expiresAt) {
         this.expiresAt = expiresAt;
+    }
+
+    public String getStoreId() {
+        return storeId;
+    }
+
+    public void setStoreId(String storeId) {
+        this.storeId = storeId;
     }
 
     public long getVersion() {

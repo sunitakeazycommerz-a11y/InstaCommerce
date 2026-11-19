@@ -66,7 +66,7 @@ public class UserController {
 
     @PutMapping("/notification-preferences")
     public NotificationPreferenceResponse updateNotificationPreferences(
-        @RequestBody NotificationPreferenceRequest request) {
+        @Valid @RequestBody NotificationPreferenceRequest request) {
         return notificationPreferenceService.updatePreferences(userService.getCurrentUserId(), request);
     }
 

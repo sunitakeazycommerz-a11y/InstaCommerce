@@ -20,32 +20,27 @@ public class PromoReservationService {
 
     private static final Logger log = LoggerFactory.getLogger(PromoReservationService.class);
     private static final long DEFAULT_LOCK_TTL_SECONDS = 300; // 5 minutes
+    private static final int PRUNE_THRESHOLD = 1024;
 
     private record ReservationEntry(Instant expiresAt) {
-        boolean isExpired() {
-            return Instant.now().isAfter(expiresAt);
+        boolean isExpired(Instant now) {
+            return !now.isBefore(expiresAt);
         }
     }
 
     private final Map<String, ReservationEntry> activeLocks = new ConcurrentHashMap<>();
 
-    /**
-     * Atomically tries to acquire a lock for the given coupon code and user ID.
-     * Equivalent to Redis SET promo:{code}:{userId} 1 NX EX {ttlSeconds}.
-     *
-     * @param code Promo / coupon code
-     * @param userId Customer UUID
-     * @param ttlSeconds Lock validity duration
-     * @return true if acquired successfully, false if already locked
-     */
     public boolean tryAcquire(String code, UUID userId, long ttlSeconds) {
-        String key = buildKey(code, userId);
         Instant now = Instant.now();
+        if (activeLocks.size() >= PRUNE_THRESHOLD) {
+            activeLocks.entrySet().removeIf(entry -> entry.getValue().isExpired(now));
+        }
+        String key = buildKey(code, userId);
         Instant expiry = now.plusSeconds(ttlSeconds > 0 ? ttlSeconds : DEFAULT_LOCK_TTL_SECONDS);
 
         final boolean[] acquired = new boolean[1];
         activeLocks.compute(key, (k, existing) -> {
-            if (existing == null || existing.isExpired()) {
+            if (existing == null || existing.isExpired(now)) {
                 acquired[0] = true;
                 return new ReservationEntry(expiry);
             }

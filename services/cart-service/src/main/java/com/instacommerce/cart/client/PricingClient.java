@@ -8,6 +8,10 @@ import com.instacommerce.cart.security.InternalServiceAuthInterceptor;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,6 +81,46 @@ public class PricingClient {
         }
         throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
                 "Unable to verify product price. Please try again later.");
+    }
+
+    @CircuitBreaker(name = "pricingService", fallbackMethod = "getPricesBatchFallback")
+    @Retry(name = "pricingService")
+    public Map<UUID, PriceResponse> getPricesBatch(Collection<UUID> productIds) {
+        if (productIds == null || productIds.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            PriceResponse[] responses = restTemplate.postForObject(
+                    baseUrl + "/pricing/products/batch", List.copyOf(productIds), PriceResponse[].class);
+            if (responses == null) {
+                return Map.of();
+            }
+            Map<UUID, PriceResponse> prices = new LinkedHashMap<>();
+            for (PriceResponse price : responses) {
+                if (price != null && price.productId() != null) {
+                    prices.put(price.productId(), price);
+                }
+            }
+            return prices;
+        } catch (ResourceAccessException ex) {
+            log.warn("Pricing service network/timeout failure during batch price lookup: {}", ex.getMessage());
+            throw ex;
+        } catch (RestClientException ex) {
+            log.warn("Pricing service batch lookup failed: {}", ex.getMessage());
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
+                    "Unable to verify product prices: " + ex.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private Map<UUID, PriceResponse> getPricesBatchFallback(Collection<UUID> productIds, Exception e) {
+        log.warn("Circuit breaker fallback for pricingService getPricesBatch size={}: {}",
+                productIds != null ? productIds.size() : 0, e.getMessage());
+        if (e instanceof ApiException apiEx) {
+            throw apiEx;
+        }
+        throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
+                "Unable to verify product prices. Please try again later.");
     }
 
     /**

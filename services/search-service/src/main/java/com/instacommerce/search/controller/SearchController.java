@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,9 +34,11 @@ public class SearchController {
             @RequestParam(required = false) String category,
             @RequestParam(required = false) @Min(0) Long minPriceCents,
             @RequestParam(required = false) @Min(0) Long maxPriceCents,
+            @RequestParam(required = false) UUID storeId,
             @RequestParam(defaultValue = "0") @Min(0) @Max(50) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
-        SearchResponse response = searchService.search(query, brand, category, minPriceCents, maxPriceCents, page, size);
+        SearchResponse response = searchService.search(
+                query, brand, category, minPriceCents, maxPriceCents, storeId, page, size);
         return ResponseEntity.ok(response);
     }
 

@@ -18,6 +18,8 @@ public record PromotionResponse(
     Integer maxUses,
     int currentUses,
     Integer maxRedemptionsPerUser,
+    boolean stackableWithCoupon,
+    int priority,
     Instant createdAt
 ) {
     public PromotionResponse(
@@ -36,6 +38,26 @@ public record PromotionResponse(
             Instant createdAt
     ) {
         this(id, name, description, discountType, discountValue, minOrderCents,
-             maxDiscountCents, startAt, endAt, active, maxUses, currentUses, 1, createdAt);
+             maxDiscountCents, startAt, endAt, active, maxUses, currentUses, 1, true, 0, createdAt);
+    }
+
+    public PromotionResponse(
+            UUID id,
+            String name,
+            String description,
+            String discountType,
+            BigDecimal discountValue,
+            long minOrderCents,
+            Long maxDiscountCents,
+            Instant startAt,
+            Instant endAt,
+            boolean active,
+            Integer maxUses,
+            int currentUses,
+            Integer maxRedemptionsPerUser,
+            Instant createdAt
+    ) {
+        this(id, name, description, discountType, discountValue, minOrderCents,
+             maxDiscountCents, startAt, endAt, active, maxUses, currentUses, maxRedemptionsPerUser, true, 0, createdAt);
     }
 }

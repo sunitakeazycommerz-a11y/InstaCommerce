@@ -4,6 +4,7 @@ import com.instacommerce.cart.config.CartProperties;
 import com.instacommerce.cart.domain.model.Cart;
 import com.instacommerce.cart.domain.model.CartItem;
 import com.instacommerce.cart.dto.request.AddItemRequest;
+import com.instacommerce.cart.exception.ApiException;
 import com.instacommerce.cart.exception.CartItemNotFoundException;
 import com.instacommerce.cart.exception.CartNotFoundException;
 import com.instacommerce.cart.repository.CartItemRepository;
@@ -14,6 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,8 +23,10 @@ import org.springframework.transaction.annotation.Transactional;
 public class JpaCartStore implements CartStore {
     private static final String AGGREGATE_TYPE = "CART";
     private static final String EVENT_ITEM_ADDED = "ITEM_ADDED";
+    private static final String EVENT_CART_UPDATED = "CART_UPDATED";
     private static final String EVENT_ITEM_REMOVED = "ITEM_REMOVED";
     private static final String EVENT_CART_CLEARED = "CART_CLEARED";
+    private static final String EVENT_CART_PRICE_REFRESHED = "CART_PRICE_REFRESHED";
 
     private final CartRepository cartRepository;
     private final CartItemRepository cartItemRepository;
@@ -55,14 +59,18 @@ public class JpaCartStore implements CartStore {
     @Override
     @Transactional
     public Cart addItem(UUID userId, AddItemRequest request) {
+        if (request.quantity() == null || request.quantity() < 1) {
+            throw new IllegalArgumentException("Quantity must be at least 1");
+        }
         Cart cart = findOrCreateCartForUpdate(userId);
+        applyOrVerifyStoreId(cart, request.storeId());
 
         Optional<CartItem> existing = cartItemRepository.findByCartIdAndProductId(cart.getId(), request.productId());
         CartItem item;
         if (existing.isPresent()) {
             item = existing.get();
-            int newQuantity = item.getQuantity() + request.quantity();
-            validateMaxQuantityPerItem(newQuantity);
+            int newQuantity = Math.addExact(item.getQuantity(), request.quantity());
+            validateQuantityBounds(newQuantity);
             item.setQuantity(newQuantity);
             item.setProductName(request.productName());
             item.setUnitPriceCents(request.unitPriceCents());
@@ -72,7 +80,7 @@ public class JpaCartStore implements CartStore {
                 throw new IllegalArgumentException(
                     "Cart cannot exceed " + cartProperties.getMaxItemsPerCart() + " distinct items");
             }
-            validateMaxQuantityPerItem(request.quantity());
+            validateQuantityBounds(request.quantity());
             item = new CartItem();
             item.setProductId(request.productId());
             item.setProductName(request.productName());
@@ -81,6 +89,7 @@ public class JpaCartStore implements CartStore {
             cart.addItem(item);
         }
 
+        validateCartTotalLimit(cart);
         cart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
         Cart savedCart = cartRepository.saveAndFlush(cart);
         outboxService.publish(AGGREGATE_TYPE, savedCart.getId().toString(), EVENT_ITEM_ADDED,
@@ -91,8 +100,20 @@ public class JpaCartStore implements CartStore {
     @Override
     @Transactional
     public Cart updateQuantity(UUID userId, UUID productId, int quantity) {
+        return updateQuantity(userId, productId, quantity, null);
+    }
+
+    @Override
+    @Transactional
+    public Cart updateQuantity(UUID userId, UUID productId, int quantity, Long expectedVersion) {
+        validateQuantityBounds(quantity);
         Cart cart = cartRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new CartNotFoundException(userId));
+
+        if (expectedVersion != null && cart.getVersion() != expectedVersion) {
+            throw new ApiException(HttpStatus.PRECONDITION_FAILED, "PRECONDITION_FAILED",
+                "Cart version mismatch; client version is stale.");
+        }
 
         CartItem item = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId)
             .orElseThrow(() -> new CartItemNotFoundException(productId));
@@ -100,8 +121,12 @@ public class JpaCartStore implements CartStore {
         item.setQuantity(quantity);
         cartItemRepository.save(item);
 
+        validateCartTotalLimit(cart);
         cart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-        return cartRepository.save(cart);
+        Cart savedCart = cartRepository.saveAndFlush(cart);
+        outboxService.publish(AGGREGATE_TYPE, savedCart.getId().toString(), EVENT_CART_UPDATED,
+            itemPayload(userId, savedCart, item));
+        return savedCart;
     }
 
     @Override
@@ -150,6 +175,33 @@ public class JpaCartStore implements CartStore {
 
     @Override
     @Transactional
+    public Cart updateItemPrices(UUID userId, Map<UUID, Long> latestUnitPrices) {
+        Cart cart = cartRepository.findByUserIdForUpdate(userId)
+            .orElseThrow(() -> new CartNotFoundException(userId));
+        if (latestUnitPrices == null || latestUnitPrices.isEmpty()) {
+            return cart;
+        }
+        boolean updated = false;
+        for (CartItem item : cart.getItems()) {
+            Long newPrice = latestUnitPrices.get(item.getProductId());
+            if (newPrice != null && newPrice >= 0 && item.getUnitPriceCents() != newPrice) {
+                item.setUnitPriceCents(newPrice);
+                cartItemRepository.save(item);
+                updated = true;
+            }
+        }
+        if (!updated) {
+            return cart;
+        }
+        cart.setUpdatedAt(Instant.now());
+        Cart savedCart = cartRepository.saveAndFlush(cart);
+        outboxService.publish(AGGREGATE_TYPE, savedCart.getId().toString(), EVENT_CART_PRICE_REFRESHED,
+            Map.of("userId", userId.toString(), "cartId", savedCart.getId().toString(), "updatedCount", latestUnitPrices.size()));
+        return savedCart;
+    }
+
+    @Override
+    @Transactional
     public Cart mergeCart(UUID targetUserId, UUID sourceGuestUserId) {
         Cart targetCart = findOrCreateCartForUpdate(targetUserId);
         if (targetUserId.equals(sourceGuestUserId)) {
@@ -170,6 +222,8 @@ public class JpaCartStore implements CartStore {
             cartRepository.delete(guestCart);
             return targetCart;
         }
+
+        applyOrVerifyStoreId(targetCart, guestCart.getStoreId());
 
         int maxQtyPerItem = cartProperties.getMaxQuantityPerItem();
         int maxItemsPerCart = cartProperties.getMaxItemsPerCart();
@@ -192,6 +246,7 @@ public class JpaCartStore implements CartStore {
             }
         }
 
+        validateCartTotalLimit(targetCart);
         targetCart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
         Cart savedTargetCart = cartRepository.saveAndFlush(targetCart);
 
@@ -212,11 +267,42 @@ public class JpaCartStore implements CartStore {
         });
     }
 
-    private void validateMaxQuantityPerItem(int quantity) {
+    private void applyOrVerifyStoreId(Cart cart, String requestedStoreId) {
+        if (requestedStoreId == null || requestedStoreId.isBlank()) {
+            return;
+        }
+        String normalized = requestedStoreId.trim();
+        if (cart.getStoreId() != null && !cart.getStoreId().isBlank() && !cart.getItems().isEmpty()) {
+            if (!cart.getStoreId().equalsIgnoreCase(normalized)) {
+                throw new ApiException(HttpStatus.CONFLICT, "STORE_MISMATCH",
+                    "Cart already contains items for store " + cart.getStoreId()
+                        + "; clear cart before adding items from store " + normalized);
+            }
+        } else {
+            cart.setStoreId(normalized);
+        }
+    }
+
+    private void validateQuantityBounds(int quantity) {
+        if (quantity < 1) {
+            throw new IllegalArgumentException("Quantity must be at least 1");
+        }
         if (quantity > cartProperties.getMaxQuantityPerItem()) {
             throw new IllegalArgumentException(
                 "Total quantity for this item would exceed maximum of "
                     + cartProperties.getMaxQuantityPerItem());
+        }
+    }
+
+    private void validateCartTotalLimit(Cart cart) {
+        long subtotal = 0L;
+        for (CartItem item : cart.getItems()) {
+            long lineTotal = Math.multiplyExact(item.getUnitPriceCents(), (long) item.getQuantity());
+            subtotal = Math.addExact(subtotal, lineTotal);
+        }
+        if (cartProperties.getMaxCartValueCents() > 0 && subtotal > cartProperties.getMaxCartValueCents()) {
+            throw new IllegalArgumentException(
+                "Cart value exceeds maximum allowed amount of " + cartProperties.getMaxCartValueCents() + " cents");
         }
     }
 

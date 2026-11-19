@@ -24,7 +24,8 @@ public record ProductResponse(
     boolean isPerishable,
     String temperatureZone,
     int vatRateBps,
-    String unitOfMeasure
+    String unitOfMeasure,
+    UUID storeId
 ) {
     public ProductResponse(
         UUID id,
@@ -43,6 +44,30 @@ public record ProductResponse(
         boolean isActive,
         Instant createdAt
     ) {
-        this(id, sku, name, slug, description, category, brand, basePriceCents, currency, unit, unitValue, weightGrams, images, isActive, createdAt, false, "AMBIENT", 0, unit);
+        this(id, sku, name, slug, description, category, brand, basePriceCents, currency, unit, unitValue, weightGrams, images, isActive, createdAt, false, "AMBIENT", 0, unit, null);
+    }
+
+    public ProductResponse(
+        UUID id,
+        String sku,
+        String name,
+        String slug,
+        String description,
+        CategorySummaryResponse category,
+        String brand,
+        long basePriceCents,
+        String currency,
+        String unit,
+        BigDecimal unitValue,
+        Integer weightGrams,
+        List<ProductImageResponse> images,
+        boolean isActive,
+        Instant createdAt,
+        boolean isPerishable,
+        String temperatureZone,
+        int vatRateBps,
+        String unitOfMeasure
+    ) {
+        this(id, sku, name, slug, description, category, brand, basePriceCents, currency, unit, unitValue, weightGrams, images, isActive, createdAt, isPerishable, temperatureZone, vatRateBps, unitOfMeasure, null);
     }
 }

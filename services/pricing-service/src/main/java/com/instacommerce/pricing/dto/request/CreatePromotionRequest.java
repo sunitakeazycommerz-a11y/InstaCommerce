@@ -15,7 +15,9 @@ public record CreatePromotionRequest(
     @NotNull Instant startAt,
     @NotNull Instant endAt,
     Integer maxUses,
-    Integer maxRedemptionsPerUser
+    Integer maxRedemptionsPerUser,
+    Boolean stackableWithCoupon,
+    Integer priority
 ) {
     public CreatePromotionRequest(
         String name,
@@ -28,6 +30,21 @@ public record CreatePromotionRequest(
         Instant endAt,
         Integer maxUses
     ) {
-        this(name, description, discountType, discountValue, minOrderCents, maxDiscountCents, startAt, endAt, maxUses, 1);
+        this(name, description, discountType, discountValue, minOrderCents, maxDiscountCents, startAt, endAt, maxUses, 1, Boolean.TRUE, 0);
+    }
+
+    public CreatePromotionRequest(
+        String name,
+        String description,
+        String discountType,
+        BigDecimal discountValue,
+        long minOrderCents,
+        Long maxDiscountCents,
+        Instant startAt,
+        Instant endAt,
+        Integer maxUses,
+        Integer maxRedemptionsPerUser
+    ) {
+        this(name, description, discountType, discountValue, minOrderCents, maxDiscountCents, startAt, endAt, maxUses, maxRedemptionsPerUser, Boolean.TRUE, 0);
     }
 }

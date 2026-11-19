@@ -50,6 +50,7 @@ public class AuthService {
     private final UserService userService;
     private final OutboxService outboxService;
     private final StringRedisTemplate redisTemplate;
+    private final TokenBlocklistService tokenBlocklistService;
 
     @Autowired
     public AuthService(UserRepository userRepository,
@@ -61,7 +62,8 @@ public class AuthService {
                        AuthMetrics authMetrics,
                        UserService userService,
                        OutboxService outboxService,
-                       ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+                       ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+                       ObjectProvider<TokenBlocklistService> tokenBlocklistServiceProvider) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordEncoder = passwordEncoder;
@@ -72,6 +74,22 @@ public class AuthService {
         this.userService = userService;
         this.outboxService = outboxService;
         this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;
+        this.tokenBlocklistService = tokenBlocklistServiceProvider != null
+                ? tokenBlocklistServiceProvider.getIfAvailable()
+                : null;
+    }
+
+    public AuthService(UserRepository userRepository,
+                       RefreshTokenRepository refreshTokenRepository,
+                       PasswordEncoder passwordEncoder,
+                       TokenService tokenService,
+                       AuditService auditService,
+                       RateLimitService rateLimitService,
+                       AuthMetrics authMetrics,
+                       UserService userService,
+                       OutboxService outboxService,
+                       ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+        this(userRepository, refreshTokenRepository, passwordEncoder, tokenService, auditService, rateLimitService, authMetrics, userService, outboxService, redisTemplateProvider, null);
     }
 
     public AuthService(UserRepository userRepository,
@@ -83,7 +101,30 @@ public class AuthService {
                        AuthMetrics authMetrics,
                        UserService userService,
                        OutboxService outboxService) {
-        this(userRepository, refreshTokenRepository, passwordEncoder, tokenService, auditService, rateLimitService, authMetrics, userService, outboxService, null);
+        this(userRepository, refreshTokenRepository, passwordEncoder, tokenService, auditService, rateLimitService, authMetrics, userService, outboxService, null, null);
+    }
+
+    public AuthService(UserRepository userRepository,
+                       RefreshTokenRepository refreshTokenRepository,
+                       PasswordEncoder passwordEncoder,
+                       TokenService tokenService,
+                       AuditService auditService,
+                       RateLimitService rateLimitService,
+                       AuthMetrics authMetrics,
+                       UserService userService,
+                       OutboxService outboxService,
+                       TokenBlocklistService tokenBlocklistService) {
+        this.userRepository = userRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.tokenService = tokenService;
+        this.auditService = auditService;
+        this.rateLimitService = rateLimitService;
+        this.authMetrics = authMetrics;
+        this.userService = userService;
+        this.outboxService = outboxService;
+        this.redisTemplate = null;
+        this.tokenBlocklistService = tokenBlocklistService;
     }
 
     @Transactional
@@ -310,6 +351,17 @@ public class AuthService {
 
     private void handleTokenReuseDetected(UUID userId, UUID tokenId, String ipAddress, String userAgent, String traceId) {
         int revokedCount = refreshTokenRepository.revokeAllByUserId(userId);
+        if (tokenBlocklistService != null) {
+            tokenBlocklistService.revokeAllUserTokens(userId);
+        }
+        Map<String, Object> eventPayload = Map.of(
+            "userId", userId.toString(),
+            "reusedTokenId", tokenId.toString(),
+            "revokedTokens", revokedCount,
+            "detectedAt", Instant.now().toString());
+        if (outboxService != null) {
+            outboxService.publish(TARGET_TYPE_USER, userId.toString(), "TokenReuseDetected", eventPayload, traceId);
+        }
         auditService.logAction(userId,
             "TOKEN_REUSE_DETECTED",
             TARGET_TYPE_USER,
@@ -348,6 +400,14 @@ public class AuthService {
     public void logout(String ipAddress, String userAgent, String traceId) {
         UUID userId = userService.getCurrentUserId();
         int revoked = refreshTokenRepository.revokeAllByUserId(userId);
+        if (tokenBlocklistService != null) {
+            tokenBlocklistService.revokeAllUserTokens(userId);
+        }
+        if (outboxService != null) {
+            outboxService.publish(TARGET_TYPE_USER, userId.toString(), "UserLoggedOut",
+                Map.of("userId", userId.toString(), "revokedTokens", revoked, "loggedOutAt", Instant.now().toString()),
+                traceId);
+        }
         authMetrics.incrementRevoke();
         auditService.logAction(userId,
             "USER_LOGOUT",

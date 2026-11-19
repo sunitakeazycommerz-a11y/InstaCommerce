@@ -123,6 +123,7 @@ class CouponServiceTest {
         Coupon coupon = createSampleCoupon(true, 0, 10, 2);
         when(couponRepository.findByCodeIgnoreCaseForUpdate(CODE)).thenReturn(Optional.of(coupon));
         when(couponRedemptionRepository.countByCouponIdAndUserId(COUPON_ID, USER_ID)).thenReturn(0L);
+        when(promotionService.recordPromotionUsage(PROMO_ID)).thenReturn(true);
 
         couponService.redeemCoupon(CODE, USER_ID, ORDER_ID, 1000L);
 
@@ -250,6 +251,7 @@ class CouponServiceTest {
         when(couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(COUPON_ID, USER_ID, ORDER_ID))
                 .thenReturn(Optional.empty());
         when(couponRedemptionRepository.countByCouponIdAndUserId(COUPON_ID, USER_ID)).thenReturn(0L);
+        when(promotionService.recordPromotionUsage(PROMO_ID)).thenReturn(true);
 
         wiredService.redeemCoupon(CODE, USER_ID, ORDER_ID, 500L);
 
@@ -260,5 +262,48 @@ class CouponServiceTest {
                 any());
         assertThat(reservationService.tryAcquire(CODE, USER_ID)).isTrue();
         reservationService.release(CODE, USER_ID);
+    }
+
+    @Test
+    @DisplayName("redeemCoupon rejects when promotion global usage limit has been exhausted")
+    void redeemCouponRejectsWhenPromotionUsageLimitReached() {
+        Coupon coupon = createSampleCoupon(true, 0, 10, 2);
+        when(couponRepository.findByCodeIgnoreCaseForUpdate(CODE)).thenReturn(Optional.of(coupon));
+        when(couponRedemptionRepository.countByCouponIdAndUserId(COUPON_ID, USER_ID)).thenReturn(0L);
+        when(promotionService.recordPromotionUsage(PROMO_ID)).thenReturn(false);
+
+        assertThatThrownBy(() -> couponService.redeemCoupon(CODE, USER_ID, ORDER_ID, 500L))
+                .isInstanceOf(InvalidCouponException.class)
+                .hasMessageContaining("usage limit");
+
+        verify(couponRedemptionRepository, never()).save(any());
+        verify(couponRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("validateCoupon rejects when backing promotion global maxUses is exhausted or expired")
+    void validateCouponRejectsWhenPromotionExhaustedOrExpired() {
+        Coupon coupon = createSampleCoupon(true, 0, 10, 2);
+        coupon.getPromotion().setMaxUses(5);
+        coupon.getPromotion().setCurrentUses(5);
+        when(couponRepository.findByCodeIgnoreCase(CODE)).thenReturn(Optional.of(coupon));
+
+        assertThatThrownBy(() -> couponService.validateCoupon(CODE, USER_ID, 5000L))
+                .isInstanceOf(InvalidCouponException.class)
+                .hasMessageContaining("usage limit");
+
+        coupon.getPromotion().setMaxUses(null);
+        coupon.getPromotion().setEndAt(Instant.now().minusSeconds(1));
+        assertThatThrownBy(() -> couponService.validateCoupon(CODE, USER_ID, 5000L))
+                .isInstanceOf(InvalidCouponException.class)
+                .hasMessageContaining("expired");
+    }
+
+    @Test
+    @DisplayName("redeemCoupon rejects negative discount amounts")
+    void redeemCouponRejectsNegativeDiscount() {
+        assertThatThrownBy(() -> couponService.redeemCoupon(CODE, USER_ID, ORDER_ID, -10L))
+                .isInstanceOf(InvalidCouponException.class)
+                .hasMessageContaining("negative");
     }
 }

@@ -47,6 +47,39 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
                                  Pageable pageable);
 
     @Query(value = """
+            SELECT sd.id, sd.product_id, sd.name, sd.description, sd.brand, sd.category, sd.price_cents, sd.image_url, sd.in_stock,
+                   ts_rank(sd.search_vector, plainto_tsquery('english', :query)) AS rank
+            FROM search_documents sd
+            WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
+              AND (:brand IS NULL OR sd.brand = :brand)
+              AND (:category IS NULL OR sd.category = :category)
+              AND (:minPrice IS NULL OR sd.price_cents >= :minPrice)
+              AND (:maxPrice IS NULL OR sd.price_cents <= :maxPrice)
+              AND (:storeId IS NULL OR sd.store_id = :storeId OR sd.store_id IS NULL)
+            ORDER BY rank DESC
+            """,
+            countQuery = """
+            SELECT COUNT(*)
+            FROM search_documents sd
+            WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
+              AND (:brand IS NULL OR sd.brand = :brand)
+              AND (:category IS NULL OR sd.category = :category)
+              AND (:minPrice IS NULL OR sd.price_cents >= :minPrice)
+              AND (:maxPrice IS NULL OR sd.price_cents <= :maxPrice)
+              AND (:storeId IS NULL OR sd.store_id = :storeId OR sd.store_id IS NULL)
+            """,
+            nativeQuery = true)
+    Page<Object[]> fullTextSearchScoped(@Param("query") String query,
+                                        @Param("brand") String brand,
+                                        @Param("category") String category,
+                                        @Param("minPrice") Long minPrice,
+                                        @Param("maxPrice") Long maxPrice,
+                                        @Param("storeId") UUID storeId,
+                                        Pageable pageable);
+
+    @Query(value = """
             SELECT sd.name AS suggestion, sd.category, sd.product_id
             FROM search_documents sd
             WHERE lower(sd.name) LIKE lower(:prefix) || '%'
@@ -78,6 +111,26 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
     List<Object[]> facetByBrandAndStore(@Param("query") String query, @Param("storeId") UUID storeId);
 
     @Query(value = """
+            SELECT sd.brand, COUNT(*) AS cnt
+            FROM search_documents sd
+            WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
+              AND (:brand IS NULL OR sd.brand = :brand)
+              AND (:category IS NULL OR sd.category = :category)
+              AND (:minPrice IS NULL OR sd.price_cents >= :minPrice)
+              AND (:maxPrice IS NULL OR sd.price_cents <= :maxPrice)
+              AND (:storeId IS NULL OR sd.store_id = :storeId OR sd.store_id IS NULL)
+            GROUP BY sd.brand
+            ORDER BY cnt DESC
+            """, nativeQuery = true)
+    List<Object[]> facetByBrandFiltered(@Param("query") String query,
+                                        @Param("brand") String brand,
+                                        @Param("category") String category,
+                                        @Param("minPrice") Long minPrice,
+                                        @Param("maxPrice") Long maxPrice,
+                                        @Param("storeId") UUID storeId);
+
+    @Query(value = """
             SELECT sd.category, COUNT(*) AS cnt
             FROM search_documents sd
             WHERE sd.search_vector @@ plainto_tsquery('english', :query)
@@ -99,6 +152,26 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
     List<Object[]> facetByCategoryAndStore(@Param("query") String query, @Param("storeId") UUID storeId);
 
     @Query(value = """
+            SELECT sd.category, COUNT(*) AS cnt
+            FROM search_documents sd
+            WHERE sd.search_vector @@ plainto_tsquery('english', :query)
+              AND sd.in_stock = TRUE
+              AND (:brand IS NULL OR sd.brand = :brand)
+              AND (:category IS NULL OR sd.category = :category)
+              AND (:minPrice IS NULL OR sd.price_cents >= :minPrice)
+              AND (:maxPrice IS NULL OR sd.price_cents <= :maxPrice)
+              AND (:storeId IS NULL OR sd.store_id = :storeId OR sd.store_id IS NULL)
+            GROUP BY sd.category
+            ORDER BY cnt DESC
+            """, nativeQuery = true)
+    List<Object[]> facetByCategoryFiltered(@Param("query") String query,
+                                           @Param("brand") String brand,
+                                           @Param("category") String category,
+                                           @Param("minPrice") Long minPrice,
+                                           @Param("maxPrice") Long maxPrice,
+                                           @Param("storeId") UUID storeId);
+
+    @Query(value = """
             SELECT sd.id, sd.product_id, sd.name, sd.description, sd.brand, sd.category, sd.price_cents, sd.image_url, sd.in_stock, 0.5 AS rank
             FROM search_documents sd
             WHERE lower(sd.name) LIKE '%' || lower(:token) || '%'
@@ -113,4 +186,36 @@ public interface SearchDocumentRepository extends JpaRepository<SearchDocument, 
             """,
             nativeQuery = true)
     Page<Object[]> fuzzyFallbackSearch(@Param("token") String token, Pageable pageable);
+
+    @Query(value = """
+            SELECT sd.id, sd.product_id, sd.name, sd.description, sd.brand, sd.category, sd.price_cents, sd.image_url, sd.in_stock, 0.5 AS rank
+            FROM search_documents sd
+            WHERE lower(sd.name) LIKE '%' || lower(:token) || '%'
+              AND sd.in_stock = TRUE
+              AND (:brand IS NULL OR sd.brand = :brand)
+              AND (:category IS NULL OR sd.category = :category)
+              AND (:minPrice IS NULL OR sd.price_cents >= :minPrice)
+              AND (:maxPrice IS NULL OR sd.price_cents <= :maxPrice)
+              AND (:storeId IS NULL OR sd.store_id = :storeId OR sd.store_id IS NULL)
+            ORDER BY lower(sd.name)
+            """,
+            countQuery = """
+            SELECT COUNT(*)
+            FROM search_documents sd
+            WHERE lower(sd.name) LIKE '%' || lower(:token) || '%'
+              AND sd.in_stock = TRUE
+              AND (:brand IS NULL OR sd.brand = :brand)
+              AND (:category IS NULL OR sd.category = :category)
+              AND (:minPrice IS NULL OR sd.price_cents >= :minPrice)
+              AND (:maxPrice IS NULL OR sd.price_cents <= :maxPrice)
+              AND (:storeId IS NULL OR sd.store_id = :storeId OR sd.store_id IS NULL)
+            """,
+            nativeQuery = true)
+    Page<Object[]> fuzzyFallbackSearchFiltered(@Param("token") String token,
+                                               @Param("brand") String brand,
+                                               @Param("category") String category,
+                                               @Param("minPrice") Long minPrice,
+                                               @Param("maxPrice") Long maxPrice,
+                                               @Param("storeId") UUID storeId,
+                                               Pageable pageable);
 }

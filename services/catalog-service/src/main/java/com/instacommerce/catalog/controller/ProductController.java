@@ -44,9 +44,10 @@ public class ProductController {
 
     @GetMapping
     public Page<ProductResponse> listProducts(@RequestParam(required = false) String category,
+                                              @RequestParam(required = false) UUID storeId,
                                               Pageable pageable,
                                               HttpServletRequest request) {
         rateLimitService.checkProduct(clientIpResolver.resolve(request));
-        return productService.listProducts(category, pageable);
+        return productService.listProducts(category, storeId, pageable);
     }
 }

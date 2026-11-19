@@ -6,12 +6,14 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -59,6 +61,9 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
                 String remoteAddr = request.getRemoteAddr();
                 String uri = request.getRequestURI();
                 String correlationId = request.getHeader("X-Correlation-ID");
+                if (correlationId == null || correlationId.isBlank()) {
+                    correlationId = MDC.get("correlationId");
+                }
 
                 if (status >= 400) {
                     log.warn("SECURITY_AUDIT_MUTATION_REJECTED: method={} uri={} principal={} roles={} status={} durationMs={} clientIp={} remoteAddr={}",
@@ -118,16 +123,38 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
     }
 
     private String getClientIp(HttpServletRequest request) {
+        String remoteAddr = request.getRemoteAddr();
         String xf = request.getHeader("X-Forwarded-For");
-        if (xf != null && !xf.isBlank()) {
-            String candidate = xf.split(",")[0].trim();
-            if (isValidIp(candidate)) {
-                return candidate;
+        if (xf != null && !xf.isBlank() && isTrustedProxy(remoteAddr)) {
+            String[] hops = xf.split(",");
+            for (int i = hops.length - 1; i >= 0; i--) {
+                String candidate = hops[i].trim();
+                if (candidate.isEmpty()) {
+                    continue;
+                }
+                if (!isValidIp(candidate)) {
+                    log.warn("SECURITY_AUDIT_SPOOFED_IP_DETECTED: invalid X-Forwarded-For header '{}', falling back to remoteAddr {}",
+                        candidate, remoteAddr);
+                    return remoteAddr;
+                }
+                if (!isTrustedProxy(candidate) || i == 0) {
+                    return candidate;
+                }
             }
-            log.warn("SECURITY_AUDIT_SPOOFED_IP_DETECTED: invalid X-Forwarded-For header '{}', falling back to remoteAddr {}",
-                candidate, request.getRemoteAddr());
         }
-        return request.getRemoteAddr();
+        return remoteAddr;
+    }
+
+    private boolean isTrustedProxy(String ip) {
+        if (!isValidIp(ip)) {
+            return false;
+        }
+        try {
+            InetAddress address = InetAddress.getByName(ip);
+            return address.isLoopbackAddress() || address.isSiteLocalAddress() || address.isLinkLocalAddress();
+        } catch (Exception ex) {
+            return false;
+        }
     }
 
     private boolean isValidIp(String ip) {

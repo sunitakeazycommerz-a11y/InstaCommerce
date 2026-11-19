@@ -1,16 +1,21 @@
 package com.instacommerce.identity.service;
 
+import com.instacommerce.identity.domain.model.Role;
 import com.instacommerce.identity.domain.model.User;
 import com.instacommerce.identity.dto.mapper.UserMapper;
 import com.instacommerce.identity.dto.request.ChangePasswordRequest;
 import com.instacommerce.identity.dto.request.UpdateProfileRequest;
 import com.instacommerce.identity.dto.response.UserResponse;
+import com.instacommerce.identity.exception.ApiException;
 import com.instacommerce.identity.exception.InvalidCredentialsException;
 import com.instacommerce.identity.exception.UserNotFoundException;
 import com.instacommerce.identity.repository.RefreshTokenRepository;
 import com.instacommerce.identity.repository.UserRepository;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -19,6 +24,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -35,6 +41,7 @@ public class UserService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final OutboxService outboxService;
     private final StringRedisTemplate redisTemplate;
+    private final TokenBlocklistService tokenBlocklistService;
 
     @Autowired
     public UserService(UserRepository userRepository,
@@ -43,7 +50,8 @@ public class UserService {
                        AuditService auditService,
                        RefreshTokenRepository refreshTokenRepository,
                        OutboxService outboxService,
-                       ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+                       ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+                       ObjectProvider<TokenBlocklistService> tokenBlocklistServiceProvider) {
         this.userRepository = userRepository;
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
@@ -51,6 +59,19 @@ public class UserService {
         this.refreshTokenRepository = refreshTokenRepository;
         this.outboxService = outboxService;
         this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;
+        this.tokenBlocklistService = tokenBlocklistServiceProvider != null
+                ? tokenBlocklistServiceProvider.getIfAvailable()
+                : null;
+    }
+
+    public UserService(UserRepository userRepository,
+                       UserMapper userMapper,
+                       PasswordEncoder passwordEncoder,
+                       AuditService auditService,
+                       RefreshTokenRepository refreshTokenRepository,
+                       OutboxService outboxService,
+                       ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+        this(userRepository, userMapper, passwordEncoder, auditService, refreshTokenRepository, outboxService, redisTemplateProvider, null);
     }
 
     public UserService(UserRepository userRepository,
@@ -58,7 +79,7 @@ public class UserService {
                        PasswordEncoder passwordEncoder,
                        AuditService auditService,
                        RefreshTokenRepository refreshTokenRepository) {
-        this(userRepository, userMapper, passwordEncoder, auditService, refreshTokenRepository, null, null);
+        this(userRepository, userMapper, passwordEncoder, auditService, refreshTokenRepository, null, null, null);
     }
 
     public UserResponse getCurrentUser() {
@@ -132,6 +153,9 @@ public class UserService {
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
         refreshTokenRepository.revokeAllByUserId(user.getId());
+        if (tokenBlocklistService != null) {
+            tokenBlocklistService.revokeAllUserTokens(user.getId());
+        }
         auditService.logAction(user.getId(),
             "PASSWORD_CHANGED",
             "User",
@@ -140,6 +164,67 @@ public class UserService {
             ipAddress,
             userAgent,
             traceId);
+    }
+
+    @Transactional
+    public void revokeUserSessions(UUID userId, String ipAddress, String userAgent, String traceId) {
+        User user = userRepository.findById(userId).orElseThrow(UserNotFoundException::new);
+        int revokedTokens = refreshTokenRepository.revokeAllByUserId(user.getId());
+        if (tokenBlocklistService != null) {
+            tokenBlocklistService.revokeAllUserTokens(user.getId());
+        }
+        auditService.logAction(user.getId(),
+            "USER_SESSIONS_REVOKED_BY_ADMIN",
+            "User",
+            user.getId().toString(),
+            Map.of("revokedTokens", revokedTokens),
+            ipAddress,
+            userAgent,
+            traceId);
+        if (outboxService != null) {
+            outboxService.publish("User", user.getId().toString(), "UserSessionsRevoked",
+                Map.of("userId", user.getId().toString(), "revokedTokens", revokedTokens,
+                    "revokedAt", Instant.now().toString()),
+                traceId);
+        }
+    }
+
+    @Transactional
+    public UserResponse updateUserRoles(UUID userId, List<String> roles,
+                                        String ipAddress, String userAgent, String traceId) {
+        if (roles == null || roles.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ROLE", "At least one role is required");
+        }
+        Set<String> normalizedRoles = new LinkedHashSet<>();
+        for (String roleName : roles) {
+            if (roleName == null || roleName.isBlank()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ROLE", "Role must not be blank");
+            }
+            String candidate = roleName.trim().toUpperCase(Locale.ROOT);
+            try {
+                Role.valueOf(candidate);
+            } catch (IllegalArgumentException ex) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ROLE", "Unsupported role: " + roleName);
+            }
+            normalizedRoles.add(candidate);
+        }
+        User user = userRepository.findById(userId).orElseThrow(UserNotFoundException::new);
+        List<String> updatedRoles = List.copyOf(normalizedRoles);
+        user.setRoles(updatedRoles);
+        User saved = userRepository.save(user);
+        refreshTokenRepository.revokeAllByUserId(saved.getId());
+        if (tokenBlocklistService != null) {
+            tokenBlocklistService.revokeAllUserTokens(saved.getId());
+        }
+        auditService.logAction(saved.getId(),
+            "USER_ROLES_UPDATED_BY_ADMIN",
+            "User",
+            saved.getId().toString(),
+            Map.of("roles", updatedRoles),
+            ipAddress,
+            userAgent,
+            traceId);
+        return userMapper.toResponse(saved);
     }
 
     @Transactional

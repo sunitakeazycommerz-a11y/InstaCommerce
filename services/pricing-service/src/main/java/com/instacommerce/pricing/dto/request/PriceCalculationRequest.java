@@ -8,6 +8,10 @@ import java.util.UUID;
 public record PriceCalculationRequest(
     @NotEmpty @Valid List<CartItem> items,
     UUID userId,
-    String couponCode
+    String couponCode,
+    UUID storeId
 ) {
+    public PriceCalculationRequest(List<CartItem> items, UUID userId, String couponCode) {
+        this(items, userId, couponCode, null);
+    }
 }

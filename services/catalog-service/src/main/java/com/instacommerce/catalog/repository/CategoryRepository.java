@@ -10,6 +10,10 @@ import org.springframework.data.repository.query.Param;
 public interface CategoryRepository extends JpaRepository<Category, UUID> {
     List<Category> findByIsActiveTrueOrderBySortOrderAscNameAsc();
 
+    List<Category> findByParentId(UUID parentId);
+
+    boolean existsBySlugIgnoreCase(String slug);
+
     @Query("SELECT c FROM Category c WHERE c.path LIKE :pathPrefix% AND c.isActive = true ORDER BY c.sortOrder ASC, c.name ASC")
     List<Category> findSubtreeByPathPrefix(@Param("pathPrefix") String pathPrefix);
 }

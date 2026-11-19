@@ -54,6 +54,12 @@ public class Promotion {
     @Column(name = "max_redemptions_per_user")
     private Integer maxRedemptionsPerUser = 1;
 
+    @Column(name = "stackable_with_coupon", nullable = false)
+    private boolean stackableWithCoupon = true;
+
+    @Column(nullable = false)
+    private int priority = 0;
+
     @Column(name = "created_at")
     private Instant createdAt;
 
@@ -166,6 +172,22 @@ public class Promotion {
 
     public void setMaxRedemptionsPerUser(Integer maxRedemptionsPerUser) {
         this.maxRedemptionsPerUser = maxRedemptionsPerUser;
+    }
+
+    public boolean isStackableWithCoupon() {
+        return stackableWithCoupon;
+    }
+
+    public void setStackableWithCoupon(boolean stackableWithCoupon) {
+        this.stackableWithCoupon = stackableWithCoupon;
+    }
+
+    public int getPriority() {
+        return priority;
+    }
+
+    public void setPriority(int priority) {
+        this.priority = priority;
     }
 
     public Instant getCreatedAt() {

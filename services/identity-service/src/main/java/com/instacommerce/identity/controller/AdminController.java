@@ -7,6 +7,9 @@ import com.instacommerce.identity.service.NotificationPreferenceService;
 import com.instacommerce.identity.service.UserService;
 import com.instacommerce.identity.util.RequestContextUtil;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
@@ -17,6 +20,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -57,5 +62,25 @@ public class AdminController {
         String traceId = traceIdProvider != null ? traceIdProvider.resolveTraceId(request) : UUID.randomUUID().toString();
         userService.unlockUser(id, RequestContextUtil.resolveIp(request), RequestContextUtil.resolveUserAgent(request), traceId);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping({"/admin/users/{id}/revoke-sessions", "/api/v1/admin/users/{id}/revoke-sessions"})
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Void> revokeSessions(@PathVariable UUID id, HttpServletRequest request) {
+        String traceId = traceIdProvider != null ? traceIdProvider.resolveTraceId(request) : UUID.randomUUID().toString();
+        userService.revokeUserSessions(id, RequestContextUtil.resolveIp(request), RequestContextUtil.resolveUserAgent(request), traceId);
+        return ResponseEntity.noContent().build();
+    }
+
+    public record UpdateRolesRequest(@NotEmpty List<String> roles) {}
+
+    @PutMapping({"/admin/users/{id}/roles", "/api/v1/admin/users/{id}/roles"})
+    @PreAuthorize("hasRole('ADMIN')")
+    public UserResponse updateUserRoles(@PathVariable UUID id,
+                                        @Valid @RequestBody UpdateRolesRequest body,
+                                        HttpServletRequest request) {
+        String traceId = traceIdProvider != null ? traceIdProvider.resolveTraceId(request) : UUID.randomUUID().toString();
+        return userService.updateUserRoles(
+            id, body.roles(), RequestContextUtil.resolveIp(request), RequestContextUtil.resolveUserAgent(request), traceId);
     }
 }
