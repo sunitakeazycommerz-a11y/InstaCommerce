@@ -28,6 +28,8 @@
     "eventTime": { "type": "string", "format": "date-time" },
     "event_time": { "type": "string", "format": "date-time" },
     "timestamp": { "type": "string", "format": "date-time" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "event_timestamp": { "type": "string", "format": "date-time" },
     "schemaVersion": { "type": "string" },
     "schema_version": { "type": "string" },
     "source_service": { "type": "string", "minLength": 1 },

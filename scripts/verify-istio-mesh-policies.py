@@ -62,6 +62,23 @@ def verify_istio_policies():
     assert any("/actuator/health/*" in p for p in public_paths), "Mobile BFF policy must allow health probes"
     print("  ✔ [PASS] Mobile BFF policy permits public discovery while gating user claims")
 
+    # Service policy selector & principal alignment against .Values.services
+    services = set(values.get("services", {}).keys())
+    service_policies = istio.get("servicePolicies", {})
+    assert service_policies, "istio.servicePolicies must be populated when denyDefault is enabled"
+    stale_targets = sorted(set(service_policies.keys()) - services)
+    assert not stale_targets, f"istio.servicePolicies contains keys absent from services: {stale_targets}"
+    uncovered_services = sorted(services - set(service_policies.keys()))
+    assert not uncovered_services, f"services missing istio.servicePolicies entry: {uncovered_services}"
+    bad_sources = [
+        (svc, src)
+        for svc, policy in service_policies.items()
+        for src in policy.get("allowFrom", [])
+        if src != "istio-ingressgateway" and src not in services
+    ]
+    assert not bad_sources, f"istio.servicePolicies allowFrom references absent services: {bad_sources}"
+    print(f"  ✔ [PASS] All {len(service_policies)} Istio/NetworkPolicy servicePolicies align with .Values.services")
+
     # 2. Load values-prod.yaml
     with open("deploy/helm/values-prod.yaml", "r") as f:
         prod_values = yaml.safe_load(f)

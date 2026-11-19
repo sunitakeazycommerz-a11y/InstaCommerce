@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StoreCapacityThrottled",
+  "description": "Emitted when a dark store reaches 90% order slot utilization so checkout extends promised ETAs",
+  "type": "object",
+  "required": ["storeId", "currentPending", "maxConcurrent", "etaExtensionMinutes"],
+  "properties": {
+    "storeId": { "type": "string", "format": "uuid" },
+    "currentPending": { "type": "integer", "minimum": 0 },
+    "maxConcurrent": { "type": "integer", "minimum": 1 },
+    "etaExtensionMinutes": { "type": "integer", "minimum": 1 }
+  }
+}

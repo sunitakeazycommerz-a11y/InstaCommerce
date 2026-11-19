@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PerishableExpiringSoon",
+  "description": "Emitted when a perishable inventory batch triggers automated markdown liquidation prior to expiry",
+  "type": "object",
+  "required": [
+    "store_id",
+    "product_id",
+    "batch_number",
+    "quantity",
+    "expiry_date",
+    "discount_percent",
+    "pricing_rule",
+    "category",
+    "featured_section",
+    "timestamp"
+  ],
+  "properties": {
+    "store_id": { "type": "string", "format": "uuid" },
+    "product_id": { "type": "string", "format": "uuid" },
+    "batch_number": { "type": "string", "minLength": 1 },
+    "quantity": { "type": "integer", "minimum": 0 },
+    "expiry_date": { "type": "string" },
+    "discount_percent": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "pricing_rule": { "type": "string" },
+    "category": { "type": "string" },
+    "featured_section": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

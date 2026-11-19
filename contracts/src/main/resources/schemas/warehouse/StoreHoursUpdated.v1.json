@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StoreHoursUpdated",
+  "description": "Emitted when a dark store's operating hours or holiday flag for a day of week is updated",
+  "type": "object",
+  "required": ["storeId", "dayOfWeek", "opensAt", "closesAt", "holiday"],
+  "properties": {
+    "storeId": { "type": "string", "format": "uuid" },
+    "dayOfWeek": { "type": "integer", "minimum": 0, "maximum": 6 },
+    "opensAt": { "type": "string" },
+    "closesAt": { "type": "string" },
+    "holiday": { "type": "boolean" }
+  }
+}

@@ -69,7 +69,7 @@ stateDiagram-v2
 | `checkout-orchestrator-service` | Java 21 / Spring Boot 4 | 8091 | Temporal Server | — | `checkout-orchestrator-service` |
 | `warehouse-service` | Java 21 / Spring Boot 4 | 8092 | PostgreSQL | `warehouse.events` | `warehouse-service` |
 | `rider-fleet-service` | Java 21 / Spring Boot 4 | 8093 | PostgreSQL | `rider.events` | `rider-fleet-service` |
-| `routing-eta-service` | Java 21 / Spring Boot 4 | 8094 | PostgreSQL + OSRM | — | `routing-eta-service` |
+| `routing-eta-service` | Java 21 / Spring Boot 4 | 8094 | PostgreSQL + OSRM | `delivery.events` | `routing-eta-service` |
 | `wallet-loyalty-service` | Java 21 / Spring Boot 4 | 8095 | PostgreSQL | `wallet.events` | `wallet-loyalty-service` |
 | `audit-trail-service` | Java 21 / Spring Boot 4 | 8096 | PostgreSQL + GCS | — | `audit-trail-service` |
 | `fraud-detection-service` | Java 21 / Spring Boot 4 | 8097 | PostgreSQL | `fraud.events` | `fraud-detection-service` |

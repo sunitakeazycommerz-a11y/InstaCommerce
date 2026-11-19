@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RiderGeofenceTransition",
+  "description": "Emitted when rider GPS telemetry detects an entry or exit transition for a store or delivery H3 geofence",
+  "type": "object",
+  "required": ["rider_id", "zone_id", "event_type", "h3_index", "timestamp", "lat", "lng"],
+  "properties": {
+    "rider_id": { "type": "string", "minLength": 1 },
+    "zone_id": { "type": "string", "minLength": 1 },
+    "event_type": { "type": "string" },
+    "h3_index": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+    "lng": { "type": "number", "minimum": -180, "maximum": 180 }
+  }
+}

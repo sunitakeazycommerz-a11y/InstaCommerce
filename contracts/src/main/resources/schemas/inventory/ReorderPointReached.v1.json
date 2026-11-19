@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReorderPointReached",
+  "description": "Emitted when available dark-store stock drops below computed safety stock reorder threshold",
+  "type": "object",
+  "required": [
+    "store_id",
+    "product_id",
+    "available_stock",
+    "safety_stock_buffer",
+    "reorder_threshold",
+    "recommended_order_quantity",
+    "lead_time_days",
+    "timestamp"
+  ],
+  "properties": {
+    "store_id": { "type": "string", "format": "uuid" },
+    "product_id": { "type": "string", "format": "uuid" },
+    "available_stock": { "type": "integer" },
+    "safety_stock_buffer": { "type": "integer", "minimum": 0 },
+    "reorder_threshold": { "type": "integer", "minimum": 0 },
+    "recommended_order_quantity": { "type": "integer", "minimum": 1 },
+    "lead_time_days": { "type": "integer", "minimum": 1 },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

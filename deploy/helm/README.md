@@ -71,9 +71,9 @@ flowchart TB
 | Layer | File | Purpose |
 |---|---|---|
 | **Base** | `values.yaml` | All service definitions, resource requests/limits, HPA configs, Istio rules, network policies |
-| **Dev** | `values-dev.yaml` | Dev image registry (`dev-images`), `tag: dev` for all services |
+| **Dev** | `values-dev.yaml` | Dev overrides (`asia-south1-docker.pkg.dev/instacommerce/images`, `tag: dev`, `gcpProject: instacommerce-dev`) |
 | **Staging** | `values-staging.yaml` | Staging cluster overrides (`instacommerce-staging`, single-replica baseline) |
-| **Prod** | `values-prod.yaml` | Prod image registry (`prod-images`), `tag: prod`, higher replica counts, prod Redis/Kafka hosts |
+| **Prod** | `values-prod.yaml` | Prod overrides (`asia-south1-docker.pkg.dev/instacommerce/images`, `tag: prod`, higher replica counts, prod Redis/Kafka hosts) |
 | **Canary SF** | `values-canary-sf.yaml` | Phase 2 W1 Dark store pilot (100% traffic, us-west-1) |
 | **Canary Seattle** | `values-canary-seattle.yaml` | Phase 2 W2 Gated canary (10% traffic, us-west-2) |
 | **Canary Austin** | `values-canary-austin.yaml` | Phase 2 W3 Multi-step gated rollout (5% → 100%, us-central-1) |
@@ -113,7 +113,7 @@ flowchart TB
 | `payment-webhook` | 8106 | 8106 | 2 | 2 | 500m | 512Mi |
 | `reconciliation-engine` | 8107 | 8107 | 2 | 2 | 500m | 512Mi |
 | `stream-processor` | 8108 | 8108 | 1 | 2 | 500m | 512Mi |
-| `reverse-etl-orchestrator` | 8080 | 8109 | 2 | 2 | 500m | 512Mi |
+| `reverse-etl-orchestrator` | 8109 | 8109 | 2 | 2 | 500m | 512Mi |
 
 > **Note on Outbox Relays:** In addition to the base `outbox-relay` service, `values.yaml` supports dedicated per-domain relays (`outbox-relay-order`, `outbox-relay-payment`, `outbox-relay-cart`, `outbox-relay-fulfillment`) for high-throughput tenant isolation.
 

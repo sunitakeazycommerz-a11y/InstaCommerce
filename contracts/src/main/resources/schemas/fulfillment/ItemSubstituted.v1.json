@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ItemSubstituted",
+  "description": "Emitted when a picker fulfills a missing line item using a customer-approved substitute SKU",
+  "type": "object",
+  "required": ["orderId", "storeId", "originalProductId", "substituteProductId", "substitutedQuantity"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "storeId": { "type": "string", "format": "uuid" },
+    "originalProductId": { "type": "string", "format": "uuid" },
+    "substituteProductId": { "type": "string", "format": "uuid" },
+    "substitutedQuantity": { "type": "integer", "minimum": 1 }
+  }
+}

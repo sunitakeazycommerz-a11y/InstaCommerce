@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StockAdjusted",
+  "description": "Emitted when dark-store on-hand inventory is adjusted individually or in batch",
+  "type": "object",
+  "required": ["productId", "storeId", "delta", "reason", "newOnHand", "adjustedAt"],
+  "properties": {
+    "productId": { "type": "string", "format": "uuid" },
+    "storeId": { "type": "string", "format": "uuid" },
+    "delta": { "type": "integer" },
+    "reason": { "type": "string", "minLength": 1 },
+    "referenceId": { "type": ["string", "null"] },
+    "newOnHand": { "type": "integer", "minimum": 0 },
+    "adjustedAt": { "type": "string", "format": "date-time" }
+  }
+}

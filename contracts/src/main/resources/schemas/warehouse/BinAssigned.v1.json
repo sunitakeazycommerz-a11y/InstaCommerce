@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BinAssigned",
+  "description": "Emitted when a SKU is assigned to a physical aisle/rack/shelf bin inside a dark store",
+  "type": "object",
+  "required": [
+    "id",
+    "storeId",
+    "aisle",
+    "rack",
+    "shelf",
+    "binNumber",
+    "sku",
+    "maxVolumeCm3",
+    "currentVolumeCm3",
+    "maxWeightGrams",
+    "currentWeightGrams",
+    "occupied"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "storeId": { "type": "string", "format": "uuid" },
+    "aisle": { "type": "string" },
+    "rack": { "type": "string" },
+    "shelf": { "type": "string" },
+    "binNumber": { "type": "string" },
+    "sku": { "type": "string" },
+    "maxVolumeCm3": { "type": "integer", "minimum": 0 },
+    "currentVolumeCm3": { "type": "integer", "minimum": 0 },
+    "maxWeightGrams": { "type": "integer", "minimum": 0 },
+    "currentWeightGrams": { "type": "integer", "minimum": 0 },
+    "occupied": { "type": "boolean" },
+    "updatedAt": { "type": ["string", "null"], "format": "date-time" }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CartMerged",
+  "description": "Emitted when a guest shopping cart is merged into an authenticated user cart (producer eventType: CART_MERGED)",
+  "type": "object",
+  "required": ["targetUserId", "guestUserId"],
+  "properties": {
+    "targetUserId": { "type": "string", "format": "uuid" },
+    "guestUserId": { "type": "string", "format": "uuid" }
+  }
+}

@@ -188,6 +188,32 @@ else
             log_fail "Microservice '$svc' MISSING from Helm deployment mapping in $HELM_VALUES"
         fi
     done
+
+    # Verify Helm istio.servicePolicies keys and allowFrom sources match .Values.services
+    if command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" 2>/dev/null; then
+        POLICY_DRIFT=$(python3 -c '
+import yaml
+with open("deploy/helm/values.yaml") as f:
+    v = yaml.safe_load(f)
+svcs = set(v.get("services", {}).keys())
+pols = v.get("istio", {}).get("servicePolicies", {})
+issues = []
+for k in sorted(set(pols.keys()) - svcs):
+    issues.append(f"stale-policy-target:{k}")
+for k in sorted(svcs - set(pols.keys())):
+    issues.append(f"uncovered-service:{k}")
+for k, pol in sorted(pols.items()):
+    for src in pol.get("allowFrom", []):
+        if src != "istio-ingressgateway" and src not in svcs:
+            issues.append(f"stale-allowFrom:{k}->{src}")
+print("\n".join(issues))
+')
+        if [ -z "$POLICY_DRIFT" ]; then
+            log_pass "Helm istio.servicePolicies targets and allowFrom sources align with .Values.services"
+        else
+            log_fail "Helm istio.servicePolicies drift detected: $POLICY_DRIFT"
+        fi
+    fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -209,6 +235,53 @@ if grep -q 'mavenBom("org.springframework.boot:spring-boot-dependencies:4.0.0")'
     log_pass "Spring Boot 4.0.0 BOM enforced in root build.gradle.kts"
 else
     log_fail "Spring Boot 4.0.0 BOM missing or drifted in root build.gradle.kts"
+fi
+
+# Verify :libs:platform-common Gradle module wiring
+if grep -q 'include("libs:platform-common")' settings.gradle.kts && [ -f "libs/platform-common/build.gradle.kts" ]; then
+    log_pass ":libs:platform-common Gradle module included and configured"
+else
+    log_fail ":libs:platform-common missing from settings.gradle.kts or build script"
+fi
+
+# Verify Dependabot groups all 30 Dockerfiles and configures cooldowns
+if [ -f ".github/dependabot.yml" ]; then
+    if command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" 2>/dev/null; then
+        DEP_DRIFT=$(python3 -c '
+import glob, os, yaml
+with open(".github/dependabot.yml") as f:
+    cfg = yaml.safe_load(f) or {}
+docker_dirs = set()
+missing_cooldown = []
+missing_docker_groups = []
+for idx, upd in enumerate(cfg.get("updates", [])):
+    eco = upd.get("package-ecosystem")
+    if "cooldown" not in upd:
+        missing_cooldown.append(f"{eco}#{idx}")
+    if eco == "docker":
+        if not upd.get("groups"):
+            missing_docker_groups.append(f"entry#{idx}")
+        for d in upd.get("directories", []):
+            docker_dirs.add(d.lstrip("/"))
+        if "directory" in upd:
+            docker_dirs.add(upd["directory"].lstrip("/"))
+actual_docker_dirs = {os.path.dirname(p) for p in glob.glob("services/*/Dockerfile")}
+uncovered = sorted(actual_docker_dirs - docker_dirs)
+errs = []
+if missing_cooldown:
+    errs.append("missing-cooldown:" + ",".join(missing_cooldown))
+if missing_docker_groups:
+    errs.append("ungrouped-docker:" + ",".join(missing_docker_groups))
+if uncovered:
+    errs.append("uncovered-dockerfiles:" + ",".join(uncovered))
+print("; ".join(errs))
+')
+        if [ -z "$DEP_DRIFT" ]; then
+            log_pass ".github/dependabot.yml enforces cooldowns and grouped Docker coverage across all 30 services"
+        else
+            log_fail ".github/dependabot.yml governance drift: $DEP_DRIFT"
+        fi
+    fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -327,7 +400,41 @@ for entry in $GLOSSARY_PORTS; do
     else
         log_fail "Service '$reg_svc' Helm port ($helm_port) does NOT match GLOSSARY.md ($reg_port)"
     fi
+
+    # 4. Assert deploy/helm/README.md port table matches GLOSSARY.md
+    if [ -f "deploy/helm/README.md" ]; then
+        if grep -qE "^\| \`${helm_key}\` \| ${reg_port} \| ${reg_port} \|" deploy/helm/README.md; then
+            log_pass "Service '$helm_key' deploy/helm/README.md port ($reg_port) matches GLOSSARY.md"
+        else
+            log_fail "Service '$helm_key' deploy/helm/README.md port table out of sync with GLOSSARY.md ($reg_port)"
+        fi
+    fi
 done
+
+# Verify .github/CODEOWNERS coverage across services and platform directories (Issue #697)
+if [ -f ".github/CODEOWNERS" ]; then
+    log_pass ".github/CODEOWNERS present"
+    for svc_dir in services/*; do
+        [ -d "$svc_dir" ] || continue
+        svc=$(basename "$svc_dir")
+        [ "$svc" == "build" ] && continue
+        if grep -qE "^/services/${svc}/[[:space:]]+@" .github/CODEOWNERS; then
+            log_pass "CODEOWNERS rule covers '/services/${svc}/'"
+        else
+            log_fail "CODEOWNERS MISSING explicit rule for '/services/${svc}/'"
+        fi
+    done
+
+    for owner_path in "/libs/" "/contracts/" "/deploy/" "/infra/" "/argocd/" "/monitoring/" "/scripts/" "/tests/e2e/" "/data-platform/" "/data-platform-jobs/" "/ml/" "/prometheus/" "/k8s/" "/GLOSSARY.md" "/AGENTS.md"; do
+        if grep -qE "^${owner_path}[[:space:]]+@" .github/CODEOWNERS; then
+            log_pass "CODEOWNERS rule covers '${owner_path}'"
+        else
+            log_fail "CODEOWNERS MISSING explicit rule for '${owner_path}'"
+        fi
+    done
+else
+    log_fail ".github/CODEOWNERS missing!"
+fi
 
 # ------------------------------------------------------------------------------
 # 6. Contracts & Event Schemas
@@ -404,6 +511,63 @@ print("\n".join(dups))
     else
         log_fail "Duplicate ArgoCD Application metadata.name found: $DUP_ARGO"
     fi
+
+    # Verify ArgoCD Rollout containerPorts match canonical GLOSSARY.md service ports
+    ARGO_PORT_DRIFT=$(python3 -c '
+import re, subprocess, yaml
+ports = {}
+with open("GLOSSARY.md") as f:
+    for line in f:
+        m = re.match(r"^\| `([a-z0-9-]+)` \| [^|]+ \| ([0-9]+) \|", line)
+        if m:
+            ports[m.group(1)] = int(m.group(2))
+issues = []
+paths = subprocess.check_output(["git", "ls-files", "--", "argocd/*.yaml", "argocd/**/*.yaml"], text=True).splitlines()
+for p in sorted(set(paths)):
+    with open(p) as f:
+        for doc in yaml.safe_load_all(f):
+            if not doc or doc.get("kind") != "Rollout":
+                continue
+            containers = doc.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+            for c in containers:
+                cname = c.get("name")
+                expected = ports.get(cname)
+                if expected:
+                    cports = [cp.get("containerPort") for cp in c.get("ports", []) if "containerPort" in cp]
+                    if expected not in cports:
+                        issues.append(f"{p}:{cname} has {cports} expected {expected}")
+print("\n".join(issues))
+')
+    if [ -z "$ARGO_PORT_DRIFT" ]; then
+        log_pass "ArgoCD Rollout containerPorts match canonical GLOSSARY.md ports"
+    else
+        log_fail "ArgoCD Rollout containerPort drift detected: $ARGO_PORT_DRIFT"
+    fi
+fi
+
+# Verify monitoring assets do not use non-existent HikariCP Micrometer metric names
+STALE_HIKARI=$(grep -rnE 'hikaricp_(active_connections|max_connections|pending_threads|connection_timeout_total)' monitoring/ prometheus/ || true)
+if [ -z "$STALE_HIKARI" ]; then
+    log_pass "Monitoring rules and dashboards use canonical Micrometer hikaricp_connections_* metrics"
+else
+    log_fail "Stale HikariCP metric names found in monitoring/: $STALE_HIKARI"
+fi
+
+# Verify TopicNames.java .events topics have matching .DLT constants (ADR-003)
+MISSING_DLT=$(python3 -c '
+import re
+with open("contracts/src/main/java/com/instacommerce/contracts/topics/TopicNames.java") as f:
+    src = f.read()
+vals = dict(re.findall(r"public static final String ([A-Z0-9_]+)\s*=\s*\"([^\"]+)\"", src))
+dlt_rhs = " ".join(re.findall(r"_DLT\s*=\s*([^;]+);", src))
+for k, v in vals.items():
+    if v.endswith(".events") and k not in dlt_rhs and f"{v}.DLT" not in src:
+        print(k, v)
+' 2>/dev/null || true)
+if [ -z "$MISSING_DLT" ]; then
+    log_pass "TopicNames.java defines .DLT topics for all .events domain topics"
+else
+    log_fail "TopicNames.java missing .DLT constants for: $MISSING_DLT"
 fi
 
 # ------------------------------------------------------------------------------

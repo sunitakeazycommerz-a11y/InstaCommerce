@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RiderAssignmentCancelled",
+  "description": "Emitted when an active rider delivery assignment is cancelled and the rider returns to available pool",
+  "type": "object",
+  "required": ["riderId", "orderId", "reason"],
+  "properties": {
+    "riderId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string", "format": "uuid" },
+    "reason": { "type": "string" }
+  }
+}

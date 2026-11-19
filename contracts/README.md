@@ -134,11 +134,11 @@ contracts/
 
 | Library | Version |
 |---------|---------|
-| grpc-protobuf | 1.62.2 |
-| grpc-stub | 1.62.2 |
-| grpc-netty-shaded | 1.62.2 |
-| protoc | 3.25.3 |
-| protoc-gen-grpc-java | 1.62.2 |
+| grpc-protobuf | 1.75.0 |
+| grpc-stub | 1.75.0 |
+| grpc-netty-shaded | 1.75.0 |
+| protoc | 4.32.0 |
+| protoc-gen-grpc-java | 1.75.0 |
 
 ---
 
@@ -153,6 +153,7 @@ contracts/
 | `OrderStatusChanged` | `orders/OrderStatusChanged.v1.json` | v1 | Generic status transition notification |
 | `OrderCancelled` | `orders/OrderCancelled.v1.json` | v1 | Order cancelled (by customer or system) |
 | `OrderFailed` | `orders/OrderFailed.v1.json` | v1 | Order processing failed |
+| `OrderPartiallyRefunded` | `orders/OrderPartiallyRefunded.v1.json` | v1 | Partial refund emitted after order modification reduces total |
 
 ### Payments (`payments.events`)
 
@@ -178,15 +179,27 @@ contracts/
 | `StockReserved` | `inventory/StockReserved.v1.json` | v1 | Stock reserved for an order |
 | `StockConfirmed` | `inventory/StockConfirmed.v1.json` | v1 | Stock reservation confirmed |
 | `StockReleased` | `inventory/StockReleased.v1.json` | v1 | Reserved stock released back |
+| `StockAdjusted` | `inventory/StockAdjusted.v1.json` | v1 | Single or batch dark-store stock adjustment |
 | `LowStockAlert` | `inventory/LowStockAlert.v1.json` | v1 | Stock below reorder threshold |
+| `PerishableExpiringSoon` | `inventory/PerishableExpiringSoon.v1.json` | v1 | Automated markdown triggered on expiring perishable batch |
+| `ReorderPointReached` | `inventory/ReorderPointReached.v1.json` | v1 | Safety stock reorder threshold crossed |
+| `InboundAsnReconciled` | `inventory/InboundAsnReconciled.v1.json` | v1 | Inbound ASN pallet receipt reconciled |
+| `StockDriftDetected` | `inventory/StockDriftDetected.v1.json` | v1 | Physical stock reconciliation discrepancy detected |
+| `DarkStoreCycleCountTaskCreated` | `inventory/DarkStoreCycleCountTaskCreated.v1.json` | v1 | Urgent physical cycle count audit task created |
+| `CycleCountAuditCompleted` | `inventory/CycleCountAuditCompleted.v1.json` | v1 | Physical cycle count audit completed and SKU unfrozen |
+| `StockReservedShortfallDetected` | `inventory/StockReservedShortfallDetected.v1.json` | v1 | Verified physical count fell below reserved units |
 
 ### Fulfillment (`fulfillment.events`)
 
 | Event | Schema | Version | Description |
 |-------|--------|---------|-------------|
 | `PickTaskCreated` | `fulfillment/PickTaskCreated.v1.json` | v1 | Pick task assigned to store staff |
+| `PickTaskCancelled` | `fulfillment/PickTaskCancelled.v1.json` | v1 | Warehouse pick task cancelled before completion |
+| `ItemSubstituted` | `fulfillment/ItemSubstituted.v1.json` | v1 | Missing item replaced with approved substitute SKU |
 | `OrderPacked` | `fulfillment/OrderPacked.v1.json` | v1 | Order picked and packed at store |
 | `OrderDispatched` | `fulfillment/OrderDispatched.v1.json` | v1 | Order handed to rider for delivery |
+| `RiderHandoffCompleted` | `fulfillment/RiderHandoffCompleted.v1.json` | v1 | Dispatch OTP verified physical handoff to rider |
+| `ProofOfDeliveryUploaded` | `fulfillment/ProofOfDeliveryUploaded.v1.json` | v1 | Masked WebP proof-of-delivery photo uploaded |
 | `OrderDelivered` | `fulfillment/OrderDelivered.v1.json` | v1 | Order delivered to customer |
 | `OrderModified` | `fulfillment/OrderModified.v1.json` | v1 | Order items modified or substituted |
 | `DeliveryCompleted` | `fulfillment/DeliveryCompleted.v1.json` | v1 | Delivery confirmed complete |
@@ -224,6 +237,8 @@ contracts/
 | `RiderOnboarded` | `rider/RiderOnboarded.v1.json` | v1 | Rider onboarding completed |
 | `RiderActivated` | `rider/RiderActivated.v1.json` | v1 | Rider activated for deliveries |
 | `RiderAssigned` | `rider/RiderAssigned.v1.json` | v1 | Rider assigned to order |
+| `RiderAssignmentCancelled` | `rider/RiderAssignmentCancelled.v1.json` | v1 | Active rider assignment cancelled and rider released |
+| `RiderGeofenceTransition` | `rider/RiderGeofenceTransition.v1.json` | v1 | Rider H3 geofence entry or exit telemetry event |
 | `RiderReleased` | `rider/RiderReleased.v1.json` | v1 | Rider assignment released |
 | `RiderSuspended` | `rider/RiderSuspended.v1.json` | v1 | Rider account suspended |
 
@@ -233,6 +248,11 @@ contracts/
 |-------|--------|---------|-------------|
 | `StoreCreated` | `warehouse/StoreCreated.v1.json` | v1 | New store/dark store created |
 | `StoreStatusChanged` | `warehouse/StoreStatusChanged.v1.json` | v1 | Store status changed (open/closed/maintenance) |
+| `StoreHoursUpdated` | `warehouse/StoreHoursUpdated.v1.json` | v1 | Dark store day-of-week hours or holiday schedule updated |
+| `StoreCapacityThrottled` | `warehouse/StoreCapacityThrottled.v1.json` | v1 | Store reached 90% capacity and extends promised ETA |
+| `StoreCapacityPaused` | `warehouse/StoreCapacityPaused.v1.json` | v1 | Store reached concurrent or hourly order capacity |
+| `ColdChainBreachAlert` | `warehouse/ColdChainBreachAlert.v1.json` | v1 | Staging bay cold-chain temperature excursion alert |
+| `BinAssigned` | `warehouse/BinAssigned.v1.json` | v1 | SKU assigned to physical warehouse bin |
 | `StoreDeleted` | `warehouse/StoreDeleted.v1.json` | v1 | Store decommissioned |
 
 ### Cart (`cart.events`)
@@ -242,6 +262,7 @@ contracts/
 | `CartItemAdded` | `cart/CartItemAdded.v1.json` | v1 | Item added to active cart |
 | `CartItemRemoved` | `cart/CartItemRemoved.v1.json` | v1 | Item removed from cart |
 | `CartCleared` | `cart/CartCleared.v1.json` | v1 | Cart emptied |
+| `CartMerged` | `cart/CartMerged.v1.json` | v1 | Guest cart merged into authenticated user cart (`CART_MERGED`) |
 
 ### Pricing & Promotions (`pricing.events`, `promotion.events`)
 
@@ -260,17 +281,17 @@ contracts/
 | `PointsRedeemed` | `wallet/PointsRedeemed.v1.json` | v1 | Loyalty points converted to discount |
 | `WalletCredited` | `wallet/WalletCredited.v1.json` | v1 | Cashback, top-up, or refund credit |
 | `WalletDebited` | `wallet/WalletDebited.v1.json` | v1 | Balance debited from wallet |
+| `TierUpgraded` | `wallet/TierUpgraded.v1.json` | v1 | Loyalty tier upgraded on lifetime points milestone |
 
-### Routing & Logistics (`delivery.events`, `routing.events`, `rider.geofence.events`)
+### Routing & Logistics (`delivery.events`, `rider.geofence.events`)
 
 | Event | Schema / Payload | Version | Description |
 |---|---|---|---|
+| `DeliveryCreated` | `delivery/DeliveryCreated.v1.json` | v1 | Delivery leg instantiated for dispatch with initial ETA |
 | `DeliveryStatusUpdated` | `delivery/DeliveryStatusUpdated.v1.json` | v1 | Canonical transition between dispatched, in-transit, arrived |
+| `EtaUpdated` | `delivery/EtaUpdated.v1.json` | v1 | Continuous ETA recalculation with detour and weather signals |
 | `ETABreachRisk` | `routing/ETABreachRisk.v1.json` | v1 | Alert emitted when delivery is projected to breach SLA |
-| `DELIVERY_CREATED` | Delivery tracking payload | v1 | Delivery leg instantiated for dispatch |
-| `DELIVERY_COMPLETED` | Proof of delivery | v1 | Order delivered and verified |
-| `RiderGeofenceEntered` | Store ID, rider ID, radius | v1 | Rider entered dark store pickup geofence |
-| `RiderGeofenceExited` | Store ID, rider ID | v1 | Rider departed dark store with package |
+| `RiderGeofenceTransition` | `rider/RiderGeofenceTransition.v1.json` | v1 | Rider entered or exited dark store / delivery H3 geofence |
 
 ### AI Orchestrator (`ai-orchestrator.events`)
 
@@ -333,7 +354,7 @@ All Java services, Go relay, and consumers reference this single source of truth
 | `FULFILLMENT_EVENTS` | `fulfillment.events` | `fulfillment-service` | Rider fleet, order, routing, notifications |
 | `RIDER_EVENTS` | `rider.events` | `rider-fleet-service` | Routing ETA, dispatch optimizer |
 | `DELIVERY_EVENTS` | `delivery.events` | `routing-eta-service` | Audit trail, notification, rider fleet |
-| `ROUTING_EVENTS` | `routing.events` | `routing-eta-service` | Dispatch optimizer, mobile-bff |
+| `ROUTING_EVENTS` | `delivery.events` | `routing-eta-service` | Alias of `DELIVERY_EVENTS` (`delivery.events`) |
 | `RIDER_GEOFENCE_EVENTS` | `rider.geofence.events` | `location-ingestion-service` | Routing ETA, fulfillment |
 | `CART_EVENTS` | `cart.events` | `cart-service` | Audit trail, AI orchestrator, analytics |
 | `PRICING_EVENTS` | `pricing.events` | `pricing-service` | Search, catalog, cart |

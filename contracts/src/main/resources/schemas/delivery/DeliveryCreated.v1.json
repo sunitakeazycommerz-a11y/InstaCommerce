@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DeliveryCreated",
+  "description": "Emitted when routing-eta-service instantiates a tracked delivery leg with initial ETA and route distance",
+  "type": "object",
+  "required": [
+    "id",
+    "orderId",
+    "storeId",
+    "pickupLat",
+    "pickupLng",
+    "dropoffLat",
+    "dropoffLng",
+    "status",
+    "estimatedMinutes",
+    "distanceKm"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string", "format": "uuid" },
+    "riderId": { "type": ["string", "null"], "format": "uuid" },
+    "storeId": { "type": "string", "format": "uuid" },
+    "pickupLat": { "type": "number", "minimum": -90, "maximum": 90 },
+    "pickupLng": { "type": "number", "minimum": -180, "maximum": 180 },
+    "dropoffLat": { "type": "number", "minimum": -90, "maximum": 90 },
+    "dropoffLng": { "type": "number", "minimum": -180, "maximum": 180 },
+    "status": { "type": "string" },
+    "estimatedMinutes": { "type": ["integer", "null"], "minimum": 0 },
+    "actualMinutes": { "type": ["integer", "null"], "minimum": 0 },
+    "distanceKm": { "type": ["number", "null"], "minimum": 0 },
+    "startedAt": { "type": ["string", "null"], "format": "date-time" },
+    "deliveredAt": { "type": ["string", "null"], "format": "date-time" },
+    "createdAt": { "type": ["string", "null"], "format": "date-time" },
+    "updatedAt": { "type": ["string", "null"], "format": "date-time" },
+    "isBreachRisk": { "type": "boolean" },
+    "compensationTriggered": { "type": "boolean" },
+    "compensationAmountCents": { "type": "integer", "minimum": 0 },
+    "vehicleType": { "type": ["string", "null"] },
+    "weatherDelayActive": { "type": "boolean" }
+  }
+}

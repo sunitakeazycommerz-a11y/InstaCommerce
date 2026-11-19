@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RiderHandoffCompleted",
+  "description": "Emitted when dispatch OTP verification confirms physical handoff from dark store to rider",
+  "type": "object",
+  "required": ["orderId", "riderId", "handoffAt"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "riderId": { "type": "string", "format": "uuid" },
+    "handoffAt": { "type": "string", "format": "date-time" }
+  }
+}

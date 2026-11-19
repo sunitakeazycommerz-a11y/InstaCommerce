@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StoreCapacityPaused",
+  "description": "Emitted when a dark store reaches concurrent or hourly order capacity and pauses new intake",
+  "type": "object",
+  "required": ["storeId", "currentPending"],
+  "properties": {
+    "storeId": { "type": "string", "format": "uuid" },
+    "currentPending": { "type": "integer", "minimum": 0 },
+    "maxConcurrent": { "type": "integer", "minimum": 1 },
+    "maxOrdersPerHour": { "type": "integer", "minimum": 1 }
+  }
+}

@@ -20,7 +20,7 @@ spec:
         - name: order-service
           image: asia-south1-docker.pkg.dev/instacommerce/images/order-service:latest
           ports:
-            - containerPort: 8080
+            - containerPort: 8084
               name: http
           resources:
             requests: { cpu: 250m, memory: 512Mi }

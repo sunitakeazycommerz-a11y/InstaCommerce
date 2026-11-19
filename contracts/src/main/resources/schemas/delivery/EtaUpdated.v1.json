@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "EtaUpdated",
+  "description": "Emitted on continuous ETA recalculations including detour detection and weather delay signals",
+  "type": "object",
+  "required": [
+    "deliveryId",
+    "orderId",
+    "riderId",
+    "estimatedMinutes",
+    "etaLowMinutes",
+    "etaHighMinutes",
+    "distanceKm",
+    "detourDetected",
+    "monsoonDelayActive",
+    "calculatedAt"
+  ],
+  "properties": {
+    "deliveryId": { "type": "string", "format": "uuid" },
+    "orderId": { "type": "string", "format": "uuid" },
+    "riderId": { "type": "string" },
+    "estimatedMinutes": { "type": "integer", "minimum": 0 },
+    "etaLowMinutes": { "type": "integer", "minimum": 0 },
+    "etaHighMinutes": { "type": "integer", "minimum": 0 },
+    "distanceKm": { "type": "number", "minimum": 0 },
+    "detourDetected": { "type": "boolean" },
+    "monsoonDelayActive": { "type": "boolean" },
+    "delayBanner": { "type": ["string", "null"] },
+    "vehicleRecommendation": { "type": ["string", "null"] },
+    "calculatedAt": { "type": "string", "format": "date-time" }
+  }
+}

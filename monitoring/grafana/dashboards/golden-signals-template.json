@@ -123,7 +123,7 @@
           "refId": "A"
         },
         {
-          "expr": "hikaricp_active_connections{service=\"$service\"} / (hikaricp_max_connections{service=\"$service\"} > 0)",
+          "expr": "hikaricp_connections_active{service=\"$service\"} / (hikaricp_connections_max{service=\"$service\"} > 0)",
           "legendFormat": "HikariCP Pool Saturation",
           "refId": "B"
         }

@@ -12,13 +12,21 @@
 *                                               @instacommerce/platform
 
 # ---------------------------------------------------------------------------
-# Root build & config files
+# Root build, toolchain & architecture files
 # ---------------------------------------------------------------------------
+/AGENTS.md                                      @instacommerce/platform
+/GLOSSARY.md                                    @instacommerce/platform
+/README.md                                      @instacommerce/platform
+/SECURITY.md                                    @instacommerce/platform @instacommerce/sre
 /build.gradle.kts                               @instacommerce/platform
 /settings.gradle.kts                            @instacommerce/platform
 /gradle/                                        @instacommerce/platform
 /gradlew                                        @instacommerce/platform
 /gradlew.bat                                    @instacommerce/platform
+/go.work                                        @instacommerce/platform
+/go.work.sum                                    @instacommerce/platform
+/pyproject.toml                                 @instacommerce/platform @instacommerce/data-ml
+/pyrightconfig.json                             @instacommerce/platform @instacommerce/data-ml
 /docker-compose.yml                             @instacommerce/platform @instacommerce/sre
 
 # ---------------------------------------------------------------------------
@@ -29,19 +37,60 @@
 /.github/CODEOWNERS                             @instacommerce/platform-infra @instacommerce/platform
 
 # ---------------------------------------------------------------------------
+# Shared libraries
+# ---------------------------------------------------------------------------
+/libs/                                          @instacommerce/platform
+/libs/platform-common/                          @instacommerce/platform
+
+# ---------------------------------------------------------------------------
 # Contracts (proto + event schemas) -- cross-team, requires platform review
 # ---------------------------------------------------------------------------
 /contracts/                                     @instacommerce/platform
+/contracts/src/main/proto/common/               @instacommerce/platform
 /contracts/src/main/proto/order/                @instacommerce/core-checkout @instacommerce/platform
+/contracts/src/main/proto/cart/                 @instacommerce/core-checkout @instacommerce/platform
+/contracts/src/main/proto/inventory/            @instacommerce/core-checkout @instacommerce/platform
+/contracts/src/main/proto/catalog/              @instacommerce/search-catalog @instacommerce/platform
+/contracts/src/main/proto/payment/              @instacommerce/payments @instacommerce/payment-eng @instacommerce/platform
+/contracts/src/main/proto/wallet/               @instacommerce/payments @instacommerce/payment-eng @instacommerce/platform
+/contracts/src/main/proto/fulfillment/          @instacommerce/logistics @instacommerce/platform
+/contracts/src/main/proto/rider/                @instacommerce/logistics @instacommerce/platform
+/contracts/src/main/proto/routing/              @instacommerce/logistics @instacommerce/platform
+/contracts/src/main/resources/schemas/common/   @instacommerce/platform
+/contracts/src/main/resources/schemas/identity/ @instacommerce/identity @instacommerce/platform
+/contracts/src/main/resources/schemas/catalog/  @instacommerce/search-catalog @instacommerce/platform
+/contracts/src/main/resources/schemas/search/   @instacommerce/search-catalog @instacommerce/platform
+/contracts/src/main/resources/schemas/pricing/  @instacommerce/search-catalog @instacommerce/platform
+/contracts/src/main/resources/schemas/orders/   @instacommerce/core-checkout @instacommerce/platform
+/contracts/src/main/resources/schemas/cart/     @instacommerce/core-checkout @instacommerce/platform
+/contracts/src/main/resources/schemas/inventory/ @instacommerce/core-checkout @instacommerce/platform
+/contracts/src/main/resources/schemas/payments/ @instacommerce/payments @instacommerce/payment-eng @instacommerce/platform
+/contracts/src/main/resources/schemas/wallet/   @instacommerce/payments @instacommerce/payment-eng @instacommerce/platform
+/contracts/src/main/resources/schemas/reconciliation/ @instacommerce/payments @instacommerce/payment-eng @instacommerce/platform
+/contracts/src/main/resources/schemas/fraud/    @instacommerce/payments @instacommerce/platform
+/contracts/src/main/resources/schemas/fulfillment/ @instacommerce/logistics @instacommerce/platform
+/contracts/src/main/resources/schemas/warehouse/ @instacommerce/logistics @instacommerce/platform
+/contracts/src/main/resources/schemas/rider/    @instacommerce/logistics @instacommerce/platform
+/contracts/src/main/resources/schemas/delivery/ @instacommerce/logistics @instacommerce/platform
+/contracts/src/main/resources/schemas/routing/  @instacommerce/logistics @instacommerce/platform
+/contracts/src/main/resources/schemas/notification/ @instacommerce/engagement @instacommerce/platform
+/contracts/src/main/resources/schemas/customer-support/ @instacommerce/engagement @instacommerce/platform
+/contracts/src/main/resources/schemas/returns/  @instacommerce/core-checkout @instacommerce/platform
+/contracts/src/main/resources/schemas/ai-orchestrator/ @instacommerce/data-ml @instacommerce/platform
 
 # ---------------------------------------------------------------------------
-# Deploy / Helm / Infrastructure
+# Deploy / Helm / Infrastructure / Observability / Verification
 # ---------------------------------------------------------------------------
 /deploy/                                        @instacommerce/platform-infra @instacommerce/sre
 /infra/                                         @instacommerce/platform-infra @instacommerce/sre
+/k8s/                                           @instacommerce/platform-infra @instacommerce/sre
 /argocd/                                        @instacommerce/platform-infra @instacommerce/sre
 /monitoring/                                    @instacommerce/platform-infra @instacommerce/sre
+/monitoring/synthetics/                         @instacommerce/sre @instacommerce/platform
+/prometheus/                                    @instacommerce/platform-infra @instacommerce/sre
 /scripts/                                       @instacommerce/platform-infra @instacommerce/platform
+/tests/                                         @instacommerce/platform @instacommerce/sre
+/tests/e2e/                                     @instacommerce/core-checkout @instacommerce/platform @instacommerce/sre
 
 # ---------------------------------------------------------------------------
 # Identity cluster

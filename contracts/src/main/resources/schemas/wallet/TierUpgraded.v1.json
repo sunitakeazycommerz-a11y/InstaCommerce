@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TierUpgraded",
+  "description": "Emitted when accumulated lifetime points advance a customer to a higher loyalty tier",
+  "type": "object",
+  "required": ["accountId", "userId", "previousTier", "tier", "points", "totalBalance", "lifetimePoints"],
+  "properties": {
+    "accountId": { "type": "string", "format": "uuid" },
+    "userId": { "type": "string", "format": "uuid" },
+    "previousTier": { "type": "string" },
+    "tier": { "type": "string" },
+    "points": { "type": "integer", "minimum": 0 },
+    "totalBalance": { "type": "integer", "minimum": 0 },
+    "lifetimePoints": { "type": "integer", "minimum": 0 }
+  }
+}

@@ -127,7 +127,7 @@ spec:
         - name: fulfillment-service
           image: gcr.io/instacommerce-prod/fulfillment-service:canary
           ports:
-            - containerPort: 8087
+            - containerPort: 8086
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: canary,gcp
@@ -136,13 +136,13 @@ spec:
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
-              port: 8087
+              port: 8086
             initialDelaySeconds: 10
             periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
-              port: 8087
+              port: 8086
             initialDelaySeconds: 30
             periodSeconds: 10
           resources:

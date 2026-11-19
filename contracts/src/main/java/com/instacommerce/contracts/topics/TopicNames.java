@@ -75,5 +75,6 @@ public final class TopicNames {
     public static final String FRAUD_DLT              = FRAUD_EVENTS + DLT_SUFFIX;
     public static final String CART_DLT               = CART_EVENTS + DLT_SUFFIX;
     public static final String DELIVERY_DLT           = DELIVERY_EVENTS + DLT_SUFFIX;
+    public static final String RIDER_GEOFENCE_DLT     = RIDER_GEOFENCE_EVENTS + DLT_SUFFIX;
     public static final String AUDIT_DLT              = "audit.DLT";
 }

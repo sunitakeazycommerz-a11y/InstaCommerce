@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OrderPartiallyRefunded",
+  "description": "Emitted when order modification reduces order total and initiates a partial refund",
+  "type": "object",
+  "required": ["orderId", "refundCents", "priceDeltaCents", "reason"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "paymentId": { "type": ["string", "null"], "format": "uuid" },
+    "refundCents": { "type": "integer", "minimum": 0 },
+    "priceDeltaCents": { "type": "integer" },
+    "reason": { "type": "string", "minLength": 1 }
+  }
+}

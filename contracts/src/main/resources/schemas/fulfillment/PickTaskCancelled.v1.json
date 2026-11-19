@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PickTaskCancelled",
+  "description": "Emitted when a warehouse pick task is cancelled prior to completion",
+  "type": "object",
+  "required": ["orderId", "reason"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "reason": { "type": "string" }
+  }
+}

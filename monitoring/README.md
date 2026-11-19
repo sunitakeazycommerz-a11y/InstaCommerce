@@ -53,9 +53,9 @@ All rules are defined in `monitoring/prometheus-rules.yaml` under the `instacomm
 | `DatabaseHighCPU` | `cloudsql_database_cpu_utilization > 0.8` | 10m | 🟡 warning | Cloud SQL CPU utilization above 80% |
 | `JVMHeapUsageHigh` | `jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.85` | 5m | 🟡 warning | JVM heap memory usage above 85% |
 | `JVMGarbageCollectionLag` | `jvm_gc_pause_seconds_max > 1.0` | 1m | 🔴 critical | JVM GC pause time exceeds 1s |
-| `HikariPoolDeadlock` | `hikaricp_pending_threads > 5` | 1m | 🔴 critical | DB connection pool deadlock suspected |
-| `HikariPoolSaturation` | `hikaricp_active_connections / (hikaricp_max_connections > 0) > 0.85` | 2m | 🟡 warning | DB connection pool saturated above 85% |
-| `HikariConnectionTimeout` | `rate(hikaricp_connection_timeout_total[5m]) > 0` | 1m | 🔴 critical | Database connection acquisition timeouts |
+| `HikariPoolDeadlock` | `hikaricp_connections_pending > 5` | 1m | 🔴 critical | DB connection pool deadlock suspected |
+| `HikariPoolSaturation` | `hikaricp_connections_active / (hikaricp_connections_max > 0) > 0.85` | 2m | 🟡 warning | DB connection pool saturated above 85% |
+| `HikariConnectionTimeout` | `rate(hikaricp_connections_timeout_total[5m]) > 0` | 1m | 🔴 critical | Database connection acquisition timeouts |
 | `KafkaPartitionLagHigh` | `kafka_consumergroup_lag{topic=~".*events"} > 500` | 3m | 🟡 warning | Partition-level Kafka consumer lag high |
 | `KafkaPartitionStarved` | `kafka_consumergroup_current_offset{topic=~".*events"} == 0` | 5m | 🔴 critical | Kafka consumer partition starved / unassigned |
 | `CloudSQLDiskReadOpsRatioHigh` | `cloudsql_database_disk_read_ops_ratio > 0.85` | 3m | 🟡 warning | Database disk read ops ratio above 85% |

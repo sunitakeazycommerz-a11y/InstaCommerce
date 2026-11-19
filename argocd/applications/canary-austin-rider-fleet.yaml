@@ -98,10 +98,8 @@ spec:
         - name: rider-fleet-service
           image: us-central1-docker.pkg.dev/instacommerce/canary-images/rider-fleet-service:canary-austin
           ports:
-            - containerPort: 8080
+            - containerPort: 8093
               name: http
-            - containerPort: 8081
-              name: management
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: canary,austin
@@ -127,14 +125,14 @@ spec:
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
-              port: management
+              port: http
             initialDelaySeconds: 30
             periodSeconds: 10
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
-              port: management
+              port: http
             initialDelaySeconds: 60
             periodSeconds: 30
             failureThreshold: 3
@@ -218,18 +216,18 @@ spec:
         - destination:
             host: rider-fleet-service-canary
             port:
-              number: 8080
+              number: 8093
           weight: 5
         - destination:
             host: rider-fleet-service-stable
             port:
-              number: 8080
+              number: 8093
           weight: 95
     - route:
         - destination:
             host: rider-fleet-service-stable
             port:
-              number: 8080
+              number: 8093
           weight: 100
 ---
 # Service for canary traffic
@@ -243,12 +241,9 @@ metadata:
     canary: "true"
 spec:
   ports:
-    - port: 8080
+    - port: 8093
       targetPort: http
       name: http
-    - port: 8081
-      targetPort: management
-      name: management
   selector:
     app: rider-fleet-service
     canary: "true"
@@ -264,12 +259,9 @@ metadata:
     stable: "true"
 spec:
   ports:
-    - port: 8080
+    - port: 8093
       targetPort: http
       name: http
-    - port: 8081
-      targetPort: management
-      name: management
   selector:
     app: rider-fleet-service
     stable: "true"

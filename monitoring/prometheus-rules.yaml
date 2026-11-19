@@ -409,7 +409,7 @@ groups:
           runbook_url: "https://runbooks.instacommerce.internal/ops/jvm-gc-lag"
 
       - alert: HikariPoolDeadlock
-        expr: hikaricp_pending_threads > 5
+        expr: hikaricp_connections_pending > 5
         for: 1m
         labels:
           severity: critical
@@ -421,9 +421,9 @@ groups:
       - alert: HikariPoolSaturation
         expr: |
           (
-            hikaricp_active_connections
+            hikaricp_connections_active
             /
-            (hikaricp_max_connections > 0)
+            (hikaricp_connections_max > 0)
           ) > 0.85
         for: 2m
         labels:
@@ -434,7 +434,7 @@ groups:
           runbook_url: "https://runbooks.instacommerce.internal/ops/hikaricp-saturation"
 
       - alert: HikariConnectionTimeout
-        expr: rate(hikaricp_connection_timeout_total[5m]) > 0
+        expr: rate(hikaricp_connections_timeout_total[5m]) > 0
         for: 1m
         labels:
           severity: critical

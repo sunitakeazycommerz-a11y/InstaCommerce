@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProofOfDeliveryUploaded",
+  "description": "Emitted when a masked WebP proof-of-delivery photo is recorded for a completed drop-off",
+  "type": "object",
+  "required": ["orderId", "photoUrl", "lifecycleDays", "format"],
+  "properties": {
+    "orderId": { "type": "string", "format": "uuid" },
+    "photoUrl": { "type": "string", "minLength": 1 },
+    "lifecycleDays": { "type": "integer", "minimum": 1 },
+    "format": { "type": "string", "enum": ["WEBP"] }
+  }
+}

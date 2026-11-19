@@ -39,8 +39,8 @@ All domain events published to Kafka must be wrapped in the canonical transport 
 | `FRAUD_EVENTS` | `fraud.events` | `fraud/` |
 | `RIDER_EVENTS` | `rider.events` | `rider/` |
 | `DELIVERY_EVENTS` | `delivery.events` | `delivery/` |
-| `ROUTING_EVENTS` | `routing.events` | `routing/` |
-| `RIDER_GEOFENCE_EVENTS` | `rider.geofence.events` | `routing/` |
+| `ROUTING_EVENTS` | `delivery.events` (alias for `DELIVERY_EVENTS`) | `delivery/`, `routing/` |
+| `RIDER_GEOFENCE_EVENTS` | `rider.geofence.events` | `rider/` |
 | `WAREHOUSE_EVENTS` | `warehouse.events` | `warehouse/` |
 | `NOTIFICATION_EVENTS` | `notification.events` | `notification/` |
 | `SEARCH_EVENTS` | `search.events` | `search/` |

@@ -211,7 +211,7 @@ istio:
         - notification-service
         - wallet-loyalty-service
         - ai-orchestrator-service
-        - payment-webhook-service
+        - payment-webhook
         - reconciliation-engine
     payment-service:
       allowFrom:
@@ -221,7 +221,7 @@ istio:
         - fulfillment-service
         - order-service
         - ai-orchestrator-service
-        - payment-webhook-service
+        - payment-webhook
         - reconciliation-engine
     inventory-service:
       allowFrom:
@@ -283,7 +283,7 @@ istio:
         - fulfillment-service
         - dispatch-optimizer-service
         - routing-eta-service
-        - location-ingestion-service
+        - location-ingestion
         - order-service
     warehouse-service:
       allowFrom:
@@ -313,7 +313,7 @@ istio:
         - order-service
         - checkout-orchestrator-service
         - payment-service
-        - payment-webhook-service
+        - payment-webhook
         - ai-orchestrator-service
     fraud-detection-service:
       allowFrom:
@@ -358,7 +358,7 @@ istio:
         - wallet-loyalty-service
         - fraud-detection-service
         - config-feature-flag-service
-        - payment-webhook-service
+        - payment-webhook
         - reconciliation-engine
     routing-eta-service:
       allowFrom:
@@ -368,7 +368,7 @@ istio:
         - rider-fleet-service
         - order-service
         - dispatch-optimizer-service
-        - location-ingestion-service
+        - location-ingestion
     mobile-bff-service:
       allowFrom:
         - istio-ingressgateway
@@ -376,14 +376,66 @@ istio:
     admin-gateway-service:
       allowFrom:
         - istio-ingressgateway
-    outbox-relay-service:
+    outbox-relay:
       allowFrom:
         - admin-gateway-service
         - order-service
         - payment-service
         - inventory-service
         - fulfillment-service
-    payment-webhook-service:
+    outbox-relay-order:
+      allowFrom:
+        - admin-gateway-service
+        - order-service
+    outbox-relay-payment:
+      allowFrom:
+        - admin-gateway-service
+        - payment-service
+    outbox-relay-inventory:
+      allowFrom:
+        - admin-gateway-service
+        - inventory-service
+    outbox-relay-fulfillment:
+      allowFrom:
+        - admin-gateway-service
+        - fulfillment-service
+    outbox-relay-catalog:
+      allowFrom:
+        - admin-gateway-service
+        - catalog-service
+    outbox-relay-identity:
+      allowFrom:
+        - admin-gateway-service
+        - identity-service
+    outbox-relay-cart:
+      allowFrom:
+        - admin-gateway-service
+        - cart-service
+    outbox-relay-pricing:
+      allowFrom:
+        - admin-gateway-service
+        - pricing-service
+    outbox-relay-warehouse:
+      allowFrom:
+        - admin-gateway-service
+        - warehouse-service
+    outbox-relay-rider-fleet:
+      allowFrom:
+        - admin-gateway-service
+        - rider-fleet-service
+    outbox-relay-wallet-loyalty:
+      allowFrom:
+        - admin-gateway-service
+        - wallet-loyalty-service
+    outbox-relay-fraud-detection:
+      allowFrom:
+        - admin-gateway-service
+        - fraud-detection-service
+    outbox-relay-routing-eta:
+      allowFrom:
+        - admin-gateway-service
+        - routing-eta-service
+    payment-webhook:
       allowFrom:
         - istio-ingressgateway
         - admin-gateway-service
@@ -394,31 +446,29 @@ istio:
         - payment-service
         - order-service
         - payment-webhook
-        - payment-webhook-service
     dispatch-optimizer-service:
       allowFrom:
         - fulfillment-service
         - rider-fleet-service
         - routing-eta-service
         - admin-gateway-service
-    location-ingestion-service:
+    location-ingestion:
       allowFrom:
         - istio-ingressgateway
         - mobile-bff-service
         - rider-fleet-service
         - routing-eta-service
         - admin-gateway-service
-    cdc-consumer-service:
+    cdc-consumer:
       allowFrom:
         - admin-gateway-service
         - order-service
         - payment-service
         - inventory-service
-    stream-processor-service:
+    stream-processor:
       allowFrom:
         - admin-gateway-service
         - location-ingestion
-        - location-ingestion-service
         - routing-eta-service
         - rider-fleet-service
     reverse-etl-orchestrator:

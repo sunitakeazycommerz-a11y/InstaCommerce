@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DarkStoreCycleCountTaskCreated",
+  "description": "Emitted when a picker flags a missing SKU, freezing available stock and creating a handheld cycle count task",
+  "type": "object",
+  "required": [
+    "taskId",
+    "productId",
+    "storeId",
+    "missingQuantity",
+    "pickerId",
+    "aisleLocation",
+    "urgency",
+    "createdAt"
+  ],
+  "properties": {
+    "taskId": { "type": "string", "format": "uuid" },
+    "productId": { "type": "string", "format": "uuid" },
+    "storeId": { "type": "string", "format": "uuid" },
+    "missingQuantity": { "type": "integer", "minimum": 1 },
+    "pickerId": { "type": ["string", "null"] },
+    "aisleLocation": { "type": ["string", "null"] },
+    "urgency": { "type": "string" },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

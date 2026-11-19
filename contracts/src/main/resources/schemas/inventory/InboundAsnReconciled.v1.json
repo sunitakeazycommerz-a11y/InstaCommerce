@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InboundAsnReconciled",
+  "description": "Emitted when an inbound Advanced Shipping Notice pallet receipt is reconciled at dark store",
+  "type": "object",
+  "required": [
+    "asn_number",
+    "purchase_order_id",
+    "vendor_id",
+    "store_id",
+    "pallet_barcode",
+    "status",
+    "line_items_count",
+    "received_by",
+    "received_at"
+  ],
+  "properties": {
+    "asn_number": { "type": "string", "minLength": 1 },
+    "purchase_order_id": { "type": "string" },
+    "vendor_id": { "type": "string" },
+    "store_id": { "type": "string", "format": "uuid" },
+    "pallet_barcode": { "type": "string", "minLength": 1 },
+    "status": { "type": "string" },
+    "line_items_count": { "type": "integer", "minimum": 0 },
+    "received_by": { "type": "string" },
+    "received_at": { "type": "string", "format": "date-time" }
+  }
+}

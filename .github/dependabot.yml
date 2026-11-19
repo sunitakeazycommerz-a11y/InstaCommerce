@@ -5,6 +5,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       dependencies:
@@ -19,124 +21,33 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       actions:
         patterns:
           - "*"
 
-  # Go Microservices
+  # Go Microservices (consolidated across all 9 Go modules)
   - package-ecosystem: "gomod"
-    directory: "/services/go-shared"
+    directories:
+      - "/services/go-shared"
+      - "/services/cdc-consumer-service"
+      - "/services/dispatch-optimizer-service"
+      - "/services/location-ingestion-service"
+      - "/services/outbox-relay-service"
+      - "/services/payment-webhook-service"
+      - "/services/reconciliation-engine"
+      - "/services/reverse-etl-orchestrator"
+      - "/services/stream-processor-service"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/services/cdc-consumer-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/services/dispatch-optimizer-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/services/location-ingestion-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/services/outbox-relay-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/services/payment-webhook-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/services/reconciliation-engine"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/services/reverse-etl-orchestrator"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/services/stream-processor-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
+      go-dependencies:
         patterns:
           - "*"
         update-types:
@@ -145,77 +56,21 @@ updates:
 
   # Python Services & Data Platform
   - package-ecosystem: "pip"
-    directory: "/services/ai-inference-service"
+    directories:
+      - "/services/ai-inference-service"
+      - "/services/ai-orchestrator-service"
+      - "/ml"
+      - "/data-platform-jobs"
+      - "/data-platform/airflow"
+      - "/data-platform/quality"
+      - "/data-platform/streaming"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "pip"
-    directory: "/services/ai-orchestrator-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "pip"
-    directory: "/ml"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "pip"
-    directory: "/data-platform/airflow"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "pip"
-    directory: "/data-platform/quality"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-
-  - package-ecosystem: "pip"
-    directory: "/data-platform/streaming"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      dependencies:
+      python-dependencies:
         patterns:
           - "*"
         update-types:
@@ -227,6 +82,8 @@ updates:
     directory: "/tests/e2e"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       dependencies:
@@ -236,183 +93,69 @@ updates:
           - "minor"
           - "patch"
 
-  # Docker Container Images (30 Services)
+  # Docker Container Images (grouped by runtime stack to avoid 30-PR storms)
   - package-ecosystem: "docker"
-    directory: "/services/admin-gateway-service"
+    directories:
+      - "/services/admin-gateway-service"
+      - "/services/audit-trail-service"
+      - "/services/cart-service"
+      - "/services/catalog-service"
+      - "/services/checkout-orchestrator-service"
+      - "/services/config-feature-flag-service"
+      - "/services/fraud-detection-service"
+      - "/services/fulfillment-service"
+      - "/services/identity-service"
+      - "/services/inventory-service"
+      - "/services/mobile-bff-service"
+      - "/services/notification-service"
+      - "/services/order-service"
+      - "/services/payment-service"
+      - "/services/pricing-service"
+      - "/services/rider-fleet-service"
+      - "/services/routing-eta-service"
+      - "/services/search-service"
+      - "/services/wallet-loyalty-service"
+      - "/services/warehouse-service"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      docker-java-services:
+        patterns:
+          - "*"
 
   - package-ecosystem: "docker"
-    directory: "/services/ai-inference-service"
+    directories:
+      - "/services/cdc-consumer-service"
+      - "/services/dispatch-optimizer-service"
+      - "/services/location-ingestion-service"
+      - "/services/outbox-relay-service"
+      - "/services/payment-webhook-service"
+      - "/services/reconciliation-engine"
+      - "/services/reverse-etl-orchestrator"
+      - "/services/stream-processor-service"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      docker-go-services:
+        patterns:
+          - "*"
 
   - package-ecosystem: "docker"
-    directory: "/services/ai-orchestrator-service"
+    directories:
+      - "/services/ai-inference-service"
+      - "/services/ai-orchestrator-service"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/audit-trail-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/cart-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/catalog-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/cdc-consumer-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/checkout-orchestrator-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/config-feature-flag-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/dispatch-optimizer-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/fraud-detection-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/fulfillment-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/identity-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/inventory-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/location-ingestion-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/mobile-bff-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/notification-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/order-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/outbox-relay-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/payment-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/payment-webhook-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/pricing-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/reconciliation-engine"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/reverse-etl-orchestrator"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/rider-fleet-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/routing-eta-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/search-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/stream-processor-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/wallet-loyalty-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "docker"
-    directory: "/services/warehouse-service"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
+    groups:
+      docker-python-services:
+        patterns:
+          - "*"

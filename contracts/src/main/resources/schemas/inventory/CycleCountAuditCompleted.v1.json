@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CycleCountAuditCompleted",
+  "description": "Emitted when a frozen SKU finishes physical cycle count audit and becomes available again",
+  "type": "object",
+  "required": [
+    "productId",
+    "storeId",
+    "verifiedPhysicalQty",
+    "appliedOnHand",
+    "reserved",
+    "shortfallBelowReserved",
+    "unfrozenAt"
+  ],
+  "properties": {
+    "productId": { "type": "string", "format": "uuid" },
+    "storeId": { "type": "string", "format": "uuid" },
+    "verifiedPhysicalQty": { "type": "integer", "minimum": 0 },
+    "appliedOnHand": { "type": "integer", "minimum": 0 },
+    "reserved": { "type": "integer", "minimum": 0 },
+    "shortfallBelowReserved": { "type": "integer", "minimum": 0 },
+    "unfrozenAt": { "type": "string", "format": "date-time" }
+  }
+}

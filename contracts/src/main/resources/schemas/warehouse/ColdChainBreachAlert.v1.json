@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ColdChainBreachAlert",
+  "description": "Emitted when dark-store staging bay temperature sensors report consecutive out-of-range readings",
+  "type": "object",
+  "required": ["storeId", "bayId", "sensorId", "storageType", "temperatureCelsius", "timestamp"],
+  "properties": {
+    "storeId": { "type": "string", "format": "uuid" },
+    "bayId": { "type": "string", "minLength": 1 },
+    "sensorId": { "type": "string", "minLength": 1 },
+    "storageType": { "type": "string" },
+    "temperatureCelsius": { "type": "number" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

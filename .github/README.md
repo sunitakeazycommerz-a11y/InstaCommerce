@@ -87,7 +87,7 @@ The following 20 services are independently detected and built. On `main`/`maste
 
 ### Go Services in the Validation Matrix
 
-The following 8 Go modules are validated with `go test ./...` and `go build ./...`:
+The following 9 Go modules are validated with `go test ./...` and `go build ./...`:
 
 | Service | Path Filter |
 |---------|-------------|
@@ -98,6 +98,7 @@ The following 8 Go modules are validated with `go test ./...` and `go build ./..
 | outbox-relay-service | `services/outbox-relay-service/**` |
 | payment-webhook-service | `services/payment-webhook-service/**` |
 | reconciliation-engine | `services/reconciliation-engine/**` |
+| reverse-etl-orchestrator | `services/reverse-etl-orchestrator/**` |
 | stream-processor-service | `services/stream-processor-service/**` |
 
 Deploy tag updates in `values-dev.yaml` include changed Java services plus deployed Go services (`cdc-consumer`, `dispatch-optimizer-service`, `location-ingestion`, `outbox-relay`, `payment-webhook`, and `reconciliation-engine`) when their source modules change.
@@ -135,12 +136,14 @@ asia-south1-docker.pkg.dev/instacommerce/images/<service-name>:<git-sha>
 
 Dependabot (`.github/dependabot.yml`) is configured to automatically create PRs for dependency updates across the monorepo:
 
-| Ecosystem | Directory Scope | Schedule | PR Limit |
-|-----------|------------------|----------|----------|
-| Gradle | `/` (root) | Weekly | 10 |
-| GitHub Actions | `/` (root) | Weekly | 10 |
-| Go modules | 8 module directories under `/services/*` | Weekly | 3 per directory |
-| Docker | All service directories containing `Dockerfile` | Weekly | 3 per directory |
+| Ecosystem | Directory Scope | Schedule | Cooldown & PR Limit |
+|-----------|------------------|----------|---------------------|
+| Gradle | `/` (root) | Weekly | 7d cooldown, limit 10 |
+| GitHub Actions | `/` (root) | Weekly | 7d cooldown, limit 10 |
+| Go modules | 9 module directories under `/services/*` (grouped) | Weekly | 7d cooldown, limit 5 |
+| Python (`pip`) | 7 Python directories (`services/ai-*`, `/ml`, `/data-platform*`) | Weekly | 7d cooldown, limit 5 |
+| npm | `/tests/e2e` | Weekly | 7d cooldown, limit 5 |
+| Docker | 30 service Dockerfiles grouped by runtime (Java, Go, Python) | Weekly | 7d cooldown, grouped PRs |
 
 ## Files
 

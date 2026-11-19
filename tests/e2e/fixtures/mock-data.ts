@@ -26,6 +26,13 @@ export interface TestCard {
   nameOnCard: string;
 }
 
+export interface PromoFixture {
+  code: string;
+  discountPercent: number;
+  discountCents: number;
+  message: string;
+}
+
 export const TEST_USER = {
   id: 'usr-synth-e2e-001',
   email: 'synthetic.shopper@instacommerce.test',
@@ -49,6 +56,30 @@ export const MOCK_PRODUCTS: Record<string, TestProduct> = {
     formattedPrice: '₹85.00',
   },
 };
+
+export const PROMO_CODES: Record<'VALID_FRESH20' | 'EXPIRED_10', PromoFixture> = {
+  VALID_FRESH20: {
+    code: 'FRESH20',
+    discountPercent: 20,
+    discountCents: 3000, // ₹30.00 off on ₹150.00 basket
+    message: 'Promo FRESH20 applied (-₹30.00)',
+  },
+  EXPIRED_10: {
+    code: 'EXPIRED10',
+    discountPercent: 0,
+    discountCents: 0,
+    message: 'Promo code EXPIRED10 has expired.',
+  },
+};
+
+export const ORDER_TRACKING_STATES = [
+  'PLACED',
+  'PACKING',
+  'PACKED',
+  'OUT_FOR_DELIVERY',
+  'DELIVERED',
+  'CANCELLED',
+] as const;
 
 export const TEST_DELIVERY_ADDRESS: TestAddress = {
   fullName: 'Synthetic Shopper',
