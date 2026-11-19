@@ -80,6 +80,15 @@ public class PickItem {
     @Column(name = "tare_weight_grams")
     private Integer tareWeightGrams;
 
+    @Column(name = "cold_chain", nullable = false)
+    private boolean coldChain;
+
+    @Column(name = "fragile", nullable = false)
+    private boolean fragile;
+
+    @Column(name = "storage_temperature")
+    private String storageTemperature;
+
     @PrePersist
     @PreUpdate
     void prePersist() {
@@ -236,5 +245,29 @@ public class PickItem {
 
     public void setTareWeightGrams(Integer tareWeightGrams) {
         this.tareWeightGrams = tareWeightGrams;
+    }
+
+    public boolean isColdChain() {
+        return coldChain;
+    }
+
+    public void setColdChain(boolean coldChain) {
+        this.coldChain = coldChain;
+    }
+
+    public boolean isFragile() {
+        return fragile;
+    }
+
+    public void setFragile(boolean fragile) {
+        this.fragile = fragile;
+    }
+
+    public String getStorageTemperature() {
+        return storageTemperature;
+    }
+
+    public void setStorageTemperature(String storageTemperature) {
+        this.storageTemperature = storageTemperature;
     }
 }

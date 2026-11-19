@@ -57,7 +57,21 @@ public class AisleRoutingOptimizer {
             aisleIndex++;
         }
 
-        // Assign 1-based sequential pick order
+        List<PickItem> standardItems = new ArrayList<>(sortedResult.size());
+        List<PickItem> fragileItems = new ArrayList<>();
+        for (PickItem item : sortedResult) {
+            if (item.isFragile()) {
+                fragileItems.add(item);
+            } else {
+                standardItems.add(item);
+            }
+        }
+        if (!fragileItems.isEmpty()) {
+            sortedResult = new ArrayList<>(standardItems.size() + fragileItems.size());
+            sortedResult.addAll(standardItems);
+            sortedResult.addAll(fragileItems);
+        }
+
         for (int i = 0; i < sortedResult.size(); i++) {
             sortedResult.get(i).setPickSequence(i + 1);
         }

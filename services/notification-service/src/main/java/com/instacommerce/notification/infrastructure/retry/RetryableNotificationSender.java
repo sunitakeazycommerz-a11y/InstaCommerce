@@ -10,6 +10,7 @@ import com.instacommerce.notification.provider.NotificationSendRequest;
 import com.instacommerce.notification.provider.ProviderPermanentException;
 import com.instacommerce.notification.provider.ProviderTemporaryException;
 import com.instacommerce.notification.repository.NotificationLogRepository;
+import com.instacommerce.notification.service.ChannelFallbackService;
 import com.instacommerce.notification.service.MaskingUtil;
 import java.time.Duration;
 import java.time.Instant;
@@ -17,6 +18,8 @@ import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
@@ -32,15 +35,45 @@ public class RetryableNotificationSender {
     private final NotificationLogRepository logRepository;
     private final NotificationDlqPublisher dlqPublisher;
     private final NotificationMetrics metrics;
+    private final ObjectProvider<ChannelFallbackService> fallbackServiceProvider;
+    private final ChannelFallbackService directFallbackService;
 
     public RetryableNotificationSender(NotificationProviderRegistry providerRegistry,
                                        NotificationLogRepository logRepository,
                                        NotificationDlqPublisher dlqPublisher,
                                        NotificationMetrics metrics) {
+        this(providerRegistry, logRepository, dlqPublisher, metrics, null, null);
+    }
+
+    @Autowired
+    public RetryableNotificationSender(NotificationProviderRegistry providerRegistry,
+                                       NotificationLogRepository logRepository,
+                                       NotificationDlqPublisher dlqPublisher,
+                                       NotificationMetrics metrics,
+                                       ObjectProvider<ChannelFallbackService> fallbackServiceProvider) {
+        this(providerRegistry, logRepository, dlqPublisher, metrics, fallbackServiceProvider, null);
+    }
+
+    public RetryableNotificationSender(NotificationProviderRegistry providerRegistry,
+                                       NotificationLogRepository logRepository,
+                                       NotificationDlqPublisher dlqPublisher,
+                                       NotificationMetrics metrics,
+                                       ChannelFallbackService directFallbackService) {
+        this(providerRegistry, logRepository, dlqPublisher, metrics, null, directFallbackService);
+    }
+
+    private RetryableNotificationSender(NotificationProviderRegistry providerRegistry,
+                                        NotificationLogRepository logRepository,
+                                        NotificationDlqPublisher dlqPublisher,
+                                        NotificationMetrics metrics,
+                                        ObjectProvider<ChannelFallbackService> fallbackServiceProvider,
+                                        ChannelFallbackService directFallbackService) {
         this.providerRegistry = providerRegistry;
         this.logRepository = logRepository;
         this.dlqPublisher = dlqPublisher;
         this.metrics = metrics;
+        this.fallbackServiceProvider = fallbackServiceProvider;
+        this.directFallbackService = directFallbackService;
     }
 
     @Async("notificationExecutor")
@@ -62,6 +95,7 @@ public class RetryableNotificationSender {
             log.setLastError("No provider configured");
             logRepository.save(log);
             metrics.incrementSkipped();
+            triggerFallback(request != null ? request : fallbackRequest(log), log);
             return;
         }
         NotificationProvider provider = providerOpt.get();
@@ -84,7 +118,9 @@ public class RetryableNotificationSender {
                 logRepository.save(log);
                 metrics.incrementFailed();
                 NotificationRequest req = request != null ? request : fallbackRequest(log);
-                dlqPublisher.publish(req, "Retries exhausted");
+                if (!triggerFallback(req, log)) {
+                    dlqPublisher.publish(req, "Retries exhausted");
+                }
                 return;
             }
             Duration backoff = BACKOFF[Math.min(currentRetry, BACKOFF.length - 1)];
@@ -101,8 +137,17 @@ public class RetryableNotificationSender {
             logRepository.save(log);
             metrics.incrementFailed();
             NotificationRequest req = request != null ? request : fallbackRequest(log);
-            dlqPublisher.publish(req, ex.getMessage());
+            if (!triggerFallback(req, log)) {
+                dlqPublisher.publish(req, ex.getMessage());
+            }
         }
+    }
+
+    private boolean triggerFallback(NotificationRequest request, NotificationLog log) {
+        ChannelFallbackService fallbackService = directFallbackService != null
+            ? directFallbackService
+            : (fallbackServiceProvider != null ? fallbackServiceProvider.getIfAvailable() : null);
+        return fallbackService != null && fallbackService.tryFallback(request, log);
     }
 
     private NotificationRequest fallbackRequest(NotificationLog log) {

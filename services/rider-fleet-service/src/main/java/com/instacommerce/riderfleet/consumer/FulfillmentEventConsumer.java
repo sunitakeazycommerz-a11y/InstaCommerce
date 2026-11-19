@@ -34,7 +34,13 @@ public class FulfillmentEventConsumer {
                     payload.orderId());
                 return;
             }
-            if (payload.dropoffLat() != null || payload.dropoffLng() != null) {
+            if (payload.orderWeightGrams() != null) {
+                riderAssignmentService.assignRider(
+                    payload.orderId(), payload.storeId(),
+                    payload.pickupLat(), payload.pickupLng(),
+                    payload.dropoffLat(), payload.dropoffLng(),
+                    payload.orderWeightGrams());
+            } else if (payload.dropoffLat() != null || payload.dropoffLng() != null) {
                 riderAssignmentService.assignRider(
                     payload.orderId(), payload.storeId(),
                     payload.pickupLat(), payload.pickupLng(),

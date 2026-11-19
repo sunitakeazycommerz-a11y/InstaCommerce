@@ -82,7 +82,8 @@ public class DeliveryService {
         rider.setAvailable(false);
         riderRepository.save(rider);
         int eta = etaMinutes != null ? etaMinutes : fulfillmentProperties.getDelivery().getDefaultEtaMinutes();
-        Delivery saved = assignDelivery(existing, orderId, rider, eta, task.getUserId());
+        Delivery saved = assignDelivery(existing, orderId, rider, eta, task.getUserId(),
+            task.isColdChainRequired(), task.isFragileRequired());
         return FulfillmentMapper.toDeliveryResponse(saved);
     }
 
@@ -268,12 +269,15 @@ public class DeliveryService {
         }
     }
 
-    private Delivery assignDelivery(Delivery existing, UUID orderId, Rider rider, int etaMinutes, UUID userId) {
+    private Delivery assignDelivery(Delivery existing, UUID orderId, Rider rider, int etaMinutes, UUID userId,
+                                    boolean coldChainRequired, boolean fragileRequired) {
         Delivery delivery = existing == null ? new Delivery() : existing;
         delivery.setOrderId(orderId);
         delivery.setRider(rider);
         delivery.setStatus(DeliveryStatus.ASSIGNED);
         delivery.setEstimatedMinutes(etaMinutes);
+        delivery.setColdChainRequired(coldChainRequired);
+        delivery.setFragileRequired(fragileRequired);
         if (delivery.getDispatchOtp() == null) {
             String otp = String.format("%06d", SECURE_RANDOM.nextInt(100000, 1000000));
             delivery.setDispatchOtp(otp);
@@ -289,6 +293,8 @@ public class DeliveryService {
         eventPayload.put("riderName", rider.getName());
         eventPayload.put("estimatedMinutes", saved.getEstimatedMinutes());
         eventPayload.put("dispatchedAt", saved.getDispatchedAt());
+        eventPayload.put("coldChainRequired", saved.isColdChainRequired());
+        eventPayload.put("fragileRequired", saved.isFragileRequired());
         outboxService.publish("Fulfillment", orderId.toString(), "OrderDispatched", eventPayload);
         return saved;
     }

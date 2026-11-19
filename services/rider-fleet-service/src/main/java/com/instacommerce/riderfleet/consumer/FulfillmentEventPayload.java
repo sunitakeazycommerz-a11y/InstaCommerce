@@ -14,7 +14,8 @@ public record FulfillmentEventPayload(
     BigDecimal pickupLat,
     BigDecimal pickupLng,
     BigDecimal dropoffLat,
-    BigDecimal dropoffLng
+    BigDecimal dropoffLng,
+    Integer orderWeightGrams
 ) {
     public FulfillmentEventPayload(
         UUID orderId,
@@ -22,7 +23,18 @@ public record FulfillmentEventPayload(
         BigDecimal pickupLat,
         BigDecimal pickupLng
     ) {
-        this(orderId, storeId, pickupLat, pickupLng, null, null);
+        this(orderId, storeId, pickupLat, pickupLng, null, null, null);
+    }
+
+    public FulfillmentEventPayload(
+        UUID orderId,
+        UUID storeId,
+        BigDecimal pickupLat,
+        BigDecimal pickupLng,
+        BigDecimal dropoffLat,
+        BigDecimal dropoffLng
+    ) {
+        this(orderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng, null);
     }
 
     @JsonCreator
@@ -32,7 +44,8 @@ public record FulfillmentEventPayload(
         @JsonProperty("pickupLat") Object pickupLatObj,
         @JsonProperty("pickupLng") Object pickupLngObj,
         @JsonProperty("dropoffLat") Object dropoffLatObj,
-        @JsonProperty("dropoffLng") Object dropoffLngObj
+        @JsonProperty("dropoffLng") Object dropoffLngObj,
+        @JsonProperty("orderWeightGrams") Integer orderWeightGrams
     ) {
         this(
             orderId,
@@ -40,7 +53,8 @@ public record FulfillmentEventPayload(
             parseCoordinate(pickupLatObj),
             parseCoordinate(pickupLngObj),
             parseCoordinate(dropoffLatObj),
-            parseCoordinate(dropoffLngObj)
+            parseCoordinate(dropoffLngObj),
+            orderWeightGrams
         );
     }
 

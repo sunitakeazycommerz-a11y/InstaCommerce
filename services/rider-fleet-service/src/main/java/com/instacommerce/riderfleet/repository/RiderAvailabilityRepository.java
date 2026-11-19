@@ -61,4 +61,46 @@ public interface RiderAvailabilityRepository extends JpaRepository<RiderAvailabi
         @Param("radiusKm") double radiusKm,
         @Param("storeId") UUID storeId
     );
+
+    @Query(value = """
+        SELECT ra.* FROM rider_availability ra
+        JOIN riders r ON r.id = ra.rider_id
+        WHERE ra.is_available = true
+          AND ra.store_id = :storeId
+          AND r.status = 'ACTIVE'
+          AND COALESCE(r.max_capacity_grams, CASE r.vehicle_type
+              WHEN 'CAR' THEN 100000
+              WHEN 'MOTORCYCLE' THEN 25000
+              ELSE 8000
+          END) >= :orderWeightGrams
+          AND ra.current_lat IS NOT NULL
+          AND ra.current_lng IS NOT NULL
+          AND (
+            6371 * acos(
+              LEAST(1.0, GREATEST(-1.0,
+                cos(radians(:lat)) * cos(radians(ra.current_lat))
+                * cos(radians(ra.current_lng) - radians(:lng))
+                + sin(radians(:lat)) * sin(radians(ra.current_lat))
+              ))
+            )
+          ) <= :radiusKm
+        ORDER BY
+          (6371 * acos(
+            LEAST(1.0, GREATEST(-1.0,
+              cos(radians(:lat)) * cos(radians(ra.current_lat))
+              * cos(radians(ra.current_lng) - radians(:lng))
+              + sin(radians(:lat)) * sin(radians(ra.current_lat))
+            ))
+          )) ASC,
+          r.rating_avg DESC
+        LIMIT 1
+        FOR UPDATE OF ra SKIP LOCKED
+        """, nativeQuery = true)
+    Optional<RiderAvailability> findNearestAvailableWithCapacity(
+        @Param("lat") BigDecimal lat,
+        @Param("lng") BigDecimal lng,
+        @Param("radiusKm") double radiusKm,
+        @Param("storeId") UUID storeId,
+        @Param("orderWeightGrams") int orderWeightGrams
+    );
 }

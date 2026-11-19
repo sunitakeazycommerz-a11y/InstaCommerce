@@ -48,6 +48,15 @@ public class RoutingProperties {
         private double roadDistanceMultiplier = 1.4;
         private double peakSpeedMultiplier = 0.6;
         private double nightSpeedMultiplier = 1.2;
+        private double monsoonDefaultMultiplier = 1.35;
+        private double minSpeedKmh = 5.0;
+        private int batchStopDwellMinutes = 3;
+        private int morningPeakStartHour = 7;
+        private int morningPeakEndHour = 10;
+        private int eveningPeakStartHour = 17;
+        private int eveningPeakEndHour = 20;
+        private int nightStartHour = 22;
+        private int nightEndHour = 5;
         private String timezone = "Asia/Kolkata";
 
         public String getTimezone() {
@@ -96,6 +105,78 @@ public class RoutingProperties {
 
         public void setNightSpeedMultiplier(double nightSpeedMultiplier) {
             this.nightSpeedMultiplier = nightSpeedMultiplier;
+        }
+
+        public double getMonsoonDefaultMultiplier() {
+            return monsoonDefaultMultiplier;
+        }
+
+        public void setMonsoonDefaultMultiplier(double monsoonDefaultMultiplier) {
+            this.monsoonDefaultMultiplier = monsoonDefaultMultiplier;
+        }
+
+        public double getMinSpeedKmh() {
+            return minSpeedKmh;
+        }
+
+        public void setMinSpeedKmh(double minSpeedKmh) {
+            this.minSpeedKmh = minSpeedKmh;
+        }
+
+        public int getBatchStopDwellMinutes() {
+            return batchStopDwellMinutes;
+        }
+
+        public void setBatchStopDwellMinutes(int batchStopDwellMinutes) {
+            this.batchStopDwellMinutes = batchStopDwellMinutes;
+        }
+
+        public int getMorningPeakStartHour() {
+            return morningPeakStartHour;
+        }
+
+        public void setMorningPeakStartHour(int morningPeakStartHour) {
+            this.morningPeakStartHour = morningPeakStartHour;
+        }
+
+        public int getMorningPeakEndHour() {
+            return morningPeakEndHour;
+        }
+
+        public void setMorningPeakEndHour(int morningPeakEndHour) {
+            this.morningPeakEndHour = morningPeakEndHour;
+        }
+
+        public int getEveningPeakStartHour() {
+            return eveningPeakStartHour;
+        }
+
+        public void setEveningPeakStartHour(int eveningPeakStartHour) {
+            this.eveningPeakStartHour = eveningPeakStartHour;
+        }
+
+        public int getEveningPeakEndHour() {
+            return eveningPeakEndHour;
+        }
+
+        public void setEveningPeakEndHour(int eveningPeakEndHour) {
+            this.eveningPeakEndHour = eveningPeakEndHour;
+        }
+
+        public int getNightStartHour() {
+            return nightStartHour;
+        }
+
+        public void setNightStartHour(int nightStartHour) {
+            this.nightStartHour = nightStartHour;
+        }
+
+        public int getNightEndHour() {
+            return nightEndHour;
+        }
+
+        public void setNightEndHour(int nightEndHour) {
+            this.nightEndHour = nightEndHour;
         }
     }
 

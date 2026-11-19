@@ -9,6 +9,9 @@ import com.instacommerce.routing.repository.RoutingBarrierRepository;
 import com.instacommerce.routing.repository.TrafficCongestionFeedRepository;
 import com.instacommerce.routing.repository.WeatherConditionRepository;
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -154,5 +157,113 @@ class ETAServiceTest {
             fromLat, fromLng, toLat, toLng, null, "BICYCLE", 0.08);
 
         assertEquals("EV_2W", estimate.vehicleRecommendation());
+    }
+
+    @Test
+    @DisplayName("Peak-hour speed multiplier increases ETA compared to off-peak and night hours")
+    void shouldApplyPeakAndNightHourSpeedMultipliers() {
+        double fromLat = 12.9000;
+        double fromLng = 77.5000;
+        double toLat = 12.9400;
+        double toLng = 77.5400;
+
+        when(barrierRepository.findByIsActiveTrue()).thenReturn(List.of());
+
+        Instant morningPeakIst = ZonedDateTime.of(2026, 11, 19, 8, 30, 0, 0, ZoneId.of("Asia/Kolkata")).toInstant();
+        Instant middayOffPeakIst = ZonedDateTime.of(2026, 11, 19, 13, 0, 0, 0, ZoneId.of("Asia/Kolkata")).toInstant();
+        Instant lateNightIst = ZonedDateTime.of(2026, 11, 19, 23, 30, 0, 0, ZoneId.of("Asia/Kolkata")).toInstant();
+
+        ETAEstimate peak = etaService.calculateETAWithConfidence(
+            fromLat, fromLng, toLat, toLng, null, "MOTORCYCLE", 0.0, 0, morningPeakIst);
+        ETAEstimate midday = etaService.calculateETAWithConfidence(
+            fromLat, fromLng, toLat, toLng, null, "MOTORCYCLE", 0.0, 0, middayOffPeakIst);
+        ETAEstimate night = etaService.calculateETAWithConfidence(
+            fromLat, fromLng, toLat, toLng, null, "MOTORCYCLE", 0.0, 0, lateNightIst);
+
+        assertTrue(peak.etaMinutes() > midday.etaMinutes());
+        assertTrue(midday.etaMinutes() >= night.etaMinutes());
+        assertTrue(peak.breachProbability() > midday.breachProbability());
+    }
+
+    @Test
+    @DisplayName("Multi-stop batch delivery accounts for dwell time per preceding stop")
+    void shouldAccountForMultiStopBatchDwellTime() {
+        double fromLat = 12.9000;
+        double fromLng = 77.5000;
+        double toLat = 12.9200;
+        double toLng = 77.5200;
+        Instant offPeak = ZonedDateTime.of(2026, 11, 19, 13, 0, 0, 0, ZoneId.of("Asia/Kolkata")).toInstant();
+
+        when(barrierRepository.findByIsActiveTrue()).thenReturn(List.of());
+
+        ETAEstimate direct = etaService.calculateETAWithConfidence(
+            fromLat, fromLng, toLat, toLng, null, "MOTORCYCLE", 0.0, 0, offPeak);
+        ETAEstimate thirdStop = etaService.calculateETAWithConfidence(
+            fromLat, fromLng, toLat, toLng, null, "MOTORCYCLE", 0.0, 2, offPeak);
+
+        assertEquals(0, direct.batchStops());
+        assertEquals(0, direct.dwellMinutes());
+        assertEquals(2, thirdStop.batchStops());
+        assertEquals(6, thirdStop.dwellMinutes());
+        assertEquals(direct.etaMinutes() + 6, thirdStop.etaMinutes());
+        assertTrue(thirdStop.breachProbability() > direct.breachProbability());
+    }
+
+    @Test
+    @DisplayName("Rainy condition clamps invalid sub-1.0 multipliers and applies monsoon default coefficient")
+    void shouldGuardSubOneRainMultiplierAndClampMinSpeed() {
+        UUID storeId = UUID.randomUUID();
+        double fromLat = 12.9000;
+        double fromLng = 77.5000;
+        double toLat = 12.9200;
+        double toLng = 77.5200;
+        Instant offPeak = ZonedDateTime.of(2026, 11, 19, 13, 0, 0, 0, ZoneId.of("Asia/Kolkata")).toInstant();
+
+        RoutingBarrier expiredBarrier = new RoutingBarrier();
+        expiredBarrier.setName("Expired Closure");
+        expiredBarrier.setMinLat(new BigDecimal("12.9050"));
+        expiredBarrier.setMinLng(new BigDecimal("77.5050"));
+        expiredBarrier.setMaxLat(new BigDecimal("12.9150"));
+        expiredBarrier.setMaxLng(new BigDecimal("77.5150"));
+        expiredBarrier.setActive(true);
+        expiredBarrier.setExpiresAt(offPeak.minusSeconds(60));
+        when(barrierRepository.findByIsActiveTrue()).thenReturn(List.of(expiredBarrier));
+
+        WeatherCondition rainWithLowMultiplier = new WeatherCondition();
+        rainWithLowMultiplier.setStoreId(storeId);
+        rainWithLowMultiplier.setConditionType("MONSOON");
+        rainWithLowMultiplier.setSpeedPenaltyMultiplier(new BigDecimal("0.80"));
+        when(weatherRepository.findByStoreId(storeId)).thenReturn(Optional.of(rainWithLowMultiplier));
+
+        TrafficCongestionFeed heavyTraffic = new TrafficCongestionFeed();
+        heavyTraffic.setZoneId(storeId.toString());
+        heavyTraffic.setCongestionFactor(new BigDecimal("10.00"));
+        when(trafficFeedRepository.findByZoneId("DEFAULT_ZONE")).thenReturn(Optional.empty());
+        when(trafficFeedRepository.findByZoneId(storeId.toString())).thenReturn(Optional.of(heavyTraffic));
+
+        ETAEstimate baseline = etaService.calculateETAWithConfidence(
+            fromLat, fromLng, toLat, toLng, null, "MOTORCYCLE", 0.0, 0, offPeak);
+        ETAEstimate rainy = etaService.calculateETAWithConfidence(
+            fromLat, fromLng, toLat, toLng, storeId, "MOTORCYCLE", 0.0, 0, offPeak);
+
+        assertEquals(false, rainy.detourDetected());
+        assertTrue(rainy.monsoonDelayActive());
+        assertTrue(rainy.etaMinutes() > baseline.etaMinutes());
+        assertTrue(rainy.breachProbability() > 0.0 && rainy.breachProbability() <= 1.0);
+    }
+
+    @Test
+    @DisplayName("SLA breach probability remains bounded even when SLA threshold is non-positive")
+    void shouldComputeBoundedSlaBreachProbability() {
+        routingProperties.getBreach().setSlaThresholdMinutes(0);
+        when(barrierRepository.findByIsActiveTrue()).thenReturn(List.of());
+
+        ETAEstimate estimate = etaService.calculateETAWithConfidence(
+            12.9000, 77.5000, 12.9200, 77.5200, null, "MOTORCYCLE", 0.0);
+
+        assertTrue(Double.isFinite(estimate.breachProbability()));
+        assertTrue(estimate.breachProbability() > 0.5 && estimate.breachProbability() <= 1.0);
+        assertTrue(estimate.etaLowMinutes() <= estimate.etaMinutes());
+        assertTrue(estimate.etaHighMinutes() >= estimate.etaMinutes());
     }
 }

@@ -29,6 +29,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -43,6 +45,8 @@ public class InventoryService {
     private final AuditLogService auditLogService;
     private final OutboxService outboxService;
     private final InventoryProperties inventoryProperties;
+    private final StockLevelMonitor stockLevelMonitor;
+    private final FefoBatchAllocationService fefoBatchAllocationService;
 
     public InventoryService(StockItemRepository stockItemRepository,
                             StockAdjustmentLogRepository stockAdjustmentLogRepository,
@@ -50,12 +54,59 @@ public class InventoryService {
                             AuditLogService auditLogService,
                             OutboxService outboxService,
                             InventoryProperties inventoryProperties) {
+        this(
+            stockItemRepository,
+            stockAdjustmentLogRepository,
+            entityManager,
+            auditLogService,
+            outboxService,
+            inventoryProperties,
+            new StockLevelMonitor(inventoryProperties, outboxService),
+            null
+        );
+    }
+
+    @Autowired
+    public InventoryService(StockItemRepository stockItemRepository,
+                            StockAdjustmentLogRepository stockAdjustmentLogRepository,
+                            EntityManager entityManager,
+                            AuditLogService auditLogService,
+                            OutboxService outboxService,
+                            InventoryProperties inventoryProperties,
+                            ObjectProvider<StockLevelMonitor> stockLevelMonitorProvider,
+                            ObjectProvider<FefoBatchAllocationService> fefoAllocationProvider) {
+        this(
+            stockItemRepository,
+            stockAdjustmentLogRepository,
+            entityManager,
+            auditLogService,
+            outboxService,
+            inventoryProperties,
+            stockLevelMonitorProvider != null
+                ? stockLevelMonitorProvider.getIfAvailable(() -> new StockLevelMonitor(inventoryProperties, outboxService))
+                : new StockLevelMonitor(inventoryProperties, outboxService),
+            fefoAllocationProvider != null ? fefoAllocationProvider.getIfAvailable() : null
+        );
+    }
+
+    public InventoryService(StockItemRepository stockItemRepository,
+                            StockAdjustmentLogRepository stockAdjustmentLogRepository,
+                            EntityManager entityManager,
+                            AuditLogService auditLogService,
+                            OutboxService outboxService,
+                            InventoryProperties inventoryProperties,
+                            StockLevelMonitor stockLevelMonitor,
+                            FefoBatchAllocationService fefoBatchAllocationService) {
         this.stockItemRepository = stockItemRepository;
         this.stockAdjustmentLogRepository = stockAdjustmentLogRepository;
         this.entityManager = entityManager;
         this.auditLogService = auditLogService;
         this.outboxService = outboxService;
         this.inventoryProperties = inventoryProperties;
+        this.stockLevelMonitor = stockLevelMonitor != null
+            ? stockLevelMonitor
+            : new StockLevelMonitor(inventoryProperties, outboxService);
+        this.fefoBatchAllocationService = fefoBatchAllocationService;
     }
 
     @Transactional(readOnly = true)
@@ -72,7 +123,13 @@ public class InventoryService {
                 if (stock == null) {
                     throw new ProductNotFoundException(item.productId(), request.storeId());
                 }
-                return InventoryMapper.toStockCheckItemResponse(stock, item.quantity());
+                if (stock.isFrozen()) {
+                    return InventoryMapper.toStockCheckItemResponse(stock, 0, item.quantity());
+                }
+                int sellableAvailable = fefoBatchAllocationService != null
+                    ? fefoBatchAllocationService.resolveSellableAvailable(stock)
+                    : Math.max(0, stock.getOnHand() - stock.getReserved());
+                return InventoryMapper.toStockCheckItemResponse(stock, sellableAvailable, item.quantity());
             })
             .toList();
         return new StockCheckResponse(items);
@@ -212,19 +269,7 @@ public class InventoryService {
     }
 
     void checkLowStock(StockItem stock, UUID storeId) {
-        int available = stock.getOnHand() - stock.getReserved();
-        int threshold = inventoryProperties.getLowStockThreshold();
-        if (available <= threshold) {
-            Map<String, Object> alertPayload = new LinkedHashMap<>();
-            alertPayload.put("productId", stock.getProductId().toString());
-            alertPayload.put("storeId", storeId.toString());
-            alertPayload.put("warehouseId", storeId.toString());
-            alertPayload.put("currentQuantity", available);
-            alertPayload.put("threshold", threshold);
-            alertPayload.put("detectedAt", Instant.now().toString());
-            outboxService.publish("StockItem", stock.getProductId().toString(),
-                "LowStockAlert", alertPayload);
-        }
+        stockLevelMonitor.evaluateAfterStockDecrease(stock, storeId);
     }
 
     private UUID resolveActorId() {

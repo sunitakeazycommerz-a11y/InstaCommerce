@@ -10,11 +10,13 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RiderAssignmentRepository extends JpaRepository<RiderAssignment, UUID> {
-    boolean existsByOrderId(UUID orderId);
+    @Query("SELECT CASE WHEN COUNT(a) > 0 THEN true ELSE false END FROM RiderAssignment a WHERE a.orderId = :orderId AND a.status = 'ACTIVE'")
+    boolean existsByOrderId(@Param("orderId") UUID orderId);
 
-    Optional<RiderAssignment> findByOrderId(UUID orderId);
+    @Query("SELECT a FROM RiderAssignment a WHERE a.orderId = :orderId AND a.status = 'ACTIVE'")
+    Optional<RiderAssignment> findByOrderId(@Param("orderId") UUID orderId);
 
     @Modifying
-    @Query("UPDATE RiderAssignment a SET a.completedAt = :completedAt WHERE a.orderId = :orderId AND a.completedAt IS NULL")
+    @Query("UPDATE RiderAssignment a SET a.status = 'COMPLETED', a.completedAt = :completedAt WHERE a.orderId = :orderId AND a.status = 'ACTIVE' AND a.completedAt IS NULL")
     int markCompletedIfPending(@Param("orderId") UUID orderId, @Param("completedAt") Instant completedAt);
 }

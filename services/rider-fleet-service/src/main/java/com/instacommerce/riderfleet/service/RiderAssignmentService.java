@@ -13,6 +13,8 @@ import com.instacommerce.riderfleet.repository.RiderAssignmentRepository;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,6 +49,8 @@ public class RiderAssignmentService {
     private final DispatchOptimizerClient dispatchOptimizerClient;
     private final RiderEarningsService riderEarningsService;
     private final StringRedisTemplate redisTemplate;
+    private final RiderShiftService shiftService;
+    private final Clock clock;
 
     public RiderAssignmentService(RiderRepository riderRepository,
                                    RiderAvailabilityRepository availabilityRepository,
@@ -55,7 +59,7 @@ public class RiderAssignmentService {
                                    RiderFleetProperties properties,
                                    DispatchOptimizerClient dispatchOptimizerClient) {
         this(riderRepository, availabilityRepository, assignmentRepository, outboxService,
-            properties, dispatchOptimizerClient, null, (StringRedisTemplate) null);
+            properties, dispatchOptimizerClient, null, (StringRedisTemplate) null, null, Clock.systemUTC());
     }
 
     public RiderAssignmentService(RiderRepository riderRepository,
@@ -66,21 +70,8 @@ public class RiderAssignmentService {
                                    DispatchOptimizerClient dispatchOptimizerClient,
                                    RiderEarningsService riderEarningsService) {
         this(riderRepository, availabilityRepository, assignmentRepository, outboxService,
-            properties, dispatchOptimizerClient, riderEarningsService, (StringRedisTemplate) null);
-    }
-
-    @Autowired
-    public RiderAssignmentService(RiderRepository riderRepository,
-                                   RiderAvailabilityRepository availabilityRepository,
-                                   RiderAssignmentRepository assignmentRepository,
-                                   OutboxService outboxService,
-                                   RiderFleetProperties properties,
-                                   DispatchOptimizerClient dispatchOptimizerClient,
-                                   RiderEarningsService riderEarningsService,
-                                   ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
-        this(riderRepository, availabilityRepository, assignmentRepository, outboxService,
-            properties, dispatchOptimizerClient, riderEarningsService,
-            redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null);
+            properties, dispatchOptimizerClient, riderEarningsService, (StringRedisTemplate) null,
+            null, Clock.systemUTC());
     }
 
     public RiderAssignmentService(RiderRepository riderRepository,
@@ -91,6 +82,45 @@ public class RiderAssignmentService {
                                    DispatchOptimizerClient dispatchOptimizerClient,
                                    RiderEarningsService riderEarningsService,
                                    StringRedisTemplate redisTemplate) {
+        this(riderRepository, availabilityRepository, assignmentRepository, outboxService,
+            properties, dispatchOptimizerClient, riderEarningsService, redisTemplate, null, Clock.systemUTC());
+    }
+
+    @Autowired
+    public RiderAssignmentService(RiderRepository riderRepository,
+                                   RiderAvailabilityRepository availabilityRepository,
+                                   RiderAssignmentRepository assignmentRepository,
+                                   OutboxService outboxService,
+                                   RiderFleetProperties properties,
+                                   DispatchOptimizerClient dispatchOptimizerClient,
+                                   RiderEarningsService riderEarningsService,
+                                   ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+                                   ObjectProvider<RiderShiftService> shiftServiceProvider,
+                                   ObjectProvider<Clock> clockProvider) {
+        this(
+            riderRepository,
+            availabilityRepository,
+            assignmentRepository,
+            outboxService,
+            properties,
+            dispatchOptimizerClient,
+            riderEarningsService,
+            redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null,
+            shiftServiceProvider != null ? shiftServiceProvider.getIfAvailable() : null,
+            clockProvider != null ? clockProvider.getIfAvailable(Clock::systemUTC) : Clock.systemUTC()
+        );
+    }
+
+    public RiderAssignmentService(RiderRepository riderRepository,
+                                   RiderAvailabilityRepository availabilityRepository,
+                                   RiderAssignmentRepository assignmentRepository,
+                                   OutboxService outboxService,
+                                   RiderFleetProperties properties,
+                                   DispatchOptimizerClient dispatchOptimizerClient,
+                                   RiderEarningsService riderEarningsService,
+                                   StringRedisTemplate redisTemplate,
+                                   RiderShiftService shiftService,
+                                   Clock clock) {
         this.riderRepository = riderRepository;
         this.availabilityRepository = availabilityRepository;
         this.assignmentRepository = assignmentRepository;
@@ -99,6 +129,8 @@ public class RiderAssignmentService {
         this.dispatchOptimizerClient = dispatchOptimizerClient;
         this.riderEarningsService = riderEarningsService;
         this.redisTemplate = redisTemplate;
+        this.shiftService = shiftService;
+        this.clock = clock != null ? clock : Clock.systemUTC();
     }
 
     /**
@@ -112,7 +144,7 @@ public class RiderAssignmentService {
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public UUID assignRider(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng) {
-        return executeAssignment(orderId, storeId, pickupLat, pickupLng, null, null);
+        return executeAssignment(orderId, storeId, pickupLat, pickupLng, null, null, null);
     }
 
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
@@ -120,22 +152,37 @@ public class RiderAssignmentService {
     @Transactional
     public UUID assignRider(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng,
                             BigDecimal dropoffLat, BigDecimal dropoffLng) {
-        return executeAssignment(orderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng);
+        return executeAssignment(orderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng, null);
+    }
+
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
+    @Transactional
+    public UUID assignRider(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng,
+                            BigDecimal dropoffLat, BigDecimal dropoffLng, Integer orderWeightGrams) {
+        return executeAssignment(orderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng, orderWeightGrams);
     }
 
     private UUID executeAssignment(UUID orderId, UUID storeId, BigDecimal pickupLat, BigDecimal pickupLng,
-                                   BigDecimal dropoffLat, BigDecimal dropoffLng) {
+                                   BigDecimal dropoffLat, BigDecimal dropoffLng, Integer orderWeightGrams) {
         if (assignmentRepository.existsByOrderId(orderId)) {
             throw new DuplicateAssignmentException(orderId);
         }
 
         double radiusKm = properties.getAssignment().getDefaultRadiusKm();
+        Instant now = Instant.now(clock);
 
         RiderAvailability availability = resolveRiderAvailability(
-            orderId, storeId, pickupLat, pickupLng, radiusKm);
+            orderId, storeId, pickupLat, pickupLng, radiusKm, orderWeightGrams, now);
 
         Rider rider = riderRepository.findById(availability.getRiderId())
             .orElseThrow(() -> new RiderNotFoundException(availability.getRiderId().toString()));
+        if (!isRiderEligible(rider, orderWeightGrams, now)) {
+            throw new NoAvailableRiderException(storeId != null ? storeId.toString() : "unknown");
+        }
+        if (hasFatigueCooldownExpired(rider, now)) {
+            rider.setConsecutiveDeliveries(0);
+        }
 
         rider.setStatus(RiderStatus.ON_DELIVERY);
         riderRepository.save(rider);
@@ -147,6 +194,7 @@ public class RiderAssignmentService {
         assignment.setOrderId(orderId);
         assignment.setRiderId(rider.getId());
         assignment.setStoreId(storeId);
+        assignment.setStatus("ACTIVE");
         try {
             assignmentRepository.save(assignment);
         } catch (DataIntegrityViolationException ex) {
@@ -174,7 +222,10 @@ public class RiderAssignmentService {
         if (dropoffLng != null) {
             payload.put("dropoffLng", dropoffLng);
         }
-        payload.put("assignedAt", Instant.now().toString());
+        if (orderWeightGrams != null) {
+            payload.put("orderWeightGrams", orderWeightGrams);
+        }
+        payload.put("assignedAt", now.toString());
         outboxService.publish("Rider", rider.getId().toString(), "RiderAssigned", payload);
 
         logger.info("Assigned rider id={} to order={} store={}", rider.getId(), orderId, storeId);
@@ -182,11 +233,11 @@ public class RiderAssignmentService {
     }
 
     private RiderAvailability resolveRiderAvailability(UUID orderId, UUID storeId,
-            BigDecimal pickupLat, BigDecimal pickupLng, double radiusKm) {
+            BigDecimal pickupLat, BigDecimal pickupLng, double radiusKm, Integer orderWeightGrams, Instant now) {
         if (properties.getDispatch().isOptimizerEnabled()) {
             try {
                 Optional<UUID> optimizedRiderId = tryOptimizerAssignment(
-                    orderId, storeId, pickupLat, pickupLng);
+                    orderId, storeId, pickupLat, pickupLng, orderWeightGrams, now);
                 if (optimizedRiderId.isPresent()) {
                     Optional<RiderAvailability> availability = availabilityRepository
                         .findByRiderIdForUpdate(optimizedRiderId.get());
@@ -205,13 +256,18 @@ public class RiderAssignmentService {
         }
 
         logger.info("Using Haversine nearest-neighbor for rider assignment, order={}", orderId);
+        if (orderWeightGrams != null && orderWeightGrams > 0) {
+            return availabilityRepository
+                .findNearestAvailableWithCapacity(pickupLat, pickupLng, radiusKm, storeId, orderWeightGrams)
+                .orElseThrow(() -> new NoAvailableRiderException(storeId.toString()));
+        }
         return availabilityRepository
             .findNearestAvailable(pickupLat, pickupLng, radiusKm, storeId)
             .orElseThrow(() -> new NoAvailableRiderException(storeId.toString()));
     }
 
     private Optional<UUID> tryOptimizerAssignment(UUID orderId, UUID storeId,
-            BigDecimal pickupLat, BigDecimal pickupLng) {
+            BigDecimal pickupLat, BigDecimal pickupLng, Integer orderWeightGrams, Instant now) {
         List<RiderAvailability> availableRiders = availabilityRepository
             .findByIsAvailableTrueAndStoreId(storeId);
         if (availableRiders.isEmpty()) {
@@ -226,7 +282,7 @@ public class RiderAssignmentService {
 
         List<DispatchOptimizerClient.RiderState> riderStates = availableRiders.stream()
             .filter(ra -> riderMap.containsKey(ra.getRiderId()))
-            .filter(ra -> riderMap.get(ra.getRiderId()).getStatus() == RiderStatus.ACTIVE)
+            .filter(ra -> isRiderEligible(riderMap.get(ra.getRiderId()), orderWeightGrams, now))
             .map(ra -> buildOptimizerRiderState(ra, riderMap.get(ra.getRiderId()), storeId))
             .filter(Objects::nonNull)
             .toList();
@@ -261,6 +317,39 @@ public class RiderAssignmentService {
             });
     }
 
+    private boolean isRiderEligible(Rider rider, Integer orderWeightGrams, Instant now) {
+        if (rider.getStatus() != RiderStatus.ACTIVE) {
+            return false;
+        }
+        if (!rider.canCarry(orderWeightGrams)) {
+            return false;
+        }
+        if (isRiderFatigued(rider, now)) {
+            return false;
+        }
+        if (properties.getAssignment().isEnforceShiftValidation() && shiftService != null
+            && !shiftService.hasActiveShift(rider.getId(), now)) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isRiderFatigued(Rider rider, Instant now) {
+        int maxConsecutive = properties.getAssignment().getMaxConsecutiveDeliveries();
+        if (maxConsecutive <= 0 || rider.getConsecutiveDeliveries() < maxConsecutive) {
+            return false;
+        }
+        return !hasFatigueCooldownExpired(rider, now);
+    }
+
+    private boolean hasFatigueCooldownExpired(Rider rider, Instant now) {
+        int resetMinutes = properties.getAssignment().getFatigueResetMinutes();
+        if (rider.getLastDeliveryCompletedAt() == null || resetMinutes <= 0) {
+            return true;
+        }
+        return !now.isBefore(rider.getLastDeliveryCompletedAt().plus(Duration.ofMinutes(resetMinutes)));
+    }
+
     private DispatchOptimizerClient.RiderState buildOptimizerRiderState(
             RiderAvailability ra, Rider r, UUID storeId) {
         double[] coords = resolveRiderCoordinates(ra);
@@ -282,7 +371,7 @@ public class RiderAssignmentService {
             true,
             r.getTotalDeliveries(),
             avgRating,
-            0,
+            r.getConsecutiveDeliveries(),
             defaultSpeedKmh,
             100.0,
             storeId != null ? storeId.toString() : null
@@ -320,7 +409,8 @@ public class RiderAssignmentService {
             logger.info("No rider assignment found to complete for order={}", orderId);
             return;
         }
-        if (assignmentRepository.markCompletedIfPending(orderId, Instant.now()) == 0) {
+        Instant now = Instant.now(clock);
+        if (assignmentRepository.markCompletedIfPending(orderId, now) == 0) {
             logger.info("Rider assignment for order={} already completed; skipping duplicate completion", orderId);
             return;
         }
@@ -329,18 +419,26 @@ public class RiderAssignmentService {
 
         Optional<Rider> riderOpt = riderRepository.findById(riderId);
         boolean canReleaseToAvailable = false;
+        boolean fatigueReached = false;
         if (riderOpt.isPresent()) {
             Rider rider = riderOpt.get();
             RiderStatus currentStatus = rider.getStatus();
             if (currentStatus != RiderStatus.SUSPENDED
                 && currentStatus != RiderStatus.INACTIVE
                 && currentStatus != RiderStatus.BLOCKED) {
+                int nextConsecutive = hasFatigueCooldownExpired(rider, now)
+                    ? 1
+                    : rider.getConsecutiveDeliveries() + 1;
+                rider.setConsecutiveDeliveries(nextConsecutive);
+                rider.setLastDeliveryCompletedAt(now);
                 rider.setTotalDeliveries(rider.getTotalDeliveries() + 1);
                 if (currentStatus == RiderStatus.ON_DELIVERY) {
                     rider.setStatus(RiderStatus.ACTIVE);
                 }
                 riderRepository.save(rider);
-                canReleaseToAvailable = true;
+                int maxConsecutive = properties.getAssignment().getMaxConsecutiveDeliveries();
+                fatigueReached = maxConsecutive > 0 && nextConsecutive >= maxConsecutive;
+                canReleaseToAvailable = !fatigueReached;
             } else {
                 logger.warn("Skipping availability restore on delivery completion for rider={} in status={}",
                     riderId, currentStatus);
@@ -352,6 +450,15 @@ public class RiderAssignmentService {
                 availability.setAvailable(true);
                 availabilityRepository.save(availability);
             });
+        } else if (fatigueReached) {
+            outboxService.publish("Rider", riderId.toString(), "RiderFatigueLimitReached",
+                Map.of("riderId", riderId,
+                    "orderId", orderId,
+                    "consecutiveDeliveries", riderOpt.get().getConsecutiveDeliveries(),
+                    "cooldownMinutes", properties.getAssignment().getFatigueResetMinutes(),
+                    "recordedAt", now.toString()));
+            logger.warn("Rider={} reached consecutive delivery limit ({}); holding offline for fatigue rest",
+                riderId, riderOpt.get().getConsecutiveDeliveries());
         }
 
         if (riderEarningsService != null && riderOpt.isPresent()) {
@@ -359,8 +466,8 @@ public class RiderAssignmentService {
         }
 
         outboxService.publish("Rider", riderId.toString(), "DeliveryCompleted",
-            Map.of("riderId", riderId, "orderId", orderId, "completedAt", Instant.now().toString()));
-        logger.info("Delivery completed for order={}, rider={} released back to ACTIVE", orderId, riderId);
+            Map.of("riderId", riderId, "orderId", orderId, "completedAt", now.toString()));
+        logger.info("Delivery completed for order={}, rider={} releasedBack={}", orderId, riderId, canReleaseToAvailable);
     }
 
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
@@ -373,8 +480,18 @@ public class RiderAssignmentService {
             return;
         }
         RiderAssignment assignment = assignmentOpt.get();
-        UUID riderId = assignment.getRiderId();
+        if (!"ACTIVE".equals(assignment.getStatus())) {
+            logger.info("Rider assignment for order={} already in status={}; skipping cancel",
+                orderId, assignment.getStatus());
+            return;
+        }
+        Instant now = Instant.now(clock);
+        assignment.setStatus("CANCELLED");
+        assignment.setCancelledAt(now);
+        assignment.setCancellationReason(reason);
+        assignmentRepository.save(assignment);
 
+        UUID riderId = assignment.getRiderId();
         Optional<Rider> riderOpt = riderRepository.findById(riderId);
         if (riderOpt.isPresent()) {
             Rider rider = riderOpt.get();

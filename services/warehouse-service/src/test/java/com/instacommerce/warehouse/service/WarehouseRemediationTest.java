@@ -103,7 +103,7 @@ class WarehouseRemediationTest {
         store.setMaxConcurrentOrders(100);
         store.setCurrentPendingOrders(5);
 
-        when(storeRepository.findById(storeId)).thenReturn(Optional.of(store));
+        when(storeRepository.findByIdForUpdate(storeId)).thenReturn(Optional.of(store));
         when(capacityRepository.incrementOrderCount(eq(storeId), any(LocalDate.class), anyInt(), eq(10)))
             .thenReturn(0);
 

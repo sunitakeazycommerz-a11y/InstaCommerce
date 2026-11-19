@@ -149,7 +149,7 @@ public class StockReconciliationService {
             throw new IllegalArgumentException("productId and storeId cannot be null");
         }
 
-        StockItem stock = stockItemRepository.findByProductIdAndStoreId(alert.productId(), alert.storeId())
+        StockItem stock = stockItemRepository.findByProductIdAndStoreIdForUpdate(alert.productId(), alert.storeId())
             .orElseThrow(() -> new ProductNotFoundException(alert.productId(), alert.storeId()));
 
         // Freeze stock immediately so no other customers order the phantom units
@@ -188,7 +188,7 @@ public class StockReconciliationService {
             throw new IllegalArgumentException("verifiedPhysicalQty cannot be negative: " + verifiedPhysicalQty);
         }
 
-        StockItem stock = stockItemRepository.findByProductIdAndStoreId(productId, storeId)
+        StockItem stock = stockItemRepository.findByProductIdAndStoreIdForUpdate(productId, storeId)
             .orElseThrow(() -> new ProductNotFoundException(productId, storeId));
 
         int reserved = stock.getReserved();

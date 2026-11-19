@@ -64,6 +64,15 @@ public class Store {
     @Column(name = "current_pending_orders", nullable = false)
     private int currentPendingOrders = 0;
 
+    @Column(name = "surge_mode_enabled", nullable = false)
+    private boolean surgeModeEnabled = false;
+
+    @Column(name = "surge_eta_extension_minutes", nullable = false)
+    private int surgeEtaExtensionMinutes = 15;
+
+    @Column(name = "surge_threshold_percent", nullable = false)
+    private int surgeThresholdPercent = 90;
+
     @Column(name = "created_at")
     private Instant createdAt;
 
@@ -132,6 +141,19 @@ public class Store {
 
     public int getCurrentPendingOrders() { return currentPendingOrders; }
     public void setCurrentPendingOrders(int currentPendingOrders) { this.currentPendingOrders = currentPendingOrders; }
+
+    public boolean isSurgeModeEnabled() { return surgeModeEnabled; }
+    public void setSurgeModeEnabled(boolean surgeModeEnabled) { this.surgeModeEnabled = surgeModeEnabled; }
+
+    public int getSurgeEtaExtensionMinutes() { return surgeEtaExtensionMinutes; }
+    public void setSurgeEtaExtensionMinutes(int surgeEtaExtensionMinutes) {
+        this.surgeEtaExtensionMinutes = surgeEtaExtensionMinutes;
+    }
+
+    public int getSurgeThresholdPercent() { return surgeThresholdPercent; }
+    public void setSurgeThresholdPercent(int surgeThresholdPercent) {
+        this.surgeThresholdPercent = surgeThresholdPercent;
+    }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

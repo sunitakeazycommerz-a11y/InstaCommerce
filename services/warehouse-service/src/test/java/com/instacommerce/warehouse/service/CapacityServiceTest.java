@@ -92,7 +92,7 @@ class CapacityServiceTest {
     void acquireOrderSlotPublishesThrottledAndIncrements() {
         UUID storeId = UUID.randomUUID();
         Store store = buildStore(storeId, 100, 10, 8);
-        when(storeRepository.findById(storeId)).thenReturn(Optional.of(store));
+        when(storeRepository.findByIdForUpdate(storeId)).thenReturn(Optional.of(store));
         when(storeRepository.save(any(Store.class))).thenAnswer(inv -> inv.getArgument(0));
         when(capacityRepository.incrementOrderCount(eq(storeId), any(LocalDate.class), anyInt(), eq(100)))
             .thenReturn(1);
@@ -110,7 +110,7 @@ class CapacityServiceTest {
     void acquireOrderSlotThrowsWhenPaused() {
         UUID storeId = UUID.randomUUID();
         Store store = buildStore(storeId, 100, 10, 10);
-        when(storeRepository.findById(storeId)).thenReturn(Optional.of(store));
+        when(storeRepository.findByIdForUpdate(storeId)).thenReturn(Optional.of(store));
 
         assertThatThrownBy(() -> capacityService.acquireOrderSlot(storeId, LocalDateTime.now()))
             .isInstanceOf(CapacityExceededException.class);
@@ -124,7 +124,7 @@ class CapacityServiceTest {
     void releaseOrderSlotDecrementsWhenPositive() {
         UUID storeId = UUID.randomUUID();
         Store store = buildStore(storeId, 100, 10, 2);
-        when(storeRepository.findById(storeId)).thenReturn(Optional.of(store));
+        when(storeRepository.findByIdForUpdate(storeId)).thenReturn(Optional.of(store));
 
         capacityService.releaseOrderSlot(storeId);
         assertThat(store.getCurrentPendingOrders()).isEqualTo(1);

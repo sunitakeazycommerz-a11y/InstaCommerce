@@ -2,13 +2,20 @@ package com.instacommerce.warehouse.repository;
 
 import com.instacommerce.warehouse.domain.model.Store;
 import com.instacommerce.warehouse.domain.model.StoreStatus;
+import jakarta.persistence.LockModeType;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface StoreRepository extends JpaRepository<Store, UUID> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM Store s WHERE s.id = :id")
+    Optional<Store> findByIdForUpdate(@Param("id") UUID id);
 
     List<Store> findByStatus(StoreStatus status);
 

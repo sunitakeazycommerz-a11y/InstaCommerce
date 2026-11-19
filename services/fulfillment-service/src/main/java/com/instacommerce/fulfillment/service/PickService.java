@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -93,6 +94,8 @@ public class PickService {
         List<OrderPlacedItem> itemsPayload = payload.items() == null ? List.of() : payload.items();
         List<PickItem> items = itemsPayload.stream().map(item -> toPickItem(task, item)).toList();
         List<PickItem> optimized = aisleRoutingOptimizer.optimizePickPath(items);
+        task.setColdChainRequired(optimized.stream().anyMatch(PickItem::isColdChain));
+        task.setFragileRequired(optimized.stream().anyMatch(PickItem::isFragile));
         task.setItems(optimized);
         try {
             pickTaskRepository.save(task);
@@ -157,13 +160,7 @@ public class PickService {
         PickTask task = pickTaskRepository.findByOrderIdForUpdate(orderId)
             .orElseThrow(() -> new PickTaskNotFoundException(orderId));
         if (request.scannedBarcode() != null) {
-            long now = System.currentTimeMillis();
-            String debounceKey = orderId + ":" + request.scannedBarcode();
-            Long lastScan = scanDebounceMap.get(debounceKey);
-            if (lastScan != null && (now - lastScan) < 1000) {
-                throw new DuplicateScanException("Duplicate scan detected for barcode " + request.scannedBarcode() + " within 1000ms debounce window");
-            }
-            scanDebounceMap.put(debounceKey, now);
+            recordAndCheckDebounce(orderId, request.scannedBarcode());
         }
 
         if (task.getStatus() == PickTaskStatus.COMPLETED || task.getStatus() == PickTaskStatus.CANCELLED) {
@@ -172,14 +169,20 @@ public class PickService {
         PickItem item = pickItemRepository.findByPickTask_OrderIdAndProductId(orderId, productId)
             .orElseThrow(() -> new PickItemNotFoundException(orderId, productId));
 
+        int resolvedQty = safeQty(request, item.getQuantity());
+        validateItemUpdate(item, request, resolvedQty);
+
+        if (isIdempotentRepeat(item, request, resolvedQty)) {
+            return FulfillmentMapper.toPickItemResponse(item);
+        }
+
         if (request.scannedBarcode() != null && request.scannerHardwareId() != null) {
             auditLogService.log(pickerId, "ITEM_SCANNED", "PickItem", item.getId().toString(),
                 Map.of("barcode", request.scannedBarcode(), "scannerId", request.scannerHardwareId()));
         }
 
         if (request.measuredWeightGrams() != null && item.getTareWeightGrams() != null && item.getTareWeightGrams() > 0) {
-            int targetQty = request.pickedQty() != null ? request.pickedQty() : item.getQuantity();
-            int expectedWeight = item.getTareWeightGrams() * targetQty;
+            int expectedWeight = item.getTareWeightGrams() * resolvedQty;
             int diff = Math.abs(request.measuredWeightGrams() - expectedWeight);
             if (expectedWeight > 0 && diff > (expectedWeight * 0.05)) {
                 logger.warn("Weight discrepancy detected for item {}: expected {}g (+/-5%), measured {}g",
@@ -191,7 +194,7 @@ public class PickService {
 
         PickItemStatus previousStatus = item.getStatus();
         int previousPickedQty = item.getPickedQty();
-        applyItemUpdate(item, request);
+        applyItemUpdate(item, request, resolvedQty);
         pickItemRepository.save(item);
 
         if (task.getStatus() == PickTaskStatus.PENDING) {
@@ -251,18 +254,62 @@ public class PickService {
         return FulfillmentMapper.toPickTaskResponse(saved);
     }
 
-    private void applyItemUpdate(PickItem item, MarkItemPickedRequest request) {
-        int pickedQty = safeQty(request, item.getQuantity());
+    private void validateItemUpdate(PickItem item, MarkItemPickedRequest request, int pickedQty) {
+        if (request.status() == PickItemStatus.PENDING) {
+            throw new IllegalArgumentException("Cannot reset pick item status to PENDING");
+        }
+        if (pickedQty < 0) {
+            throw new IllegalArgumentException("Picked quantity cannot be negative");
+        }
         if (pickedQty > item.getQuantity()) {
             throw new IllegalArgumentException("Picked quantity cannot exceed ordered quantity");
         }
-        if (request.status() == PickItemStatus.SUBSTITUTED && request.substituteProductId() == null) {
-            throw new IllegalArgumentException("Substitution requires substituteProductId");
+        if (request.status() == PickItemStatus.PICKED && pickedQty == 0) {
+            throw new IllegalArgumentException("PICKED status requires pickedQty > 0; use MISSING when unavailable");
         }
+        if (request.status() == PickItemStatus.SUBSTITUTED) {
+            if (request.substituteProductId() == null) {
+                throw new IllegalArgumentException("Substitution requires substituteProductId");
+            }
+            if (request.substituteProductId().equals(item.getProductId())) {
+                throw new IllegalArgumentException("Substitute product cannot match ordered product");
+            }
+            if (pickedQty == 0) {
+                throw new IllegalArgumentException("SUBSTITUTED status requires positive substituted quantity");
+            }
+        }
+        if (item.getStatus() != PickItemStatus.PENDING && item.getStatus() != request.status()) {
+            throw new IllegalStateException("Pick item already resolved as " + item.getStatus()
+                + " and cannot transition to " + request.status());
+        }
+    }
+
+    private boolean isIdempotentRepeat(PickItem item, MarkItemPickedRequest request, int resolvedQty) {
+        UUID requestedSub = request.status() == PickItemStatus.SUBSTITUTED ? request.substituteProductId() : null;
+        return item.getStatus() != PickItemStatus.PENDING
+            && item.getStatus() == request.status()
+            && item.getPickedQty() == resolvedQty
+            && Objects.equals(item.getSubstituteProductId(), requestedSub);
+    }
+
+    private void recordAndCheckDebounce(UUID orderId, String barcode) {
+        long now = System.currentTimeMillis();
+        if (scanDebounceMap.size() > 1000) {
+            scanDebounceMap.entrySet().removeIf(entry -> (now - entry.getValue()) >= 1000);
+        }
+        String debounceKey = orderId + ":" + barcode;
+        Long lastScan = scanDebounceMap.get(debounceKey);
+        if (lastScan != null && (now - lastScan) < 1000) {
+            throw new DuplicateScanException("Duplicate scan detected for barcode " + barcode + " within 1000ms debounce window");
+        }
+        scanDebounceMap.put(debounceKey, now);
+    }
+
+    private void applyItemUpdate(PickItem item, MarkItemPickedRequest request, int pickedQty) {
         item.setPickedQty(pickedQty);
         item.setStatus(request.status());
         item.setNote(request.note());
-        item.setSubstituteProductId(request.substituteProductId());
+        item.setSubstituteProductId(request.status() == PickItemStatus.SUBSTITUTED ? request.substituteProductId() : null);
     }
 
     private int safeQty(MarkItemPickedRequest request, int defaultQty) {
@@ -309,14 +356,17 @@ public class PickService {
 
     @Transactional
     public void onBatchCompleted(PickTask task) {
-        if (task.getStatus() == PickTaskStatus.CANCELLED) {
+        PickTask locked = task.getOrderId() != null
+            ? pickTaskRepository.findByOrderIdForUpdate(task.getOrderId()).orElse(task)
+            : task;
+        if (locked.getStatus() == PickTaskStatus.COMPLETED || locked.getStatus() == PickTaskStatus.CANCELLED) {
             return;
         }
-        if (task.getCompletedAt() == null) {
-            task.setCompletedAt(Instant.now());
+        if (locked.getCompletedAt() == null) {
+            locked.setCompletedAt(Instant.now());
         }
-        task.setStatus(PickTaskStatus.COMPLETED);
-        PickTask saved = pickTaskRepository.save(task);
+        locked.setStatus(PickTaskStatus.COMPLETED);
+        PickTask saved = pickTaskRepository.save(locked);
         if (saved.getStartedAt() != null && saved.getCompletedAt() != null) {
             pickDurationTimer.record(Duration.between(saved.getStartedAt(), saved.getCompletedAt()));
         }
@@ -341,6 +391,8 @@ public class PickService {
         payload.put("storeId", task.getStoreId());
         payload.put("packedAt", task.getCompletedAt());
         payload.put("note", note == null ? "" : note);
+        payload.put("coldChainRequired", task.isColdChainRequired());
+        payload.put("fragileRequired", task.isFragileRequired());
         StoreCoordinates coords = warehouseClient.getStoreCoordinates(task.getStoreId());
         if (coords != null) {
             payload.put("pickupLat", coords.latitude());
@@ -374,6 +426,9 @@ public class PickService {
         pickItem.setBin(item.bin());
         pickItem.setBarcode(item.barcode());
         pickItem.setTareWeightGrams(item.tareWeightGrams());
+        pickItem.setColdChain(item.isColdChainRequired());
+        pickItem.setFragile(item.isFragileRequired());
+        pickItem.setStorageTemperature(item.storageTemperature());
         return pickItem;
     }
 }

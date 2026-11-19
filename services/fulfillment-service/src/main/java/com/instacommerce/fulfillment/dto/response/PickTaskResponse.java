@@ -11,6 +11,12 @@ public record PickTaskResponse(
     UUID pickerId,
     Instant startedAt,
     Instant completedAt,
-    Instant createdAt
+    Instant createdAt,
+    boolean coldChainRequired,
+    boolean fragileRequired
 ) {
+    public PickTaskResponse(UUID id, UUID orderId, UUID storeId, String status,
+                            UUID pickerId, Instant startedAt, Instant completedAt, Instant createdAt) {
+        this(id, orderId, storeId, status, pickerId, startedAt, completedAt, createdAt, false, false);
+    }
 }

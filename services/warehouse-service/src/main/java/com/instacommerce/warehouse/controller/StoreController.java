@@ -2,6 +2,7 @@ package com.instacommerce.warehouse.controller;
 
 import com.instacommerce.warehouse.dto.response.CapacityResponse;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
+import com.instacommerce.warehouse.dto.response.ZoneResolutionResponse;
 import com.instacommerce.warehouse.service.CapacityService;
 import com.instacommerce.warehouse.service.StoreService;
 import com.instacommerce.warehouse.service.ZoneService;
@@ -80,6 +81,14 @@ public class StoreController {
     @GetMapping("/by-pincode")
     public ResponseEntity<List<UUID>> findStoresByPincode(@RequestParam String pincode) {
         return ResponseEntity.ok(zoneService.mapPincodeToStoreIds(pincode));
+    }
+
+    @GetMapping("/resolve")
+    public ResponseEntity<List<ZoneResolutionResponse>> resolveStores(
+            @RequestParam String pincode,
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng) {
+        return ResponseEntity.ok(zoneService.resolveStoresForOrder(pincode, lat, lng));
     }
 
     @GetMapping("/by-city")

@@ -2,7 +2,9 @@ package com.instacommerce.inventory.controller;
 
 import com.instacommerce.inventory.dto.request.CancelRequest;
 import com.instacommerce.inventory.dto.request.ConfirmRequest;
+import com.instacommerce.inventory.dto.request.PartialReleaseRequest;
 import com.instacommerce.inventory.dto.request.ReserveRequest;
+import com.instacommerce.inventory.dto.response.PartialReleaseResponse;
 import com.instacommerce.inventory.dto.response.ReserveResponse;
 import com.instacommerce.inventory.service.ReservationService;
 import jakarta.validation.Valid;
@@ -52,5 +54,16 @@ public class ReservationController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void releaseById(@PathVariable UUID reservationId) {
         reservationService.cancel(reservationId);
+    }
+
+    @PostMapping("/release-partial")
+    public PartialReleaseResponse releasePartial(@Valid @RequestBody PartialReleaseRequest request) {
+        return reservationService.releasePartial(request.reservationId(), request.items(), request.releaseKey());
+    }
+
+    @PostMapping("/reservations/{reservationId}/release")
+    public PartialReleaseResponse releasePartialById(@PathVariable UUID reservationId,
+                                                     @Valid @RequestBody PartialReleaseRequest request) {
+        return reservationService.releasePartial(reservationId, request.items(), request.releaseKey());
     }
 }

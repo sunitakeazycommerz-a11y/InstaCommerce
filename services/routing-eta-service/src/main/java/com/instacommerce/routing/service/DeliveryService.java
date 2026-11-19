@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -207,6 +208,9 @@ public class DeliveryService {
         updatePayload.put("monsoonDelayActive", estimate.monsoonDelayActive());
         updatePayload.put("delayBanner", estimate.delayBanner());
         updatePayload.put("vehicleRecommendation", estimate.vehicleRecommendation());
+        updatePayload.put("batchStops", estimate.batchStops());
+        updatePayload.put("dwellMinutes", estimate.dwellMinutes());
+        updatePayload.put("breachProbability", estimate.breachProbability());
         updatePayload.put("calculatedAt", estimate.calculatedAt().toString());
 
         outboxService.publish("Delivery", deliveryId.toString(), "EtaUpdated", updatePayload);
@@ -314,6 +318,65 @@ public class DeliveryService {
         return deliveryRepository.findById(deliveryId)
             .map(this::toResponse)
             .orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
+    }
+
+    @Transactional(readOnly = true)
+    public int countPrecedingStops(DeliveryResponse delivery, double fromLat, double fromLng) {
+        if (delivery == null || delivery.riderId() == null) {
+            return 0;
+        }
+        return countPrecedingStopsForRider(delivery.id(), delivery.riderId(), delivery.createdAt(),
+            delivery.dropoffLat(), delivery.dropoffLng(), fromLat, fromLng);
+    }
+
+    @Transactional(readOnly = true)
+    public int countPrecedingStops(Delivery delivery, double fromLat, double fromLng) {
+        if (delivery == null || delivery.getRiderId() == null) {
+            return 0;
+        }
+        return countPrecedingStopsForRider(delivery.getId(), delivery.getRiderId(), delivery.getCreatedAt(),
+            delivery.getDropoffLat(), delivery.getDropoffLng(), fromLat, fromLng);
+    }
+
+    private int countPrecedingStopsForRider(UUID targetDeliveryId, UUID riderId, Instant targetCreatedAt,
+                                            BigDecimal targetDropoffLat, BigDecimal targetDropoffLng,
+                                            double fromLat, double fromLng) {
+        List<Delivery> active = deliveryRepository.findByRiderIdAndStatusIn(riderId, List.copyOf(ACTIVE_STATUSES));
+        if (active == null || active.size() <= 1) {
+            return 0;
+        }
+        double targetDistanceKm = (targetDropoffLat != null && targetDropoffLng != null)
+            ? haversineKm(fromLat, fromLng, targetDropoffLat.doubleValue(), targetDropoffLng.doubleValue())
+            : Double.MAX_VALUE;
+        int preceding = 0;
+        for (Delivery other : active) {
+            if (other.getId().equals(targetDeliveryId)) {
+                continue;
+            }
+            if (other.getDropoffLat() != null && other.getDropoffLng() != null) {
+                double otherDistanceKm = haversineKm(
+                    fromLat, fromLng, other.getDropoffLat().doubleValue(), other.getDropoffLng().doubleValue());
+                if (otherDistanceKm < targetDistanceKm - 1e-6) {
+                    preceding++;
+                    continue;
+                }
+                if (Math.abs(otherDistanceKm - targetDistanceKm) <= 1e-6
+                    && other.getCreatedAt() != null && targetCreatedAt != null
+                    && other.getCreatedAt().isBefore(targetCreatedAt)) {
+                    preceding++;
+                }
+            }
+        }
+        return preceding;
+    }
+
+    private static double haversineKm(double lat1, double lon1, double lat2, double lon2) {
+        double dLat = Math.toRadians(lat2 - lat1);
+        double dLon = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+            + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+            * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return 6371.0 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
     private void validateTransition(DeliveryStatus current, DeliveryStatus target) {

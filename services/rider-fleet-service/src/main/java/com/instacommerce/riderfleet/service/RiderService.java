@@ -79,6 +79,9 @@ public class RiderService {
     public RiderResponse activateRider(UUID riderId) {
         Rider rider = riderRepository.findById(riderId)
             .orElseThrow(() -> new RiderNotFoundException(riderId.toString()));
+        if (rider.getStatus() == RiderStatus.ACTIVE) {
+            return toResponse(rider);
+        }
         if (rider.getStatus() != RiderStatus.INACTIVE) {
             throw new InvalidRiderStateException(
                 "Rider must be INACTIVE to activate, current: " + rider.getStatus());
@@ -96,6 +99,9 @@ public class RiderService {
     public RiderResponse suspendRider(UUID riderId) {
         Rider rider = riderRepository.findById(riderId)
             .orElseThrow(() -> new RiderNotFoundException(riderId.toString()));
+        if (rider.getStatus() == RiderStatus.SUSPENDED) {
+            return toResponse(rider);
+        }
         if (rider.getStatus() == RiderStatus.BLOCKED) {
             throw new InvalidRiderStateException("Cannot suspend a BLOCKED rider");
         }
@@ -118,6 +124,9 @@ public class RiderService {
     public RiderResponse onboardRider(UUID riderId) {
         Rider rider = riderRepository.findById(riderId)
             .orElseThrow(() -> new RiderNotFoundException(riderId.toString()));
+        if (rider.getStatus() == RiderStatus.ACTIVE) {
+            return toResponse(rider);
+        }
         if (rider.getStatus() != RiderStatus.INACTIVE) {
             throw new InvalidRiderStateException(
                 "Rider must be INACTIVE to onboard, current: " + rider.getStatus());

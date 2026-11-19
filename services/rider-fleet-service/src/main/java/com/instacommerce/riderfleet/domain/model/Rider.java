@@ -50,6 +50,15 @@ public class Rider {
     @Column(name = "store_id")
     private UUID storeId;
 
+    @Column(name = "consecutive_deliveries", nullable = false)
+    private int consecutiveDeliveries = 0;
+
+    @Column(name = "last_delivery_completed_at")
+    private Instant lastDeliveryCompletedAt;
+
+    @Column(name = "max_capacity_grams")
+    private Integer maxCapacityGrams;
+
     @Column(name = "created_at")
     private Instant createdAt;
 
@@ -175,5 +184,42 @@ public class Rider {
 
     public void setVersion(long version) {
         this.version = version;
+    }
+
+    public int getConsecutiveDeliveries() {
+        return consecutiveDeliveries;
+    }
+
+    public void setConsecutiveDeliveries(int consecutiveDeliveries) {
+        this.consecutiveDeliveries = consecutiveDeliveries;
+    }
+
+    public Instant getLastDeliveryCompletedAt() {
+        return lastDeliveryCompletedAt;
+    }
+
+    public void setLastDeliveryCompletedAt(Instant lastDeliveryCompletedAt) {
+        this.lastDeliveryCompletedAt = lastDeliveryCompletedAt;
+    }
+
+    public Integer getMaxCapacityGrams() {
+        return maxCapacityGrams;
+    }
+
+    public void setMaxCapacityGrams(Integer maxCapacityGrams) {
+        this.maxCapacityGrams = maxCapacityGrams;
+    }
+
+    public int resolveMaxCapacityGrams() {
+        if (maxCapacityGrams != null && maxCapacityGrams > 0) {
+            return maxCapacityGrams;
+        }
+        return vehicleType != null
+            ? vehicleType.getDefaultCapacityGrams()
+            : VehicleType.MOTORCYCLE.getDefaultCapacityGrams();
+    }
+
+    public boolean canCarry(Integer orderWeightGrams) {
+        return orderWeightGrams == null || orderWeightGrams <= 0 || orderWeightGrams <= resolveMaxCapacityGrams();
     }
 }

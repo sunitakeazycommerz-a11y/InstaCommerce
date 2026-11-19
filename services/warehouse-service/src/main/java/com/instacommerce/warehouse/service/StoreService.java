@@ -2,13 +2,17 @@ package com.instacommerce.warehouse.service;
 
 import com.instacommerce.warehouse.config.WarehouseProperties;
 import com.instacommerce.warehouse.domain.model.Store;
+import com.instacommerce.warehouse.domain.model.StoreBlackoutWindow;
 import com.instacommerce.warehouse.domain.model.StoreHours;
 import com.instacommerce.warehouse.domain.model.StoreStatus;
 import com.instacommerce.warehouse.dto.mapper.StoreMapper;
+import com.instacommerce.warehouse.dto.request.CreateBlackoutWindowRequest;
 import com.instacommerce.warehouse.dto.request.CreateStoreRequest;
 import com.instacommerce.warehouse.dto.request.UpsertStoreHoursRequest;
+import com.instacommerce.warehouse.dto.response.BlackoutWindowResponse;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.exception.StoreNotFoundException;
+import com.instacommerce.warehouse.repository.StoreBlackoutWindowRepository;
 import com.instacommerce.warehouse.repository.StoreHoursRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
 import java.time.Clock;
@@ -24,6 +28,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -40,12 +45,23 @@ public class StoreService {
     private final OutboxService outboxService;
     private final WarehouseProperties warehouseProperties;
     private final Clock clock;
+    private final StoreBlackoutWindowRepository blackoutWindowRepository;
 
     public StoreService(StoreRepository storeRepository,
                         StoreHoursRepository storeHoursRepository,
                         OutboxService outboxService,
                         WarehouseProperties warehouseProperties) {
-        this(storeRepository, storeHoursRepository, outboxService, warehouseProperties, Clock.systemUTC());
+        this(storeRepository, storeHoursRepository, outboxService, warehouseProperties, Clock.systemUTC(),
+                (StoreBlackoutWindowRepository) null);
+    }
+
+    public StoreService(StoreRepository storeRepository,
+                        StoreHoursRepository storeHoursRepository,
+                        OutboxService outboxService,
+                        WarehouseProperties warehouseProperties,
+                        Clock clock) {
+        this(storeRepository, storeHoursRepository, outboxService, warehouseProperties, clock,
+                (StoreBlackoutWindowRepository) null);
     }
 
     @Autowired
@@ -53,12 +69,30 @@ public class StoreService {
                         StoreHoursRepository storeHoursRepository,
                         OutboxService outboxService,
                         WarehouseProperties warehouseProperties,
-                        Clock clock) {
+                        Clock clock,
+                        ObjectProvider<StoreBlackoutWindowRepository> blackoutWindowProvider) {
+        this(
+            storeRepository,
+            storeHoursRepository,
+            outboxService,
+            warehouseProperties,
+            clock,
+            blackoutWindowProvider != null ? blackoutWindowProvider.getIfAvailable() : null
+        );
+    }
+
+    public StoreService(StoreRepository storeRepository,
+                        StoreHoursRepository storeHoursRepository,
+                        OutboxService outboxService,
+                        WarehouseProperties warehouseProperties,
+                        Clock clock,
+                        StoreBlackoutWindowRepository blackoutWindowRepository) {
         this.storeRepository = storeRepository;
         this.storeHoursRepository = storeHoursRepository;
         this.outboxService = outboxService;
         this.warehouseProperties = warehouseProperties;
         this.clock = clock != null ? clock : Clock.systemUTC();
+        this.blackoutWindowRepository = blackoutWindowRepository;
     }
 
     @Transactional(readOnly = true)
@@ -99,8 +133,12 @@ public class StoreService {
         if (store.getStatus() != StoreStatus.ACTIVE) {
             return false;
         }
+        Instant effective = instant != null ? instant : Instant.now(clock);
+        if (hasActiveBlackout(storeId, effective)) {
+            return false;
+        }
         ZoneId storeZone = resolveZoneId(store.getTimezone());
-        ZonedDateTime storeNow = instant.atZone(storeZone);
+        ZonedDateTime storeNow = effective.atZone(storeZone);
         return checkStoreHours(storeId, storeNow);
     }
 
@@ -112,7 +150,65 @@ public class StoreService {
             return false;
         }
         ZonedDateTime storeNow = toStoreTime(store, now);
+        if (hasActiveBlackout(storeId, storeNow.toInstant())) {
+            return false;
+        }
         return checkStoreHours(storeId, storeNow);
+    }
+
+    @Transactional
+    @CacheEvict(value = "stores", key = "#storeId")
+    public BlackoutWindowResponse createBlackoutWindow(UUID storeId, CreateBlackoutWindowRequest request) {
+        if (!request.endsAt().isAfter(request.startsAt())) {
+            throw new IllegalArgumentException("Blackout endsAt must be after startsAt");
+        }
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> new StoreNotFoundException(storeId));
+        StoreBlackoutWindow window = new StoreBlackoutWindow();
+        window.setStore(store);
+        window.setStartsAt(request.startsAt());
+        window.setEndsAt(request.endsAt());
+        window.setReason(request.reason().trim());
+        StoreBlackoutWindow saved = blackoutWindowRepository.save(window);
+        outboxService.publish("Store", storeId.toString(), "StoreBlackoutScheduled",
+                Map.of("storeId", storeId.toString(),
+                        "windowId", saved.getId().toString(),
+                        "startsAt", saved.getStartsAt().toString(),
+                        "endsAt", saved.getEndsAt().toString(),
+                        "reason", saved.getReason()));
+        return toBlackoutResponse(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public List<BlackoutWindowResponse> listBlackoutWindows(UUID storeId) {
+        if (!storeRepository.existsById(storeId)) {
+            throw new StoreNotFoundException(storeId);
+        }
+        return blackoutWindowRepository.findByStoreIdOrderByStartsAtAsc(storeId).stream()
+                .map(this::toBlackoutResponse)
+                .toList();
+    }
+
+    @Transactional
+    @CacheEvict(value = "stores", key = "#storeId")
+    public void deleteBlackoutWindow(UUID storeId, UUID windowId) {
+        StoreBlackoutWindow window = blackoutWindowRepository.findByIdAndStoreId(windowId, storeId)
+                .orElseThrow(() -> new IllegalArgumentException("Blackout window not found for store"));
+        blackoutWindowRepository.delete(window);
+    }
+
+    private boolean hasActiveBlackout(UUID storeId, Instant at) {
+        return blackoutWindowRepository != null && blackoutWindowRepository.existsActiveBlackout(storeId, at);
+    }
+
+    private BlackoutWindowResponse toBlackoutResponse(StoreBlackoutWindow window) {
+        return new BlackoutWindowResponse(
+                window.getId(),
+                window.getStore().getId(),
+                window.getStartsAt(),
+                window.getEndsAt(),
+                window.getReason(),
+                window.getCreatedAt());
     }
 
     @Transactional

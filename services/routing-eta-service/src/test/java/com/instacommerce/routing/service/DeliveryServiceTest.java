@@ -7,6 +7,7 @@ import com.instacommerce.routing.dto.response.ETAEstimate;
 import com.instacommerce.routing.repository.DeliveryRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -192,5 +193,32 @@ class DeliveryServiceTest {
 
         verifyNoInteractions(etaService);
         verify(deliveryRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("countPrecedingStops counts active deliveries for same rider that are closer to rider position")
+    void countsPrecedingStopsForBatchDelivery() {
+        UUID riderId = UUID.randomUUID();
+        Delivery firstStop = new Delivery();
+        firstStop.setId(UUID.randomUUID());
+        firstStop.setRiderId(riderId);
+        firstStop.setStatus(DeliveryStatus.EN_ROUTE);
+        firstStop.setDropoffLat(new BigDecimal("12.9100"));
+        firstStop.setDropoffLng(new BigDecimal("77.5100"));
+        firstStop.setCreatedAt(Instant.parse("2026-11-19T10:00:00Z"));
+
+        Delivery secondStop = new Delivery();
+        secondStop.setId(UUID.randomUUID());
+        secondStop.setRiderId(riderId);
+        secondStop.setStatus(DeliveryStatus.EN_ROUTE);
+        secondStop.setDropoffLat(new BigDecimal("12.9400"));
+        secondStop.setDropoffLng(new BigDecimal("77.5400"));
+        secondStop.setCreatedAt(Instant.parse("2026-11-19T10:01:00Z"));
+
+        when(deliveryRepository.findByRiderIdAndStatusIn(eq(riderId), any()))
+            .thenReturn(List.of(firstStop, secondStop));
+
+        assertEquals(0, deliveryService.countPrecedingStops(firstStop, 12.9000, 77.5000));
+        assertEquals(1, deliveryService.countPrecedingStops(secondStop, 12.9000, 77.5000));
     }
 }

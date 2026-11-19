@@ -32,7 +32,13 @@ public class TemplateRegistry {
         Map.entry("PaymentFailed", new TemplateDefinition("payment_failed",
             List.of(NotificationChannel.EMAIL, NotificationChannel.SMS), "Payment failed")),
         Map.entry("ETABreachRisk", new TemplateDefinition("eta_delayed",
-            List.of(NotificationChannel.SMS, NotificationChannel.PUSH), "Delivery delayed"))
+            List.of(NotificationChannel.SMS, NotificationChannel.PUSH), "Delivery delayed")),
+        Map.entry("PromotionalCampaign", new TemplateDefinition("promo_offer",
+            List.of(NotificationChannel.PUSH, NotificationChannel.EMAIL), "Special offer from InstaCommerce")),
+        Map.entry("PromotionOffer", new TemplateDefinition("promo_offer",
+            List.of(NotificationChannel.PUSH, NotificationChannel.EMAIL), "Exclusive offer just for you")),
+        Map.entry("MarketingCampaign", new TemplateDefinition("promo_offer",
+            List.of(NotificationChannel.PUSH, NotificationChannel.EMAIL), "Special offer from InstaCommerce"))
     );
 
     public Optional<TemplateDefinition> resolve(String eventType) {

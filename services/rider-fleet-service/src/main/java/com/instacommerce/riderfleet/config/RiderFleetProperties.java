@@ -48,6 +48,9 @@ public class RiderFleetProperties {
 
     public static class Assignment {
         private double defaultRadiusKm = 5.0;
+        private int maxConsecutiveDeliveries = 8;
+        private int fatigueResetMinutes = 45;
+        private boolean enforceShiftValidation = false;
 
         public double getDefaultRadiusKm() {
             return defaultRadiusKm;
@@ -55,6 +58,30 @@ public class RiderFleetProperties {
 
         public void setDefaultRadiusKm(double defaultRadiusKm) {
             this.defaultRadiusKm = defaultRadiusKm;
+        }
+
+        public int getMaxConsecutiveDeliveries() {
+            return maxConsecutiveDeliveries;
+        }
+
+        public void setMaxConsecutiveDeliveries(int maxConsecutiveDeliveries) {
+            this.maxConsecutiveDeliveries = maxConsecutiveDeliveries;
+        }
+
+        public int getFatigueResetMinutes() {
+            return fatigueResetMinutes;
+        }
+
+        public void setFatigueResetMinutes(int fatigueResetMinutes) {
+            this.fatigueResetMinutes = fatigueResetMinutes;
+        }
+
+        public boolean isEnforceShiftValidation() {
+            return enforceShiftValidation;
+        }
+
+        public void setEnforceShiftValidation(boolean enforceShiftValidation) {
+            this.enforceShiftValidation = enforceShiftValidation;
         }
     }
 

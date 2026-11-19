@@ -7,13 +7,11 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "rider_assignments",
-    uniqueConstraints = @UniqueConstraint(name = "uk_rider_assignments_order_id", columnNames = "order_id"))
+@Table(name = "rider_assignments")
 public class RiderAssignment {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -33,6 +31,15 @@ public class RiderAssignment {
 
     @Column(name = "completed_at")
     private Instant completedAt;
+
+    @Column(name = "status", nullable = false, length = 20)
+    private String status = "ACTIVE";
+
+    @Column(name = "cancelled_at")
+    private Instant cancelledAt;
+
+    @Column(name = "cancellation_reason", length = 255)
+    private String cancellationReason;
 
     @PrePersist
     void prePersist() {
@@ -87,5 +94,29 @@ public class RiderAssignment {
 
     public void setCompletedAt(Instant completedAt) {
         this.completedAt = completedAt;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public Instant getCancelledAt() {
+        return cancelledAt;
+    }
+
+    public void setCancelledAt(Instant cancelledAt) {
+        this.cancelledAt = cancelledAt;
+    }
+
+    public String getCancellationReason() {
+        return cancellationReason;
+    }
+
+    public void setCancellationReason(String cancellationReason) {
+        this.cancellationReason = cancellationReason;
     }
 }

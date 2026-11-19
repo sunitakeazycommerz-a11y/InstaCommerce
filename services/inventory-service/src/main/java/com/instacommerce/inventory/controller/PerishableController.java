@@ -56,4 +56,10 @@ public class PerishableController {
             @RequestParam(required = false, defaultValue = "24") int hoursAhead) {
         return ResponseEntity.ok(perishableService.triggerMarkdownsGlobal(Duration.ofHours(hoursAhead)));
     }
+
+    @PostMapping("/stores/{storeId}/perishables/write-off-expired")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WAREHOUSE_MANAGER', 'INTERNAL_SERVICE')")
+    public ResponseEntity<List<StockBatchResponse>> writeOffExpired(@PathVariable UUID storeId) {
+        return ResponseEntity.ok(perishableService.writeOffExpiredBatches(storeId));
+    }
 }

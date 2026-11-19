@@ -22,7 +22,9 @@ public final class FulfillmentMapper {
             task.getPickerId(),
             task.getStartedAt(),
             task.getCompletedAt(),
-            task.getCreatedAt()
+            task.getCreatedAt(),
+            task.isColdChainRequired(),
+            task.isFragileRequired()
         );
     }
 
@@ -45,7 +47,10 @@ public final class FulfillmentMapper {
             item.getBin(),
             item.getPickSequence(),
             item.getBarcode(),
-            item.getTareWeightGrams()
+            item.getTareWeightGrams(),
+            item.isColdChain(),
+            item.isFragile(),
+            item.getStorageTemperature()
         );
     }
 
@@ -60,7 +65,9 @@ public final class FulfillmentMapper {
             delivery.getDispatchedAt(),
             delivery.getDeliveredAt(),
             delivery.getDispatchOtp(),
-            delivery.getPodPhotoUrl()
+            delivery.getPodPhotoUrl(),
+            delivery.isColdChainRequired(),
+            delivery.isFragileRequired()
         );
     }
 

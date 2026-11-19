@@ -160,6 +160,11 @@ public class SafetyStockService {
         return toResponse(buffer, onHand, available, reorderNeeded);
     }
 
+    @Transactional
+    public SafetyStockResponse evaluateBuffer(UUID storeId, SkuSafetyStockBuffer buffer, StockItem stock) {
+        return evaluateAndReorderIfNeeded(storeId, buffer, stock);
+    }
+
     private SafetyStockResponse toResponse(SkuSafetyStockBuffer buffer, int onHand, int available, boolean reorderNeeded) {
         return new SafetyStockResponse(
             buffer.getStoreId(),

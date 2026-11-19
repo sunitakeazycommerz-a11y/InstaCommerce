@@ -1,10 +1,14 @@
 package com.instacommerce.warehouse.controller;
 
 import com.instacommerce.warehouse.domain.model.StoreStatus;
+import com.instacommerce.warehouse.dto.request.CreateBlackoutWindowRequest;
 import com.instacommerce.warehouse.dto.request.CreateStoreRequest;
 import com.instacommerce.warehouse.dto.request.CreateZoneRequest;
+import com.instacommerce.warehouse.dto.request.SurgeModeRequest;
 import com.instacommerce.warehouse.dto.request.UpdateZoneRequest;
 import com.instacommerce.warehouse.dto.request.UpsertStoreHoursRequest;
+import com.instacommerce.warehouse.dto.response.BlackoutWindowResponse;
+import com.instacommerce.warehouse.dto.response.CapacityResponse;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.service.CapacityService;
 import com.instacommerce.warehouse.service.StoreService;
@@ -127,5 +131,32 @@ public class AdminStoreController {
             @PathVariable UUID id,
             @RequestBody @Valid UpsertStoreHoursRequest request) {
         return ResponseEntity.ok(storeService.upsertStoreHours(id, request));
+    }
+
+    @PatchMapping("/{id}/surge-mode")
+    public ResponseEntity<CapacityResponse> updateSurgeMode(
+            @PathVariable UUID id,
+            @RequestBody @Valid SurgeModeRequest request) {
+        return ResponseEntity.ok(capacityService.updateSurgeMode(id, request));
+    }
+
+    @PostMapping("/{id}/blackouts")
+    public ResponseEntity<BlackoutWindowResponse> createBlackoutWindow(
+            @PathVariable UUID id,
+            @RequestBody @Valid CreateBlackoutWindowRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(storeService.createBlackoutWindow(id, request));
+    }
+
+    @GetMapping("/{id}/blackouts")
+    public ResponseEntity<List<BlackoutWindowResponse>> listBlackoutWindows(@PathVariable UUID id) {
+        return ResponseEntity.ok(storeService.listBlackoutWindows(id));
+    }
+
+    @DeleteMapping("/{id}/blackouts/{windowId}")
+    public ResponseEntity<Void> deleteBlackoutWindow(
+            @PathVariable UUID id,
+            @PathVariable UUID windowId) {
+        storeService.deleteBlackoutWindow(id, windowId);
+        return ResponseEntity.noContent().build();
     }
 }

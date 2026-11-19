@@ -125,6 +125,43 @@ public class PerishableLiquidationService {
         return batchRepository.findByStoreId(storeId).stream().map(this::toResponse).toList();
     }
 
+    @Transactional
+    public List<StockBatchResponse> writeOffExpiredBatches(UUID storeId) {
+        Instant now = Instant.now();
+        List<StockBatch> expired = batchRepository.findExpiredBatchesForWriteOff(storeId, now);
+        List<StockBatchResponse> writtenOff = new ArrayList<>();
+        for (StockBatch batch : expired) {
+            int expiredQty = batch.getQuantity();
+            if (expiredQty <= 0) {
+                continue;
+            }
+            batch.setQuantity(0);
+            StockBatch savedBatch = batchRepository.save(batch);
+
+            stockItemRepository.findByStoreIdAndProductId(storeId, batch.getProductId())
+                .ifPresent(stock -> {
+                    int maxDeductible = Math.max(0, stock.getOnHand() - stock.getReserved());
+                    int writeOffQty = Math.min(expiredQty, maxDeductible);
+                    if (writeOffQty > 0) {
+                        stock.setOnHand(stock.getOnHand() - writeOffQty);
+                        stockItemRepository.save(stock);
+                    }
+                });
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("store_id", storeId.toString());
+            payload.put("product_id", batch.getProductId().toString());
+            payload.put("batch_number", batch.getBatchNumber());
+            payload.put("written_off_quantity", expiredQty);
+            payload.put("expiry_date", batch.getExpiryDate().toString());
+            payload.put("timestamp", now.toString());
+            outboxService.publish("STOCK_BATCH", savedBatch.getId().toString(), "ExpiredStockWrittenOff", payload);
+
+            writtenOff.add(toResponse(savedBatch));
+        }
+        return writtenOff;
+    }
+
     private StockBatchResponse toResponse(StockBatch batch) {
         return new StockBatchResponse(
             batch.getId(),

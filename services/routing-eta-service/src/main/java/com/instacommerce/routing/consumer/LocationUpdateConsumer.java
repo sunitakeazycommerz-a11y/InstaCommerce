@@ -56,42 +56,16 @@ public class LocationUpdateConsumer {
         try {
             JsonNode event = objectMapper.readTree(message);
 
-            BigDecimal lat = null;
-            if (event.hasNonNull("latitude")) {
-                lat = new BigDecimal(event.path("latitude").asText());
-            } else if (event.hasNonNull("lat")) {
-                lat = new BigDecimal(event.path("lat").asText());
-            }
-
-            BigDecimal lng = null;
-            if (event.hasNonNull("longitude")) {
-                lng = new BigDecimal(event.path("longitude").asText());
-            } else if (event.hasNonNull("lng")) {
-                lng = new BigDecimal(event.path("lng").asText());
-            }
+            BigDecimal lat = parseDecimal(event, "latitude", "lat");
+            BigDecimal lng = parseDecimal(event, "longitude", "lng");
 
             if (lat == null || lng == null) {
                 log.warn("Skipping location update missing coordinates: {}", message);
                 return;
             }
 
-            BigDecimal speed = null;
-            if (event.hasNonNull("speedKmh")) {
-                speed = new BigDecimal(event.path("speedKmh").asText());
-            } else if (event.hasNonNull("speed_kmh")) {
-                speed = new BigDecimal(event.path("speed_kmh").asText());
-            } else if (event.hasNonNull("speed")) {
-                speed = new BigDecimal(event.path("speed").asText());
-            }
-
-            BigDecimal heading = null;
-            if (event.hasNonNull("headingDegrees")) {
-                heading = new BigDecimal(event.path("headingDegrees").asText());
-            } else if (event.hasNonNull("heading_degrees")) {
-                heading = new BigDecimal(event.path("heading_degrees").asText());
-            } else if (event.hasNonNull("heading")) {
-                heading = new BigDecimal(event.path("heading").asText());
-            }
+            BigDecimal speed = parseDecimal(event, "speedKmh", "speed_kmh", "speed");
+            BigDecimal heading = parseDecimal(event, "headingDegrees", "heading_degrees", "heading");
 
             List<UUID> deliveryIds = new ArrayList<>();
             String deliveryIdStr = event.hasNonNull("deliveryId") ? event.path("deliveryId").asText()
@@ -156,18 +130,23 @@ public class LocationUpdateConsumer {
                 return;
             }
 
+            int batchStops = deliveryService.countPrecedingStops(delivery, currentLat, currentLng);
             ETAEstimate estimate = etaService.calculateETAWithConfidence(
                 currentLat, currentLng,
                 delivery.getDropoffLat().doubleValue(),
                 delivery.getDropoffLng().doubleValue(),
                 delivery.getStoreId(),
                 delivery.getVehicleType(),
-                0.0);
+                0.0,
+                batchStops);
 
             int currentEta = delivery.getEstimatedMinutes() != null ? delivery.getEstimatedMinutes() : 0;
             int minDelta = routingProperties.getBreach().getEtaRecalcMinDeltaMinutes();
+            boolean breachCrossed = !delivery.isCompensationTriggered()
+                && (estimate.breachProbability() > routingProperties.getBreach().getBreachAlertThreshold()
+                    || estimate.etaMinutes() > routingProperties.getBreach().getSlaThresholdMinutes());
 
-            if (Math.abs(estimate.etaMinutes() - currentEta) >= minDelta) {
+            if (Math.abs(estimate.etaMinutes() - currentEta) >= minDelta || breachCrossed) {
                 deliveryService.updateETA(delivery.getId(), estimate);
                 log.info("Recalculated ETA for delivery {}: {}min -> {}min (breach_prob={})",
                     deliveryId, currentEta, estimate.etaMinutes(),
@@ -176,5 +155,26 @@ public class LocationUpdateConsumer {
         } catch (Exception ex) {
             log.warn("ETA recalculation failed for delivery {}, continuing", deliveryId, ex);
         }
+    }
+
+    private BigDecimal parseDecimal(JsonNode event, String... fieldNames) {
+        for (String field : fieldNames) {
+            JsonNode node = event.path(field);
+            if (!node.isMissingNode() && !node.isNull() && node.isValueNode()) {
+                if (node.isNumber()) {
+                    return node.decimalValue();
+                }
+                String raw = node.asText().trim();
+                if (!raw.isEmpty() && !"null".equalsIgnoreCase(raw)) {
+                    try {
+                        return new BigDecimal(raw);
+                    } catch (NumberFormatException ex) {
+                        log.warn("Ignoring invalid decimal value for {}: {}", field, raw);
+                        return null;
+                    }
+                }
+            }
+        }
+        return null;
     }
 }

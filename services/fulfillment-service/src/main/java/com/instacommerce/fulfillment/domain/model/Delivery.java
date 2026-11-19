@@ -66,6 +66,12 @@ public class Delivery {
     @Column(name = "pod_masked")
     private Boolean podMasked;
 
+    @Column(name = "cold_chain_required", nullable = false)
+    private boolean coldChainRequired;
+
+    @Column(name = "fragile_required", nullable = false)
+    private boolean fragileRequired;
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) {
@@ -183,5 +189,21 @@ public class Delivery {
 
     public void setPodMasked(Boolean podMasked) {
         this.podMasked = podMasked;
+    }
+
+    public boolean isColdChainRequired() {
+        return coldChainRequired;
+    }
+
+    public void setColdChainRequired(boolean coldChainRequired) {
+        this.coldChainRequired = coldChainRequired;
+    }
+
+    public boolean isFragileRequired() {
+        return fragileRequired;
+    }
+
+    public void setFragileRequired(boolean fragileRequired) {
+        this.fragileRequired = fragileRequired;
     }
 }

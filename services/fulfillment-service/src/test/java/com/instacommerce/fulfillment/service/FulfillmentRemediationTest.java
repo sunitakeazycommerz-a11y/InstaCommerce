@@ -241,6 +241,7 @@ class FulfillmentRemediationTest {
         task.setStatus(PickTaskStatus.IN_PROGRESS);
 
         PickService mockPickService = Mockito.mock(PickService.class);
+        when(pickBatchRepository.findByIdForUpdate(batchId)).thenReturn(Optional.of(batch));
         when(pickBatchRepository.findById(batchId)).thenReturn(Optional.of(batch));
         when(pickBatchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(pickTaskRepository.findByBatchId(batchId)).thenReturn(List.of(task));

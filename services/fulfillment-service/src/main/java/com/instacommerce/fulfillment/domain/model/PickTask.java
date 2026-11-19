@@ -77,6 +77,12 @@ public class PickTask {
     @Column(name = "dropoff_lng", precision = 11, scale = 8)
     private BigDecimal dropoffLng;
 
+    @Column(name = "cold_chain_required", nullable = false)
+    private boolean coldChainRequired;
+
+    @Column(name = "fragile_required", nullable = false)
+    private boolean fragileRequired;
+
     @OneToMany(mappedBy = "pickTask", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PickItem> items = new ArrayList<>();
 
@@ -229,5 +235,21 @@ public class PickTask {
 
     public void setDropoffLng(BigDecimal dropoffLng) {
         this.dropoffLng = dropoffLng;
+    }
+
+    public boolean isColdChainRequired() {
+        return coldChainRequired;
+    }
+
+    public void setColdChainRequired(boolean coldChainRequired) {
+        this.coldChainRequired = coldChainRequired;
+    }
+
+    public boolean isFragileRequired() {
+        return fragileRequired;
+    }
+
+    public void setFragileRequired(boolean fragileRequired) {
+        this.fragileRequired = fragileRequired;
     }
 }

@@ -15,7 +15,13 @@ public final class InventoryMapper {
     }
 
     public static StockCheckItemResponse toStockCheckItemResponse(StockItem stockItem, int requestedQuantity) {
-        int available = stockItem.getOnHand() - stockItem.getReserved();
+        int available = Math.max(0, stockItem.getOnHand() - stockItem.getReserved());
+        return toStockCheckItemResponse(stockItem, available, requestedQuantity);
+    }
+
+    public static StockCheckItemResponse toStockCheckItemResponse(StockItem stockItem, int sellableAvailable,
+                                                                  int requestedQuantity) {
+        int available = Math.max(0, sellableAvailable);
         boolean sufficient = available >= requestedQuantity;
         return new StockCheckItemResponse(stockItem.getProductId(), available, stockItem.getOnHand(), sufficient);
     }

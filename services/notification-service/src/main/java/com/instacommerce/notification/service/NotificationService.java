@@ -21,15 +21,29 @@ import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class NotificationService {
     private static final Logger logger = LoggerFactory.getLogger(NotificationService.class);
+    private static final Set<String> DEDUPLICATED_STATUS_EVENTS = Set.of(
+        "OrderCreated",
+        "OrderPlaced",
+        "OrderConfirmed",
+        "OrderPacked",
+        "OrderDispatched",
+        "OrderDelivered",
+        "OrderCancelled",
+        "OrderFailed",
+        "DeliveryFailed"
+    );
 
     private final TemplateRegistry templateRegistry;
     private final TemplateService templateService;
@@ -43,6 +57,7 @@ public class NotificationService {
     private final NotificationMetrics metrics;
     private final NotificationProperties notificationProperties;
     private final DeviceTokenRepository deviceTokenRepository;
+    private final ChannelFallbackService channelFallbackService;
 
     public NotificationService(TemplateRegistry templateRegistry,
                                TemplateService templateService,
@@ -56,6 +71,80 @@ public class NotificationService {
                                NotificationMetrics metrics,
                                NotificationProperties notificationProperties,
                                DeviceTokenRepository deviceTokenRepository) {
+        this(
+            templateRegistry,
+            templateService,
+            deduplicationService,
+            logRepository,
+            sender,
+            dlqPublisher,
+            userPreferenceService,
+            userDirectoryClient,
+            orderLookupClient,
+            metrics,
+            notificationProperties,
+            deviceTokenRepository,
+            new ChannelFallbackService(
+                deduplicationService,
+                templateRegistry,
+                templateService,
+                userPreferenceService,
+                userDirectoryClient,
+                sender
+            )
+        );
+    }
+
+    @Autowired
+    public NotificationService(TemplateRegistry templateRegistry,
+                               TemplateService templateService,
+                               DeduplicationService deduplicationService,
+                               NotificationLogRepository logRepository,
+                               RetryableNotificationSender sender,
+                               NotificationDlqPublisher dlqPublisher,
+                               UserPreferenceService userPreferenceService,
+                               UserDirectoryClient userDirectoryClient,
+                               OrderLookupClient orderLookupClient,
+                               NotificationMetrics metrics,
+                               NotificationProperties notificationProperties,
+                               DeviceTokenRepository deviceTokenRepository,
+                               ObjectProvider<ChannelFallbackService> fallbackServiceProvider) {
+        this(
+            templateRegistry,
+            templateService,
+            deduplicationService,
+            logRepository,
+            sender,
+            dlqPublisher,
+            userPreferenceService,
+            userDirectoryClient,
+            orderLookupClient,
+            metrics,
+            notificationProperties,
+            deviceTokenRepository,
+            fallbackServiceProvider != null
+                ? fallbackServiceProvider.getIfAvailable(() -> new ChannelFallbackService(
+                    deduplicationService, templateRegistry, templateService,
+                    userPreferenceService, userDirectoryClient, sender))
+                : new ChannelFallbackService(
+                    deduplicationService, templateRegistry, templateService,
+                    userPreferenceService, userDirectoryClient, sender)
+        );
+    }
+
+    public NotificationService(TemplateRegistry templateRegistry,
+                               TemplateService templateService,
+                               DeduplicationService deduplicationService,
+                               NotificationLogRepository logRepository,
+                               RetryableNotificationSender sender,
+                               NotificationDlqPublisher dlqPublisher,
+                               UserPreferenceService userPreferenceService,
+                               UserDirectoryClient userDirectoryClient,
+                               OrderLookupClient orderLookupClient,
+                               NotificationMetrics metrics,
+                               NotificationProperties notificationProperties,
+                               DeviceTokenRepository deviceTokenRepository,
+                               ChannelFallbackService channelFallbackService) {
         this.templateRegistry = templateRegistry;
         this.templateService = templateService;
         this.deduplicationService = deduplicationService;
@@ -68,6 +157,7 @@ public class NotificationService {
         this.metrics = metrics;
         this.notificationProperties = notificationProperties;
         this.deviceTokenRepository = deviceTokenRepository;
+        this.channelFallbackService = channelFallbackService;
     }
 
     public void handleEvent(ConsumerRecord<String, String> record, EventEnvelope envelope) {
@@ -119,6 +209,15 @@ public class NotificationService {
                 }
                 persistSkipped(eventId, envelope.eventType(), userId, channel, template.templateId(),
                     "Missing recipient");
+                if (channel == NotificationChannel.PUSH
+                    && channelFallbackService != null
+                    && (variables.containsKey("phone") || variables.containsKey("email") || cachedUserContact.isPresent())
+                    && !template.channels().contains(NotificationChannel.SMS)
+                    && !template.channels().contains(NotificationChannel.EMAIL)) {
+                    NotificationRequest failedPush = new NotificationRequest(
+                        eventId, envelope.eventType(), userId, channel, template.templateId(), "n/a", variables);
+                    channelFallbackService.tryFallback(failedPush, null);
+                }
                 continue;
             }
             NotificationRequest request = new NotificationRequest(
@@ -245,6 +344,20 @@ public class NotificationService {
         if (orderId != null) {
             variables.put("orderId", orderId);
         }
+        String phone = textValue(payload, "phone");
+        if (phone == null && userContact != null) {
+            phone = userContact.phone();
+        }
+        if (phone != null) {
+            variables.put("phone", phone);
+        }
+        String email = textValue(payload, "email");
+        if (email == null && userContact != null) {
+            email = userContact.email();
+        }
+        if (email != null) {
+            variables.put("email", email);
+        }
         String reason = textValue(payload, "reason");
         if (reason != null) {
             variables.put("reason", reason);
@@ -339,6 +452,16 @@ public class NotificationService {
     }
 
     private String resolveEventId(ConsumerRecord<String, String> record, EventEnvelope envelope) {
+        if (envelope != null && envelope.eventType() != null && DEDUPLICATED_STATUS_EVENTS.contains(envelope.eventType())) {
+            String orderId = textValue(envelope.payload(), "orderId");
+            if (orderId == null && envelope.aggregateId() != null && !envelope.aggregateId().isBlank()) {
+                orderId = envelope.aggregateId().trim();
+            }
+            if (orderId != null && !orderId.isBlank()) {
+                String canonical = "status:" + orderId.trim() + ":" + envelope.eventType();
+                return canonical.length() > 64 ? hash(canonical) : canonical;
+            }
+        }
         String eventId = envelope != null ? envelope.id() : null;
         if (eventId == null || eventId.isBlank()) {
             if (envelope != null && envelope.aggregateId() != null && envelope.eventType() != null) {

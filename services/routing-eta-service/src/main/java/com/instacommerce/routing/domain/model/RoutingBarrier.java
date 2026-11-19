@@ -59,14 +59,16 @@ public class RoutingBarrier {
         }
     }
 
-    /**
-     * Checks if a line segment between (lat1, lng1) and (lat2, lng2) intersects or enters the barrier bounding box.
-     */
     public boolean intersects(double lat1, double lng1, double lat2, double lng2) {
+        return intersects(lat1, lng1, lat2, lng2, Instant.now());
+    }
+
+    public boolean intersects(double lat1, double lng1, double lat2, double lng2, Instant asOf) {
         if (!isActive) {
             return false;
         }
-        if (expiresAt != null && expiresAt.isBefore(Instant.now())) {
+        Instant effectiveTime = asOf != null ? asOf : Instant.now();
+        if (expiresAt != null && expiresAt.isBefore(effectiveTime)) {
             return false;
         }
 
@@ -75,13 +77,11 @@ public class RoutingBarrier {
         double bMinLng = minLng.doubleValue();
         double bMaxLng = maxLng.doubleValue();
 
-        // Check if either endpoint is inside barrier box
         if ((lat1 >= bMinLat && lat1 <= bMaxLat && lng1 >= bMinLng && lng1 <= bMaxLng) ||
             (lat2 >= bMinLat && lat2 <= bMaxLat && lng2 >= bMinLng && lng2 <= bMaxLng)) {
             return true;
         }
 
-        // Bounding box overlap test
         double segMinLat = Math.min(lat1, lat2);
         double segMaxLat = Math.max(lat1, lat2);
         double segMinLng = Math.min(lng1, lng2);

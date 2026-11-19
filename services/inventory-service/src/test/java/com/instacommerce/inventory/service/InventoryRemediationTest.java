@@ -137,7 +137,7 @@ class InventoryRemediationTest {
 
         when(stockItemRepository.findByStoreIdAndProductIdIn(storeId, List.of(productId)))
             .thenReturn(List.of(stock));
-        when(stockItemRepository.findByProductIdAndStoreId(productId, storeId))
+        when(stockItemRepository.findByProductIdAndStoreIdForUpdate(productId, storeId))
             .thenReturn(Optional.of(stock));
 
         StockReconciliationService service = new StockReconciliationService(stockItemRepository, outboxService);

@@ -186,12 +186,15 @@ public class BatchPickingService {
 
     @Transactional
     public BatchPickResponse completeBatch(UUID batchId) {
-        PickBatch batch = pickBatchRepository.findById(batchId)
+        PickBatch batch = pickBatchRepository.findByIdForUpdate(batchId)
             .orElseThrow(() -> new IllegalArgumentException("Batch not found: " + batchId));
+        if ("COMPLETED".equals(batch.getStatus())) {
+            return getBatch(batchId);
+        }
 
         batch.setStatus("COMPLETED");
         batch.setCompletedAt(Instant.now());
-        PickBatch saved = pickBatchRepository.save(batch);
+        pickBatchRepository.save(batch);
 
         List<PickTask> tasks = pickTaskRepository.findByBatchId(batchId);
         for (PickTask task : tasks) {

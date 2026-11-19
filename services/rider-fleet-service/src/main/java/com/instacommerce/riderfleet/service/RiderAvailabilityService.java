@@ -3,6 +3,7 @@ package com.instacommerce.riderfleet.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.topics.TopicNames;
+import com.instacommerce.riderfleet.config.RiderFleetProperties;
 import com.instacommerce.riderfleet.domain.model.Rider;
 import com.instacommerce.riderfleet.domain.model.RiderAvailability;
 import com.instacommerce.riderfleet.domain.model.RiderStatus;
@@ -11,6 +12,8 @@ import com.instacommerce.riderfleet.exception.RiderNotFoundException;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
@@ -18,6 +21,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.geo.Point;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -33,17 +37,35 @@ public class RiderAvailabilityService {
     private final StringRedisTemplate redisTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final RiderFleetProperties properties;
+    private final Clock clock;
+
+    @Autowired
+    public RiderAvailabilityService(RiderAvailabilityRepository availabilityRepository,
+                                    RiderRepository riderRepository,
+                                    ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+                                    ObjectProvider<KafkaTemplate<String, String>> kafkaTemplateProvider,
+                                    ObjectMapper objectMapper,
+                                    ObjectProvider<RiderFleetProperties> propertiesProvider,
+                                    ObjectProvider<Clock> clockProvider) {
+        this(
+            availabilityRepository,
+            riderRepository,
+            redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null,
+            kafkaTemplateProvider != null ? kafkaTemplateProvider.getIfAvailable() : null,
+            objectMapper,
+            propertiesProvider != null ? propertiesProvider.getIfAvailable(RiderFleetProperties::new) : new RiderFleetProperties(),
+            clockProvider != null ? clockProvider.getIfAvailable(Clock::systemUTC) : Clock.systemUTC()
+        );
+    }
 
     public RiderAvailabilityService(RiderAvailabilityRepository availabilityRepository,
                                     RiderRepository riderRepository,
                                     ObjectProvider<StringRedisTemplate> redisTemplateProvider,
                                     ObjectProvider<KafkaTemplate<String, String>> kafkaTemplateProvider,
                                     ObjectMapper objectMapper) {
-        this.availabilityRepository = availabilityRepository;
-        this.riderRepository = riderRepository;
-        this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;
-        this.kafkaTemplate = kafkaTemplateProvider != null ? kafkaTemplateProvider.getIfAvailable() : null;
-        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
+        this(availabilityRepository, riderRepository, redisTemplateProvider, kafkaTemplateProvider,
+            objectMapper, null, null);
     }
 
     public RiderAvailabilityService(RiderAvailabilityRepository availabilityRepository,
@@ -51,11 +73,24 @@ public class RiderAvailabilityService {
                                     StringRedisTemplate redisTemplate,
                                     KafkaTemplate<String, String> kafkaTemplate,
                                     ObjectMapper objectMapper) {
+        this(availabilityRepository, riderRepository, redisTemplate, kafkaTemplate,
+            objectMapper, new RiderFleetProperties(), Clock.systemUTC());
+    }
+
+    public RiderAvailabilityService(RiderAvailabilityRepository availabilityRepository,
+                                    RiderRepository riderRepository,
+                                    StringRedisTemplate redisTemplate,
+                                    KafkaTemplate<String, String> kafkaTemplate,
+                                    ObjectMapper objectMapper,
+                                    RiderFleetProperties properties,
+                                    Clock clock) {
         this.availabilityRepository = availabilityRepository;
         this.riderRepository = riderRepository;
         this.redisTemplate = redisTemplate;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
+        this.properties = properties != null ? properties : new RiderFleetProperties();
+        this.clock = clock != null ? clock : Clock.systemUTC();
     }
 
     /**
@@ -112,6 +147,22 @@ public class RiderAvailabilityService {
         if (rider.getStatus() != RiderStatus.ACTIVE) {
             throw new InvalidRiderStateException(
                 "Rider must be ACTIVE to toggle availability, current: " + rider.getStatus());
+        }
+
+        if (available) {
+            int maxConsecutive = properties.getAssignment().getMaxConsecutiveDeliveries();
+            int resetMinutes = properties.getAssignment().getFatigueResetMinutes();
+            Instant now = Instant.now(clock);
+            if (maxConsecutive > 0 && rider.getConsecutiveDeliveries() >= maxConsecutive
+                && rider.getLastDeliveryCompletedAt() != null && resetMinutes > 0) {
+                Instant cooldownEnds = rider.getLastDeliveryCompletedAt().plus(Duration.ofMinutes(resetMinutes));
+                if (now.isBefore(cooldownEnds)) {
+                    throw new InvalidRiderStateException(
+                        "Rider reached consecutive delivery fatigue limit; cooldown ends at " + cooldownEnds);
+                }
+                rider.setConsecutiveDeliveries(0);
+                riderRepository.save(rider);
+            }
         }
 
         RiderAvailability availability = availabilityRepository.findByRiderId(riderId)

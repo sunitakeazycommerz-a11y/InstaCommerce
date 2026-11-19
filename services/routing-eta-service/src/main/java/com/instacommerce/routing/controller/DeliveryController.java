@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -36,7 +37,8 @@ public class DeliveryController {
     }
 
     @GetMapping("/{id}/eta")
-    public ResponseEntity<ETAResponse> getETA(@PathVariable UUID id) {
+    public ResponseEntity<ETAResponse> getETA(@PathVariable UUID id,
+                                              @RequestParam(required = false) Integer batchStops) {
         DeliveryResponse delivery = deliveryService.getById(id);
         TrackingResponse latest = trackingService.findLatestLocation(id).orElse(null);
         double fromLat = latest != null
@@ -45,10 +47,18 @@ public class DeliveryController {
         double fromLng = latest != null
             ? latest.longitude().doubleValue()
             : delivery.pickupLng().doubleValue();
-        ETAResponse eta = etaService.calculateETA(
-            fromLat, fromLng,
-            delivery.dropoffLat().doubleValue(), delivery.dropoffLng().doubleValue(),
-            delivery.storeId(), delivery.vehicleType(), 0.0);
+        int effectiveBatchStops = batchStops != null
+            ? Math.max(0, batchStops)
+            : deliveryService.countPrecedingStops(delivery, fromLat, fromLng);
+        ETAResponse eta = effectiveBatchStops > 0
+            ? etaService.calculateETA(
+                fromLat, fromLng,
+                delivery.dropoffLat().doubleValue(), delivery.dropoffLng().doubleValue(),
+                delivery.storeId(), delivery.vehicleType(), 0.0, effectiveBatchStops)
+            : etaService.calculateETA(
+                fromLat, fromLng,
+                delivery.dropoffLat().doubleValue(), delivery.dropoffLng().doubleValue(),
+                delivery.storeId(), delivery.vehicleType(), 0.0);
         return ResponseEntity.ok(eta);
     }
 

@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -65,6 +67,12 @@ public class GlobalExceptionHandler {
                                                         HttpServletRequest request) {
         return ResponseEntity.badRequest()
             .body(buildError("VALIDATION_ERROR", "Invalid input", List.of(), request));
+    }
+
+    @ExceptionHandler({OptimisticLockingFailureException.class, PessimisticLockingFailureException.class})
+    public ResponseEntity<ErrorResponse> handleLockConflict(RuntimeException ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(buildError("CONFLICT", "Concurrent modification detected; please retry", List.of(), request));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
