@@ -153,6 +153,7 @@ contracts/
 | `OrderStatusChanged` | `orders/OrderStatusChanged.v1.json` | v1 | Generic status transition notification |
 | `OrderCancelled` | `orders/OrderCancelled.v1.json` | v1 | Order cancelled (by customer or system) |
 | `OrderFailed` | `orders/OrderFailed.v1.json` | v1 | Order processing failed |
+| `OrderRefunded` | `orders/OrderRefunded.v1.json` | v1 | Order refunded after transition to REFUNDED |
 | `OrderPartiallyRefunded` | `orders/OrderPartiallyRefunded.v1.json` | v1 | Partial refund emitted after order modification reduces total |
 
 ### Payments (`payments.events`)

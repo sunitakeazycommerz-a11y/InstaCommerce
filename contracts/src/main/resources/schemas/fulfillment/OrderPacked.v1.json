@@ -12,6 +12,9 @@
     "pickupLng": { "type": "number", "description": "Longitude of the pickup store location" },
     "dropoffLat": { "type": "number", "description": "Latitude of the customer dropoff location" },
     "dropoffLng": { "type": "number", "description": "Longitude of the customer dropoff location" },
+    "orderWeightGrams": { "type": "integer", "minimum": 0 },
+    "coldChain": { "type": "boolean" },
+    "fragile": { "type": "boolean" },
     "note": { "type": "string" }
   }
 }

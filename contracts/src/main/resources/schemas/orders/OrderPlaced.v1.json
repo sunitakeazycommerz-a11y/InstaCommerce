@@ -19,7 +19,11 @@
           "sku": { "type": "string" },
           "quantity": { "type": "integer", "minimum": 1 },
           "unitPriceCents": { "type": "integer", "minimum": 0 },
-          "lineTotalCents": { "type": "integer", "minimum": 0 }
+          "lineTotalCents": { "type": "integer", "minimum": 0 },
+          "coldChain": { "type": "boolean" },
+          "fragile": { "type": "boolean" },
+          "storageTemperature": { "type": ["string", "null"] },
+          "tareWeightGrams": { "type": "integer", "minimum": 0 }
         }
       }
     },

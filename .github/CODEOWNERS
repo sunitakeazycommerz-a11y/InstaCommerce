@@ -11,9 +11,6 @@
 # ---------------------------------------------------------------------------
 *                                               @instacommerce/platform
 
-# ---------------------------------------------------------------------------
-# Root build, toolchain & architecture files
-# ---------------------------------------------------------------------------
 /AGENTS.md                                      @instacommerce/platform
 /GLOSSARY.md                                    @instacommerce/platform
 /README.md                                      @instacommerce/platform
@@ -36,9 +33,6 @@
 /.github/workflows/                             @instacommerce/platform-infra @instacommerce/platform @instacommerce/sre
 /.github/CODEOWNERS                             @instacommerce/platform-infra @instacommerce/platform
 
-# ---------------------------------------------------------------------------
-# Shared libraries
-# ---------------------------------------------------------------------------
 /libs/                                          @instacommerce/platform
 /libs/platform-common/                          @instacommerce/platform
 
@@ -78,9 +72,6 @@
 /contracts/src/main/resources/schemas/returns/  @instacommerce/core-checkout @instacommerce/platform
 /contracts/src/main/resources/schemas/ai-orchestrator/ @instacommerce/data-ml @instacommerce/platform
 
-# ---------------------------------------------------------------------------
-# Deploy / Helm / Infrastructure / Observability / Verification
-# ---------------------------------------------------------------------------
 /deploy/                                        @instacommerce/platform-infra @instacommerce/sre
 /infra/                                         @instacommerce/platform-infra @instacommerce/sre
 /k8s/                                           @instacommerce/platform-infra @instacommerce/sre

@@ -801,6 +801,8 @@ services:
       INVENTORY_SERVICE_URL: "http://inventory-service:8083"
       PAYMENT_SERVICE_URL: "http://payment-service:8085"
       ORDER_SERVICE_URL: "http://order-service:8084"
+      WALLET_SERVICE_URL: "http://wallet-loyalty-service:8095"
+      INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
     hpa:
       minReplicas: 2
       maxReplicas: 10

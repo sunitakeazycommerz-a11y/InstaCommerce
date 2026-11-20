@@ -45,14 +45,14 @@ export const MOCK_PRODUCTS: Record<string, TestProduct> = {
     id: 'prod-milk-organic-1l',
     name: 'Organic Whole Milk 1L',
     sku: 'MILK-ORG-1L',
-    priceCents: 6500, // ₹65.00
+    priceCents: 6500,
     formattedPrice: '₹65.00',
   },
   bread: {
     id: 'prod-sourdough-bread',
     name: 'Artisan Sourdough Bread',
     sku: 'BREAD-SOUR-500G',
-    priceCents: 8500, // ₹85.00
+    priceCents: 8500,
     formattedPrice: '₹85.00',
   },
 };
@@ -61,7 +61,7 @@ export const PROMO_CODES: Record<'VALID_FRESH20' | 'EXPIRED_10', PromoFixture> =
   VALID_FRESH20: {
     code: 'FRESH20',
     discountPercent: 20,
-    discountCents: 3000, // ₹30.00 off on ₹150.00 basket
+    discountCents: 3000,
     message: 'Promo FRESH20 applied (-₹30.00)',
   },
   EXPIRED_10: {
@@ -91,21 +91,18 @@ export const TEST_DELIVERY_ADDRESS: TestAddress = {
 };
 
 export const PAYMENT_CARDS = {
-  // Successful standard Visa test card
   SUCCESSFUL_VISA: {
     number: '4242 4242 4242 4242',
     exp: '12/28',
     cvc: '123',
     nameOnCard: 'Synthetic Shopper',
   },
-  // Card that triggers an intentional decline error in payment sandbox
   DECLINED_CARD: {
     number: '4000 0000 0000 0002',
     exp: '12/28',
     cvc: '123',
     nameOnCard: 'Synthetic Shopper',
   },
-  // Card that triggers an insufficient funds decline
   INSUFFICIENT_FUNDS_CARD: {
     number: '4000 0000 0000 9995',
     exp: '12/28',

@@ -29,7 +29,6 @@ updates:
         patterns:
           - "*"
 
-  # Go Microservices (consolidated across all 9 Go modules)
   - package-ecosystem: "gomod"
     directories:
       - "/services/go-shared"
@@ -77,7 +76,6 @@ updates:
           - "minor"
           - "patch"
 
-  # Playwright End-to-End Suite
   - package-ecosystem: "npm"
     directory: "/tests/e2e"
     schedule:
@@ -93,7 +91,6 @@ updates:
           - "minor"
           - "patch"
 
-  # Docker Container Images (grouped by runtime stack to avoid 30-PR storms)
   - package-ecosystem: "docker"
     directories:
       - "/services/admin-gateway-service"

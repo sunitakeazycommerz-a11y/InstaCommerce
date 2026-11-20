@@ -23,7 +23,6 @@ class SchemaUniquenessTest {
     void shouldHaveZeroDuplicateSchemaTitlesAcrossDomains() throws IOException {
         Path schemasPath = Path.of("src/main/resources/schemas");
         if (!Files.exists(schemasPath)) {
-            // In case running from root monorepo directory
             schemasPath = Path.of("contracts/src/main/resources/schemas");
         }
         assertThat(schemasPath).exists();

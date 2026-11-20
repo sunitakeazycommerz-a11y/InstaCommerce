@@ -40,13 +40,11 @@ class SchemaValidityTest {
                 try {
                     JsonNode root = objectMapper.readTree(file.toFile());
 
-                    // Check $schema
                     JsonNode schemaNode = root.get("$schema");
                     if (schemaNode == null || !schemaNode.asText().contains("draft-07")) {
                         errors.add(file.getFileName() + ": missing or invalid $schema draft-07 declaration");
                     }
 
-                    // Check title
                     JsonNode titleNode = root.get("title");
                     if (titleNode == null || titleNode.asText().isBlank()) {
                         errors.add(file.getFileName() + ": missing or empty title");
@@ -57,7 +55,6 @@ class SchemaValidityTest {
                         }
                     }
 
-                    // Check type
                     JsonNode typeNode = root.get("type");
                     if (typeNode == null) {
                         errors.add(file.getFileName() + ": missing 'type'");
@@ -69,7 +66,6 @@ class SchemaValidityTest {
                         errors.add(file.getFileName() + ": expected type 'object' or enum 'string'");
                     }
 
-                    // Check required properties declared in properties
                     JsonNode reqNode = root.get("required");
                     JsonNode propsNode = root.get("properties");
                     if (reqNode != null && reqNode.isArray()) {

@@ -8,6 +8,9 @@
     "userId": { "type": "string", "format": "uuid" },
     "paymentId": { "type": "string", "format": "uuid" },
     "totalCents": { "type": "integer", "minimum": 0 },
+    "walletAmountCents": { "type": "integer", "minimum": 0 },
+    "walletRefundCents": { "type": "integer", "minimum": 0 },
+    "refundedCents": { "type": "integer", "minimum": 0 },
     "currency": { "type": "string" },
     "reason": { "type": "string" },
     "reasonCode": {

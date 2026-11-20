@@ -5,6 +5,11 @@
   "required": ["orderId", "reason"],
   "properties": {
     "orderId": { "type": "string", "format": "uuid" },
-    "reason": { "type": "string" }
+    "userId": { "type": "string", "format": "uuid" },
+    "paymentId": { "type": ["string", "null"], "format": "uuid" },
+    "reason": { "type": "string" },
+    "walletAmountCents": { "type": "integer", "minimum": 0 },
+    "walletRefundCents": { "type": "integer", "minimum": 0 },
+    "refundedCents": { "type": "integer", "minimum": 0 }
   }
 }

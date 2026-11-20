@@ -8,6 +8,7 @@ dependencies {
     compileOnly("org.springframework.boot:spring-boot-starter-security")
     compileOnly("org.springframework.boot:spring-boot-starter-cache")
     compileOnly("org.springframework.boot:spring-boot-starter-data-redis")
+    compileOnly("org.springframework.data:spring-data-commons")
     compileOnly("com.github.ben-manes.caffeine:caffeine")
     compileOnly("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
 
@@ -15,6 +16,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-security")
     testImplementation("org.springframework.boot:spring-boot-starter-cache")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis")
+    testImplementation("org.springframework.data:spring-data-commons")
     testImplementation("com.github.ben-manes.caffeine:caffeine")
     testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
