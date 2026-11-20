@@ -79,7 +79,7 @@ subprojects {
         imports {
             mavenBom("org.springframework.boot:spring-boot-dependencies:4.0.0")
             mavenBom("com.google.cloud:spring-cloud-gcp-dependencies:6.0.0")
-            mavenBom("org.springframework.cloud:spring-cloud-dependencies:2024.0.0")
+            mavenBom("org.springframework.cloud:spring-cloud-dependencies:2025.1.4")
             mavenBom("io.grpc:grpc-bom:1.75.0")
         }
         dependencies {
