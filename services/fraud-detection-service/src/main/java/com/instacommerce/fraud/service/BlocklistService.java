@@ -23,12 +23,15 @@ public class BlocklistService {
     @Cacheable(value = "blocklist", key = "#entityType + ':' + #entityValue")
     @Transactional(readOnly = true)
     public boolean isBlocked(String entityType, String entityValue) {
+        if (entityType == null || entityType.isBlank() || entityValue == null || entityValue.isBlank()) {
+            return false;
+        }
         return blockedEntityRepository.findActiveBlockByEntityTypeAndValue(entityType, entityValue)
                 .map(blocked -> {
-                    if (blocked.getExpiresAt() != null && blocked.getExpiresAt().isBefore(Instant.now())) {
+                    if (blocked.getExpiresAt() != null && !blocked.getExpiresAt().isAfter(Instant.now())) {
                         return false;
                     }
-                    return true;
+                    return blocked.isActive();
                 })
                 .orElse(false);
     }

@@ -16,7 +16,20 @@ public class RuleConditionValidator {
             case "DEVICE" -> validateDevice(conditionJson);
             case "GEO" -> validateGeo(conditionJson);
             case "PATTERN" -> validatePattern(conditionJson);
+            case "COMBINATION" -> validateCombination(conditionJson);
             default -> throw new IllegalArgumentException("Unsupported ruleType: " + ruleType);
+        }
+    }
+
+    private void validateCombination(Map<String, Object> conditionJson) {
+        validateOptionalString(conditionJson, "paymentMethodType");
+        validateOptionalNumber(conditionJson, "minAmountCents");
+        validateOptionalBoolean(conditionJson, "requireNewDevice");
+        validateOptionalBoolean(conditionJson, "newUsersOnly");
+        validateOptionalNumber(conditionJson, "burstThreshold");
+        Object methods = conditionJson.get("paymentMethods");
+        if (methods != null && !(methods instanceof Iterable<?>)) {
+            throw new IllegalArgumentException("Invalid condition type for paymentMethods");
         }
     }
 

@@ -10,10 +10,11 @@ public enum OrderStatus {
     OUT_FOR_DELIVERY,
     DELIVERED,
     CANCELLED,
-    FAILED;
+    FAILED,
+    REFUNDED;
 
     public boolean isTerminal() {
-        return this == DELIVERED || this == CANCELLED || this == FAILED;
+        return this == DELIVERED || this == CANCELLED || this == FAILED || this == REFUNDED;
     }
 
     public boolean canTransitionTo(OrderStatus next) {

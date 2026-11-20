@@ -11,6 +11,7 @@ import com.instacommerce.checkout.workflow.CheckoutWorkflowImpl;
 import com.instacommerce.checkout.workflow.activity.CartActivityImpl;
 import com.instacommerce.checkout.workflow.activity.CouponActivityImpl;
 import com.instacommerce.checkout.workflow.activity.PricingActivityImpl;
+import com.instacommerce.checkout.workflow.activity.WalletActivityImpl;
 import com.instacommerce.checkout.workflow.activity.InventoryActivityImpl;
 import com.instacommerce.checkout.workflow.activity.PaymentActivityImpl;
 import com.instacommerce.checkout.workflow.activity.OrderActivityImpl;
@@ -54,6 +55,7 @@ public class TemporalConfig {
                                        PaymentActivityImpl paymentActivity,
                                        OrderActivityImpl orderActivity,
                                        CouponActivityImpl couponActivity,
+                                       WalletActivityImpl walletActivity,
                                        CompensationDlqActivityImpl dlqActivity) {
         WorkerFactory factory = WorkerFactory.newInstance(workflowClient);
         Worker worker = factory.newWorker(temporalProperties.getTaskQueue());
@@ -65,6 +67,7 @@ public class TemporalConfig {
             paymentActivity,
             orderActivity,
             couponActivity,
+            walletActivity,
             dlqActivity
         );
         return factory;

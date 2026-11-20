@@ -42,6 +42,7 @@ public class OrderEventConsumer {
                 return;
             }
 
+            velocityService.incrementCounter("USER", userId, "ORDERS_5M");
             velocityService.incrementCounter("USER", userId, "ORDERS_1H");
             velocityService.incrementCounter("USER", userId, "ORDERS_24H");
 
@@ -51,12 +52,14 @@ public class OrderEventConsumer {
 
             String deviceFingerprint = payload.path("deviceFingerprint").asText(null);
             if (deviceFingerprint != null && !deviceFingerprint.isBlank()) {
+                velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_5M");
                 velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_1H");
                 velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_24H");
             }
 
             String ipAddress = payload.path("ipAddress").asText(null);
             if (ipAddress != null && !ipAddress.isBlank()) {
+                velocityService.incrementCounter("IP", ipAddress, "ORDERS_5M");
                 velocityService.incrementCounter("IP", ipAddress, "ORDERS_1H");
                 velocityService.incrementCounter("IP", ipAddress, "ORDERS_24H");
             }

@@ -13,6 +13,8 @@ import com.instacommerce.payment.exception.PaymentNotFoundException;
 import com.instacommerce.payment.gateway.GatewayAuthRequest;
 import com.instacommerce.payment.gateway.GatewayAuthResult;
 import com.instacommerce.payment.gateway.GatewayCaptureResult;
+import com.instacommerce.payment.gateway.GatewayStatusResult;
+import com.instacommerce.payment.gateway.GatewayStatusResult.PspPaymentState;
 import com.instacommerce.payment.gateway.GatewayVoidResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.PaymentRepository;
@@ -67,6 +69,11 @@ public class PaymentService {
             if (pending == null) {
                 // idempotent hit — already exists
                 Payment existing = paymentRepository.findByIdempotencyKey(normalizedKey).orElseThrow();
+                if (existing.getStatus() == PaymentStatus.AUTHORIZE_PENDING
+                    && existing.getPspReference() != null
+                    && !existing.getPspReference().isBlank()) {
+                    existing = reconcilePendingAuthorization(existing);
+                }
                 return PaymentMapper.toResponse(existing);
             }
 
@@ -111,6 +118,32 @@ public class PaymentService {
                 .register(meterRegistry));
             meterRegistry.counter("payment.operation.total", "operation", "authorize", "result", result).increment();
         }
+    }
+
+    private Payment reconcilePendingAuthorization(Payment existing) {
+        try {
+            GatewayStatusResult pspState = paymentGateway.getStatus(existing.getPspReference());
+            if (pspState == null || pspState.isInFlight()) {
+                return existing;
+            }
+            if (pspState.isAuthorized()) {
+                return txHelper.completeAuthorization(existing.getId(), existing.getPspReference());
+            }
+            if (pspState.isCaptured()) {
+                long capturedCents = (pspState.amountCapturedCents() != null && pspState.amountCapturedCents() > 0)
+                    ? pspState.amountCapturedCents()
+                    : existing.getAmountCents();
+                return txHelper.reconcileDirectToCaptured(existing.getId(), existing.getPspReference(), capturedCents);
+            }
+            if (pspState.state() != PspPaymentState.UNKNOWN) {
+                txHelper.resolveStaleAuthorizationFailed(existing.getId(), "psp_status_" + pspState.rawStatus());
+                return paymentRepository.findById(existing.getId()).orElse(existing);
+            }
+        } catch (Exception ex) {
+            log.warn("Failed to reconcile AUTHORIZE_PENDING payment {} during idempotent retry: {}",
+                existing.getId(), ex.getMessage());
+        }
+        return existing;
     }
 
     /**

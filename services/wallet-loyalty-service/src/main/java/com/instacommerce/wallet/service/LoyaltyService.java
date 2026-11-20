@@ -52,16 +52,27 @@ public class LoyaltyService {
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public LoyaltyResponse earnPoints(UUID userId, String orderId, long orderTotalCents) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId must not be null");
+        }
+        if (orderId == null || orderId.isBlank()) {
+            throw new IllegalArgumentException("orderId must not be blank");
+        }
+        if (orderTotalCents < 0) {
+            throw new IllegalArgumentException("orderTotalCents must not be negative");
+        }
+        String normalizedOrderId = orderId.trim();
         LoyaltyAccount account = findOrCreateAccount(userId);
 
-        int pointsPerRupee = walletProperties.getLoyalty().getPointsPerRupee();
-        int pointsEarned = (int) ((orderTotalCents * pointsPerRupee) / 100);
+        int pointsPerRupee = Math.max(0, walletProperties.getLoyalty().getPointsPerRupee());
+        int pointsEarned = computeCappedEarnedPoints(orderTotalCents, pointsPerRupee);
         if (pointsEarned <= 0) {
+            checkTierUpgrade(account);
             return toResponse(account);
         }
 
-        account.setPointsBalance(account.getPointsBalance() + pointsEarned);
-        account.setLifetimePoints(account.getLifetimePoints() + pointsEarned);
+        account.setPointsBalance(saturatingAdd(account.getPointsBalance(), pointsEarned));
+        account.setLifetimePoints(saturatingAdd(account.getLifetimePoints(), pointsEarned));
         accountRepository.save(account);
 
         LoyaltyTransaction txn = new LoyaltyTransaction();
@@ -69,18 +80,18 @@ public class LoyaltyService {
         txn.setType(LoyaltyTransaction.Type.EARN);
         txn.setPoints(pointsEarned);
         txn.setReferenceType("ORDER");
-        txn.setReferenceId(orderId);
+        txn.setReferenceId(normalizedOrderId);
         try {
             txn = transactionRepository.saveAndFlush(txn);
         } catch (DataIntegrityViolationException ex) {
-            throw new DuplicateTransactionException("Transaction already exists for ref=ORDER/" + orderId);
+            throw new DuplicateTransactionException("Transaction already exists for ref=ORDER/" + normalizedOrderId);
         }
 
         checkTierUpgrade(account);
-        log.info("Earned {} points for user={} order={}", pointsEarned, userId, orderId);
+        log.info("Earned {} points for user={} order={}", pointsEarned, userId, normalizedOrderId);
 
         outboxService.publish("Loyalty", account.getId().toString(), "PointsEarned",
-            buildPointEventPayload(txn, account, userId, orderId, pointsEarned, "ORDER"));
+            buildPointEventPayload(txn, account, userId, normalizedOrderId, pointsEarned, "ORDER"));
         return toResponse(account);
     }
 
@@ -88,6 +99,18 @@ public class LoyaltyService {
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public LoyaltyResponse redeemPoints(UUID userId, int points, String orderId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId must not be null");
+        }
+        if (points <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_POINTS",
+                "Points to redeem must be positive");
+        }
+        if (orderId == null || orderId.isBlank()) {
+            throw new IllegalArgumentException("orderId must not be blank");
+        }
+        String normalizedOrderId = orderId.trim();
+
         LoyaltyAccount account = accountRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "LOYALTY_ACCOUNT_NOT_FOUND",
                 "Loyalty account not found for user: " + userId));
@@ -105,17 +128,38 @@ public class LoyaltyService {
         txn.setType(LoyaltyTransaction.Type.REDEEM);
         txn.setPoints(points);
         txn.setReferenceType("REDEMPTION");
-        txn.setReferenceId(orderId);
+        txn.setReferenceId(normalizedOrderId);
         try {
             txn = transactionRepository.saveAndFlush(txn);
         } catch (DataIntegrityViolationException ex) {
-            throw new DuplicateTransactionException("Transaction already exists for ref=REDEMPTION/" + orderId);
+            throw new DuplicateTransactionException("Transaction already exists for ref=REDEMPTION/" + normalizedOrderId);
         }
 
         log.info("Redeemed {} points for user={}", points, userId);
         outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed",
-            buildPointEventPayload(txn, account, userId, orderId, points, "REDEMPTION"));
+            buildPointEventPayload(txn, account, userId, normalizedOrderId, points, "REDEMPTION"));
         return toResponse(account);
+    }
+
+    private int computeCappedEarnedPoints(long orderTotalCents, int pointsPerRupee) {
+        if (orderTotalCents <= 0 || pointsPerRupee <= 0) {
+            return 0;
+        }
+        int configuredCap = walletProperties.getLoyalty().getMaxPointsEarnPerOrder();
+        int maxPoints = configuredCap > 0 ? configuredCap : Integer.MAX_VALUE;
+        long quotient = orderTotalCents / 100L;
+        long remainder = orderTotalCents % 100L;
+        long fromQuotient = quotient > (long) maxPoints / pointsPerRupee
+            ? maxPoints
+            : quotient * pointsPerRupee;
+        long fromRemainder = (remainder * pointsPerRupee) / 100L;
+        long total = Math.min((long) maxPoints, fromQuotient + fromRemainder);
+        return (int) Math.max(0L, total);
+    }
+
+    private int saturatingAdd(int current, int delta) {
+        long sum = (long) current + (long) delta;
+        return sum > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) sum;
     }
 
     private Map<String, Object> buildPointEventPayload(LoyaltyTransaction txn, LoyaltyAccount account,

@@ -44,6 +44,11 @@ public class RestClientConfig {
         return buildRestTemplate(props.getClients().getOrder());
     }
 
+    @Bean("walletRestTemplate")
+    public RestTemplate walletRestTemplate(CheckoutProperties props) {
+        return buildRestTemplate(props.getClients().getWallet());
+    }
+
     private RestTemplate buildRestTemplate(CheckoutProperties.ServiceClient client) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofMillis(client.getConnectTimeout()));

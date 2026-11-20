@@ -66,6 +66,13 @@ public class GlobalExceptionHandler {
             .body(buildError("VALIDATION_ERROR", "Invalid input", List.of(), request));
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex,
+                                                               HttpServletRequest request) {
+        return ResponseEntity.badRequest()
+            .body(buildError("INVALID_ARGUMENT", ex.getMessage(), List.of(), request));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleFallback(Exception ex, HttpServletRequest request) {
         log.error("Unhandled exception on {} {}", request.getMethod(), request.getRequestURI(), ex);

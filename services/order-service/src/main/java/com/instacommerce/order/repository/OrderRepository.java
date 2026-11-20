@@ -1,6 +1,9 @@
 package com.instacommerce.order.repository;
 
 import com.instacommerce.order.domain.model.Order;
+import com.instacommerce.order.domain.model.OrderStatus;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -34,4 +37,11 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     @Modifying
     @Query("update Order o set o.userId = :placeholder, o.userErased = true where o.userId = :userId")
     int anonymizeByUserId(@Param("userId") UUID userId, @Param("placeholder") UUID placeholder);
+
+    @Query("SELECT o FROM Order o WHERE o.slaDeadlineAt IS NOT NULL AND o.slaDeadlineAt < :now "
+        + "AND o.slaBreachedAt IS NULL AND o.status IN :statuses")
+    List<Order> findUnrecordedSlaBreaches(
+        @Param("now") Instant now,
+        @Param("statuses") List<OrderStatus> statuses,
+        Pageable pageable);
 }

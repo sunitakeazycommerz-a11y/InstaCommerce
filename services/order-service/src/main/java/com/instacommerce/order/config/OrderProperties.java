@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class OrderProperties {
     private final Jwt jwt = new Jwt();
     private final Clients clients = new Clients();
+    private final Sla sla = new Sla();
 
     public Jwt getJwt() {
         return jwt;
@@ -13,6 +14,22 @@ public class OrderProperties {
 
     public Clients getClients() {
         return clients;
+    }
+
+    public Sla getSla() {
+        return sla;
+    }
+
+    public static class Sla {
+        private int promisedDeliveryMinutes = 20;
+
+        public int getPromisedDeliveryMinutes() {
+            return promisedDeliveryMinutes;
+        }
+
+        public void setPromisedDeliveryMinutes(int promisedDeliveryMinutes) {
+            this.promisedDeliveryMinutes = promisedDeliveryMinutes;
+        }
     }
 
     public static class Jwt {

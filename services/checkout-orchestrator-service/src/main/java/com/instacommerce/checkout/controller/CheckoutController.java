@@ -28,6 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -158,17 +159,21 @@ public class CheckoutController {
             try {
                 result = workflow.checkout(request);
             } catch (WorkflowExecutionAlreadyStarted ex) {
-                return handleAlreadyStarted(workflowId);
+                return handleAlreadyStarted(workflowId, scopedIdempotencyKey);
             } catch (WorkflowException ex) {
                 if (ex.getCause() instanceof WorkflowExecutionAlreadyStarted
                         || (ex.getMessage() != null && ex.getMessage().contains("WorkflowExecutionAlreadyStarted"))) {
-                    return handleAlreadyStarted(workflowId);
+                    return handleAlreadyStarted(workflowId, scopedIdempotencyKey);
                 }
                 throw ex;
             }
 
             // Persist idempotency key + response in its own short TX (connection returned immediately)
-            idempotencyService.recordResponse(scopedIdempotencyKey, result);
+            try {
+                idempotencyService.recordResponse(scopedIdempotencyKey, result);
+            } catch (DataIntegrityViolationException dupEx) {
+                log.warn("Duplicate idempotency response save ignored workflowId={}", workflowId, dupEx);
+            }
 
             return ResponseEntity.ok(result);
         } finally {
@@ -210,14 +215,35 @@ public class CheckoutController {
             && workflowId != null && workflowId.startsWith("checkout-" + principal + "-");
     }
 
-    private ResponseEntity<CheckoutResponse> handleAlreadyStarted(String workflowId) {
+    private ResponseEntity<CheckoutResponse> handleAlreadyStarted(String workflowId, String scopedIdempotencyKey) {
+        Optional<CheckoutResponse> recorded = idempotencyService.findValidResponse(scopedIdempotencyKey);
+        if (recorded.isPresent()) {
+            log.info("Returning recorded idempotent response after concurrent checkout start workflowId={}", workflowId);
+            return ResponseEntity.ok(recorded.get());
+        }
         log.warn("Duplicate checkout workflow detected, returning existing workflowId={}", workflowId);
         String existingStatus = "UNKNOWN";
+        CheckoutResponse snapshot = null;
         try {
             CheckoutWorkflow existingWorkflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
             existingStatus = existingWorkflow.getStatus();
+            snapshot = existingWorkflow.getResultSnapshot();
         } catch (WorkflowException statusEx) {
             log.warn("Failed to query existing checkout workflow status workflowId={}", workflowId, statusEx);
+        }
+        if (snapshot != null) {
+            if ("COMPLETED".equalsIgnoreCase(existingStatus)) {
+                return ResponseEntity.ok(snapshot);
+            }
+            return ResponseEntity.accepted().body(snapshot);
+        }
+        if ("COMPLETED".equalsIgnoreCase(existingStatus)) {
+            return ResponseEntity.accepted().body(
+                new CheckoutResponse(null, "CHECKOUT_ALREADY_COMPLETED", 0, 0));
+        }
+        if ("FAILED".equalsIgnoreCase(existingStatus)) {
+            return ResponseEntity.accepted().body(
+                new CheckoutResponse(null, "CHECKOUT_ALREADY_FAILED", 0, 0));
         }
         return ResponseEntity.accepted().body(
             new CheckoutResponse(null, "CHECKOUT_ALREADY_IN_PROGRESS: " + existingStatus, 0, 0));

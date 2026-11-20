@@ -45,6 +45,10 @@ public class FlagManagementService {
 
     @Transactional
     public FlagResponse createFlag(CreateFlagRequest request, String changedBy) {
+        FlagTargetingValidator.validateKey(request.key());
+        FlagTargetingValidator.validateRolloutPercentage(request.rolloutPercentage());
+        FlagTargetingValidator.validateTargetUsersJson(request.targetUsers());
+        FlagTargetingValidator.validateMetadataAndSegmentsJson(request.metadata());
         if (flagRepository.findByKey(request.key()).isPresent()) {
             throw new ApiException(HttpStatus.CONFLICT, "FLAG_ALREADY_EXISTS",
                     "Flag with key '" + request.key() + "' already exists");
@@ -79,6 +83,9 @@ public class FlagManagementService {
     @Transactional
     @CacheEvict(value = "flags", key = "#key")
     public FlagResponse updateFlag(String key, UpdateFlagRequest request, String changedBy) {
+        FlagTargetingValidator.validateRolloutPercentage(request.rolloutPercentage());
+        FlagTargetingValidator.validateTargetUsersJson(request.targetUsers());
+        FlagTargetingValidator.validateMetadataAndSegmentsJson(request.metadata());
         FeatureFlag flag = findByKeyOrThrow(key);
         String oldValue = flagSummary(flag);
 
@@ -172,6 +179,11 @@ public class FlagManagementService {
 
     @Transactional
     public void forceDisable(String flagKey) {
+        forceDisable(flagKey, "system");
+    }
+
+    @Transactional
+    public void forceDisable(String flagKey, String changedBy) {
         FeatureFlag flag = findByKeyOrThrow(flagKey);
         boolean oldEnabled = flag.isEnabled();
         flag.setEnabled(false);
@@ -182,11 +194,12 @@ public class FlagManagementService {
             cacheManager.getCache("flags").evict(flagKey);
         }
 
+        String actor = (changedBy != null && !changedBy.isBlank()) ? changedBy : "system";
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "EMERGENCY_STOP",
-                String.valueOf(oldEnabled), "false", "system"));
+                String.valueOf(oldEnabled), "false", actor));
 
         cacheEventListener.publishBulkUpdate("emergency_stop");
-        log.warn("flags.force_disable flag={} previous_state={}", flagKey, oldEnabled);
+        log.warn("flags.force_disable flag={} previous_state={} by={}", flagKey, oldEnabled, actor);
     }
 
     public FlagResponse getFlag(String key) {

@@ -2,6 +2,7 @@ package com.instacommerce.wallet.controller;
 
 import com.instacommerce.wallet.client.PaymentClient;
 import com.instacommerce.wallet.domain.model.WalletTransaction.ReferenceType;
+import com.instacommerce.wallet.dto.request.CreditRequest;
 import com.instacommerce.wallet.dto.request.DebitRequest;
 import com.instacommerce.wallet.dto.request.TopUpRequest;
 import com.instacommerce.wallet.dto.response.WalletResponse;
@@ -9,6 +10,7 @@ import com.instacommerce.wallet.dto.response.WalletTransactionResponse;
 import com.instacommerce.wallet.exception.ApiException;
 import com.instacommerce.wallet.service.WalletService;
 import jakarta.validation.Valid;
+import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,13 +107,37 @@ public class WalletController {
                     "userId is required for internal wallet debit");
             }
         }
-        ReferenceType refType = ReferenceType.valueOf(request.referenceType());
+        ReferenceType refType;
+        try {
+            refType = ReferenceType.valueOf(request.referenceType().trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REFERENCE_TYPE",
+                "Unsupported referenceType: " + request.referenceType());
+        }
+        String description = (request.description() != null && !request.description().isBlank())
+            ? request.description()
+            : "Wallet debit: " + refType.name();
         WalletTransactionResponse response = walletService.debit(
             userId,
             request.amountCents(),
             refType,
             request.referenceId(),
-            "Wallet debit: " + request.referenceType()
+            description
+        );
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/credit")
+    public ResponseEntity<WalletTransactionResponse> credit(@Valid @RequestBody CreditRequest request) {
+        String description = (request.description() != null && !request.description().isBlank())
+            ? request.description()
+            : "Wallet credit: " + request.referenceType().name();
+        WalletTransactionResponse response = walletService.credit(
+            request.userId(),
+            request.amountCents(),
+            request.referenceType(),
+            request.referenceId(),
+            description
         );
         return ResponseEntity.ok(response);
     }

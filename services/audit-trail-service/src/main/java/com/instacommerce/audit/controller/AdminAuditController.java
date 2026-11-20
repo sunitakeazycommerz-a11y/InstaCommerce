@@ -57,9 +57,9 @@ public class AdminAuditController {
             @RequestParam(required = false) Instant toDate,
             HttpServletResponse response) throws IOException {
 
-        AuditSearchCriteria criteria = new AuditSearchCriteria(
+        AuditSearchCriteria criteria = AuditSearchCriteria.forExport(
                 actorId, resourceType, resourceId, sourceService, eventType, correlationId,
-                fromDate, toDate, 0, Integer.MAX_VALUE);
+                fromDate, toDate);
         exportService.exportCsv(criteria, response);
     }
 }

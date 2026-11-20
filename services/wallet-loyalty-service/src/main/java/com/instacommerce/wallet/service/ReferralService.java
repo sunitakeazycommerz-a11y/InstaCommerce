@@ -1,5 +1,6 @@
 package com.instacommerce.wallet.service;
 
+import com.instacommerce.wallet.config.WalletProperties;
 import com.instacommerce.wallet.domain.model.ReferralCode;
 import com.instacommerce.wallet.domain.model.ReferralRedemption;
 import com.instacommerce.wallet.domain.model.WalletTransaction.ReferenceType;
@@ -8,9 +9,12 @@ import com.instacommerce.wallet.exception.ApiException;
 import com.instacommerce.wallet.repository.ReferralCodeRepository;
 import com.instacommerce.wallet.repository.ReferralRedemptionRepository;
 import java.security.SecureRandom;
+import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,17 +29,30 @@ public class ReferralService {
     private final ReferralCodeRepository referralCodeRepository;
     private final ReferralRedemptionRepository redemptionRepository;
     private final WalletService walletService;
+    private final WalletProperties walletProperties;
 
     public ReferralService(ReferralCodeRepository referralCodeRepository,
                            ReferralRedemptionRepository redemptionRepository,
                            WalletService walletService) {
+        this(referralCodeRepository, redemptionRepository, walletService, new WalletProperties());
+    }
+
+    @Autowired
+    public ReferralService(ReferralCodeRepository referralCodeRepository,
+                           ReferralRedemptionRepository redemptionRepository,
+                           WalletService walletService,
+                           WalletProperties walletProperties) {
         this.referralCodeRepository = referralCodeRepository;
         this.redemptionRepository = redemptionRepository;
         this.walletService = walletService;
+        this.walletProperties = walletProperties != null ? walletProperties : new WalletProperties();
     }
 
     @Transactional
     public ReferralCodeResponse getOrGenerateCode(UUID userId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId must not be null");
+        }
         ReferralCode code = referralCodeRepository.findByUserId(userId)
             .orElseGet(() -> generateCode(userId));
         return toResponse(code);
@@ -43,15 +60,27 @@ public class ReferralService {
 
     @Transactional
     public void redeemReferral(String code, UUID newUserId) {
-        ReferralCode referralCode = referralCodeRepository.findByCodeForUpdate(code.toUpperCase())
+        if (newUserId == null) {
+            throw new IllegalArgumentException("newUserId must not be null");
+        }
+        if (code == null || code.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REFERRAL_CODE",
+                "Referral code must not be blank");
+        }
+        String normalizedCode = code.trim().toUpperCase(Locale.ROOT);
+        ReferralCode referralCode = referralCodeRepository.findByCodeForUpdate(normalizedCode)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "REFERRAL_NOT_FOUND",
-                "Referral code not found: " + code));
+                "Referral code not found: " + normalizedCode));
 
         if (!referralCode.isActive()) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "REFERRAL_INACTIVE",
                 "Referral code is no longer active");
         }
-        if (referralCode.getUses() >= referralCode.getMaxUses()) {
+        int configuredCap = walletProperties.getLoyalty().getMaxReferralRedemptionsPerReferrer();
+        int effectiveMaxUses = configuredCap > 0
+            ? Math.min(referralCode.getMaxUses(), configuredCap)
+            : referralCode.getMaxUses();
+        if (referralCode.getUses() >= effectiveMaxUses) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "REFERRAL_MAX_USES",
                 "Referral code has reached maximum uses");
         }
@@ -68,13 +97,26 @@ public class ReferralService {
         redemption.setReferralCode(referralCode);
         redemption.setReferredUserId(newUserId);
         redemption.setRewardCredited(true);
-        redemptionRepository.save(redemption);
+        try {
+            ReferralRedemption saved = redemptionRepository.saveAndFlush(redemption);
+            if (saved != null) {
+                redemption = saved;
+            }
+        } catch (DataIntegrityViolationException ex) {
+            throw new ApiException(HttpStatus.CONFLICT, "REFERRAL_ALREADY_USED",
+                "User has already used a referral code");
+        }
 
         referralCode.setUses(referralCode.getUses() + 1);
         referralCodeRepository.save(referralCode);
 
         long rewardCents = referralCode.getRewardCents();
-        String refId = "referral-" + redemption.getId().toString();
+        if (rewardCents <= 0) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "INVALID_REFERRAL_REWARD",
+                "Referral reward amount must be positive");
+        }
+        UUID redemptionId = redemption.getId() != null ? redemption.getId() : UUID.randomUUID();
+        String refId = "referral-" + redemptionId.toString();
 
         // Credit referrer wallet
         walletService.credit(referralCode.getUserId(), rewardCents,
@@ -84,13 +126,21 @@ public class ReferralService {
         walletService.credit(newUserId, rewardCents,
             ReferenceType.REFERRAL, refId + "-referee", "Welcome bonus: referral signup");
 
-        log.info("Referral redeemed: code={} referrer={} referee={}", code, referralCode.getUserId(), newUserId);
+        log.info("Referral redeemed: code={} referrer={} referee={}", normalizedCode, referralCode.getUserId(), newUserId);
     }
 
     private ReferralCode generateCode(UUID userId) {
         ReferralCode referralCode = new ReferralCode();
         referralCode.setUserId(userId);
         referralCode.setCode(generateUniqueCode());
+        long rewardCents = walletProperties.getReferral().getRewardCents();
+        if (rewardCents > 0) {
+            referralCode.setRewardCents(rewardCents);
+        }
+        int cap = walletProperties.getLoyalty().getMaxReferralRedemptionsPerReferrer();
+        if (cap > 0) {
+            referralCode.setMaxUses(Math.min(referralCode.getMaxUses(), cap));
+        }
         return referralCodeRepository.save(referralCode);
     }
 

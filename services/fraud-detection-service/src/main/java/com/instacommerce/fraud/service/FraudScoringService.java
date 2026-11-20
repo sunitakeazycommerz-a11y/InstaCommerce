@@ -16,6 +16,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -46,6 +47,12 @@ public class FraudScoringService {
     private final MeterRegistry meterRegistry;
     private final FraudOperationalMode operationalMode;
     private final TransactionTemplate persistenceTxTemplate;
+    private AllowlistService allowlistService;
+
+    @Autowired(required = false)
+    public void setAllowlistService(AllowlistService allowlistService) {
+        this.allowlistService = allowlistService;
+    }
 
     @Autowired
     public FraudScoringService(FraudRuleRepository fraudRuleRepository,
@@ -219,6 +226,11 @@ public class FraudScoringService {
                     RiskLevel.CRITICAL, FraudAction.BLOCK, "BLOCKLIST_EVALUATION_ERROR");
         }
 
+        if (isAnyEntityAllowlisted(request)) {
+            return persistAndRespond(request, 0, RiskLevel.LOW, FraudAction.ALLOW,
+                    List.of("ALLOWLIST_BYPASS"));
+        }
+
         Double cachedFraudScore = getCachedFraudRiskScore(request.userId(), mode);
         if (cachedFraudScore != null && cachedFraudScore > 0.85) {
             if (mode == FraudOperationalMode.SHADOW) {
@@ -251,14 +263,22 @@ public class FraudScoringService {
         int minimumErrorScore = 0;
         FraudAction highestAction = FraudAction.ALLOW;
         List<String> triggeredRules = new ArrayList<>();
+        boolean allowRuleMatched = false;
+        boolean nonAllowRuleMatched = false;
 
         for (FraudRule rule : rules) {
             try {
                 if (ruleEvaluationService.evaluateRule(rule, request)) {
-                    totalScore += rule.getScoreImpact();
-                    triggeredRules.add(rule.getName());
                     FraudAction ruleAction = FraudAction.valueOf(rule.getAction());
-                    highestAction = FraudAction.escalate(highestAction, ruleAction);
+                    triggeredRules.add(rule.getName());
+                    if (ruleAction == FraudAction.ALLOW) {
+                        allowRuleMatched = true;
+                        totalScore = Math.max(0, totalScore - Math.abs(rule.getScoreImpact()));
+                    } else {
+                        nonAllowRuleMatched = true;
+                        totalScore += rule.getScoreImpact();
+                        highestAction = FraudAction.escalate(highestAction, ruleAction);
+                    }
                 }
             } catch (Exception ex) {
                 FraudAction ruleFallback = resolveRuleFailureAction(rule);
@@ -274,6 +294,20 @@ public class FraudScoringService {
                         : RiskLevel.HIGH.getMinScore();
                 minimumErrorScore = Math.max(minimumErrorScore, errorFloor);
             }
+        }
+
+        if (!allowRuleMatched) {
+            int comboScore = evaluateHighRiskPaymentAndNewDeviceCombo(request);
+            if (comboScore > 0 && !triggeredRules.contains("HIGH_RISK_PAYMENT_NEW_DEVICE")) {
+                totalScore += comboScore;
+                triggeredRules.add("HIGH_RISK_PAYMENT_NEW_DEVICE");
+                nonAllowRuleMatched = true;
+            }
+        }
+
+        if (allowRuleMatched && !nonAllowRuleMatched && minimumErrorScore == 0) {
+            totalScore = 0;
+            highestAction = FraudAction.ALLOW;
         }
 
         int clampedScore = Math.min(100, Math.max(minimumErrorScore, Math.max(0, totalScore)));
@@ -410,6 +444,46 @@ public class FraudScoringService {
             return true;
         }
         return false;
+    }
+
+    private boolean isAnyEntityAllowlisted(FraudCheckRequest request) {
+        if (allowlistService == null) {
+            return false;
+        }
+        if (request.userId() != null && allowlistService.isAllowlisted("USER", request.userId().toString())) {
+            return true;
+        }
+        if (request.deviceFingerprint() != null
+                && !request.deviceFingerprint().isBlank()
+                && allowlistService.isAllowlisted("DEVICE", request.deviceFingerprint())) {
+            return true;
+        }
+        if (request.ipAddress() != null
+                && !request.ipAddress().isBlank()
+                && allowlistService.isAllowlisted("IP", request.ipAddress())) {
+            return true;
+        }
+        return false;
+    }
+
+    private int evaluateHighRiskPaymentAndNewDeviceCombo(FraudCheckRequest request) {
+        String method = request.paymentMethodType();
+        if (method == null || method.isBlank()) {
+            return 0;
+        }
+        boolean missingDevice = request.deviceFingerprint() == null || request.deviceFingerprint().isBlank();
+        boolean newDeviceContext = missingDevice || request.isNewUser();
+        if (!newDeviceContext) {
+            return 0;
+        }
+        String normalized = method.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "CRYPTO", "GIFT_CARD", "PREPAID_CARD", "INTERNATIONAL_CARD" ->
+                (missingDevice || request.totalCents() >= 100_000L) ? 80 : 55;
+            case "COD" ->
+                request.totalCents() >= 100_000L ? (missingDevice ? 60 : 35) : 0;
+            default -> 0;
+        };
     }
 
     private FraudCheckResponse persistAndRespond(FraudCheckRequest request, int score,

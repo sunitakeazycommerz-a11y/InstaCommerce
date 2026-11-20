@@ -14,4 +14,7 @@ public interface CheckoutWorkflow {
 
     @QueryMethod
     String getStatus();
+
+    @QueryMethod
+    CheckoutResponse getResultSnapshot();
 }

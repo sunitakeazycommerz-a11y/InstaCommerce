@@ -48,6 +48,17 @@ public class FlagOverrideService {
         @CacheEvict(value = "flag-overrides-bulk", allEntries = true)
     })
     public FlagOverride addOverride(String flagKey, AddOverrideRequest request, String changedBy) {
+        if (request == null || request.userId() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OVERRIDE", "userId is required");
+        }
+        if (request.value() == null || request.value().isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OVERRIDE_VALUE",
+                    "Override value must not be blank");
+        }
+        if (request.expiresAt() != null && !request.expiresAt().isAfter(Instant.now())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OVERRIDE_EXPIRY",
+                    "Override expiresAt must be in the future");
+        }
         FeatureFlag flag = flagRepository.findByKey(flagKey)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "FLAG_NOT_FOUND",
                         "Flag with key '" + flagKey + "' not found"));

@@ -3,6 +3,7 @@ package com.instacommerce.payment.service;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.gateway.GatewayStatusResult;
+import com.instacommerce.payment.gateway.GatewayStatusResult.PspPaymentState;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.PaymentRepository;
 import io.micrometer.core.instrument.Counter;
@@ -149,6 +150,11 @@ public class StalePendingPaymentRecoveryJob {
             long capturedCents = resolveCapturedAmount(pspState, payment);
             txHelper.reconcileDirectToCaptured(payment.getId(), payment.getPspReference(), capturedCents);
             return RecoveryOutcome.COMPLETED_FORWARD;
+        }
+        if (pspState.state() == PspPaymentState.UNKNOWN) {
+            log.warn("Recovery: payment {} PSP state UNKNOWN ({}), skipping",
+                payment.getId(), pspState.rawStatus());
+            return RecoveryOutcome.SKIPPED;
         }
 
         // Terminal failure or unrecoverable states

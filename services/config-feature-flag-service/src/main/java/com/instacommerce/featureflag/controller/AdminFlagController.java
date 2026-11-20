@@ -5,6 +5,7 @@ import com.instacommerce.featureflag.dto.request.AddOverrideRequest;
 import com.instacommerce.featureflag.dto.request.CreateFlagRequest;
 import com.instacommerce.featureflag.dto.request.UpdateFlagRequest;
 import com.instacommerce.featureflag.dto.response.FlagResponse;
+import com.instacommerce.featureflag.exception.ApiException;
 import com.instacommerce.featureflag.service.FlagManagementService;
 import com.instacommerce.featureflag.service.FlagOverrideService;
 import jakarta.validation.Valid;
@@ -85,10 +86,14 @@ public class AdminFlagController {
 
     @PostMapping("/{key}/rollout")
     public ResponseEntity<FlagResponse> setRollout(@PathVariable String key,
-                                                   @RequestBody Map<String, Integer> body,
+                                                   @RequestBody(required = false) Map<String, Integer> body,
                                                    Principal principal) {
         String changedBy = principal != null ? principal.getName() : "system";
-        int percentage = body.getOrDefault("percentage", 0);
+        Integer percentage = body != null ? body.get("percentage") : null;
+        if (percentage == null) {
+            throw new ApiException(
+                HttpStatus.BAD_REQUEST, "INVALID_PERCENTAGE", "percentage is required");
+        }
         return ResponseEntity.ok(flagManagementService.setRolloutPercentage(key, percentage, changedBy));
     }
 
@@ -115,10 +120,15 @@ public class AdminFlagController {
         return ResponseEntity.noContent().build();
     }
 
+    public ResponseEntity<Void> emergencyStop(String flagKey) {
+        return emergencyStop(flagKey, null);
+    }
+
     @PostMapping("/emergency-stop/{flagKey}")
-    public ResponseEntity<Void> emergencyStop(@PathVariable String flagKey) {
-        log.warn("flags.emergency_stop triggered for flag={}", flagKey);
-        flagManagementService.forceDisable(flagKey);
+    public ResponseEntity<Void> emergencyStop(@PathVariable String flagKey, Principal principal) {
+        String changedBy = principal != null ? principal.getName() : "system";
+        log.warn("flags.emergency_stop triggered for flag={} by={}", flagKey, changedBy);
+        flagManagementService.forceDisable(flagKey, changedBy);
         flagChangeStreamController.broadcast(flagKey, false);
         return ResponseEntity.ok().build();
     }

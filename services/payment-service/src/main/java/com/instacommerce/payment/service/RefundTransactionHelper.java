@@ -50,6 +50,9 @@ public class RefundTransactionHelper {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RefundPendingResult savePendingRefund(UUID paymentId, RefundRequest request, String appliedKey) {
+        if (request == null || request.amountCents() <= 0) {
+            throw new IllegalArgumentException("Refund amountCents must be positive");
+        }
         // Pessimistic lock to prevent double-refund race condition
         Payment payment = paymentRepository.findByIdForUpdate(paymentId)
             .orElseThrow(() -> new PaymentNotFoundException(paymentId));
@@ -92,6 +95,10 @@ public class RefundTransactionHelper {
         if (refund.getStatus() == RefundStatus.COMPLETED) {
             log.info("Refund {} already completed (likely by webhook), skipping synchronous completion", refundId);
             return refund;
+        }
+        long remainingRefundable = Math.max(0L, payment.getCapturedCents() - payment.getRefundedCents());
+        if (request.amountCents() > remainingRefundable) {
+            throw new RefundExceedsChargeException(paymentId, request.amountCents(), remainingRefundable);
         }
 
         int updated = refundRepository.compareAndSetPendingToCompletedWithPspRefundId(
@@ -250,6 +257,10 @@ public class RefundTransactionHelper {
             log.info("Refund {} no longer PENDING (status={}), skipping recovery completion",
                 refundId, refund.getStatus());
             return refund;
+        }
+        long remainingRefundable = Math.max(0L, payment.getCapturedCents() - payment.getRefundedCents());
+        if (refund.getAmountCents() > remainingRefundable) {
+            throw new RefundExceedsChargeException(paymentId, refund.getAmountCents(), remainingRefundable);
         }
 
         int updated = refundRepository.compareAndSetPendingToCompleted(refundId, refund.getVersion());

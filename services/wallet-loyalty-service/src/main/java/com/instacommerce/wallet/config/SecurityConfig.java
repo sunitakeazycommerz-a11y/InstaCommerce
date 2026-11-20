@@ -56,7 +56,8 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error").permitAll()
-                .requestMatchers(HttpMethod.POST, "/wallet/debit", "/api/v1/wallet/debit")
+                .requestMatchers(HttpMethod.POST, "/wallet/debit", "/api/v1/wallet/debit",
+                        "/wallet/credit", "/api/v1/wallet/credit")
                     .hasAnyRole("ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions

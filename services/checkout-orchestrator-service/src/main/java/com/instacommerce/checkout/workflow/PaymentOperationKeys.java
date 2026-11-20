@@ -45,6 +45,14 @@ public final class PaymentOperationKeys {
         return operationKey(paymentId, "refund");
     }
 
+    public String walletDebit() {
+        return workflowId + ":wallet:debit";
+    }
+
+    public String walletRefund() {
+        return workflowId + ":wallet:refund";
+    }
+
     public String workflowId() {
         return workflowId;
     }

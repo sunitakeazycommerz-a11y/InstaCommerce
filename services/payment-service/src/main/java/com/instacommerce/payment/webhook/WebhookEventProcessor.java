@@ -161,17 +161,25 @@ public class WebhookEventProcessor {
     @Transactional
     public void processEvent(String eventId, String type, String pspReference,
                              JsonNode objectNode, String rawPayload) {
-        if (eventId != null && !eventId.isBlank()) {
+        String normalizedEventId = (eventId != null && !eventId.isBlank()) ? eventId.trim() : null;
+        if (normalizedEventId != null) {
+            if (processedWebhookEventRepository.existsById(normalizedEventId)
+                || (pspReference != null && !pspReference.isBlank()
+                    && processedWebhookEventRepository.existsByExternalPaymentReferenceAndPspEventId(
+                        pspReference, normalizedEventId))) {
+                log.debug("Webhook event {} already processed, skipping duplicate", normalizedEventId);
+                return;
+            }
             try {
                 ProcessedWebhookEvent processed = new ProcessedWebhookEvent();
-                processed.setEventId(eventId);
-                processed.setPspEventId(eventId);
+                processed.setEventId(normalizedEventId);
+                processed.setPspEventId(normalizedEventId);
                 processed.setExternalPaymentReference(pspReference);
                 processed.setEventType(type);
                 processed.setRawPayload(rawPayload);
                 processedWebhookEventRepository.saveAndFlush(processed);
             } catch (DataIntegrityViolationException ex) {
-                log.debug("Webhook event {} already processed (concurrent), skipping", eventId);
+                log.debug("Webhook event {} already processed (concurrent), skipping", normalizedEventId);
                 return;
             }
         }
@@ -421,7 +429,12 @@ public class WebhookEventProcessor {
         long cumulativeRefunded = longValue(objectNode, "amount_refunded");
         long untrackedDelta = 0;
         if (cumulativeRefunded > 0) {
-            long updatedRefunded = Math.max(payment.getRefundedCents(), cumulativeRefunded);
+            long cappedCumulative = Math.min(cumulativeRefunded, payment.getCapturedCents());
+            if (cumulativeRefunded > payment.getCapturedCents()) {
+                log.warn("Webhook cumulative refund {} exceeds captured amount {} for payment {}, clamping to capturedCents",
+                    cumulativeRefunded, payment.getCapturedCents(), payment.getId());
+            }
+            long updatedRefunded = Math.max(payment.getRefundedCents(), cappedCumulative);
             untrackedDelta = updatedRefunded - payment.getRefundedCents();
             if (untrackedDelta > 0) {
                 payment.setRefundedCents(updatedRefunded);
@@ -514,6 +527,12 @@ public class WebhookEventProcessor {
             if (tracked.getStatus() != RefundStatus.PENDING) {
                 log.warn("Tracked refund {} in unexpected state {} for pspRefundId {}, skipping",
                     tracked.getId(), tracked.getStatus(), pspRefundId);
+                continue;
+            }
+            long remainingRefundable = Math.max(0L, payment.getCapturedCents() - payment.getRefundedCents());
+            if (tracked.getAmountCents() > remainingRefundable) {
+                log.warn("Tracked refund {} amount {} exceeds remaining refundable {} for payment {}, skipping",
+                    tracked.getId(), tracked.getAmountCents(), remainingRefundable, payment.getId());
                 continue;
             }
 

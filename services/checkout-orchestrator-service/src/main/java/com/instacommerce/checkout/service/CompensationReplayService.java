@@ -6,11 +6,13 @@ import com.instacommerce.checkout.workflow.activity.CouponActivity;
 import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
+import com.instacommerce.checkout.workflow.activity.WalletActivity;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
  * Replays failed saga compensation operations recorded in {@link CompensationDlq}
- * against downstream inventory, payment, order, and pricing services.
+ * against downstream inventory, payment, order, wallet, and pricing services.
  */
 @Service
 public class CompensationReplayService {
@@ -19,15 +21,26 @@ public class CompensationReplayService {
     private final PaymentActivity paymentActivity;
     private final OrderActivity orderActivity;
     private final CouponActivity couponActivity;
+    private final WalletActivity walletActivity;
 
     public CompensationReplayService(InventoryActivity inventoryActivity,
                                      PaymentActivity paymentActivity,
                                      OrderActivity orderActivity,
                                      CouponActivity couponActivity) {
+        this(inventoryActivity, paymentActivity, orderActivity, couponActivity, null);
+    }
+
+    @Autowired
+    public CompensationReplayService(InventoryActivity inventoryActivity,
+                                     PaymentActivity paymentActivity,
+                                     OrderActivity orderActivity,
+                                     CouponActivity couponActivity,
+                                     WalletActivity walletActivity) {
         this.inventoryActivity = inventoryActivity;
         this.paymentActivity = paymentActivity;
         this.orderActivity = orderActivity;
         this.couponActivity = couponActivity;
+        this.walletActivity = walletActivity;
     }
 
     public void replay(CompensationDlq entry) {
@@ -42,6 +55,16 @@ public class CompensationReplayService {
                 targetId, paymentKeysFor(entry).voidOp(targetId));
             case "refundPayment" -> paymentActivity.refundPayment(
                 targetId, parsePositiveAmountCents(entry.getPayload()), paymentKeysFor(entry).refund(targetId));
+            case "refundWallet" -> {
+                if (walletActivity == null) {
+                    throw new IllegalStateException("WalletActivity is not configured");
+                }
+                walletActivity.refundWallet(
+                    targetId,
+                    parsePositiveAmountCents(entry.getPayload()),
+                    paymentKeysFor(entry).walletRefund(),
+                    "DLQ replay wallet refund for workflow " + entry.getWorkflowId());
+            }
             case "cancelOrder" -> orderActivity.cancelOrder(targetId);
             case "rollbackUsage" -> replayRollbackUsage(targetId);
             case "unredeemCoupon" -> replayUnredeemCoupon(targetId);

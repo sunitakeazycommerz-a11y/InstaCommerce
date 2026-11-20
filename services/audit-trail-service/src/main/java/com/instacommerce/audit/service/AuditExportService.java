@@ -3,6 +3,7 @@ package com.instacommerce.audit.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.dto.AuditSearchCriteria;
+import com.instacommerce.audit.exception.ApiException;
 import com.instacommerce.audit.repository.AuditEventRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.criteria.Predicate;
@@ -10,6 +11,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -23,6 +25,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,11 +55,22 @@ public class AuditExportService {
 
     @Transactional(readOnly = true)
     public void exportCsv(AuditSearchCriteria criteria, HttpServletResponse response) throws IOException {
+        if (criteria == null) {
+            throw new IllegalArgumentException("criteria must not be null");
+        }
+        if (response == null) {
+            throw new IllegalArgumentException("response must not be null");
+        }
+        if (Duration.between(criteria.fromDate(), criteria.toDate()).compareTo(AuditSearchCriteria.MAX_EXPORT_RANGE) > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_EXPORT_RANGE",
+                "Export date range cannot exceed 90 days");
+        }
+        Specification<AuditEvent> baseSpec = buildSpecification(criteria);
+
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType("text/csv; charset=UTF-8");
         response.setHeader("Content-Disposition", "attachment; filename=audit_export.csv");
 
-        Specification<AuditEvent> baseSpec = buildSpecification(criteria);
         long totalExported = 0;
 
         try (PrintWriter writer = response.getWriter()) {
@@ -162,8 +176,9 @@ public class AuditExportService {
         String sanitized = value;
         if (!sanitized.isEmpty()) {
             char first = sanitized.charAt(0);
-            if (first == '=' || first == '+' || first == '-' || first == '@'
-                    || first == '\t' || first == '\r') {
+            String stripped = sanitized.stripLeading();
+            char firstNonWs = stripped.isEmpty() ? '\0' : stripped.charAt(0);
+            if (isFormulaTrigger(first) || isFormulaTrigger(firstNonWs)) {
                 sanitized = "'" + sanitized;
             }
         }
@@ -174,40 +189,15 @@ public class AuditExportService {
         return sanitized;
     }
 
+    private static boolean isFormulaTrigger(char ch) {
+        return ch == '=' || ch == '+' || ch == '-' || ch == '@' || ch == '\t' || ch == '\r';
+    }
+
     private static String str(Object obj) {
         return obj != null ? obj.toString() : "";
     }
 
     private Specification<AuditEvent> buildSpecification(AuditSearchCriteria criteria) {
-        return (root, query, cb) -> {
-            List<Predicate> predicates = new ArrayList<>();
-
-            if (criteria.actorId() != null) {
-                predicates.add(cb.equal(root.get("actorId"), criteria.actorId()));
-            }
-            if (criteria.resourceType() != null && !criteria.resourceType().isBlank()) {
-                predicates.add(cb.equal(root.get("resourceType"), criteria.resourceType()));
-            }
-            if (criteria.resourceId() != null && !criteria.resourceId().isBlank()) {
-                predicates.add(cb.equal(root.get("resourceId"), criteria.resourceId()));
-            }
-            if (criteria.sourceService() != null && !criteria.sourceService().isBlank()) {
-                predicates.add(cb.equal(root.get("sourceService"), criteria.sourceService()));
-            }
-            if (criteria.eventType() != null && !criteria.eventType().isBlank()) {
-                predicates.add(cb.equal(root.get("eventType"), criteria.eventType()));
-            }
-            if (criteria.correlationId() != null && !criteria.correlationId().isBlank()) {
-                predicates.add(cb.equal(root.get("correlationId"), criteria.correlationId()));
-            }
-            if (criteria.fromDate() != null) {
-                predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), criteria.fromDate()));
-            }
-            if (criteria.toDate() != null) {
-                predicates.add(cb.lessThan(root.get("createdAt"), criteria.toDate()));
-            }
-
-            return cb.and(predicates.toArray(new Predicate[0]));
-        };
+        return AuditEventSpecifications.fromCriteria(criteria);
     }
 }

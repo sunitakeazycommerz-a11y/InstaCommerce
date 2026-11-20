@@ -2,6 +2,7 @@ package com.instacommerce.fraud.service;
 
 import com.instacommerce.fraud.domain.model.FraudRule;
 import com.instacommerce.fraud.dto.request.FraudCheckRequest;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +33,7 @@ public class RuleEvaluationService {
             case "DEVICE" -> evaluateDevice(rule, request);
             case "GEO" -> evaluateGeo(rule, request);
             case "PATTERN" -> evaluatePattern(rule, request);
+            case "COMBINATION" -> evaluateCombination(rule, request);
             default -> {
                 log.warn("Unknown rule type: {}", rule.getRuleType());
                 yield false;
@@ -110,8 +112,83 @@ public class RuleEvaluationService {
             case "RAPID_RETRY" -> {
                 long failedCount = velocityService.getCount("USER", request.userId().toString(),
                         "FAILED_PAYMENTS_1H");
-                yield failedCount >= ((Number) condition.getOrDefault("maxFailures", 3)).intValue();
+                long burstFailedCount = velocityService.getCount("USER", request.userId().toString(),
+                        "FAILED_PAYMENTS_5M");
+                int maxFailures = ((Number) condition.getOrDefault("maxFailures", 3)).intValue();
+                yield Math.max(failedCount, burstFailedCount) >= maxFailures;
             }
+            case "VELOCITY_BURST" -> {
+                String entityType = (String) condition.getOrDefault("entityType", "USER");
+                String counterType = (String) condition.getOrDefault("counterType", "ORDERS_5M");
+                int threshold = ((Number) condition.getOrDefault("threshold", 4)).intValue();
+                String entityId = resolveEntityId(entityType, request);
+                yield entityId != null && velocityService.getCount(entityType, entityId, counterType) >= threshold;
+            }
+            case "HIGH_RISK_PAYMENT_NEW_DEVICE" -> evaluateCombination(rule, request);
+            default -> false;
+        };
+    }
+
+    private boolean evaluateCombination(FraudRule rule, FraudCheckRequest request) {
+        Map<String, Object> condition = rule.getConditionJson() != null ? rule.getConditionJson() : Map.of();
+        if (!isHighRiskPaymentMethod(request.paymentMethodType(), condition)) {
+            return false;
+        }
+        long minAmountCents = condition.get("minAmountCents") instanceof Number n
+            ? n.longValue()
+            : 0L;
+        if (request.totalCents() < minAmountCents) {
+            return false;
+        }
+        boolean newUsersOnly = Boolean.TRUE.equals(condition.get("newUsersOnly"));
+        if (newUsersOnly && !request.isNewUser()) {
+            return false;
+        }
+        boolean requireNewDevice = condition.get("requireNewDevice") == null
+            || Boolean.TRUE.equals(condition.get("requireNewDevice"));
+        if (requireNewDevice && !isNewOrUnrecognizedDevice(request)) {
+            return false;
+        }
+        if (condition.get("burstThreshold") instanceof Number burstNum) {
+            String userId = request.userId() != null ? request.userId().toString() : null;
+            long burstOrders = userId != null ? velocityService.getCount("USER", userId, "ORDERS_5M") : 0L;
+            if (burstOrders < burstNum.intValue()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public boolean isNewOrUnrecognizedDevice(FraudCheckRequest request) {
+        if (request.deviceFingerprint() == null || request.deviceFingerprint().isBlank()) {
+            return true;
+        }
+        if (request.isNewUser()) {
+            return true;
+        }
+        return velocityService.getCount("DEVICE", request.deviceFingerprint(), "ORDERS_24H") == 0L;
+    }
+
+    public static boolean isHighRiskPaymentMethod(String paymentMethodType, Map<String, Object> condition) {
+        if (paymentMethodType == null || paymentMethodType.isBlank()) {
+            return false;
+        }
+        String normalized = paymentMethodType.trim().toUpperCase(Locale.ROOT);
+        Object explicitSingle = condition != null ? condition.get("paymentMethodType") : null;
+        if (explicitSingle instanceof String target && !target.isBlank()) {
+            return normalized.equals(target.trim().toUpperCase(Locale.ROOT));
+        }
+        Object explicitList = condition != null ? condition.get("paymentMethods") : null;
+        if (explicitList instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                if (item != null && normalized.equals(item.toString().trim().toUpperCase(Locale.ROOT))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return switch (normalized) {
+            case "COD", "CRYPTO", "GIFT_CARD", "PREPAID_CARD", "INTERNATIONAL_CARD" -> true;
             default -> false;
         };
     }

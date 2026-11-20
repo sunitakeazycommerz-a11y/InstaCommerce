@@ -26,12 +26,14 @@ public class CheckoutProperties {
         private final ServiceClient inventory = new ServiceClient();
         private final ServiceClient payment = new ServiceClient();
         private final ServiceClient order = new ServiceClient();
+        private final ServiceClient wallet = new ServiceClient();
 
         public ServiceClient getCart() { return cart; }
         public ServiceClient getPricing() { return pricing; }
         public ServiceClient getInventory() { return inventory; }
         public ServiceClient getPayment() { return payment; }
         public ServiceClient getOrder() { return order; }
+        public ServiceClient getWallet() { return wallet; }
     }
 
     public static class ServiceClient {

@@ -88,6 +88,15 @@ public class Order implements Persistable<UUID> {
     @Column(name = "updated_at")
     private Instant updatedAt;
 
+    @Column(name = "sla_deadline_at")
+    private Instant slaDeadlineAt;
+
+    @Column(name = "sla_breached_at")
+    private Instant slaBreachedAt;
+
+    @Column(name = "delivered_at")
+    private Instant deliveredAt;
+
     @Version
     private long version;
 
@@ -284,6 +293,45 @@ public class Order implements Persistable<UUID> {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public Instant getSlaDeadlineAt() {
+        return slaDeadlineAt;
+    }
+
+    public void setSlaDeadlineAt(Instant slaDeadlineAt) {
+        this.slaDeadlineAt = slaDeadlineAt;
+    }
+
+    public Instant getSlaBreachedAt() {
+        return slaBreachedAt;
+    }
+
+    public void setSlaBreachedAt(Instant slaBreachedAt) {
+        this.slaBreachedAt = slaBreachedAt;
+    }
+
+    public Instant getDeliveredAt() {
+        return deliveredAt;
+    }
+
+    public void setDeliveredAt(Instant deliveredAt) {
+        this.deliveredAt = deliveredAt;
+    }
+
+    public boolean isSlaBreached() {
+        return slaBreachedAt != null;
+    }
+
+    public boolean recordSlaBreachIfDue(Instant evaluationTime) {
+        if (slaDeadlineAt == null || slaBreachedAt != null || evaluationTime == null) {
+            return false;
+        }
+        if (evaluationTime.isAfter(slaDeadlineAt)) {
+            slaBreachedAt = evaluationTime;
+            return true;
+        }
+        return false;
     }
 
     public long getVersion() {

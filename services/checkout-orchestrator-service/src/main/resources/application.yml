@@ -52,6 +52,10 @@ checkout:
       base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
       connect-timeout: 5000
       read-timeout: 10000
+    wallet:
+      base-url: ${WALLET_SERVICE_URL:http://localhost:8088}
+      connect-timeout: 5000
+      read-timeout: 10000
 
 temporal:
   service-address: "${TEMPORAL_HOST:localhost}:7233"
@@ -150,6 +154,18 @@ resilience4j:
           - java.net.SocketTimeoutException
           - org.springframework.web.client.RestClientException
       pricingService:
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 5
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        recordExceptions:
+          - java.io.IOException
+          - java.net.SocketTimeoutException
+          - org.springframework.web.client.RestClientException
+      walletService:
         slidingWindowType: COUNT_BASED
         slidingWindowSize: 20
         minimumNumberOfCalls: 10

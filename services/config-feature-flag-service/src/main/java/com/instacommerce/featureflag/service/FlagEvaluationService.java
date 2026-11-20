@@ -1,6 +1,7 @@
 package com.instacommerce.featureflag.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.hash.Hashing;
 import com.instacommerce.featureflag.domain.model.FeatureFlag;
@@ -8,9 +9,14 @@ import com.instacommerce.featureflag.domain.model.FlagOverride;
 import com.instacommerce.featureflag.dto.response.FlagEvaluationResponse;
 import com.instacommerce.featureflag.repository.FeatureFlagRepository;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,35 +77,150 @@ public class FlagEvaluationService {
                     parseValue(override.getOverrideValue()),
                     FlagEvaluationResponse.SOURCE_OVERRIDE);
         }
+        if (!flag.isEnabled()) {
+            return new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
+        }
+
+        SegmentMatchResult segmentMatch = evaluateTargetSegments(flag, context);
+        if (!segmentMatch.allowed()) {
+            return new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
+        }
+        if (segmentMatch.rolloutPercentageOverride() != null) {
+            return evaluateWithPercentage(key, userId, segmentMatch.rolloutPercentageOverride());
+        }
 
         return switch (flag.getFlagType()) {
-            case BOOLEAN -> new FlagEvaluationResponse(key, flag.isEnabled(),
+            case BOOLEAN -> new FlagEvaluationResponse(key, true,
                     FlagEvaluationResponse.SOURCE_DEFAULT);
 
             case PERCENTAGE -> evaluatePercentage(flag, key, userId);
 
             case USER_LIST -> evaluateUserList(flag, key, userId);
 
-            case JSON -> {
-                if (!flag.isEnabled()) {
-                    yield new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
-                }
-                yield new FlagEvaluationResponse(key,
-                        parseValue(flag.getDefaultValue()),
-                        FlagEvaluationResponse.SOURCE_DEFAULT);
-            }
+            case JSON -> new FlagEvaluationResponse(key,
+                    parseValue(flag.getDefaultValue()),
+                    FlagEvaluationResponse.SOURCE_DEFAULT);
         };
     }
 
     private FlagEvaluationResponse evaluatePercentage(FeatureFlag flag, String key, UUID userId) {
-        if (!flag.isEnabled() || userId == null) {
+        if (!flag.isEnabled()) {
             return new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
         }
+        return evaluateWithPercentage(key, userId, flag.getRolloutPercentage());
+    }
 
+    private FlagEvaluationResponse evaluateWithPercentage(String key, UUID userId, int configuredPercentage) {
+        int clampedPercentage = Math.max(0, Math.min(100, configuredPercentage));
+        if (clampedPercentage <= 0) {
+            return new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_PERCENTAGE);
+        }
+        if (userId == null) {
+            return new FlagEvaluationResponse(key, false, FlagEvaluationResponse.SOURCE_DEFAULT);
+        }
+        if (clampedPercentage >= 100) {
+            return new FlagEvaluationResponse(key, true, FlagEvaluationResponse.SOURCE_PERCENTAGE);
+        }
         // Consistent hashing: hash(userId + flagKey) % 100 — same user always gets same result
         int bucket = computeBucket(userId, key);
-        boolean inRollout = bucket < flag.getRolloutPercentage();
+        boolean inRollout = bucket < clampedPercentage;
         return new FlagEvaluationResponse(key, inRollout, FlagEvaluationResponse.SOURCE_PERCENTAGE);
+    }
+
+    private record SegmentMatchResult(boolean allowed, Integer rolloutPercentageOverride) {
+    }
+
+    private SegmentMatchResult evaluateTargetSegments(FeatureFlag flag, Map<String, Object> context) {
+        String metadata = flag.getMetadata();
+        if (metadata == null || metadata.isBlank()) {
+            return new SegmentMatchResult(true, null);
+        }
+        try {
+            JsonNode root = objectMapper.readTree(metadata);
+            if (root == null || !root.isObject()) {
+                return new SegmentMatchResult(true, null);
+            }
+            JsonNode segmentsNode = root.get("targetSegments");
+            if (segmentsNode == null || segmentsNode.isNull()) {
+                segmentsNode = root.get("segments");
+            }
+            if (segmentsNode == null || !segmentsNode.isArray() || segmentsNode.isEmpty()) {
+                return new SegmentMatchResult(true, null);
+            }
+            Set<String> callerSegments = extractCallerSegments(context);
+            if (callerSegments.isEmpty()) {
+                return new SegmentMatchResult(false, null);
+            }
+            boolean requireAll = "ALL".equalsIgnoreCase(root.path("segmentMatchMode").asText("ANY"));
+            List<String> matchedSegments = new ArrayList<>();
+            int totalRequired = 0;
+            for (JsonNode item : segmentsNode) {
+                if (item.isTextual()) {
+                    String target = item.asText().trim().toLowerCase(Locale.ROOT);
+                    if (!target.isEmpty()) {
+                        totalRequired++;
+                        if (callerSegments.contains(target)) {
+                            matchedSegments.add(item.asText().trim());
+                        }
+                    }
+                }
+            }
+            boolean matched = requireAll
+                ? (totalRequired > 0 && matchedSegments.size() == totalRequired)
+                : !matchedSegments.isEmpty();
+            if (!matched) {
+                return new SegmentMatchResult(false, null);
+            }
+            JsonNode rolloutsNode = root.get("segmentRolloutPercentages");
+            if (rolloutsNode != null && rolloutsNode.isObject()) {
+                for (String matchedSeg : matchedSegments) {
+                    JsonNode pctNode = rolloutsNode.get(matchedSeg);
+                    if (pctNode != null && pctNode.isIntegralNumber()) {
+                        return new SegmentMatchResult(true, pctNode.intValue());
+                    }
+                }
+            }
+            return new SegmentMatchResult(true, null);
+        } catch (Exception ex) {
+            log.warn("Failed to evaluate target segments for flag '{}': {}", flag.getKey(), ex.getMessage());
+            return new SegmentMatchResult(true, null);
+        }
+    }
+
+    private Set<String> extractCallerSegments(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> segments = new HashSet<>();
+        addContextSegments(segments, context.get("segment"));
+        addContextSegments(segments, context.get("segments"));
+        addContextSegments(segments, context.get("tier"));
+        addContextSegments(segments, context.get("region"));
+        addContextSegments(segments, context.get("city"));
+        return segments;
+    }
+
+    private void addContextSegments(Set<String> acc, Object value) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof Collection<?> col) {
+            for (Object item : col) {
+                if (item != null) {
+                    String trimmed = item.toString().trim().toLowerCase(Locale.ROOT);
+                    if (!trimmed.isEmpty()) {
+                        acc.add(trimmed);
+                    }
+                }
+            }
+            return;
+        }
+        for (String token : value.toString().split(",")) {
+            String trimmed = token.trim().toLowerCase(Locale.ROOT);
+            if (!trimmed.isEmpty()) {
+                acc.add(trimmed);
+            }
+        }
     }
 
     private FlagEvaluationResponse evaluateUserList(FeatureFlag flag, String key, UUID userId) {

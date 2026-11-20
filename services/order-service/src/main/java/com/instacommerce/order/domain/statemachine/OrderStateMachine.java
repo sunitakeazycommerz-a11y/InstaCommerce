@@ -8,13 +8,14 @@ import java.util.Set;
 public final class OrderStateMachine {
     private static final Map<OrderStatus, Set<OrderStatus>> TRANSITIONS = Map.of(
         OrderStatus.PENDING, Set.of(OrderStatus.PLACED, OrderStatus.FAILED, OrderStatus.CANCELLED),
-        OrderStatus.PLACED, Set.of(OrderStatus.PACKING, OrderStatus.CANCELLED, OrderStatus.FAILED),
-        OrderStatus.PACKING, Set.of(OrderStatus.PACKED, OrderStatus.CANCELLED, OrderStatus.FAILED),
-        OrderStatus.PACKED, Set.of(OrderStatus.OUT_FOR_DELIVERY, OrderStatus.CANCELLED, OrderStatus.FAILED),
-        OrderStatus.OUT_FOR_DELIVERY, Set.of(OrderStatus.DELIVERED, OrderStatus.CANCELLED, OrderStatus.FAILED),
+        OrderStatus.PLACED, Set.of(OrderStatus.PACKING, OrderStatus.CANCELLED, OrderStatus.FAILED, OrderStatus.REFUNDED),
+        OrderStatus.PACKING, Set.of(OrderStatus.PACKED, OrderStatus.CANCELLED, OrderStatus.FAILED, OrderStatus.REFUNDED),
+        OrderStatus.PACKED, Set.of(OrderStatus.OUT_FOR_DELIVERY, OrderStatus.CANCELLED, OrderStatus.FAILED, OrderStatus.REFUNDED),
+        OrderStatus.OUT_FOR_DELIVERY, Set.of(OrderStatus.DELIVERED, OrderStatus.CANCELLED, OrderStatus.FAILED, OrderStatus.REFUNDED),
         OrderStatus.DELIVERED, Set.of(),
         OrderStatus.CANCELLED, Set.of(),
-        OrderStatus.FAILED, Set.of()
+        OrderStatus.FAILED, Set.of(),
+        OrderStatus.REFUNDED, Set.of()
     );
 
     private OrderStateMachine() {

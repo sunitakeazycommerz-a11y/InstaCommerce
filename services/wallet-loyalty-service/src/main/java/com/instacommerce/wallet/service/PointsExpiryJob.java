@@ -7,11 +7,14 @@ import com.instacommerce.wallet.repository.LoyaltyAccountRepository;
 import com.instacommerce.wallet.repository.LoyaltyTransactionRepository;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Slice;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -30,23 +33,38 @@ public class PointsExpiryJob {
     private final LoyaltyTransactionRepository transactionRepository;
     private final WalletProperties walletProperties;
     private final TransactionTemplate transactionTemplate;
+    private final OutboxService outboxService;
 
     public PointsExpiryJob(LoyaltyAccountRepository accountRepository,
                            LoyaltyTransactionRepository transactionRepository,
                            WalletProperties walletProperties,
                            PlatformTransactionManager transactionManager) {
+        this(accountRepository, transactionRepository, walletProperties, transactionManager, null);
+    }
+
+    @Autowired
+    public PointsExpiryJob(LoyaltyAccountRepository accountRepository,
+                           LoyaltyTransactionRepository transactionRepository,
+                           WalletProperties walletProperties,
+                           PlatformTransactionManager transactionManager,
+                           OutboxService outboxService) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
         this.walletProperties = walletProperties;
         TransactionTemplate template = new TransactionTemplate(transactionManager);
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transactionTemplate = template;
+        this.outboxService = outboxService;
     }
 
     @Scheduled(cron = "0 0 2 * * *")
     @SchedulerLock(name = "points-expiry", lockAtLeastFor = "PT5M", lockAtMostFor = "PT2H")
     public void expireOldPoints() {
         int expiryMonths = walletProperties.getLoyalty().getPointsExpiryMonths();
+        if (expiryMonths <= 0) {
+            log.warn("Skipping points expiry job due to non-positive pointsExpiryMonths={}", expiryMonths);
+            return;
+        }
         Instant cutoff = Instant.now().minus(expiryMonths * 30L, ChronoUnit.DAYS);
         log.info("Running points expiry job, cutoff={}", cutoff);
 
@@ -129,8 +147,17 @@ public class PointsExpiryJob {
         }
 
         if (totalExpired > 0) {
-            account.setPointsBalance(remainingBalance);
+            account.setPointsBalance(Math.max(0, remainingBalance));
             accountRepository.save(account);
+            if (outboxService != null) {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("accountId", account.getId().toString());
+                payload.put("userId", account.getUserId().toString());
+                payload.put("expiredPoints", totalExpired);
+                payload.put("pointsBalance", account.getPointsBalance());
+                payload.put("tier", account.getTier().name());
+                outboxService.publish("Loyalty", account.getId().toString(), "PointsExpired", payload);
+            }
         }
 
         return totalExpired;

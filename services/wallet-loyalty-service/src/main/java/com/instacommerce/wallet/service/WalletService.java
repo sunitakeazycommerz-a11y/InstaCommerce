@@ -11,8 +11,10 @@ import com.instacommerce.wallet.exception.InsufficientBalanceException;
 import com.instacommerce.wallet.exception.WalletNotFoundException;
 import com.instacommerce.wallet.repository.WalletRepository;
 import com.instacommerce.wallet.repository.WalletTransactionRepository;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,17 +57,22 @@ public class WalletService {
     @CacheEvict(value = "walletBalance", key = "#userId")
     public WalletTransactionResponse credit(UUID userId, long amountCents,
                                             ReferenceType refType, String refId, String description) {
-        if (amountCents <= 0) {
-            throw new IllegalArgumentException("amountCents must be positive");
+        String normalizedRefId = validateMutationArgs(userId, amountCents, refType, refId);
+        Optional<WalletTransaction> existing = transactionRepository
+            .findByReferenceTypeAndReferenceId(refType, normalizedRefId);
+        if (existing.isPresent()) {
+            return resolveIdempotentMatch(existing.get(), userId, Type.CREDIT, amountCents, refType, normalizedRefId);
         }
-        Wallet wallet = findOrCreateWallet(userId);
 
-        wallet.setBalanceCents(wallet.getBalanceCents() + amountCents);
+        Wallet wallet = findOrCreateWallet(userId);
+        long newBalance = Math.addExact(wallet.getBalanceCents(), amountCents);
+        wallet.setBalanceCents(newBalance);
         walletRepository.save(wallet);
 
-        WalletTransaction txn = recordTransaction(wallet, Type.CREDIT, amountCents, refType, refId, description);
-        recordLedgerEntry(wallet.getId(), userId, refType, amountCents, refId, true);
-        log.info("Credited {} cents to wallet for user={} ref={}/{}", amountCents, userId, refType, refId);
+        WalletTransaction txn = recordTransaction(
+            wallet, Type.CREDIT, amountCents, refType, normalizedRefId, description);
+        recordLedgerEntry(wallet.getId(), userId, refType, amountCents, normalizedRefId, true);
+        log.info("Credited {} cents to wallet for user={} ref={}/{}", amountCents, userId, refType, normalizedRefId);
 
         Map<String, Object> creditPayload = new LinkedHashMap<>();
         creditPayload.put("transactionId", txn.getId().toString());
@@ -74,7 +81,7 @@ public class WalletService {
         creditPayload.put("amountCents", amountCents);
         creditPayload.put("balanceCents", wallet.getBalanceCents());
         creditPayload.put("referenceType", refType.name());
-        creditPayload.put("referenceId", refId != null ? refId : "");
+        creditPayload.put("referenceId", normalizedRefId);
         outboxService.publish("Wallet", wallet.getId().toString(), "WalletCredited", creditPayload);
         return toResponse(txn);
     }
@@ -83,9 +90,13 @@ public class WalletService {
     @CacheEvict(value = "walletBalance", key = "#userId")
     public WalletTransactionResponse debit(UUID userId, long amountCents,
                                            ReferenceType refType, String refId, String description) {
-        if (amountCents <= 0) {
-            throw new IllegalArgumentException("amountCents must be positive");
+        String normalizedRefId = validateMutationArgs(userId, amountCents, refType, refId);
+        Optional<WalletTransaction> existing = transactionRepository
+            .findByReferenceTypeAndReferenceId(refType, normalizedRefId);
+        if (existing.isPresent()) {
+            return resolveIdempotentMatch(existing.get(), userId, Type.DEBIT, amountCents, refType, normalizedRefId);
         }
+
         Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
             .orElseThrow(() -> new WalletNotFoundException("Wallet not found for user: " + userId));
 
@@ -97,9 +108,10 @@ public class WalletService {
         wallet.setBalanceCents(wallet.getBalanceCents() - amountCents);
         walletRepository.save(wallet);
 
-        WalletTransaction txn = recordTransaction(wallet, Type.DEBIT, amountCents, refType, refId, description);
-        recordLedgerEntry(wallet.getId(), userId, refType, amountCents, refId, false);
-        log.info("Debited {} cents from wallet for user={} ref={}/{}", amountCents, userId, refType, refId);
+        WalletTransaction txn = recordTransaction(
+            wallet, Type.DEBIT, amountCents, refType, normalizedRefId, description);
+        recordLedgerEntry(wallet.getId(), userId, refType, amountCents, normalizedRefId, false);
+        log.info("Debited {} cents from wallet for user={} ref={}/{}", amountCents, userId, refType, normalizedRefId);
 
         Map<String, Object> debitPayload = new LinkedHashMap<>();
         debitPayload.put("transactionId", txn.getId().toString());
@@ -108,9 +120,53 @@ public class WalletService {
         debitPayload.put("amountCents", amountCents);
         debitPayload.put("balanceCents", wallet.getBalanceCents());
         debitPayload.put("referenceType", refType.name());
-        debitPayload.put("referenceId", refId != null ? refId : "");
+        debitPayload.put("referenceId", normalizedRefId);
         outboxService.publish("Wallet", wallet.getId().toString(), "WalletDebited", debitPayload);
         return toResponse(txn);
+    }
+
+    @Transactional(readOnly = true)
+    public long getMonthlyCashbackCreditedCents(UUID userId, Instant monthStart) {
+        if (userId == null || monthStart == null) {
+            return 0L;
+        }
+        return transactionRepository.sumCreditsByUserIdAndReferenceTypeSince(
+            userId, ReferenceType.CASHBACK, monthStart);
+    }
+
+    private String validateMutationArgs(UUID userId, long amountCents, ReferenceType refType, String refId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId must not be null");
+        }
+        if (amountCents <= 0) {
+            throw new IllegalArgumentException("amountCents must be positive");
+        }
+        if (refType == null) {
+            throw new IllegalArgumentException("referenceType must not be null");
+        }
+        if (refId == null || refId.isBlank()) {
+            throw new IllegalArgumentException("referenceId must not be blank");
+        }
+        return refId.trim();
+    }
+
+    private WalletTransactionResponse resolveIdempotentMatch(
+        WalletTransaction existing,
+        UUID userId,
+        Type expectedType,
+        long amountCents,
+        ReferenceType refType,
+        String refId
+    ) {
+        UUID ownerId = existing.getWallet() != null ? existing.getWallet().getUserId() : null;
+        if (ownerId != null && ownerId.equals(userId)
+            && existing.getType() == expectedType
+            && existing.getAmountCents() == amountCents) {
+            log.info("Idempotent wallet {} replay detected user={} ref={}/{}", expectedType, userId, refType, refId);
+            return toResponse(existing);
+        }
+        throw new DuplicateTransactionException(
+            "Transaction already exists with mismatched parameters for ref=" + refType + "/" + refId);
     }
 
     @Transactional(readOnly = true)

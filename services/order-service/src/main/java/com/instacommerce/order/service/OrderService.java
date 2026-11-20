@@ -2,9 +2,11 @@ package com.instacommerce.order.service;
 
 import com.instacommerce.contracts.orders.CancellationReason;
 import com.instacommerce.order.client.PricingQuoteClient;
+import com.instacommerce.order.config.OrderProperties;
 import com.instacommerce.order.consumer.FulfillmentOrderEvent;
 import com.instacommerce.order.domain.model.Order;
 import com.instacommerce.order.domain.model.OrderItem;
+import com.instacommerce.order.domain.model.OrderRefundCalculator;
 import com.instacommerce.order.domain.model.OrderStatus;
 import com.instacommerce.order.domain.model.OrderStatusHistory;
 import com.instacommerce.order.domain.statemachine.OrderStateMachine;
@@ -26,6 +28,8 @@ import jakarta.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
@@ -69,6 +73,8 @@ public class OrderService {
     private final AuditLogService auditLogService;
     private final PricingQuoteClient pricingQuoteClient;
     private final MeterRegistry meterRegistry;
+    private final OrderProperties orderProperties;
+    private final Clock clock;
     private TransactionOperations transactionOperations = TransactionOperations.withoutTransaction();
 
     public OrderService(OrderRepository orderRepository,
@@ -76,7 +82,18 @@ public class OrderService {
                         OutboxService outboxService,
                         AuditLogService auditLogService,
                         PricingQuoteClient pricingQuoteClient) {
-        this(orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient, null);
+        this(orderRepository, statusHistoryRepository, outboxService, auditLogService,
+            pricingQuoteClient, null, new OrderProperties(), Clock.systemUTC());
+    }
+
+    public OrderService(OrderRepository orderRepository,
+                        OrderStatusHistoryRepository statusHistoryRepository,
+                        OutboxService outboxService,
+                        AuditLogService auditLogService,
+                        PricingQuoteClient pricingQuoteClient,
+                        @Nullable MeterRegistry meterRegistry) {
+        this(orderRepository, statusHistoryRepository, outboxService, auditLogService,
+            pricingQuoteClient, meterRegistry, new OrderProperties(), Clock.systemUTC());
     }
 
     @Autowired
@@ -85,13 +102,29 @@ public class OrderService {
                         OutboxService outboxService,
                         AuditLogService auditLogService,
                         PricingQuoteClient pricingQuoteClient,
-                        @Nullable MeterRegistry meterRegistry) {
+                        @Nullable MeterRegistry meterRegistry,
+                        @Nullable OrderProperties orderProperties) {
+        this(orderRepository, statusHistoryRepository, outboxService, auditLogService,
+            pricingQuoteClient, meterRegistry,
+            orderProperties != null ? orderProperties : new OrderProperties(), Clock.systemUTC());
+    }
+
+    public OrderService(OrderRepository orderRepository,
+                        OrderStatusHistoryRepository statusHistoryRepository,
+                        OutboxService outboxService,
+                        AuditLogService auditLogService,
+                        PricingQuoteClient pricingQuoteClient,
+                        @Nullable MeterRegistry meterRegistry,
+                        OrderProperties orderProperties,
+                        Clock clock) {
         this.orderRepository = orderRepository;
         this.statusHistoryRepository = statusHistoryRepository;
         this.outboxService = outboxService;
         this.auditLogService = auditLogService;
         this.pricingQuoteClient = pricingQuoteClient;
         this.meterRegistry = meterRegistry;
+        this.orderProperties = orderProperties != null ? orderProperties : new OrderProperties();
+        this.clock = clock != null ? clock : Clock.systemUTC();
     }
 
     @Autowired
@@ -369,8 +402,20 @@ public class OrderService {
         }
         OrderStateMachine.validate(order.getStatus(), newStatus);
         OrderStatus previous = order.getStatus();
+        Instant now = Instant.now(clock);
+        if (newStatus == OrderStatus.PLACED && order.getSlaDeadlineAt() == null) {
+            int slaMinutes = Math.max(1, orderProperties.getSla().getPromisedDeliveryMinutes());
+            order.setSlaDeadlineAt(now.plus(Duration.ofMinutes(slaMinutes)));
+        }
+        if (newStatus == OrderStatus.DELIVERED && order.getDeliveredAt() == null) {
+            order.setDeliveredAt(now);
+        }
+        boolean slaNewlyBreached = isSlaTrackedStatus(newStatus) && order.recordSlaBreachIfDue(now);
         order.setStatus(newStatus);
         Order saved = orderRepository.save(order);
+        if (saved == null) {
+            saved = order;
+        }
         recordStatusChange(saved, previous, newStatus, changedBy, note);
         if (newStatus == OrderStatus.PLACED) {
             auditLogService.log(saved.getUserId(),
@@ -403,9 +448,19 @@ public class OrderService {
                 "Order",
                 saved.getId().toString(),
                 Map.of("orderUserId", saved.getUserId(), "reason", note != null ? note : ""));
+        } else if (newStatus == OrderStatus.REFUNDED) {
+            String refundReason = note != null ? note : "Order refunded";
+            auditLogService.log(actorId,
+                "ORDER_REFUNDED",
+                "Order",
+                saved.getId().toString(),
+                Map.of("orderUserId", saved.getUserId(), "reason", refundReason));
         }
         outboxService.publish("Order", saved.getId().toString(), "OrderStatusChanged",
             Map.of("orderId", saved.getId(), "from", previous.name(), "to", newStatus.name()));
+        if (slaNewlyBreached) {
+            publishSlaBreachedEvent(saved);
+        }
         if (newStatus == OrderStatus.PLACED) {
             outboxService.publish("Order", saved.getId().toString(), "OrderPlaced", buildOrderPlacedPayload(saved));
         } else if (newStatus == OrderStatus.FAILED) {
@@ -415,6 +470,15 @@ public class OrderService {
             failedPayload.put("paymentId", saved.getPaymentId());
             failedPayload.put("reason", note != null ? note : "Fulfillment failure");
             outboxService.publish("Order", saved.getId().toString(), "OrderFailed", failedPayload);
+        } else if (newStatus == OrderStatus.REFUNDED) {
+            Map<String, Object> refundedPayload = new LinkedHashMap<>();
+            refundedPayload.put("orderId", saved.getId());
+            refundedPayload.put("userId", saved.getUserId());
+            refundedPayload.put("paymentId", saved.getPaymentId());
+            refundedPayload.put("totalCents", saved.getTotalCents());
+            refundedPayload.put("currency", saved.getCurrency());
+            refundedPayload.put("reason", note != null ? note : "Order refunded");
+            outboxService.publish("Order", saved.getId().toString(), "OrderRefunded", refundedPayload);
         } else if (newStatus == OrderStatus.DELIVERED) {
             Map<String, Object> deliveredPayload = new LinkedHashMap<>();
             deliveredPayload.put("orderId", saved.getId().toString());
@@ -422,7 +486,15 @@ public class OrderService {
             deliveredPayload.put("paymentId", saved.getPaymentId() != null ? saved.getPaymentId().toString() : null);
             deliveredPayload.put("totalCents", saved.getTotalCents());
             deliveredPayload.put("currency", saved.getCurrency());
-            deliveredPayload.put("deliveredAt", Instant.now().toString());
+            deliveredPayload.put("deliveredAt",
+                (saved.getDeliveredAt() != null ? saved.getDeliveredAt() : now).toString());
+            deliveredPayload.put("slaBreached", saved.isSlaBreached());
+            if (saved.getSlaDeadlineAt() != null) {
+                deliveredPayload.put("slaDeadlineAt", saved.getSlaDeadlineAt().toString());
+            }
+            if (saved.getSlaBreachedAt() != null) {
+                deliveredPayload.put("slaBreachedAt", saved.getSlaBreachedAt().toString());
+            }
             outboxService.publish("Order", saved.getId().toString(), "OrderDelivered", deliveredPayload);
         }
     }
@@ -635,6 +707,7 @@ public class OrderService {
             deltas.add(new FulfillmentOrderEvent.OrderItemDelta(event.productId(), deltaQty, deltaPrice));
         }
 
+        long computedGrossRemoved = 0L;
         for (FulfillmentOrderEvent.OrderItemDelta delta : deltas) {
             if (delta.productId() == null) {
                 continue;
@@ -644,27 +717,69 @@ public class OrderService {
             while (it.hasNext()) {
                 OrderItem item = it.next();
                 if (delta.productId().equals(item.getProductId())) {
+                    if (qtyDelta < 0) {
+                        int removedQty = Math.min(item.getQuantity(), -qtyDelta);
+                        computedGrossRemoved += computeItemGrossReduction(item, removedQty);
+                    }
                     int updatedQty = item.getQuantity() + qtyDelta;
                     if (updatedQty <= 0) {
+                        item.setPickedStatus("SHORT_PICKED");
                         it.remove();
                     } else {
                         item.setQuantity(updatedQty);
                         item.setLineTotalCents(Math.max(0L, (long) updatedQty * item.getUnitPriceCents()));
+                        if (qtyDelta < 0) {
+                            item.setPickedStatus("PARTIAL");
+                        }
                     }
                     break;
                 }
             }
         }
 
-        long priceDeltaCents = event.priceDeltaCents() != null
-            ? event.priceDeltaCents()
-            : (event.refundCents() != null && event.refundCents() > 0 ? -event.refundCents() : 0L);
-        long refundCents = priceDeltaCents < 0
-            ? -priceDeltaCents
-            : (event.refundCents() != null ? event.refundCents() : 0L);
-
-        long newTotal = Math.max(0L, order.getTotalCents() + priceDeltaCents);
-        order.setTotalCents(newTotal);
+        long priceDeltaCents;
+        long refundCents;
+        boolean hasExplicitPriceAdjustment = event.priceDeltaCents() != null
+            || (event.refundCents() != null && event.refundCents() > 0);
+        if (hasExplicitPriceAdjustment) {
+            long rawDelta = event.priceDeltaCents() != null
+                ? event.priceDeltaCents()
+                : -event.refundCents();
+            if (rawDelta < 0) {
+                long boundedRefund = Math.min(order.getTotalCents(), -rawDelta);
+                priceDeltaCents = -boundedRefund;
+                refundCents = boundedRefund;
+            } else {
+                priceDeltaCents = rawDelta;
+                refundCents = 0L;
+            }
+            order.setTotalCents(Math.max(0L, order.getTotalCents() + priceDeltaCents));
+            if (order.getSubtotalCents() > 0 && computedGrossRemoved > 0) {
+                OrderRefundCalculator.PartialRefundBreakdown subtotalUpdate =
+                    OrderRefundCalculator.calculateForRemovedGross(
+                        order.getSubtotalCents(), order.getDiscountCents(), order.getTotalCents() + refundCents, computedGrossRemoved);
+                order.setSubtotalCents(subtotalUpdate.updatedSubtotalCents());
+                order.setDiscountCents(subtotalUpdate.updatedDiscountCents());
+            }
+        } else if (computedGrossRemoved > 0) {
+            OrderRefundCalculator.PartialRefundBreakdown breakdown =
+                OrderRefundCalculator.calculateForRemovedGross(
+                    order.getSubtotalCents(),
+                    order.getDiscountCents(),
+                    order.getTotalCents(),
+                    computedGrossRemoved);
+            refundCents = breakdown.refundCents();
+            priceDeltaCents = -refundCents;
+            if (order.getSubtotalCents() > 0) {
+                order.setSubtotalCents(breakdown.updatedSubtotalCents());
+                order.setDiscountCents(breakdown.updatedDiscountCents());
+            }
+            order.setTotalCents(breakdown.updatedTotalCents());
+        } else {
+            priceDeltaCents = 0L;
+            refundCents = 0L;
+        }
+        long newTotal = order.getTotalCents();
         orderRepository.save(order);
 
         Map<String, Object> auditDetails = new LinkedHashMap<>();
@@ -695,16 +810,166 @@ public class OrderService {
         modifiedPayload.put("newTotalCents", newTotal);
         outboxService.publish("Order", orderId.toString(), "OrderModified", modifiedPayload);
 
-        if (priceDeltaCents < 0) {
-            Map<String, Object> refundPayload = new LinkedHashMap<>();
-            refundPayload.put("orderId", orderId.toString());
-            if (order.getPaymentId() != null) {
-                refundPayload.put("paymentId", order.getPaymentId().toString());
-            }
-            refundPayload.put("refundCents", refundCents);
-            refundPayload.put("priceDeltaCents", priceDeltaCents);
-            refundPayload.put("reason", "ORDER_MODIFIED_PARTIAL_REFUND");
-            outboxService.publish("Order", orderId.toString(), "OrderPartiallyRefunded", refundPayload);
+        if (priceDeltaCents < 0 && refundCents > 0) {
+            publishPartialRefundEvent(order, refundCents, priceDeltaCents, "ORDER_MODIFIED_PARTIAL_REFUND");
         }
+    }
+
+    @Retryable(
+        retryFor = {ObjectOptimisticLockingFailureException.class, OptimisticLockingFailureException.class},
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
+    @Transactional
+    public PartialCancellationResult cancelOrderItems(UUID orderId,
+                                                      Map<UUID, Integer> itemQuantities,
+                                                      String reason,
+                                                      String changedBy,
+                                                      UUID actorId) {
+        Objects.requireNonNull(orderId, "orderId must not be null");
+        if (itemQuantities == null || itemQuantities.isEmpty()) {
+            throw new IllegalArgumentException("At least one item quantity must be specified for cancellation");
+        }
+        Order order = lockOrder(orderId);
+        if (order.getStatus().isTerminal()) {
+            throw new IllegalOrderStateTransitionException(order.getStatus(), OrderStatus.CANCELLED);
+        }
+
+        long grossRemovedCents = 0L;
+        for (Map.Entry<UUID, Integer> entry : itemQuantities.entrySet()) {
+            UUID productId = Objects.requireNonNull(entry.getKey(), "productId must not be null");
+            Integer cancelQty = entry.getValue();
+            if (cancelQty == null || cancelQty <= 0) {
+                throw new IllegalArgumentException("Cancellation quantity must be positive for product " + productId);
+            }
+            OrderItem item = order.getItems().stream()
+                .filter(candidate -> productId.equals(candidate.getProductId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Product not found in order: " + productId));
+            if (cancelQty > item.getQuantity()) {
+                throw new IllegalArgumentException(
+                    "Cannot cancel qty " + cancelQty + " for product " + productId
+                        + " when order only has " + item.getQuantity());
+            }
+            grossRemovedCents += computeItemGrossReduction(item, cancelQty);
+            int remainingQty = item.getQuantity() - cancelQty;
+            if (remainingQty == 0) {
+                order.getItems().remove(item);
+            } else {
+                item.setQuantity(remainingQty);
+                item.setLineTotalCents((long) remainingQty * item.getUnitPriceCents());
+            }
+        }
+
+        if (order.getItems().isEmpty()) {
+            long fullRefundCents = order.getTotalCents();
+            String effectiveReason = reason != null && !reason.isBlank() ? reason : "All order items cancelled";
+            cancelOrder(orderId, effectiveReason, changedBy != null ? changedBy : "system", actorId);
+            return new PartialCancellationResult(orderId, fullRefundCents, 0L, true);
+        }
+
+        OrderRefundCalculator.PartialRefundBreakdown breakdown =
+            OrderRefundCalculator.calculateForRemovedGross(
+                order.getSubtotalCents(),
+                order.getDiscountCents(),
+                order.getTotalCents(),
+                grossRemovedCents);
+        if (order.getSubtotalCents() > 0) {
+            order.setSubtotalCents(breakdown.updatedSubtotalCents());
+            order.setDiscountCents(breakdown.updatedDiscountCents());
+        }
+        order.setTotalCents(breakdown.updatedTotalCents());
+        orderRepository.save(order);
+
+        String effectiveReason = reason != null && !reason.isBlank() ? reason : "PARTIAL_ITEM_CANCELLATION";
+        auditLogService.log(actorId != null ? actorId : order.getUserId(),
+            "ORDER_PARTIALLY_CANCELLED",
+            "Order",
+            orderId.toString(),
+            Map.of(
+                "refundCents", breakdown.refundCents(),
+                "remainingTotalCents", breakdown.updatedTotalCents(),
+                "reason", effectiveReason));
+        if (breakdown.refundCents() > 0) {
+            publishPartialRefundEvent(order, breakdown.refundCents(), -breakdown.refundCents(), effectiveReason);
+        }
+        return new PartialCancellationResult(orderId, breakdown.refundCents(), breakdown.updatedTotalCents(), false);
+    }
+
+    @Transactional
+    public int checkAndRecordSlaBreaches() {
+        Instant now = Instant.now(clock);
+        List<Order> candidates = orderRepository.findUnrecordedSlaBreaches(
+            now,
+            List.of(OrderStatus.PLACED, OrderStatus.PACKING, OrderStatus.PACKED, OrderStatus.OUT_FOR_DELIVERY),
+            PageRequest.of(0, 200));
+        int breachedCount = 0;
+        for (Order candidate : candidates) {
+            if (candidate.recordSlaBreachIfDue(now)) {
+                orderRepository.save(candidate);
+                publishSlaBreachedEvent(candidate);
+                breachedCount++;
+            }
+        }
+        return breachedCount;
+    }
+
+    public record PartialCancellationResult(
+        UUID orderId,
+        long refundCents,
+        long remainingTotalCents,
+        boolean fullOrderCancelled
+    ) {
+    }
+
+    private long computeItemGrossReduction(OrderItem item, int removedQty) {
+        if (removedQty <= 0) {
+            return 0L;
+        }
+        if (item.getUnitPriceCents() > 0) {
+            return (long) removedQty * item.getUnitPriceCents();
+        }
+        if (item.getQuantity() > 0 && item.getLineTotalCents() > 0) {
+            return (item.getLineTotalCents() * removedQty) / item.getQuantity();
+        }
+        return 0L;
+    }
+
+    private boolean isSlaTrackedStatus(OrderStatus status) {
+        return status == OrderStatus.PACKING
+            || status == OrderStatus.PACKED
+            || status == OrderStatus.OUT_FOR_DELIVERY
+            || status == OrderStatus.DELIVERED;
+    }
+
+    private void publishSlaBreachedEvent(Order order) {
+        Instant deadline = order.getSlaDeadlineAt();
+        Instant breachedAt = order.getSlaBreachedAt();
+        long breachSeconds = (deadline != null && breachedAt != null)
+            ? Math.max(0L, Duration.between(deadline, breachedAt).getSeconds())
+            : 0L;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", order.getId().toString());
+        payload.put("userId", order.getUserId().toString());
+        payload.put("status", order.getStatus().name());
+        if (deadline != null) {
+            payload.put("slaDeadlineAt", deadline.toString());
+        }
+        if (breachedAt != null) {
+            payload.put("slaBreachedAt", breachedAt.toString());
+        }
+        payload.put("breachSeconds", breachSeconds);
+        outboxService.publish("Order", order.getId().toString(), "OrderSlaBreached", payload);
+    }
+
+    private void publishPartialRefundEvent(Order order, long refundCents, long priceDeltaCents, String reason) {
+        Map<String, Object> refundPayload = new LinkedHashMap<>();
+        refundPayload.put("orderId", order.getId().toString());
+        if (order.getPaymentId() != null) {
+            refundPayload.put("paymentId", order.getPaymentId().toString());
+        }
+        refundPayload.put("refundCents", refundCents);
+        refundPayload.put("priceDeltaCents", priceDeltaCents);
+        refundPayload.put("reason", reason);
+        outboxService.publish("Order", order.getId().toString(), "OrderPartiallyRefunded", refundPayload);
     }
 }

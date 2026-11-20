@@ -9,9 +9,14 @@ public record DebitRequest(
     @NotNull @Min(1) Long amountCents,
     @NotBlank String referenceType,
     @NotBlank String referenceId,
-    UUID userId
+    UUID userId,
+    String description
 ) {
     public DebitRequest(Long amountCents, String referenceType, String referenceId) {
-        this(amountCents, referenceType, referenceId, null);
+        this(amountCents, referenceType, referenceId, null, null);
+    }
+
+    public DebitRequest(Long amountCents, String referenceType, String referenceId, UUID userId) {
+        this(amountCents, referenceType, referenceId, userId, null);
     }
 }

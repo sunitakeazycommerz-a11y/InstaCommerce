@@ -40,15 +40,18 @@ public class PaymentEventConsumer {
                 return;
             }
 
+            velocityService.incrementCounter("USER", userId, "FAILED_PAYMENTS_5M");
             velocityService.incrementCounter("USER", userId, "FAILED_PAYMENTS_1H");
 
             String deviceFingerprint = payload.path("deviceFingerprint").asText(null);
             if (deviceFingerprint != null && !deviceFingerprint.isBlank()) {
+                velocityService.incrementCounter("DEVICE", deviceFingerprint, "FAILED_PAYMENTS_5M");
                 velocityService.incrementCounter("DEVICE", deviceFingerprint, "FAILED_PAYMENTS_1H");
             }
 
             String ipAddress = payload.path("ipAddress").asText(null);
             if (ipAddress != null && !ipAddress.isBlank()) {
+                velocityService.incrementCounter("IP", ipAddress, "FAILED_PAYMENTS_5M");
                 velocityService.incrementCounter("IP", ipAddress, "FAILED_PAYMENTS_1H");
             }
 
