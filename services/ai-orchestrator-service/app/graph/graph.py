@@ -57,6 +57,8 @@ from app.graph.tools import ToolRegistry
 
 logger = logging.getLogger("ai_orchestrator.graph")
 
+_DEFAULT_SETTINGS = Settings()
+
 
 def _should_escalate(state: AgentState) -> str:
     """Route after ``check_policy``: escalate or continue processing."""
@@ -97,7 +99,7 @@ def build_graph(
     checkpointer: Optional[CheckpointSaver] = None,
 ) -> Any:
     """Construct and compile the LangGraph state machine."""
-    settings = settings or Settings()
+    settings = settings or _DEFAULT_SETTINGS
 
     def _route_after_policy(state: Dict[str, Any]) -> str:
         return _should_escalate(AgentState(**state))

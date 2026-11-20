@@ -31,8 +31,10 @@ SECRET_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bBearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE), "TOKEN"),
     (
         re.compile(
-            r"\b(?:password|passwd|secret|api[_-]?key|internal[_-]?token|"
-            r"access[_-]?token|refresh[_-]?token)\s*[:=]\s*[\"']?[^\s\"',}]{4,}[\"']?",
+            r"\b(?:password|passwd|secret|api[_-]?key|llm[_-]?api[_-]?key|"
+            r"internal[_-]?(?:service[_-]?)?token|access[_-]?token|refresh[_-]?token|"
+            r"client[_-]?secret|private[_-]?key|auth[_-]?token|session[_-]?token)"
+            r"\s*[:=]\s*[\"']?[^\s\"',}]{4,}[\"']?",
             re.IGNORECASE,
         ),
         "SECRET",
@@ -56,20 +58,46 @@ SENSITIVE_FIELD_NAMES: frozenset[str] = frozenset(
         "secret",
         "api_key",
         "apikey",
+        "apiKey",
         "llm_api_key",
+        "llmApiKey",
         "internal_service_token",
+        "internalServiceToken",
         "x-internal-token",
+        "x_internal_token",
+        "xInternalToken",
         "authorization",
         "token",
         "access_token",
+        "accessToken",
         "refresh_token",
+        "refreshToken",
+        "auth_token",
+        "authToken",
+        "session_token",
+        "sessionToken",
+        "client_secret",
+        "clientSecret",
+        "private_key",
+        "privateKey",
         "pii_vault_mapping",
+        "piiVaultMapping",
         "otp",
         "card_number",
+        "cardNumber",
         "cvv",
         "ssn",
     }
 )
+
+_SENSITIVE_FIELD_NAMES_LOWER: frozenset[str] = frozenset(
+    name.lower() for name in SENSITIVE_FIELD_NAMES
+)
+
+
+def _is_sensitive_field(field_name: str) -> bool:
+    cleaned = field_name.strip()
+    return cleaned in SENSITIVE_FIELD_NAMES or cleaned.lower() in _SENSITIVE_FIELD_NAMES_LOWER
 
 
 def scrub_pii_and_secrets(text: str, *, include_secrets: bool = True) -> str:
@@ -90,7 +118,7 @@ def scrub_structured_value(value: Any, *, include_secrets: bool = True) -> Any:
     if isinstance(value, dict):
         result: dict[Any, Any] = {}
         for k, v in value.items():
-            if isinstance(k, str) and k.strip().lower() in SENSITIVE_FIELD_NAMES:
+            if isinstance(k, str) and _is_sensitive_field(k):
                 result[k] = "[REDACTED_SECRET]"
             else:
                 result[k] = scrub_structured_value(v, include_secrets=include_secrets)

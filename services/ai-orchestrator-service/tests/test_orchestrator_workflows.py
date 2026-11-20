@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 from unittest.mock import patch
 
 import httpx
@@ -14,6 +14,7 @@ from app.api import handlers as v2_handlers
 from app.config import Settings
 from app.core.llm import LlmClient
 from app.core.logging import JsonLogFormatter, PiiRedactor, sanitize_llm_payload
+from app.core.redaction import SENSITIVE_FIELD_NAMES, scrub_structured_value
 from app.graph.graph import build_graph
 from app.graph.nodes import execute_tools
 from app.graph.state import AgentState, IntentType
@@ -21,6 +22,7 @@ from app.graph.tools import ToolRegistry
 from app.guardrails.escalation import EscalationPolicy, EscalationState
 from app.guardrails.injection import wrap_user_input
 from app.guardrails.pii import PIIVault
+from app.main import app
 from app.schemas import AgentRequest
 
 
@@ -166,13 +168,23 @@ def test_escalation_policy_triggers_on_refund_cap_dispute_and_sentiment() -> Non
 
     over_cap, reason_cap = policy.should_escalate(
         EscalationState(
-            query="Refund $25 for spoiled items",
+            query="Refund ₹25 for spoiled items",
             intent="refund",
             metadata={},
         )
     )
     assert over_cap is True
     assert reason_cap == "refund_cap_exceeded"
+
+    inr_cap, inr_reason = policy.should_escalate(
+        EscalationState(
+            query="Please process INR 20.00 refund",
+            intent="refund",
+            metadata={},
+        )
+    )
+    assert inr_cap is True
+    assert inr_reason == "refund_cap_exceeded"
 
     dispute_hit, reason_dispute = policy.should_escalate(
         EscalationState(
@@ -293,6 +305,8 @@ async def test_substitute_workflow_checks_inventory_and_ranks_in_stock_candidate
     assert [s["product_id"] for s in subs] == ["sub-best", "sub-far-price"]
     assert "Organic Almond Milk" in result.response
     assert "Recommended substitutes:" in result.response
+    assert "₹4.60" in result.response
+    assert "$" not in result.response
 
 
 @pytest.mark.asyncio
@@ -319,3 +333,85 @@ async def test_execute_tools_enforces_aggregate_total_timeout() -> None:
     assert updated.tool_results[0].success is False
     assert "Aggregate tool timeout exceeded" in (updated.tool_results[0].error or "")
     assert any("Aggregate tool timeout exceeded" in err for err in updated.errors)
+
+
+def test_redaction_scrubs_camelcase_secret_keys() -> None:
+    for key in ("accessToken", "refreshToken", "cardNumber", "llmApiKey", "internalServiceToken"):
+        assert key in SENSITIVE_FIELD_NAMES
+
+    scrubbed = scrub_structured_value(
+        {
+            "accessToken": "tok-access-123",
+            "refreshToken": "tok-refresh-456",
+            "cardNumber": "4111111111111111",
+            "llmApiKey": "sk-live-abc",
+            "internalServiceToken": "svc-secret",
+            "safeField": "organic milk",
+        }
+    )
+    assert scrubbed["accessToken"] == "[REDACTED_SECRET]"
+    assert scrubbed["refreshToken"] == "[REDACTED_SECRET]"
+    assert scrubbed["cardNumber"] == "[REDACTED_SECRET]"
+    assert scrubbed["llmApiKey"] == "[REDACTED_SECRET]"
+    assert scrubbed["internalServiceToken"] == "[REDACTED_SECRET]"
+    assert scrubbed["safeField"] == "organic milk"
+
+
+@pytest.mark.asyncio
+async def test_v1_assist_redacts_query_and_context_before_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "test-internal-secret")
+    app.middleware_stack = None
+    captured_retrievals: List[tuple[str, Dict[str, Any]]] = []
+    captured_llm: List[Dict[str, Any]] = []
+
+    class FakeRetriever:
+        async def retrieve(self, query: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+            captured_retrievals.append((query, dict(context)))
+            return [{"doc_id": "doc-1", "content": "Policy info"}]
+
+    class FakeLlm:
+        async def generate(self, task: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+            captured_llm.append(dict(payload))
+            return {"message": "Order checked safely.", "intent": "order_status"}
+
+    class PassthroughGraph:
+        async def ainvoke(self, state_dict: Dict[str, Any]) -> Dict[str, Any]:
+            return AgentState(**state_dict).model_dump()
+
+    v2_handlers.set_retriever(cast(Any, FakeRetriever()))
+    v2_handlers.set_llm_client(cast(Any, FakeLlm()))
+    v2_handlers.set_compiled_graph(PassthroughGraph())
+    try:
+        transport = httpx.ASGITransport(app=cast(Any, app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/agent/assist",
+                json={
+                    "query": "please check my order for alice@example.com or 555-123-4567 and tell me when the groceries arrive at my home",
+                    "context": {
+                        "store_id": "store-1",
+                        "coupon_code": "alice@example.com",
+                    },
+                },
+                headers={
+                    "X-Internal-Service": "test-client",
+                    "X-Internal-Token": "test-internal-secret",
+                },
+            )
+    finally:
+        v2_handlers.set_retriever(None)
+        v2_handlers.set_llm_client(None)
+        v2_handlers.set_compiled_graph(None)
+        app.middleware_stack = None
+
+    assert resp.status_code == 200
+    assert len(captured_retrievals) == 1
+    ret_query, ret_payload = captured_retrievals[0]
+    assert "alice@example.com" not in ret_query
+    assert "555-123-4567" not in ret_query
+    assert "alice@example.com" not in json.dumps(ret_payload)
+    assert "555-123-4567" not in json.dumps(ret_payload)
+    assert len(captured_llm) == 1
+    assert "alice@example.com" not in json.dumps(captured_llm[0])

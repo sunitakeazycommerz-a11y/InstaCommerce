@@ -37,9 +37,11 @@ _DISPUTE_RE: re.Pattern[str] = re.compile(
     r"unauthorised(?:\s+charge)?|consumer\s+court|ombudsman|lawsuit|legal\s+action)\b",
     re.IGNORECASE,
 )
-_QUERY_DOLLAR_REFUND_RE: re.Pattern[str] = re.compile(
-    r"(?:refund|reimburse|credit)\s*(?:of|for|up\s+to)?\s*\$\s*(\d+(?:\.\d{1,2})?)|"
-    r"\$\s*(\d+(?:\.\d{1,2})?)\s*(?:refund|reimbursement)",
+_CURRENCY_SYMBOL: str = os.environ.get("PLATFORM_CURRENCY_SYMBOL", "₹") or "₹"
+_CURRENCY_TOKEN_PATTERN: str = rf"(?:{re.escape(_CURRENCY_SYMBOL)}|₹|INR\s*|Rs\.?\s*)"
+_QUERY_REFUND_AMOUNT_RE: re.Pattern[str] = re.compile(
+    rf"(?:refund|reimburse|credit)\s*(?:of|for|up\s+to)?\s*{_CURRENCY_TOKEN_PATTERN}\s*(\d+(?:\.\d{{1,2}})?)|"
+    rf"{_CURRENCY_TOKEN_PATTERN}\s*(\d+(?:\.\d{{1,2}})?)\s*(?:refund|reimbursement)",
     re.IGNORECASE,
 )
 _NEGATIVE_SENTIMENT_WEIGHTS: Dict[str, float] = {
@@ -120,10 +122,10 @@ def _extract_refund_cents(state: EscalationState) -> Optional[int]:
                 if isinstance(amount, (int, float)) and amount > 0:
                     candidates.append(int(amount))
     if state.intent in ("refund", "support") and state.query:
-        for match in _QUERY_DOLLAR_REFUND_RE.finditer(state.query):
-            raw_dollars = match.group(1) or match.group(2)
-            if raw_dollars:
-                candidates.append(int(round(float(raw_dollars) * 100)))
+        for match in _QUERY_REFUND_AMOUNT_RE.finditer(state.query):
+            raw_amount = match.group(1) or match.group(2)
+            if raw_amount:
+                candidates.append(int(round(float(raw_amount) * 100)))
     return max(candidates) if candidates else None
 
 

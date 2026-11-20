@@ -7,19 +7,23 @@ from typing import Any, Dict
 
 import pytest
 
-from app.core.config import ModelConfig
+from app.core.config import DEFAULT_SLA_BUDGETS_MS, ModelConfig, ModelRegistry, Settings
 from app.core.guardrails import (
+    DEFAULT_SLA_BUDGETS_MS as GUARDRAILS_SLA_BUDGETS_MS,
     OOD_FEATURE_TOTAL,
     SLA_BREACH_TOTAL,
     SLABudgetExceededError,
     assess_feature_health,
     enforce_async_sla,
     enforce_sync_sla,
+    get_sla_executor,
     is_cold_start_context,
     score_cold_start_fallback,
+    shutdown_sla_executor,
 )
-from app.core.inference import perform_inference
-from app.core.shadow import ShadowRunner
+from app.core.inference import execute_inference, perform_inference
+from app.core.shadow import ShadowRunner, default_shadow_runner
+from app.schemas import EtaResponse, FraudResponse, GuardedPredictionResponse, RankingResponse
 
 
 def test_online_feature_drift_ood_zscore_and_missing_ratio() -> None:
@@ -158,3 +162,55 @@ async def test_async_sla_timeout_and_shadow_comparison_logging(caplog: pytest.Lo
     assert comp["agreed"] is False
     assert comp["delta"] == pytest.approx(0.16, abs=1e-4)
     assert any(rec.message == "shadow.comparison" for rec in caplog.records)
+
+
+def test_shared_sla_executor_and_nonblocking_sync_shadow(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert GUARDRAILS_SLA_BUDGETS_MS is DEFAULT_SLA_BUDGETS_MS
+    assert issubclass(EtaResponse, GuardedPredictionResponse)
+    assert issubclass(RankingResponse, GuardedPredictionResponse)
+    assert issubclass(FraudResponse, GuardedPredictionResponse)
+
+    exec1 = get_sla_executor()
+    enforce_sync_sla("eta", lambda: {"eta_minutes": 5.0}, strict=True)
+    exec2 = get_sla_executor()
+    enforce_sync_sla("eta", lambda: {"eta_minutes": 6.0}, strict=True)
+    assert exec1 is exec2
+    shutdown_sla_executor(wait=True)
+
+    registry = ModelRegistry.from_sources(
+        {
+            "eta": {
+                "default_version": "v1",
+                "versions": {
+                    "v1": {"bias": 4.0, "weights": {"distance_km": 2.0}},
+                    "v2-shadow": {"bias": 5.0, "weights": {"distance_km": 2.0}},
+                },
+            }
+        }
+    )
+    monkeypatch.setattr(
+        "app.core.inference.settings",
+        Settings(shadow_models={"eta": "v2-shadow"}, shadow_sample_rate=1.0),
+    )
+
+    def slow_shadow(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+        time.sleep(0.06)
+        return {"eta_minutes": 11.0}
+
+    monkeypatch.setattr("app.core.inference.perform_inference", lambda name, feat, cfg: (
+        slow_shadow() if cfg.version == "v2-shadow" else {"eta_minutes": 10.0}
+    ))
+
+    start = time.perf_counter()
+    output, cache_hit = execute_inference(
+        "eta",
+        {"distance_km": 3.0},
+        registry.get("eta", "v1"),
+        cache=None,
+        registry=registry,
+    )
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    assert cache_hit is False
+    assert output["eta_minutes"] == 10.0
+    assert elapsed_ms < 25.0
+    default_shadow_runner.wait_pending(timeout=1.0)

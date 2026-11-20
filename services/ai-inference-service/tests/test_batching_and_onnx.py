@@ -135,19 +135,26 @@ async def test_shadow_runner_async_create_task_and_metrics():
 
 
 def test_shadow_runner_sync_fallback_and_dropped_async_error_count():
-    """Verify sync fallback records agreement/divergence and increments error_count if async fn is dropped."""
+    """Verify sync shadow dispatch offloads to background executor without blocking live path."""
     runner = ShadowRunner(tolerance=0.1)
 
-    def sync_agree() -> dict[str, float]:
+    def slow_sync_agree() -> dict[str, float]:
+        time.sleep(0.05)
         return {"ranking_score": 0.82}
 
     async def async_dropped() -> dict[str, float]:
         return {"ranking_score": 0.82}
 
-    assert runner.dispatch("ranking", "v2", sync_agree, {"ranking_score": 0.80}) is None
-    assert runner.agreement_count == 1
-    assert runner.error_count == 0
+    try:
+        start = time.perf_counter()
+        assert runner.dispatch("ranking", "v2", slow_sync_agree, {"ranking_score": 0.80}) is None
+        assert (time.perf_counter() - start) < 0.025
+        runner.wait_pending(timeout=1.0)
+        assert runner.agreement_count == 1
+        assert runner.error_count == 0
 
-    assert runner.dispatch("ranking", "v2", async_dropped, {"ranking_score": 0.80}) is None
-    assert runner.error_count == 1
-    assert runner.stats["errors"] == 1
+        assert runner.dispatch("ranking", "v2", async_dropped, {"ranking_score": 0.80}) is None
+        assert runner.error_count == 1
+        assert runner.stats["errors"] == 1
+    finally:
+        runner.shutdown(wait=True)

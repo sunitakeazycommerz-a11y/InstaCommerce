@@ -29,6 +29,11 @@ _MAX_REFUND_AMOUNT_CENTS: int = int(
 _MAX_DISCOUNT_PERCENT: int = int(
     os.environ.get("OUTPUT_MAX_DISCOUNT_PERCENT", "30")
 )
+_CURRENCY_SYMBOL: str = os.environ.get("PLATFORM_CURRENCY_SYMBOL", "₹") or "₹"
+_TEXTUAL_REFUND_RE: re.Pattern[str] = re.compile(
+    rf"refund(?:ed|ing)?\s+(?:of\s+)?(?:{re.escape(_CURRENCY_SYMBOL)}|₹|INR\s*|Rs\.?\s*)?(\d+(?:\.\d{{2}})?)",
+    re.IGNORECASE,
+)
 
 
 class ValidationStatus(str, Enum):
@@ -192,7 +197,6 @@ class OutputPolicy:
         raw_order = output.get("order_status")
         order_ctx: Dict[str, Any] = raw_order if isinstance(raw_order, dict) else {}
 
-        # Refund cap (Hard-coded max $15.00 / 1500 cents or 100% of order total, whichever is lower) (#615)
         if intent in ("refund", "support"):
             amount = output.get("amount_cents") or policy_ctx.get("amount_cents")
             order_total = (
@@ -201,30 +205,28 @@ class OutputPolicy:
                 or order_ctx.get("total_cents")
                 or pricing_ctx.get("total_cents")
             )
-            max_allowed = self.MAX_REFUND_AMOUNT_CENTS  # default 1500 cents ($15.00)
+            max_allowed = self.MAX_REFUND_AMOUNT_CENTS
             if isinstance(order_total, (int, float)) and order_total > 0:
                 max_allowed = min(max_allowed, int(order_total))
 
             if isinstance(amount, (int, float)) and amount > max_allowed:
+                cap_display = f"{_CURRENCY_SYMBOL}{self.MAX_REFUND_AMOUNT_CENTS / 100.0:.2f}"
                 violations.append(
                     ValidationViolation(
                         rule="refund_limit_exceeded",
                         severity="error",
                         message=(
                             f"Refund amount {amount} cents exceeds max "
-                            f"allowed {max_allowed} cents ($15.00 or order total). "
+                            f"allowed {max_allowed} cents ({cap_display} or order total). "
                             "Two-person supervisor approval required."
                         ),
                         field="amount_cents",
                     )
                 )
 
-        # Check for textual refund promises exceeding the cap (#615)
         text = self._extract_text(output)
         if text:
-            refund_matches = re.findall(
-                r"refund(?:ed|ing)?\s+(?:of\s+)?\$?(\d+(?:\.\d{2})?)", text, re.IGNORECASE
-            )
+            refund_matches = _TEXTUAL_REFUND_RE.findall(text)
             for match in refund_matches:
                 try:
                     refund_val = float(match)
@@ -234,8 +236,8 @@ class OutputPolicy:
                                 rule="refund_limit_exceeded",
                                 severity="error",
                                 message=(
-                                    f"Autonomous refund promise of ${refund_val:.2f} exceeds hard-coded cap "
-                                    f"of ${self.MAX_REFUND_AMOUNT_CENTS / 100.0:.2f}. Two-person supervisor approval required."
+                                    f"Autonomous refund promise of {_CURRENCY_SYMBOL}{refund_val:.2f} exceeds hard-coded cap "
+                                    f"of {_CURRENCY_SYMBOL}{self.MAX_REFUND_AMOUNT_CENTS / 100.0:.2f}. Two-person supervisor approval required."
                                 ),
                                 field="message",
                             )

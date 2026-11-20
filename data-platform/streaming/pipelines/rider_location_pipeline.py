@@ -19,7 +19,7 @@ from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, 
 import json
 import logging
 
-from pipelines.validation import coerce_float, coerce_optional_float, require_non_empty_str
+from pipelines.validation import coerce_float, coerce_optional_float, parse_finite_number, require_non_empty_str
 from pipelines.common import (
     first_present as _first_present,
     parse_event_ts as _parse_event_ts,
@@ -140,8 +140,7 @@ class SpatialPreAggregateFn(beam.CombineFn):
             acc["active_riders"].add(rider_id)
         else:
             acc["idle_riders"].add(rider_id)
-        raw_speed = element.get("speed_kmh", 0.0)
-        acc["total_speed_kmh"] += float(raw_speed) if isinstance(raw_speed, (int, float)) and not isinstance(raw_speed, bool) else 0.0
+        acc["total_speed_kmh"] += parse_finite_number(element.get("speed_kmh", 0.0))
         acc["ping_count"] += 1
         return acc
 

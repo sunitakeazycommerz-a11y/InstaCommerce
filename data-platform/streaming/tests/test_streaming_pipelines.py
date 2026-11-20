@@ -205,6 +205,7 @@ from pipelines.order_payment_join_pipeline import (  # noqa: E402
     ParsePaymentFn,
     StatefulOrderPaymentJoinFn,
 )
+from pipelines.validation import is_finite_number, parse_finite_number
 
 
 class _InMemoryState:
@@ -662,3 +663,34 @@ def test_streaming_parsers_enforce_null_safety_and_schema_validation():
     out_rider = list(rider_parser.process(("k", bad_lat)))
     assert len(out_rider) == 1 and out_rider[0].tag == RiderLocationParser.DEAD_LETTER
     assert compute_spatial_cell("bad", 77.6) == "UNKNOWN_CELL"
+
+
+def test_streaming_aggregators_reject_bool_and_non_finite_numbers():
+    assert is_finite_number(10) is True
+    assert is_finite_number(True) is False
+    assert is_finite_number(float("nan")) is False
+    assert is_finite_number(float("inf")) is False
+    assert parse_finite_number(True, default=5.0) == 5.0
+    assert parse_finite_number(float("nan"), default=0.0) == 0.0
+
+    cart_agg = CartSessionAggregator()
+    cart_acc = cart_agg.create_accumulator()
+    cart_acc = cart_agg.add_input(
+        cart_acc,
+        {"event_type": "ITEM_ADDED", "cart_value_cents": True, "item_count": float("nan")},
+    )
+    assert cart_acc["max_cart_value_cents"] == 0
+    assert cart_acc["total_items"] == 0
+
+    inv_agg = InventoryVelocityAggregator()
+    inv_acc = inv_agg.create_accumulator()
+    inv_acc = inv_agg.add_input(inv_acc, {"quantity_change": True})
+    inv_acc = inv_agg.add_input(inv_acc, {"quantity_change": float("inf")})
+    assert inv_acc["units_sold"] == 0
+    assert inv_acc["units_restocked"] == 0
+
+    rider_agg = SpatialPreAggregateFn()
+    r_acc = rider_agg.create_accumulator()
+    r_acc = rider_agg.add_input(r_acc, {"rider_id": "r1", "status": "IDLE", "speed_kmh": True})
+    r_acc = rider_agg.add_input(r_acc, {"rider_id": "r2", "status": "IDLE", "speed_kmh": float("nan")})
+    assert r_acc["total_speed_kmh"] == 0.0

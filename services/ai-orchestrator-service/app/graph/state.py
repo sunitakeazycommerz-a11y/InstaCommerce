@@ -113,6 +113,7 @@ class AgentState(BaseModel):
     response_citations: List[str] = Field(default_factory=list)
     needs_escalation: bool = False
     escalation_reason: Optional[str] = None
+    escalation_category: Optional[str] = None
 
     # -- Conversation --------------------------------------------------------
     conversation_history: List[Dict[str, str]] = Field(default_factory=list)

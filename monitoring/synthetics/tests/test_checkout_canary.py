@@ -51,6 +51,7 @@ def test_synthetic_canary_success_and_contract_payloads():
         payment_json = payment_call.kwargs["json"]
         for key in ("amountCents", "currency", "orderId", "paymentMethod", "idempotencyKey"):
             assert key in payment_json
+        assert payment_json["currency"] == "INR"
 
 
 def test_synthetic_canary_failure_increments_consecutive_counter():
@@ -72,28 +73,56 @@ def test_synthetic_canary_failure_increments_consecutive_counter():
         assert CANARY_CONSECUTIVE_FAILURES.labels(journey="checkout")._value.get() == 2
 
 
-def test_synthetic_canary_live_mode_fails_on_404_while_mock_mode_passes(monkeypatch):
+def test_synthetic_canary_default_fails_on_4xx_and_supports_mock_404_compat(monkeypatch):
     base_url = "http://mock-api.instacommerce.dev"
-    mock_resp_404 = MagicMock(status_code=404)
+    monkeypatch.delenv("CANARY_ALLOW_MOCK", raising=False)
+    monkeypatch.delenv("CANARY_CURRENCY", raising=False)
 
-    monkeypatch.setenv("CANARY_ALLOW_MOCK", "false")
-    live_canary = SyntheticCheckoutCanary(base_url=base_url)
-    assert live_canary.allow_mock is False
+    default_canary = SyntheticCheckoutCanary(base_url=base_url)
+    assert default_canary.allow_mock is False
+    assert default_canary.currency == "INR"
 
-    with patch("requests.get", return_value=mock_resp_404):
-        assert live_canary.run_checkout_journey() is False
-        assert live_canary.consecutive_failures == 1
+    for status_code in (401, 403, 404, 422, 500):
+        with patch("requests.get", return_value=MagicMock(status_code=status_code)):
+            assert default_canary.run_checkout_journey() is False
 
     monkeypatch.setenv("CANARY_ALLOW_MOCK", "true")
     mock_canary = SyntheticCheckoutCanary(base_url=base_url)
     assert mock_canary.allow_mock is True
 
+    mock_resp_404 = MagicMock(status_code=404)
     with (
         patch("requests.get", return_value=mock_resp_404),
         patch("requests.post", return_value=mock_resp_404),
     ):
         assert mock_canary.run_checkout_journey() is True
         assert mock_canary.consecutive_failures == 0
+
+    for status_code in (401, 403, 422, 500):
+        with patch("requests.get", return_value=MagicMock(status_code=status_code)):
+            assert mock_canary.run_checkout_journey() is False
+
+
+def test_synthetic_canary_configurable_currency(monkeypatch):
+    base_url = "http://mock-api.instacommerce.dev"
+    monkeypatch.setenv("CANARY_CURRENCY", "aed")
+    canary = SyntheticCheckoutCanary(base_url=base_url)
+    assert canary.currency == "AED"
+
+    search_resp = MagicMock(status_code=200)
+    search_resp.json.return_value = {"results": [{"id": "00000000-0000-0000-0000-000000000002"}]}
+    cart_resp = MagicMock(status_code=201)
+    cart_resp.json.return_value = {"productId": "00000000-0000-0000-0000-000000000002"}
+    reserve_resp = MagicMock(status_code=200)
+    reserve_resp.json.return_value = {"reserved": True}
+    pay_resp = MagicMock(status_code=200)
+    pay_resp.json.return_value = {"authorized": True}
+    with (
+        patch("requests.get", return_value=search_resp),
+        patch("requests.post", side_effect=[cart_resp, reserve_resp, pay_resp]) as mock_post,
+    ):
+        assert canary.run_checkout_journey() is True
+        assert mock_post.call_args_list[2].kwargs["json"]["currency"] == "AED"
 
 
 def test_synthetic_canary_rejects_broken_json_contracts_and_step_sla_breach():

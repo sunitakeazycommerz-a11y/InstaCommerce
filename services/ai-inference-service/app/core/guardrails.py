@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 import logging
 import math
+import os
+import threading
 import time
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from prometheus_client import Counter, Gauge, Histogram
+
+from app.core.config import DEFAULT_SLA_BUDGETS_MS
 
 logger = logging.getLogger("ai_inference.guardrails")
 
@@ -19,10 +24,32 @@ COLD_START_FALLBACK_TOTAL = Counter("ai_inference_cold_start_fallback_total", "C
 SLA_BREACH_TOTAL = Counter("ai_inference_sla_breaches_total", "Per-model SLA timeout breaches", ["model", "action"])
 MODEL_LATENCY_MS = Histogram("ai_inference_model_duration_ms", "Per-model inference latency in ms", ["model"])
 
-DEFAULT_SLA_BUDGETS_MS: Dict[str, float] = {
-    "eta": 10.0, "fraud": 15.0, "ranking": 20.0, "personalization": 25.0,
-    "clv": 30.0, "demand": 50.0, "pricing": 20.0,
-}
+_SLA_EXECUTOR_LOCK = threading.Lock()
+_SLA_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_SLA_MAX_WORKERS = max(4, min(32, (os.cpu_count() or 2) * 2))
+
+
+def get_sla_executor() -> ThreadPoolExecutor:
+    global _SLA_EXECUTOR
+    with _SLA_EXECUTOR_LOCK:
+        if _SLA_EXECUTOR is None:
+            _SLA_EXECUTOR = ThreadPoolExecutor(
+                max_workers=_SLA_MAX_WORKERS,
+                thread_name_prefix="ai-inference-sla",
+            )
+        return _SLA_EXECUTOR
+
+
+def shutdown_sla_executor(wait: bool = False) -> None:
+    global _SLA_EXECUTOR
+    with _SLA_EXECUTOR_LOCK:
+        executor = _SLA_EXECUTOR
+        _SLA_EXECUTOR = None
+    if executor is not None:
+        executor.shutdown(wait=wait, cancel_futures=True)
+
+
+atexit.register(shutdown_sla_executor)
 
 
 class SLABudgetExceededError(TimeoutError):
@@ -313,6 +340,18 @@ def _handle_sla_timeout(
     return fallback, True, elapsed_ms
 
 
+def observe_sla_latency(model_name: str, elapsed_ms: float, budget_ms: float) -> bool:
+    MODEL_LATENCY_MS.labels(model=model_name).observe(elapsed_ms)
+    if elapsed_ms > budget_ms:
+        SLA_BREACH_TOTAL.labels(model=model_name, action="observed_breach").inc()
+        logger.warning(
+            "sla.observed_breach",
+            extra={"model": model_name, "budget_ms": budget_ms, "elapsed_ms": round(elapsed_ms, 2)},
+        )
+        return True
+    return False
+
+
 def enforce_sync_sla(
     model_name: str,
     fn: Callable[[], Dict[str, Any]],
@@ -324,32 +363,22 @@ def enforce_sync_sla(
 ) -> Tuple[Dict[str, Any], bool, float]:
     budget = _sla_budget_for_model(model_name, budget_ms)
     start = time.perf_counter()
-    breached = False
 
     if strict:
-        executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(fn)
+        future = get_sla_executor().submit(fn)
         try:
             result = future.result(timeout=budget / 1000.0)
         except FuturesTimeoutError as exc:
+            future.cancel()
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             return _handle_sla_timeout(
                 model_name, model_version, budget, elapsed_ms, fallback_on_timeout, exc
             )
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
     else:
         result = fn()
 
     elapsed_ms = (time.perf_counter() - start) * 1000.0
-    MODEL_LATENCY_MS.labels(model=model_name).observe(elapsed_ms)
-    if elapsed_ms > budget:
-        breached = True
-        SLA_BREACH_TOTAL.labels(model=model_name, action="observed_breach").inc()
-        logger.warning(
-            "sla.observed_breach",
-            extra={"model": model_name, "budget_ms": budget, "elapsed_ms": round(elapsed_ms, 2)},
-        )
+    breached = observe_sla_latency(model_name, elapsed_ms, budget)
     return result, breached, elapsed_ms
 
 

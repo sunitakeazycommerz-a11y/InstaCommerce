@@ -1,5 +1,4 @@
 """Unit tests for Airflow DAGs, Kafka sensors, SQL validation, and Slack alerts."""
-import os
 import sys
 import types
 from dataclasses import dataclass
@@ -7,6 +6,12 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+
+from dags import data_quality, dbt_marts, dbt_staging, ml_training, monitoring_alerts
+from dags.historical_backfill import _prepare_backfill_params
+import plugins.kafka_lag_sensor as kafka_lag_sensor_mod
+from plugins.kafka_lag_sensor import KafkaLagSensor
+from plugins.slack_alerts import build_block_kit_payload
 
 
 @dataclass(frozen=True)
@@ -20,158 +25,6 @@ def _stub_module(name: str, **attrs: Any) -> Any:
     for attr_name, attr_value in attrs.items():
         setattr(module, attr_name, attr_value)
     return module
-
-
-class _MockOperator:
-    def __init__(
-        self,
-        task_id: str = "",
-        trigger_rule: str = "all_success",
-        python_callable: Any = None,
-        op_kwargs: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        self.task_id = task_id
-        self.trigger_rule = trigger_rule
-        self.python_callable = python_callable
-        self.op_kwargs = op_kwargs or {}
-        self.kwargs = kwargs
-        self.log = MagicMock()
-        self.upstream_task_ids: set[str] = set()
-        self.downstream_task_ids: set[str] = set()
-        if _MockDAG._current is not None and task_id:
-            _MockDAG._current.task_dict[task_id] = self
-
-    def _link_downstream(self, other: Any) -> None:
-        targets = other if isinstance(other, (list, tuple)) else [other]
-        for target in targets:
-            if isinstance(target, _MockOperator):
-                self.downstream_task_ids.add(target.task_id)
-                target.upstream_task_ids.add(self.task_id)
-
-    def __rshift__(self, other: Any) -> Any:
-        self._link_downstream(other)
-        return other
-
-    def __rrshift__(self, other: Any) -> "_MockOperator":
-        sources = other if isinstance(other, (list, tuple)) else [other]
-        for source in sources:
-            if isinstance(source, _MockOperator):
-                source._link_downstream(self)
-        return self
-
-
-class _MockDAG:
-    _current: "_MockDAG | None" = None
-
-    def __init__(self, dag_id: str = "", **kwargs: Any) -> None:
-        self.dag_id = dag_id
-        self.kwargs = kwargs
-        self.task_dict: dict[str, _MockOperator] = {}
-        self._previous: _MockDAG | None = None
-
-    def __enter__(self) -> "_MockDAG":
-        self._previous = _MockDAG._current
-        _MockDAG._current = self
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _MockDAG._current = self._previous
-
-
-class _MockTaskGroup:
-    def __init__(self, group_id: str = "", **kwargs: Any) -> None:
-        self.group_id = group_id
-        self.kwargs = kwargs
-
-    def __enter__(self) -> "_MockTaskGroup":
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        return None
-
-
-if "airflow" not in sys.modules:
-    mock_bash = _stub_module("airflow.operators.bash", BashOperator=_MockOperator)
-    mock_python = _stub_module(
-        "airflow.operators.python",
-        PythonOperator=_MockOperator,
-        BranchPythonOperator=_MockOperator,
-    )
-    mock_operators = _stub_module(
-        "airflow.operators",
-        bash=mock_bash,
-        python=mock_python,
-    )
-    mock_sensors_base = _stub_module(
-        "airflow.sensors.base",
-        BaseSensorOperator=_MockOperator,
-    )
-    mock_external_task = _stub_module(
-        "airflow.sensors.external_task",
-        ExternalTaskSensor=_MockOperator,
-    )
-    mock_sensors = _stub_module(
-        "airflow.sensors",
-        base=mock_sensors_base,
-        external_task=mock_external_task,
-    )
-    mock_hooks_base = _stub_module("airflow.hooks.base", BaseHook=MagicMock())
-    mock_hooks = _stub_module("airflow.hooks", base=mock_hooks_base)
-    mock_models = _stub_module(
-        "airflow.models",
-        DagRun=MagicMock(),
-        Variable=MagicMock(get=MagicMock(return_value=None)),
-    )
-    mock_slack_webhook = _stub_module(
-        "airflow.providers.slack.hooks.slack_webhook",
-        SlackWebhookHook=MagicMock(),
-    )
-    mock_slack_hooks = _stub_module(
-        "airflow.providers.slack.hooks",
-        slack_webhook=mock_slack_webhook,
-    )
-    mock_slack = _stub_module("airflow.providers.slack", hooks=mock_slack_hooks)
-    mock_providers = _stub_module("airflow.providers", slack=mock_slack)
-    mock_task_group = _stub_module("airflow.utils.task_group", TaskGroup=_MockTaskGroup)
-    mock_utils = _stub_module("airflow.utils", task_group=mock_task_group)
-    mock_airflow = _stub_module(
-        "airflow",
-        DAG=_MockDAG,
-        operators=mock_operators,
-        sensors=mock_sensors,
-        hooks=mock_hooks,
-        models=mock_models,
-        providers=mock_providers,
-        utils=mock_utils,
-    )
-
-    sys.modules["airflow"] = mock_airflow
-    sys.modules["airflow.operators"] = mock_operators
-    sys.modules["airflow.operators.bash"] = mock_bash
-    sys.modules["airflow.operators.python"] = mock_python
-    sys.modules["airflow.sensors"] = mock_sensors
-    sys.modules["airflow.sensors.base"] = mock_sensors_base
-    sys.modules["airflow.sensors.external_task"] = mock_external_task
-    sys.modules["airflow.hooks"] = mock_hooks
-    sys.modules["airflow.hooks.base"] = mock_hooks_base
-    sys.modules["airflow.models"] = mock_models
-    sys.modules["airflow.providers"] = mock_providers
-    sys.modules["airflow.providers.slack"] = mock_slack
-    sys.modules["airflow.providers.slack.hooks"] = mock_slack_hooks
-    sys.modules["airflow.providers.slack.hooks.slack_webhook"] = mock_slack_webhook
-    sys.modules["airflow.utils"] = mock_utils
-    sys.modules["airflow.utils.task_group"] = mock_task_group
-
-airflow_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if airflow_dir not in sys.path:
-    sys.path.insert(0, airflow_dir)
-
-import plugins.kafka_lag_sensor as kafka_lag_sensor_mod  # noqa: E402
-from plugins.kafka_lag_sensor import KafkaLagSensor  # noqa: E402
-from plugins.slack_alerts import build_block_kit_payload  # noqa: E402
-from dags import data_quality, dbt_marts, dbt_staging, ml_training, monitoring_alerts  # noqa: E402
-from dags.historical_backfill import _prepare_backfill_params  # noqa: E402
 
 
 def _install_mock_admin_client(monkeypatch: pytest.MonkeyPatch, admin_client: Any) -> None:
@@ -483,3 +336,28 @@ def test_ml_training_promotion_gate_evaluates_full_gate_suite():
     ti_missing_fpr = MagicMock()
     ti_missing_fpr.xcom_pull.return_value = {"f1_score": 0.94}
     assert gate_fn(model_name="fraud_detection", config=config, ti=ti_missing_fpr) == "fraud_detection_group.skip_promote_fraud_detection"
+
+
+def test_ml_training_fallback_gates_reject_bool_nan_and_resolve_aliases(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(ml_training, "_shared_evaluate_gates", None)
+
+    assert ml_training._evaluate_model_gates(
+        {"ndcg@10": float("nan")},
+        {"min_ndcg@10": 0.75},
+    ) is False
+    assert ml_training._evaluate_model_gates(
+        {"rmse": float("nan"), "mape": 0.02, "accuracy_pct": 95.0},
+        {"max_rmse": 0.15, "max_mape": 0.08, "min_accuracy_pct": 92.0},
+    ) is False
+    assert ml_training._evaluate_model_gates(
+        {"ndcg@10": True},
+        {"min_ndcg@10": 0.75},
+    ) is False
+    assert ml_training._evaluate_model_gates(
+        {"mae_min": 2.1, "within_2min_pct": 0.9},
+        {"max_mae_minutes": 3.0, "min_within_2min_pct": 0.85},
+    ) is True
+    assert ml_training._evaluate_model_gates(
+        {"ndcg_at_10": 0.82},
+        {"min_ndcg@10": 0.75},
+    ) is True

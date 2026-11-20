@@ -13,40 +13,24 @@ import re
 import threading
 from typing import Any, Dict, List, Tuple
 
-from app.core.redaction import OTP_PREFIX_PATTERN, OTP_SUFFIX_PATTERN
+from app.core.redaction import (
+    CARD_PATTERN,
+    EMAIL_PATTERN,
+    OTP_PREFIX_PATTERN,
+    OTP_SUFFIX_PATTERN,
+    PHONE_PATTERN,
+    SSN_PATTERN,
+)
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# PII detection patterns
-# ---------------------------------------------------------------------------
 _PII_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
-    (re.compile(r"[\w\.-]+@[\w\.-]+\.\w{2,}"), "EMAIL"),
-    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "SSN"),
-    (re.compile(r"\b(?:\d[ \-]*?){13,16}\b"), "CARD"),
+    (EMAIL_PATTERN, "EMAIL"),
+    (SSN_PATTERN, "SSN"),
+    (CARD_PATTERN, "CARD"),
     (OTP_PREFIX_PATTERN, "OTP"),
     (OTP_SUFFIX_PATTERN, "OTP"),
-    # Indian mobile numbers (+91-9876543210, 09876543210, 9876543210) and international numbers (#601)
-    (
-        re.compile(
-            r"(?:\+91[\-\s]?)?[0]?(?:91)?[6789]\d{9}\b"
-        ),
-        "PHONE",
-    ),
-    # US & international phone formats
-    (
-        re.compile(
-            r"\b(?:\+\d{1,3}[\s\-]?)?(?:\(?\d{3}\)?[\s\-]?)\d{3}[\s\-]?\d{4}\b"
-        ),
-        "PHONE",
-    ),
-    (
-        re.compile(
-            r"\b\+\d{1,3}[\s\-]\d{3,4}[\s\-]\d{4,6}\b"
-        ),
-        "PHONE",
-    ),
-    # Localized Indian and international street addresses (Plot, Flat, Sector, Nagar, Marg, Layout, etc.) (#601)
+    (PHONE_PATTERN, "PHONE"),
     (
         re.compile(
             r"\b(?:Flat|Plot|House|Door|Shop|Office|Block|Sector|Phase|Apartment|Apt|Building|Tower|Suite|Unit)\s*#?[\w\-\/]+[\w\s,\.\-]{1,60}(?:Street|St|Avenue|Ave|Road|Rd|Marg|Nagar|Colony|Enclave|Layout|Cross|Main|Lane|Ln|Drive|Dr|Court|Ct|Circle|Boulevard|Blvd|Society|Apartments|Heights|Residency|Park|Extension|Extn)\b",
@@ -68,7 +52,6 @@ _PII_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
         ),
         "ADDRESS",
     ),
-    # Postal / PIN codes (Indian 6-digit PIN and US ZIP code)
     (
         re.compile(
             r"\b(?:PIN(?:code)?|Postal\s+Code|Zip(?:\s+Code)?)?\s*:?\s*([1-9][0-9]{2}\s?[0-9]{3}|\d{5}(?:-\d{4})?)\b",

@@ -1,9 +1,20 @@
-# pyright: reportMissingImports=false
 """Shared schema validation and null-safety coercion for Beam streaming pipelines."""
 from __future__ import annotations
 
 import math
 from typing import Any, List, Optional
+
+
+def is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def parse_finite_number(value: Any, default: float = 0.0) -> float:
+    return float(value) if is_finite_number(value) else default
 
 
 def require_non_empty_str(value: Any, field_name: str) -> str:

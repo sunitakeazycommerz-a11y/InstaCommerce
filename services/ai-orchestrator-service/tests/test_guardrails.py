@@ -71,15 +71,15 @@ def test_pii_vault_indian_phone_and_localized_address():
 def test_output_policy_refund_cap():
     policy = OutputPolicy()
     
-    # Allowed refund within $15 cap (e.g. $12 = 1200 cents) (#615)
+    # Allowed refund within 1500-paise cap (₹12.00 = 1200) (#615)
     valid_result = policy.validate(
         intent="refund",
         output={"amount_cents": 1200, "reason": "Damaged goods", "message": "Refund processed."},
     )
     assert valid_result.is_valid
     assert not valid_result.requires_human_approval
-    
-    # Excessive refund exceeding $15 cap ($50 = 5000 cents) (#615)
+
+    # Excessive refund exceeding 1500-paise cap (₹50.00 = 5000) (#615)
     invalid_result = policy.validate(
         intent="refund",
         output={"amount_cents": 5000, "reason": "Wrong item delivered", "message": "Refund processed."},

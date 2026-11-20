@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.graph.state import AgentState, IntentType, ToolResult
+
+_CURRENCY_SYMBOL: str = os.environ.get("PLATFORM_CURRENCY_SYMBOL", "₹") or "₹"
 
 
 @dataclass(frozen=True)
@@ -247,7 +250,7 @@ def format_substitution_summary(candidates: Sequence[SubstitutionCandidate]) -> 
     for cand in candidates:
         details: List[str] = []
         if cand.price_cents is not None:
-            details.append(f"${cand.price_cents / 100:.2f}")
+            details.append(f"{_CURRENCY_SYMBOL}{cand.price_cents / 100:.2f}")
         details.append("in stock" if cand.inventory_verified else "stock unverified")
         if cand.reason:
             details.append(cand.reason)

@@ -21,9 +21,9 @@ from app.core.config import (
     settings,
 )
 from app.core.guardrails import (
-    MODEL_LATENCY_MS,
-    SLA_BREACH_TOTAL,
     enforce_async_sla,
+    observe_sla_latency,
+    shutdown_sla_executor,
 )
 from app.core.inference import (
     REQUEST_COUNT,
@@ -32,6 +32,7 @@ from app.core.inference import (
     process_batch_item,
     resolve_model_config,
 )
+from app.core.shadow import default_shadow_runner
 from app.core.telemetry import TraceContextMiddleware, init_telemetry
 from app.features.extractors import (
     build_feature_store,
@@ -101,6 +102,8 @@ async def lifespan(app_instance: FastAPI):
         yield
     finally:
         await batcher.stop()
+        default_shadow_runner.shutdown(wait=False)
+        shutdown_sla_executor(wait=False)
         feature_store.close()
         if feature_fetcher is not None and feature_fetcher is not feature_store:
             feature_fetcher.close()
@@ -155,10 +158,8 @@ def _run_model_endpoint(
         version_label = model.version
         response = model.predict(features)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
-        MODEL_LATENCY_MS.labels(model=model_name).observe(elapsed_ms)
         budget_ms = settings.sla_budgets_ms.get(model_name, 25.0)
-        if elapsed_ms > budget_ms:
-            SLA_BREACH_TOTAL.labels(model=model_name, action="observed_breach").inc()
+        observe_sla_latency(model_name, elapsed_ms, budget_ms)
         status = "success"
         return response
     finally:
@@ -192,9 +193,7 @@ async def dynamic_batch_endpoint(
     start = time.perf_counter()
     output = await batcher.submit(model_name, features, model_config)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
-    MODEL_LATENCY_MS.labels(model=model_name).observe(elapsed_ms)
-    if elapsed_ms > budget_ms:
-        SLA_BREACH_TOTAL.labels(model=model_name, action="observed_breach").inc()
+    observe_sla_latency(model_name, elapsed_ms, budget_ms)
     return output
 
 
@@ -231,7 +230,7 @@ def liveness() -> Dict[str, str]:
 
 
 @app.post("/inference/eta", response_model=EtaResponse)
-def eta_inference(request: EtaRequest, model_version: Optional[str] = None) -> EtaResponse:
+async def eta_inference(request: EtaRequest, model_version: Optional[str] = None) -> EtaResponse:
     output = _run_linear_endpoint(
         "/inference/eta",
         "eta",
@@ -242,7 +241,7 @@ def eta_inference(request: EtaRequest, model_version: Optional[str] = None) -> E
 
 
 @app.post("/inference/ranking", response_model=RankingResponse)
-def ranking_inference(
+async def ranking_inference(
     request: RankingRequest, model_version: Optional[str] = None
 ) -> RankingResponse:
     output = _run_linear_endpoint(
@@ -255,7 +254,7 @@ def ranking_inference(
 
 
 @app.post("/inference/fraud", response_model=FraudResponse)
-def fraud_inference(request: FraudRequest, model_version: Optional[str] = None) -> FraudResponse:
+async def fraud_inference(request: FraudRequest, model_version: Optional[str] = None) -> FraudResponse:
     output = _run_linear_endpoint(
         "/inference/fraud",
         "fraud",
@@ -266,7 +265,7 @@ def fraud_inference(request: FraudRequest, model_version: Optional[str] = None) 
 
 
 @app.post("/inference/batch", response_model=BatchInferenceResponse)
-def batch_inference(request: BatchInferenceRequest) -> BatchInferenceResponse:
+async def batch_inference(request: BatchInferenceRequest) -> BatchInferenceResponse:
     registry = app.state.registry
     cache = app.state.cache
     feature_store = app.state.feature_store

@@ -2,7 +2,9 @@
 Trains all scheduled models, evaluates, and promotes if gates pass.
 """
 import json
+import math
 from datetime import datetime, timedelta
+from typing import Any, Callable, Mapping, Optional
 
 from airflow import DAG
 from airflow.operators.python import BranchPythonOperator, PythonOperator
@@ -20,12 +22,42 @@ except ImportError:
     aiplatform = None  # type: ignore[assignment]
     storage = None  # type: ignore[assignment]
 
+_GateEvaluator = Callable[[Mapping[str, Any], Mapping[str, Any]], tuple[bool, list[str]]]
+_shared_evaluate_gates: Optional[_GateEvaluator]
 try:
-    from ml.eval.metrics import (  # type: ignore[import-not-found]
-        evaluate_promotion_gates as _shared_evaluate_gates,
-    )
+    from ml.eval.metrics import evaluate_promotion_gates as _shared_evaluate_gates
 except ImportError:
     _shared_evaluate_gates = None
+
+_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "mae_min": ("mae", "mae_minutes"),
+    "mae_minutes": ("mae", "mae_min"),
+    "mae": ("mae_min", "mae_minutes"),
+    "ndcg_at_10": ("ndcg@10",),
+    "ndcg@10": ("ndcg_at_10",),
+    "hit_at_10": ("hit@10",),
+    "hit@10": ("hit_at_10",),
+}
+
+
+def _resolve_fallback_metric(
+    metrics: Mapping[str, Any],
+    metric_name: str,
+    gate_key: str,
+) -> Optional[float]:
+    candidates: list[str] = [metric_name]
+    if gate_key and gate_key not in candidates:
+        candidates.append(gate_key)
+    candidates.extend(_METRIC_ALIASES.get(metric_name, ()))
+    if "_at_" in metric_name:
+        candidates.append(metric_name.replace("_at_", "@"))
+    if "@" in metric_name:
+        candidates.append(metric_name.replace("@", "_at_"))
+    for key in candidates:
+        val = metrics.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(float(val)):
+            return float(val)
+    return None
 
 
 def _evaluate_model_gates(metrics: dict, gates: dict) -> bool:
@@ -33,15 +65,15 @@ def _evaluate_model_gates(metrics: dict, gates: dict) -> bool:
         passed, _ = _shared_evaluate_gates(metrics, gates)
         return passed
     for gate_key, threshold in gates.items():
-        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool) or not math.isfinite(float(threshold)):
             continue
         if gate_key.startswith("min_"):
-            val = metrics.get(gate_key[4:], metrics.get(gate_key))
-            if not isinstance(val, (int, float)) or float(val) < float(threshold):
+            val = _resolve_fallback_metric(metrics, gate_key[4:], gate_key)
+            if val is None or val < float(threshold):
                 return False
         elif gate_key.startswith("max_"):
-            val = metrics.get(gate_key[4:], metrics.get(gate_key))
-            if not isinstance(val, (int, float)) or float(val) > float(threshold):
+            val = _resolve_fallback_metric(metrics, gate_key[4:], gate_key)
+            if val is None or val > float(threshold):
                 return False
     return True
 
@@ -205,7 +237,6 @@ with DAG(
             )
 
     def _check_promotion_gate(model_name: str, config: dict, **context):
-        """Decide whether to promote the model based on complete quality gates."""
         metrics = context["ti"].xcom_pull(
             task_ids=f"{model_name}_group.evaluate_{model_name}",
             key=f"{model_name}_metrics",
@@ -221,13 +252,17 @@ with DAG(
             key=f"{model_name}_primary_metric",
         )
 
-        if primary_metric is None:
+        if (
+            not isinstance(primary_metric, (int, float))
+            or isinstance(primary_metric, bool)
+            or not math.isfinite(float(primary_metric))
+        ):
             return f"{model_name}_group.skip_promote_{model_name}"
 
         if config["direction"] == "minimize":
-            passes = primary_metric <= config["threshold"]
+            passes = float(primary_metric) <= config["threshold"]
         else:
-            passes = primary_metric >= config["threshold"]
+            passes = float(primary_metric) >= config["threshold"]
 
         if passes:
             return f"{model_name}_group.promote_{model_name}"

@@ -20,7 +20,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from pipelines.validation import coerce_int, coerce_optional_int, require_non_empty_str
+from pipelines.validation import coerce_int, coerce_optional_int, parse_finite_number, require_non_empty_str
 from pipelines.common import (
     first_present as _first_present,
     parse_event_ts as _parse_event_ts,
@@ -119,8 +119,7 @@ class InventoryVelocityAggregator(beam.CombineFn):
         return {"units_sold": 0, "units_restocked": 0, "event_count": 0}
 
     def add_input(self, acc, element):
-        raw_change = element.get("quantity_change", 0)
-        change = int(raw_change) if isinstance(raw_change, (int, float)) and not isinstance(raw_change, bool) else 0
+        change = int(parse_finite_number(element.get("quantity_change", 0)))
         if change < 0:
             acc["units_sold"] += abs(change)
         elif change > 0:

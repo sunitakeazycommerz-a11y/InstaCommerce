@@ -20,7 +20,7 @@ from apache_beam.transforms.trigger import AfterWatermark, AfterProcessingTime, 
 import json
 import logging
 
-from pipelines.validation import coerce_int, coerce_str_list, require_non_empty_str
+from pipelines.validation import coerce_int, coerce_str_list, parse_finite_number, require_non_empty_str
 from pipelines.common import (
     first_present as _first_present,
     parse_event_ts as _parse_event_ts,
@@ -132,12 +132,10 @@ class CartSessionAggregator(beam.CombineFn):
 
     def add_input(self, acc, element):
         acc["event_types"].append(element.get("event_type", ""))
-        raw_val = element.get("cart_value_cents", 0)
-        cart_val = int(raw_val) if isinstance(raw_val, (int, float)) and not isinstance(raw_val, bool) else 0
+        cart_val = int(parse_finite_number(element.get("cart_value_cents", 0)))
         if cart_val > acc["max_cart_value_cents"]:
             acc["max_cart_value_cents"] = cart_val
-        raw_items = element.get("item_count", 0)
-        item_count = int(raw_items) if isinstance(raw_items, (int, float)) and not isinstance(raw_items, bool) else 0
+        item_count = int(parse_finite_number(element.get("item_count", 0)))
         acc["total_items"] = max(acc["total_items"], item_count)
         raw_skus = element.get("sku_ids", [])
         if isinstance(raw_skus, list):

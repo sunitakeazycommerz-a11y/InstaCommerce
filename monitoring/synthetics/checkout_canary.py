@@ -42,16 +42,19 @@ class SyntheticCheckoutCanary:
         base_url: str | None = None,
         allow_mock: bool | None = None,
         step_sla_seconds: float | None = None,
+        currency: str | None = None,
     ):
         self.base_url = base_url or os.getenv("API_BASE_URL", "http://localhost:8080")
         if allow_mock is None:
-            self.allow_mock = os.getenv("CANARY_ALLOW_MOCK", "true").lower() == "true"
+            self.allow_mock = os.getenv("CANARY_ALLOW_MOCK", "false").lower() == "true"
         else:
             self.allow_mock = allow_mock
         if step_sla_seconds is None:
             self.step_sla_seconds = float(os.getenv("CANARY_STEP_SLA_SECONDS", "2.0"))
         else:
             self.step_sla_seconds = step_sla_seconds
+        raw_currency = currency if currency is not None else os.getenv("CANARY_CURRENCY", "INR")
+        self.currency = raw_currency.strip().upper() or "INR"
         self.consecutive_failures = 0
 
     def _validate_step_payload(self, step_name: str, payload: Any) -> None:
@@ -80,11 +83,10 @@ class SyntheticCheckoutCanary:
                 raise RuntimeError(f"Payment authorization declined: {payload}")
 
     def _check_response(self, resp: requests.Response, step_name: str) -> None:
-        threshold = 500 if self.allow_mock else 400
-        if resp.status_code >= threshold:
-            raise RuntimeError(f"{step_name} failed with status {resp.status_code}")
         if resp.status_code >= 400:
-            return
+            if self.allow_mock and resp.status_code == 404:
+                return
+            raise RuntimeError(f"{step_name} failed with status {resp.status_code}")
         try:
             payload = resp.json()
         except ValueError as exc:
@@ -170,7 +172,7 @@ class SyntheticCheckoutCanary:
             payment_url = f"{self.base_url}/api/v1/payments/authorize"
             payment_payload = {
                 "amountCents": 499,
-                "currency": "USD",
+                "currency": self.currency,
                 "orderId": str(uuid.uuid4()),
                 "paymentMethod": "sandbox_card",
                 "idempotencyKey": f"{correlation_id}-payment",

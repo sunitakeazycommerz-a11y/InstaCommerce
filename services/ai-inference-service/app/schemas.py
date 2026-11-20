@@ -11,15 +11,7 @@ class InferenceBaseModel(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class EtaRequest(InferenceBaseModel):
-    distance_km: float = Field(..., ge=0, le=200)
-    item_count: int = Field(..., ge=0, le=200)
-    traffic_factor: float = Field(..., ge=0.5, le=3.0)
-    model_version: Optional[str] = None
-
-
-class EtaResponse(InferenceBaseModel):
-    eta_minutes: float
+class GuardedPredictionResponse(InferenceBaseModel):
     feature_contributions: Dict[str, float]
     bias: float
     model_version: str
@@ -28,6 +20,17 @@ class EtaResponse(InferenceBaseModel):
     confidence_upper: Optional[float] = None
     drift_detected: bool = False
     sla_breached: bool = False
+
+
+class EtaRequest(InferenceBaseModel):
+    distance_km: float = Field(..., ge=0, le=200)
+    item_count: int = Field(..., ge=0, le=200)
+    traffic_factor: float = Field(..., ge=0.5, le=3.0)
+    model_version: Optional[str] = None
+
+
+class EtaResponse(GuardedPredictionResponse):
+    eta_minutes: float
 
 
 class RankingRequest(InferenceBaseModel):
@@ -38,17 +41,9 @@ class RankingRequest(InferenceBaseModel):
     model_version: Optional[str] = None
 
 
-class RankingResponse(InferenceBaseModel):
+class RankingResponse(GuardedPredictionResponse):
     ranking_score: float
     raw_score: float
-    feature_contributions: Dict[str, float]
-    bias: float
-    model_version: str
-    is_cold_start: bool = False
-    confidence_lower: Optional[float] = None
-    confidence_upper: Optional[float] = None
-    drift_detected: bool = False
-    sla_breached: bool = False
 
 
 class FraudRequest(InferenceBaseModel):
@@ -59,17 +54,9 @@ class FraudRequest(InferenceBaseModel):
     model_version: Optional[str] = None
 
 
-class FraudResponse(InferenceBaseModel):
+class FraudResponse(GuardedPredictionResponse):
     fraud_probability: float
     raw_score: float
-    feature_contributions: Dict[str, float]
-    bias: float
-    model_version: str
-    is_cold_start: bool = False
-    confidence_lower: Optional[float] = None
-    confidence_upper: Optional[float] = None
-    drift_detected: bool = False
-    sla_breached: bool = False
 
 
 class BatchInferenceItem(InferenceBaseModel):

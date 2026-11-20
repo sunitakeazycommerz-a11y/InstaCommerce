@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_futures
+import functools
 import inspect
 import logging
+import threading
 import time
 from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 
@@ -72,36 +76,57 @@ def compare_shadow_output(
 
 
 class ShadowRunner:
-    """Dispatches shadow predictions via asyncio.create_task and tracks agreement."""
+    """Dispatches shadow predictions off the critical path and tracks agreement."""
 
     def __init__(
         self,
         tolerance: float = 0.1,
         timeout_seconds: float = 0.25,
         max_history: int = 200,
+        max_workers: int = 4,
+        max_pending: int = 256,
     ) -> None:
         self.tolerance = tolerance
         self.timeout_seconds = max(0.001, timeout_seconds)
         self.agreement_count: int = 0
         self.divergence_count: int = 0
         self.error_count: int = 0
+        self._max_workers = max(1, max_workers)
+        self._max_pending = max(1, max_pending)
+        self._lock = threading.Lock()
+        self._executor: Optional[ThreadPoolExecutor] = None
         self._pending_tasks: Set[asyncio.Task[Any]] = set()
+        self._pending_futures: Set[Future[Any]] = set()
         self._comparisons: Deque[Dict[str, Any]] = deque(maxlen=max(1, max_history))
+
+    def _get_executor(self) -> ThreadPoolExecutor:
+        with self._lock:
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(
+                    max_workers=self._max_workers,
+                    thread_name_prefix="ai-inference-shadow",
+                )
+            return self._executor
 
     @property
     def stats(self) -> Dict[str, Any]:
-        total = self.agreement_count + self.divergence_count
+        with self._lock:
+            agreed = self.agreement_count
+            diverged = self.divergence_count
+            errors = self.error_count
+        total = agreed + diverged
         return {
             "total": total,
-            "agreed": self.agreement_count,
-            "diverged": self.divergence_count,
-            "errors": self.error_count,
-            "agreement_rate": (self.agreement_count / total) if total > 0 else 1.0,
+            "agreed": agreed,
+            "diverged": diverged,
+            "errors": errors,
+            "agreement_rate": (agreed / total) if total > 0 else 1.0,
         }
 
     @property
     def recent_comparisons(self) -> List[Dict[str, Any]]:
-        return list(self._comparisons)
+        with self._lock:
+            return list(self._comparisons)
 
     def _record_comparison(
         self,
@@ -117,10 +142,8 @@ class ShadowRunner:
         )
         SHADOW_SCORE_DELTA.labels(model=model_name, version=shadow_version).observe(delta)
         if agreed:
-            self.agreement_count += 1
             SHADOW_AGREEMENT_TOTAL.labels(model=model_name, version=shadow_version).inc()
         else:
-            self.divergence_count += 1
             SHADOW_DIVERGENCE_TOTAL.labels(model=model_name, version=shadow_version).inc()
         entry = {
             "model": model_name,
@@ -132,18 +155,55 @@ class ShadowRunner:
             "agreed": agreed,
             "elapsed_ms": round(elapsed_s * 1000.0, 3),
         }
-        self._comparisons.append(entry)
+        with self._lock:
+            if agreed:
+                self.agreement_count += 1
+            else:
+                self.divergence_count += 1
+            self._comparisons.append(entry)
         logger.info("shadow.comparison", extra=entry)
         return agreed, delta
 
     def _record_error(self, model_name: str, shadow_version: str, reason: str) -> None:
-        self.error_count += 1
+        with self._lock:
+            self.error_count += 1
         logger.warning(
             "Shadow prediction failed for %s (%s): %s",
             model_name,
             shadow_version,
             reason,
         )
+
+    def _run_sync_shadow(
+        self,
+        model_name: str,
+        shadow_version: str,
+        shadow_fn: Callable[..., Any],
+        primary_output: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        start = time.perf_counter()
+        try:
+            res = shadow_fn(*args, **kwargs)
+            if inspect.isawaitable(res):
+                if inspect.iscoroutine(res):
+                    res.close()
+                self._record_error(
+                    model_name,
+                    shadow_version,
+                    "async shadow_fn dropped without running event loop",
+                )
+                return
+            self._record_comparison(
+                model_name,
+                shadow_version,
+                primary_output,
+                res,
+                time.perf_counter() - start,
+            )
+        except Exception as exc:
+            self._record_error(model_name, shadow_version, exc.__class__.__name__)
 
     async def _run_shadow(
         self,
@@ -156,11 +216,21 @@ class ShadowRunner:
     ) -> Optional[Dict[str, Any]]:
         start = time.perf_counter()
         try:
-            res = shadow_fn(*args, **kwargs)
-            if inspect.isawaitable(res):
-                shadow_output = await asyncio.wait_for(res, timeout=self.timeout_seconds)
+            if inspect.iscoroutinefunction(shadow_fn):
+                shadow_output = await asyncio.wait_for(
+                    shadow_fn(*args, **kwargs), timeout=self.timeout_seconds
+                )
             else:
-                shadow_output = res
+                loop = asyncio.get_running_loop()
+                call = functools.partial(shadow_fn, *args, **kwargs)
+                res = await asyncio.wait_for(
+                    loop.run_in_executor(self._get_executor(), call),
+                    timeout=self.timeout_seconds,
+                )
+                if inspect.isawaitable(res):
+                    shadow_output = await asyncio.wait_for(res, timeout=self.timeout_seconds)
+                else:
+                    shadow_output = res
             agreed, delta = self._record_comparison(
                 model_name,
                 shadow_version,
@@ -191,7 +261,7 @@ class ShadowRunner:
         *args: Any,
         **kwargs: Any,
     ) -> Optional[asyncio.Task[Any]]:
-        """Schedule shadow prediction via asyncio.create_task without blocking caller."""
+        """Schedule shadow prediction on the event loop or bounded background executor."""
         try:
             asyncio.get_running_loop()
             coro = self._run_shadow(
@@ -202,32 +272,60 @@ class ShadowRunner:
             task.add_done_callback(self._pending_tasks.discard)
             return task
         except RuntimeError:
-            # No running event loop; execute synchronous shadow_fn directly.
-            start = time.perf_counter()
-            try:
-                res = shadow_fn(*args, **kwargs)
-                if inspect.isawaitable(res):
-                    if inspect.iscoroutine(res):
-                        res.close()
-                    self._record_error(
-                        model_name,
-                        shadow_version,
-                        "async shadow_fn dropped without running event loop",
-                    )
-                    return None
-                self._record_comparison(
+            if inspect.iscoroutinefunction(shadow_fn):
+                self._record_error(
                     model_name,
                     shadow_version,
-                    primary_output,
-                    res,
-                    time.perf_counter() - start,
+                    "async shadow_fn dropped without running event loop",
                 )
-            except Exception as exc:
-                self._record_error(model_name, shadow_version, exc.__class__.__name__)
+                return None
+            with self._lock:
+                if len(self._pending_futures) >= self._max_pending:
+                    saturated = True
+                else:
+                    saturated = False
+            if saturated:
+                self._record_error(model_name, shadow_version, "shadow executor queue saturated")
+                return None
+            executor = self._get_executor()
+            future = executor.submit(
+                self._run_sync_shadow,
+                model_name,
+                shadow_version,
+                shadow_fn,
+                primary_output,
+                *args,
+                **kwargs,
+            )
+            with self._lock:
+                self._pending_futures.add(future)
+            future.add_done_callback(self._discard_future)
             return None
+
+    def _discard_future(self, future: Future[Any]) -> None:
+        with self._lock:
+            self._pending_futures.discard(future)
+
+    def wait_pending(self, timeout: Optional[float] = 2.0) -> None:
+        with self._lock:
+            pending = list(self._pending_futures)
+        if pending:
+            wait_futures(pending, timeout=timeout)
+
+    def shutdown(self, wait: bool = False) -> None:
+        with self._lock:
+            executor = self._executor
+            self._executor = None
+            pending = list(self._pending_futures)
+            self._pending_futures.clear()
+        for fut in pending:
+            fut.cancel()
+        if executor is not None:
+            executor.shutdown(wait=wait, cancel_futures=True)
 
 
 default_shadow_runner = ShadowRunner()
+atexit.register(default_shadow_runner.shutdown)
 
 
 def dispatch_shadow_prediction(
@@ -239,7 +337,7 @@ def dispatch_shadow_prediction(
     runner: Optional[ShadowRunner] = None,
     **kwargs: Any,
 ) -> Optional[asyncio.Task[Any]]:
-    """Dispatch shadow prediction via asyncio.create_task on the active ShadowRunner."""
+    """Dispatch shadow prediction on the active ShadowRunner without blocking live latency."""
     active_runner = runner or default_shadow_runner
     return active_runner.dispatch(
         model_name, shadow_version, shadow_fn, primary_output, *args, **kwargs

@@ -35,6 +35,17 @@ def parse_json_env(name: str, default: Dict[str, str]) -> Dict[str, str]:
     return default
 
 
+DEFAULT_SLA_BUDGETS_MS: Dict[str, float] = {
+    "eta": 10.0,
+    "fraud": 15.0,
+    "ranking": 20.0,
+    "personalization": 25.0,
+    "clv": 30.0,
+    "demand": 50.0,
+    "pricing": 20.0,
+}
+
+
 @dataclass(frozen=True)
 class Settings:
     log_level: str = os.getenv("AI_INFERENCE_LOG_LEVEL", "INFO")
@@ -57,13 +68,8 @@ class Settings:
     shadow_timeout_seconds: float = float(os.getenv("AI_INFERENCE_SHADOW_TIMEOUT_SECONDS", "0.25"))
     sla_budgets_ms: Dict[str, float] = field(
         default_factory=lambda: {
-            "eta": float(os.getenv("AI_INFERENCE_SLA_ETA_MS", "10.0")),
-            "fraud": float(os.getenv("AI_INFERENCE_SLA_FRAUD_MS", "15.0")),
-            "ranking": float(os.getenv("AI_INFERENCE_SLA_RANKING_MS", "20.0")),
-            "personalization": float(os.getenv("AI_INFERENCE_SLA_PERSONALIZATION_MS", "25.0")),
-            "clv": float(os.getenv("AI_INFERENCE_SLA_CLV_MS", "30.0")),
-            "demand": float(os.getenv("AI_INFERENCE_SLA_DEMAND_MS", "50.0")),
-            "pricing": float(os.getenv("AI_INFERENCE_SLA_PRICING_MS", "20.0")),
+            model: float(os.getenv(f"AI_INFERENCE_SLA_{model.upper()}_MS", str(default_ms)))
+            for model, default_ms in DEFAULT_SLA_BUDGETS_MS.items()
         }
     )
 

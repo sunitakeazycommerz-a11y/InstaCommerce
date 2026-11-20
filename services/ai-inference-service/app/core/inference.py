@@ -204,37 +204,31 @@ def execute_inference(
     registry: ModelRegistry,
 ) -> tuple[Dict[str, Any], bool]:
     cache_hit = False
-    budget_ms = settings.sla_budgets_ms.get(model_name)
-    if cache:
-        key = build_cache_key(model_name, model_config.version, features)
-        cached = cache.get(key)
+    cache_key: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+    if cache is not None:
+        cache_key = build_cache_key(model_name, model_config.version, features)
+        cached = cache.get(cache_key)
         if cached is not None:
             cache_hit = True
             CACHE_EVENTS.labels(model=model_name, version=model_config.version, result="hit").inc()
             result = {**cached, "sla_breached": False}
         else:
             CACHE_EVENTS.labels(model=model_name, version=model_config.version, result="miss").inc()
-            computed, sla_breached, _ = enforce_sync_sla(
-                model_name,
-                lambda: perform_inference(model_name, features, model_config),
-                budget_ms=budget_ms,
-                strict=settings.strict_sla_timeout,
-                model_version=model_config.version,
-                fallback_on_timeout=True,
-            )
-            result = {**computed, "sla_breached": sla_breached}
-            if not sla_breached:
-                cache.set(key, result)
-    else:
+
+    if result is None:
         computed, sla_breached, _ = enforce_sync_sla(
             model_name,
             lambda: perform_inference(model_name, features, model_config),
-            budget_ms=budget_ms,
+            budget_ms=settings.sla_budgets_ms.get(model_name),
             strict=settings.strict_sla_timeout,
             model_version=model_config.version,
             fallback_on_timeout=True,
         )
         result = {**computed, "sla_breached": sla_breached}
+        if cache is not None and cache_key is not None and not sla_breached:
+            cache.set(cache_key, result)
+
     maybe_run_shadow(model_name, features, model_config.version, registry, primary_output=result)
     return result, cache_hit
 

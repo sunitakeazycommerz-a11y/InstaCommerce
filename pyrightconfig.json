@@ -37,7 +37,8 @@
     {
       "root": "data-platform/airflow/dags",
       "extraPaths": [
-        "data-platform/airflow"
+        "data-platform/airflow",
+        "."
       ],
       "reportUnusedExpression": "none",
       "reportMissingModuleSource": "none"
@@ -58,7 +59,8 @@
     {
       "root": "data-platform/quality",
       "extraPaths": [
-        "data-platform/quality"
+        "data-platform/quality",
+        "data-platform/airflow"
       ]
     },
     {

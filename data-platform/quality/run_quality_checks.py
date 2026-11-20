@@ -14,12 +14,17 @@ import argparse
 import json
 import logging
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+
+_AIRFLOW_DIR = str(Path(__file__).resolve().parents[1] / "airflow")
+if _AIRFLOW_DIR not in sys.path:
+    sys.path.insert(0, _AIRFLOW_DIR)
+
+from plugins.sql_validation import validate_bq_identifier
 
 try:
     from .validators import validate_expectation
@@ -46,14 +51,6 @@ logger = logging.getLogger(__name__)
 
 SUITES_DIR = Path(__file__).parent / "expectations"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-BQ_IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$")
-
-
-def validate_bq_identifier(value: str, field_name: str = "identifier") -> str:
-    """Validate BigQuery project, dataset, or table identifier before SQL interpolation."""
-    if not isinstance(value, str) or not BQ_IDENTIFIER_RE.fullmatch(value):
-        raise ValueError(f"Invalid BigQuery {field_name}: {value!r}")
-    return value
 
 SUITE_TABLE_MAP = {
     "orders_validation": "analytics.orders",
@@ -323,16 +320,8 @@ def main():
 
     fixtures_path = Path(args.fixtures_dir)
 
-    # If --fixtures flag is set, or if live GCP credentials are not available, use fixture mode
-    use_fixtures = args.fixtures or (not os.getenv("GOOGLE_APPLICATION_CREDENTIALS") and not os.getenv("CI_BIGQUERY_ENABLED"))
-
-    context = None
-    if not use_fixtures:
-        try:
-            context = build_bigquery_context(args.project, args.dataset)
-        except Exception as exc:
-            logger.warning("Could not initialize BigQuery context (%s). Falling back to fixture verification.", exc)
-            use_fixtures = True
+    use_fixtures = bool(args.fixtures)
+    context = None if use_fixtures else build_bigquery_context(args.project, args.dataset)
 
     results = []
     for path in suite_paths:

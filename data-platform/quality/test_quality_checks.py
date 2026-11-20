@@ -205,3 +205,99 @@ def test_validate_expectation_pair_type_mean_gap_and_fail_closed():
     )
     assert unsupported_ok is False
     assert unsupported_detail is not None and "Unsupported" in unsupported_detail["error"]
+
+
+@pytest.mark.parametrize(
+    "bad_val",
+    [True, False, float("nan"), float("inf"), float("-inf")],
+)
+def test_between_and_mean_reject_bool_and_non_finite(bad_val):
+    between_ok, _ = validate_expectation(
+        {
+            "expectation_type": "expect_column_values_to_be_between",
+            "kwargs": {"column": "amount", "min_value": 0, "max_value": 100},
+        },
+        [{"amount": 10}, {"amount": bad_val}],
+    )
+    assert between_ok is False
+
+    mean_ok, _ = validate_expectation(
+        {
+            "expectation_type": "expect_column_mean_to_be_between",
+            "kwargs": {"column": "amount", "min_value": 0, "max_value": 100},
+        },
+        [{"amount": 10}, {"amount": bad_val}],
+    )
+    assert mean_ok is False
+
+
+def test_event_time_gaps_normalizes_timezones_and_fails_on_empty_records():
+    empty_ok, empty_detail = validate_expectation(
+        {
+            "expectation_type": "expect_no_event_time_gaps",
+            "kwargs": {"column": "event_time", "max_gap_minutes": 15},
+        },
+        [],
+    )
+    assert empty_ok is False
+    assert empty_detail is not None and "No records" in empty_detail["error"]
+
+    explicit_empty_ok, _ = validate_expectation(
+        {
+            "expectation_type": "expect_no_event_time_gaps",
+            "kwargs": {"column": "event_time", "max_gap_minutes": 15, "allow_empty": True},
+        },
+        [],
+    )
+    assert explicit_empty_ok is True
+
+    mixed_tz_ok, mixed_detail = validate_expectation(
+        {
+            "expectation_type": "expect_no_event_time_gaps",
+            "kwargs": {"column": "event_time", "max_gap_minutes": 15},
+        },
+        [
+            {"event_time": "2026-10-18T10:00:00Z"},
+            {"event_time": "2026-10-18T10:05:00"},
+            {"event_time": "2026-10-18T15:40:00+05:30"},
+        ],
+    )
+    assert mixed_tz_ok is True, mixed_detail
+
+    mixed_tz_gap, _ = validate_expectation(
+        {
+            "expectation_type": "expect_no_event_time_gaps",
+            "kwargs": {"column": "event_time", "max_gap_minutes": 15},
+        },
+        [
+            {"event_time": "2026-10-18T10:00:00Z"},
+            {"event_time": "2026-10-18T10:40:00"},
+        ],
+    )
+    assert mixed_tz_gap is False
+
+
+def test_main_does_not_silently_downgrade_to_fixtures_on_bigquery_failure(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["run_quality_checks.py", "--suite", "orders"])
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("CI_BIGQUERY_ENABLED", raising=False)
+    monkeypatch.setattr(
+        run_quality_checks,
+        "build_bigquery_context",
+        MagicMock(side_effect=RuntimeError("BigQuery unavailable")),
+    )
+    with pytest.raises(RuntimeError, match="BigQuery unavailable"):
+        run_quality_checks.main()
+
+
+def test_main_runs_fixtures_only_when_explicitly_requested(monkeypatch, tmp_path):
+    out_file = tmp_path / "summary.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["run_quality_checks.py", "--fixtures", "--suite", "orders", "--json-output", str(out_file)],
+    )
+    build_mock = MagicMock()
+    monkeypatch.setattr(run_quality_checks, "build_bigquery_context", build_mock)
+    run_quality_checks.main()
+    build_mock.assert_not_called()
+    assert out_file.exists()

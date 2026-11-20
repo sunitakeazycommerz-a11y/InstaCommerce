@@ -15,7 +15,11 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from app.config import Settings
+    from app.graph.state import AgentState
 
 logger = logging.getLogger("ai_orchestrator.budgets")
 
@@ -165,6 +169,71 @@ class BudgetTracker:
                 "tool_calls_remaining": self.tool_calls_remaining,
             },
         )
+
+    def reset_for_turn(self, *, elapsed_ms: float = 0.0) -> None:
+        self._start_ns = time.monotonic_ns() - int(max(0.0, elapsed_ms) * 1_000_000)
+
+    def record_usage_delta(
+        self,
+        *,
+        cost_delta: float = 0.0,
+        token_delta: int = 0,
+        tool_calls_delta: int = 0,
+    ) -> None:
+        self.total_cost_usd += max(0.0, cost_delta)
+        self.total_tokens += max(0, token_delta)
+        self.tool_calls_used += max(0, tool_calls_delta)
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "total_cost_usd": self.total_cost_usd,
+            "max_cost_usd": self.max_cost_usd,
+            "cost_remaining": self.cost_remaining,
+            "total_tokens": self.total_tokens,
+            "max_tokens": self.max_tokens,
+            "tool_calls_used": self.tool_calls_used,
+            "tool_calls_remaining": self.tool_calls_remaining,
+            "max_tool_calls": self.max_tool_calls,
+            "elapsed_ms": self.elapsed_ms,
+            "max_latency_ms": self.max_latency_ms,
+        }
+
+
+def budget_tracker_from_state(
+    state: "AgentState",
+    settings: Optional["Settings"] = None,
+) -> BudgetTracker:
+    """Construct a synchronized ``BudgetTracker`` from ``AgentState``."""
+    elapsed_ms = state.current_elapsed_ms()
+    configured_tool_cap = max(
+        settings.tool_call_max if settings is not None else 10,
+        len(state.tool_results) + max(state.tool_calls_remaining, 0),
+    )
+    used_tool_calls = max(0, configured_tool_cap - max(state.tool_calls_remaining, 0))
+    tracker = BudgetTracker(
+        max_cost_usd=state.max_cost_usd,
+        max_tokens=state.max_tokens,
+        max_tool_calls=configured_tool_cap,
+        max_latency_ms=state.max_latency_ms,
+        total_cost_usd=state.total_cost_usd,
+        total_tokens=state.total_tokens_used,
+        tool_calls_used=used_tool_calls,
+    )
+    tracker.reset_for_turn(elapsed_ms=elapsed_ms)
+    return tracker
+
+
+def apply_budget_to_state(state: "AgentState", tracker: BudgetTracker) -> "AgentState":
+    """Sync tracked budget consumption back onto ``AgentState``."""
+    snap = tracker.snapshot()
+    return state.model_copy(
+        update={
+            "total_cost_usd": snap["total_cost_usd"],
+            "total_tokens_used": snap["total_tokens"],
+            "tool_calls_remaining": snap["tool_calls_remaining"],
+            "elapsed_ms": max(state.elapsed_ms, snap["elapsed_ms"]),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

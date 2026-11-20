@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
+import time
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -135,3 +138,101 @@ def test_model_registry_tracks_and_executes_rollback(tmp_path: Path) -> None:
     rolled = registry.rollback("eta")
     assert rolled._version == "v1"
     assert loaded[-2:] == ["v2", "v1"]
+
+
+def test_model_registry_missing_version_dir_and_load_failure_preserve_state(tmp_path: Path) -> None:
+    (tmp_path / "v1").mkdir(parents=True)
+    (tmp_path / "v2-broken").mkdir(parents=True)
+
+    class _Predictor(BasePredictor):
+        def _load_model(self, version: Optional[str] = None) -> None:
+            if version == "v2-broken":
+                raise RuntimeError("corrupt artifact")
+            self._model = {"version": version}
+
+        def predict(self, features: Dict[str, Any]) -> PredictionResult:
+            return PredictionResult({"loaded_version": self._model["version"]}, self._version, self.model_name, 1.0)
+
+        def rule_based_fallback(self, features: Dict[str, Any]) -> PredictionResult:
+            return self.predict(features)
+
+    registry = ModelRegistry(str(tmp_path))
+    pred = _Predictor("eta", str(tmp_path))
+    pred._load_model("v1")
+    pred._version = "v1"
+    registry.register(pred)
+
+    with pytest.raises(FileNotFoundError, match="missing-v99"):
+        registry.get("eta", version="missing-v99")
+
+    assert registry._models["eta"]._version == "v1"
+    assert registry.status()["models"]["eta"]["previous_version"] is None
+    assert registry.status()["models"]["eta"]["version_history"] == ["v1"]
+
+    with pytest.raises(RuntimeError, match="corrupt artifact"):
+        registry.get("eta", version="v2-broken")
+
+    active = registry.get("eta")
+    assert active._version == "v1"
+    assert active.predict({}).output["loaded_version"] == "v1"
+    assert registry.status()["models"]["eta"]["previous_version"] is None
+
+
+def test_model_registry_concurrent_ab_routing_isolates_predictor_instances(tmp_path: Path) -> None:
+    for ver in ("v1", "v2"):
+        (tmp_path / ver).mkdir(parents=True)
+
+    load_lock = threading.Lock()
+    loads: list[str] = []
+
+    class _ConcurrentPredictor(BasePredictor):
+        def _load_model(self, version: Optional[str] = None) -> None:
+            time.sleep(0.01)
+            with load_lock:
+                loads.append(str(version))
+            self._model = {"weights_version": version}
+
+        def predict(self, features: Dict[str, Any]) -> PredictionResult:
+            return PredictionResult(
+                {"weights_version": self._model["weights_version"]},
+                self._version,
+                self.model_name,
+                1.0,
+            )
+
+        def rule_based_fallback(self, features: Dict[str, Any]) -> PredictionResult:
+            return self.predict(features)
+
+    registry = ModelRegistry(str(tmp_path))
+    base = _ConcurrentPredictor("eta", str(tmp_path))
+    base._load_model("v1")
+    base._version = "v1"
+    registry.register(base)
+    registry.set_ab_routing("eta", {"v1": 0.5, "v2": 0.5})
+
+    user_ids = [f"user-{idx}" for idx in range(40)]
+    expected_versions = {
+        uid: registry.resolve_version("eta", user_id=uid) for uid in user_ids
+    }
+    assert set(expected_versions.values()) == {"v1", "v2"}
+
+    def _call(uid: str) -> tuple[str, str, str, int]:
+        predictor = registry.get("eta", user_id=uid)
+        result = predictor.predict({})
+        return uid, predictor._version, result.output["weights_version"], id(predictor)
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        outcomes = list(pool.map(_call, user_ids))
+
+    instance_ids_by_version: dict[str, set[int]] = {"v1": set(), "v2": set()}
+    for uid, pred_ver, weights_ver, inst_id in outcomes:
+        expected = expected_versions[uid]
+        assert expected is not None
+        assert pred_ver == expected
+        assert weights_ver == expected
+        instance_ids_by_version[expected].add(inst_id)
+
+    assert len(instance_ids_by_version["v1"]) == 1
+    assert len(instance_ids_by_version["v2"]) == 1
+    assert instance_ids_by_version["v1"] != instance_ids_by_version["v2"]
+    assert loads.count("v2") == 1

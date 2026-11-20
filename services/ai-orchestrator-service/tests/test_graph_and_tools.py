@@ -14,11 +14,12 @@ from app.config import Settings
 from app.graph import checkpoints as cp_mod
 from app.graph.checkpoints import RedisCheckpointSaver
 from app.graph.graph import build_agent_graph, build_graph
+from app.graph.budgets import BudgetTracker
 from app.graph.nodes import (
     AgentExecutionRunner,
-    _plan_tools,
     check_policy,
     extract_structured_tool_outputs,
+    plan_tools,
 )
 from app.graph.state import AgentState, IntentType, RetrievalResult, ToolResult
 from app.graph.tools import ToolDescriptor, ToolRegistry
@@ -126,7 +127,7 @@ async def test_graph_escalates_when_validate_output_rejects_policy_violation() -
                 "retrieval_results": [
                     RetrievalResult(
                         doc_id="doc-refund-violation",
-                        content="Approved refund of $50.00 to your original payment method.",
+                        content="Approved refund of ₹50.00 to your original payment method.",
                         score=0.95,
                     )
                 ],
@@ -146,7 +147,7 @@ async def test_graph_escalates_when_validate_output_rejects_policy_violation() -
     result = AgentState(**result_dict)
     assert result.needs_escalation is True
     assert "Output policy violations" in (result.escalation_reason or "")
-    assert "$50.00" not in result.response
+    assert "₹50.00" not in result.response
     assert result.completed_nodes[-2:] == ["validate_output", "escalate"]
 
 
@@ -417,17 +418,23 @@ async def test_tool_registry_sends_internal_headers_without_bearer_authorization
 @pytest.mark.asyncio
 async def test_substitute_intent_skips_inventory_check_without_store_and_items() -> None:
     without_ctx = AgentState(query="oat milk substitute", intent=IntentType.SUBSTITUTE)
-    assert _plan_tools(without_ctx) == [{"tool": "catalog.search", "params": {"q": "oat milk substitute"}}]
+    assert plan_tools(without_ctx) == [{"tool": "catalog.search", "params": {"q": "oat milk substitute"}}]
 
     with_ctx = AgentState(
         query="oat milk substitute",
         intent=IntentType.SUBSTITUTE,
         context={"store_id": "store-1", "items": [{"productId": "prod-1", "quantity": 1}]},
     )
-    assert _plan_tools(with_ctx) == [
+    assert plan_tools(with_ctx) == [
         {"tool": "catalog.search", "params": {"q": "oat milk substitute"}},
         {"tool": "inventory.check", "body": {"storeId": "store-1", "items": [{"productId": "prod-1", "quantity": 1}]}},
     ]
+
+    tracker = BudgetTracker(max_cost_usd=0.5, max_tokens=100, max_tool_calls=5, max_latency_ms=1000.0)
+    tracker.reset_for_turn(elapsed_ms=25.0)
+    snap = tracker.snapshot()
+    assert snap["elapsed_ms"] >= 25.0
+    assert snap["tool_calls_remaining"] == 5
 
 
 @pytest.mark.asyncio
