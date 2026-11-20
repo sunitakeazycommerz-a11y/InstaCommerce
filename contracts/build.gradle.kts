@@ -1,17 +1,17 @@
 plugins {
     java
-    id("com.google.protobuf") version "0.9.6"
+    id("com.google.protobuf") version "0.10.1"
 }
 
 dependencies {
-    implementation("io.grpc:grpc-protobuf:1.75.0")
-    implementation("io.grpc:grpc-stub:1.75.0")
-    implementation("io.grpc:grpc-netty-shaded:1.75.0")
+    implementation("io.grpc:grpc-protobuf:1.85.1")
+    implementation("io.grpc:grpc-stub:1.85.1")
+    implementation("io.grpc:grpc-netty-shaded:1.85.1")
     implementation("javax.annotation:javax.annotation-api:1.3.2")
-    implementation("com.fasterxml.jackson.core:jackson-annotations:2.18.11")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.18.11")
+    implementation("com.fasterxml.jackson.core:jackson-annotations:2.23")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.23")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
-    testImplementation("org.assertj:assertj-core:3.25.3")
+    testImplementation("org.assertj:assertj-core:3.27.7")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -31,11 +31,11 @@ sourceSets {
 
 protobuf {
     protoc {
-        artifact = "com.google.protobuf:protoc:4.32.0"
+        artifact = "com.google.protobuf:protoc:4.36.2"
     }
     plugins {
         create("grpc") {
-            artifact = "io.grpc:protoc-gen-grpc-java:1.75.0"
+            artifact = "io.grpc:protoc-gen-grpc-java:1.85.1"
         }
     }
     generateProtoTasks {
