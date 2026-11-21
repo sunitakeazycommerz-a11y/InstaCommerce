@@ -3,6 +3,8 @@ package com.instacommerce.audit.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -17,14 +19,17 @@ import java.io.StringWriter;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor.SpecificationFluentQuery;
 
 @ExtendWith(MockitoExtension.class)
 class AuditExportServiceTest {
@@ -60,8 +65,8 @@ class AuditExportServiceTest {
                 .createdAt(Instant.parse("2026-03-01T10:00:00Z"))
                 .build();
 
-        when(repository.findAll(ArgumentMatchers.<Specification<AuditEvent>>any(), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(event)));
+        when(repository.findBy(ArgumentMatchers.<Specification<AuditEvent>>any(), any()))
+                .thenReturn(List.of(event));
 
         StringWriter buffer = new StringWriter();
         when(response.getWriter()).thenReturn(new PrintWriter(buffer));
@@ -76,7 +81,7 @@ class AuditExportServiceTest {
     }
 
     @Test
-    void exportCsv_usesSingleSpecificationPathAndClearsEntityManagerWhenPresent() throws Exception {
+    void exportCsv_usesKeysetLimitQueryWithoutCountAndClearsEntityManagerWhenPresent() throws Exception {
         AuditEvent event = AuditEvent.builder()
                 .id(UUID.randomUUID())
                 .eventType("PAYMENT_CAPTURED")
@@ -85,8 +90,16 @@ class AuditExportServiceTest {
                 .createdAt(Instant.parse("2026-03-01T11:00:00Z"))
                 .build();
 
-        when(repository.findAll(ArgumentMatchers.<Specification<AuditEvent>>any(), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(event)));
+        SpecificationFluentQuery<AuditEvent> fluentQuery = mock();
+        when(fluentQuery.sortBy(any(Sort.class))).thenReturn(fluentQuery);
+        when(fluentQuery.limit(500)).thenReturn(fluentQuery);
+        when(fluentQuery.all()).thenReturn(List.of(event));
+
+        when(repository.findBy(ArgumentMatchers.<Specification<AuditEvent>>any(), any()))
+                .thenAnswer(inv -> {
+                    Function<SpecificationFluentQuery<AuditEvent>, List<AuditEvent>> fn = inv.getArgument(1);
+                    return fn.apply(fluentQuery);
+                });
 
         StringWriter buffer = new StringWriter();
         when(response.getWriter()).thenReturn(new PrintWriter(buffer));
@@ -95,8 +108,48 @@ class AuditExportServiceTest {
         AuditExportService service = new AuditExportService(repository, new ObjectMapper(), entityManager);
         service.exportCsv(new AuditSearchCriteria(null, null, null, null, null, null, null, null, 0, 20), response);
 
-        verify(repository).findAll(ArgumentMatchers.<Specification<AuditEvent>>any(), any(Pageable.class));
+        verify(repository, never()).findAll(ArgumentMatchers.<Specification<AuditEvent>>any(), any(Pageable.class));
+        verify(fluentQuery).sortBy(Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
+        verify(fluentQuery).limit(500);
+        verify(fluentQuery).all();
         verify(entityManager).clear();
         assertThat(buffer.toString()).contains("PAYMENT_CAPTURED");
+    }
+
+    @Test
+    void exportCsv_iteratesMultipleBatchesWithoutCountQueries() throws Exception {
+        Instant baseTime = Instant.parse("2026-03-01T11:00:00Z");
+        List<AuditEvent> firstBatch = IntStream.range(0, 500)
+                .mapToObj(i -> AuditEvent.builder()
+                        .id(UUID.randomUUID())
+                        .eventType("EVENT_" + i)
+                        .sourceService("order-service")
+                        .action("CREATE")
+                        .createdAt(baseTime.plusMillis(i))
+                        .build())
+                .toList();
+        AuditEvent tailEvent = AuditEvent.builder()
+                .id(UUID.randomUUID())
+                .eventType("EVENT_TAIL")
+                .sourceService("order-service")
+                .action("CREATE")
+                .createdAt(baseTime.plusSeconds(10))
+                .build();
+
+        when(repository.findBy(ArgumentMatchers.<Specification<AuditEvent>>any(), any()))
+                .thenReturn(firstBatch)
+                .thenReturn(List.of(tailEvent));
+
+        StringWriter buffer = new StringWriter();
+        when(response.getWriter()).thenReturn(new PrintWriter(buffer));
+        EntityManager entityManager = mock(EntityManager.class);
+
+        AuditExportService service = new AuditExportService(repository, new ObjectMapper(), entityManager);
+        service.exportCsv(new AuditSearchCriteria(null, null, null, null, null, null, null, null, 0, 20), response);
+
+        verify(repository, times(2)).findBy(ArgumentMatchers.<Specification<AuditEvent>>any(), any());
+        verify(repository, never()).findAll(ArgumentMatchers.<Specification<AuditEvent>>any(), any(Pageable.class));
+        verify(entityManager, times(2)).clear();
+        assertThat(buffer.toString()).contains("EVENT_0").contains("EVENT_TAIL");
     }
 }

@@ -8,7 +8,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,7 +42,7 @@ public class AllowlistService {
         String normalizedType = entityType.trim().toUpperCase(Locale.ROOT);
         String normalizedValue = entityValue.trim();
         Instant now = Instant.now(clock);
-        return allowlistRepository.findActiveAllowlistEntry(normalizedType, normalizedValue, now)
+        return allowlistRepository.findActiveAllowlistEntry(normalizedType, normalizedValue)
             .filter(entry -> entry.getExpiresAt() == null || entry.getExpiresAt().isAfter(now))
             .isPresent();
     }
@@ -57,15 +56,11 @@ public class AllowlistService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_EXPIRY",
                 "Allowlist expiry must be in the future");
         }
-        Optional<AllowlistedEntity> existing =
-            allowlistRepository.findActiveAllowlistEntry(normalizedType, normalizedValue, now);
-        if (existing.isPresent()) {
-            AllowlistedEntity entity = existing.get();
-            entity.setReason(request.reason());
-            entity.setExpiresAt(request.expiresAt());
-            entity.setAllowedBy(allowedBy);
-            return allowlistRepository.save(entity);
-        }
+        allowlistRepository.findActiveAllowlistEntry(normalizedType, normalizedValue)
+            .ifPresent(existing -> {
+                existing.setActive(false);
+                allowlistRepository.saveAndFlush(existing);
+            });
         AllowlistedEntity entity = new AllowlistedEntity();
         entity.setEntityType(normalizedType);
         entity.setEntityValue(normalizedValue);

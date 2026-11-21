@@ -39,6 +39,10 @@ public class FlagChangeStreamController {
         return emitter;
     }
 
+    void registerEmitter(SseEmitter emitter) {
+        emitters.add(emitter);
+    }
+
     public void broadcast(String flagKey, Object newValue) {
         String data;
         try {

@@ -34,6 +34,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.test.util.AopTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
@@ -78,13 +79,37 @@ class OrderCreateTransactionBoundaryTest {
         }
 
         @Bean
-        OrderService orderService(OrderRepository orderRepository,
-                                  OrderStatusHistoryRepository statusHistoryRepository,
-                                  OutboxService outboxService,
-                                  AuditLogService auditLogService,
-                                  PricingQuoteClient pricingQuoteClient) {
-            return new OrderService(orderRepository, statusHistoryRepository, outboxService,
-                auditLogService, pricingQuoteClient);
+        OrderCreationService orderCreationService(OrderRepository orderRepository,
+                                                  OrderStatusHistoryRepository statusHistoryRepository,
+                                                  OutboxService outboxService,
+                                                  PricingQuoteClient pricingQuoteClient,
+                                                  PlatformTransactionManager transactionManager) {
+            return new OrderCreationService(orderRepository, statusHistoryRepository, outboxService,
+                pricingQuoteClient, transactionManager);
+        }
+
+        @Bean
+        OrderLifecycleService orderLifecycleService(OrderRepository orderRepository,
+                                                    OrderStatusHistoryRepository statusHistoryRepository,
+                                                    OutboxService outboxService,
+                                                    AuditLogService auditLogService) {
+            return new OrderLifecycleService(orderRepository, statusHistoryRepository, outboxService,
+                auditLogService, null, null, null);
+        }
+
+        @Bean
+        OrderModificationService orderModificationService(OrderRepository orderRepository,
+                                                          OutboxService outboxService,
+                                                          AuditLogService auditLogService,
+                                                          OrderLifecycleService lifecycleService) {
+            return new OrderModificationService(orderRepository, outboxService, auditLogService, lifecycleService);
+        }
+
+        @Bean
+        OrderService orderService(OrderCreationService creationService,
+                                  OrderLifecycleService lifecycleService,
+                                  OrderModificationService modificationService) {
+            return new OrderService(creationService, lifecycleService, modificationService);
         }
     }
 
@@ -232,15 +257,14 @@ class OrderCreateTransactionBoundaryTest {
     }
 
     @Test
-    @DisplayName("setTransactionManager fails fast when null is supplied by Spring wiring")
-    void setTransactionManagerRejectsNull() {
-        OrderService isolatedService = new OrderService(
+    @DisplayName("OrderCreationService fails fast when transactionManager is null")
+    void constructorRejectsNullTransactionManager() {
+        assertThatThrownBy(() -> new OrderCreationService(
             orderRepository,
             mock(OrderStatusHistoryRepository.class),
             outboxService,
-            mock(AuditLogService.class),
-            pricingQuoteClient);
-        assertThatThrownBy(() -> isolatedService.setTransactionManager(null))
+            pricingQuoteClient,
+            null))
             .isInstanceOf(NullPointerException.class)
             .hasMessageContaining("transactionManager");
     }

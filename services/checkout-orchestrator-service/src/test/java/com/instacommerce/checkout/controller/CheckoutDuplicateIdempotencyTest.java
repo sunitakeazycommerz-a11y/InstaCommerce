@@ -70,7 +70,8 @@ class CheckoutDuplicateIdempotencyTest {
             "CHECKOUT_TASK_QUEUE",
             idempotencyService,
             dlqRepository,
-            replayService
+            replayService,
+            1500
         );
     }
 

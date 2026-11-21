@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -26,6 +27,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.PlatformTransactionManager;
 
 @ExtendWith(MockitoExtension.class)
 class OrderCancellationTaxonomyTest {
@@ -52,7 +54,14 @@ class OrderCancellationTaxonomyTest {
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient);
+        OrderCreationService creationService = new OrderCreationService(
+            orderRepository, statusHistoryRepository, outboxService,
+            pricingQuoteClient, mock(PlatformTransactionManager.class));
+        OrderLifecycleService lifecycleService = new OrderLifecycleService(
+            orderRepository, statusHistoryRepository, outboxService, auditLogService, null, null, null);
+        OrderModificationService modificationService = new OrderModificationService(
+            orderRepository, outboxService, auditLogService, lifecycleService);
+        orderService = new OrderService(creationService, lifecycleService, modificationService);
         orderId = UUID.randomUUID();
         userId = UUID.randomUUID();
         order = new Order();
@@ -71,8 +80,7 @@ class OrderCancellationTaxonomyTest {
 
         orderService.cancelOrderByUser(orderId, userId, "Customer changed their mind");
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderCancelled"), payloadCaptor.capture());
 
         Map<String, Object> payload = payloadCaptor.getValue();
@@ -89,8 +97,7 @@ class OrderCancellationTaxonomyTest {
 
         orderService.cancelOrder(orderId, "Dark store stock shortage for SKU-1234", "warehouse-service");
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderCancelled"), payloadCaptor.capture());
 
         Map<String, Object> payload = payloadCaptor.getValue();

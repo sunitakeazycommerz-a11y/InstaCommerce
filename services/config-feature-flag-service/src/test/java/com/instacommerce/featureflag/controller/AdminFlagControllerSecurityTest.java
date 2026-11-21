@@ -93,9 +93,8 @@ class AdminFlagControllerSecurityTest {
             """.formatted(UUID.randomUUID());
     }
 
-    @SuppressWarnings("unchecked")
     private void stubJwt(String token, String subject, String role) {
-        Jws<Claims> jws = Mockito.mock(Jws.class);
+        Jws<Claims> jws = Mockito.mock();
         Claims claims = Mockito.mock(Claims.class);
         when(jws.getPayload()).thenReturn(claims);
         when(claims.getSubject()).thenReturn(subject);

@@ -95,7 +95,7 @@ class CheckoutSecurityConfigTest {
                                               CompensationDlqRepository dlqRepository,
                                               CompensationReplayService replayService) {
             return new CheckoutController(workflowClient, "CHECKOUT_TEST_QUEUE",
-                idempotencyService, dlqRepository, replayService);
+                idempotencyService, dlqRepository, replayService, 1500);
         }
     }
 
@@ -133,9 +133,8 @@ class CheckoutSecurityConfigTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
     void authenticatedBearerTokenAccessesApiV1Checkout() throws Exception {
-        Jws<Claims> jws = mock(Jws.class);
+        Jws<Claims> jws = mock();
         Claims claims = mock(Claims.class);
         when(jwtService.validateAccessToken("valid-jwt")).thenReturn(jws);
         when(jws.getPayload()).thenReturn(claims);
@@ -156,9 +155,8 @@ class CheckoutSecurityConfigTest {
             .andExpect(jsonPath("$.orderId").value("ord-sec-1"));
     }
 
-    @SuppressWarnings("unchecked")
     private static Jws<Claims> mockJws() {
-        return mock(Jws.class);
+        return mock();
     }
 
     @Test

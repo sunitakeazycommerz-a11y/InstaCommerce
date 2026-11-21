@@ -226,7 +226,7 @@ class CheckoutSagaCompensationIntegrationTest {
         when(cartActivity.validateCart(USER_ID))
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
         when(pricingActivity.calculatePrice(any()))
-            .thenReturn(new PricingResult(4000L, 500L, 0L, 3500L, "INR", null, null));
+            .thenReturn(new PricingResult(4000L, 500L, 0L, 3500L, "INR", null, null, "SAVE500", 500L, List.of()));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
         when(paymentActivity.authorizePayment(anyString(), eq(3500L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))

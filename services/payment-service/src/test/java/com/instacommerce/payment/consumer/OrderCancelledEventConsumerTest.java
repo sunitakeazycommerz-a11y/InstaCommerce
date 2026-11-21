@@ -467,6 +467,56 @@ class OrderCancelledEventConsumerTest {
         verify(paymentService).voidAuth(eq(paymentId), eq(orderId + "-cancellation-refund"));
     }
 
+    @Test
+    @DisplayName("Split-tender cancellation refunds only PSP portion")
+    void splitTenderCancellationRefundsOnlyPspPortion() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        Payment payment = buildPayment(paymentId, orderId, PaymentStatus.CAPTURED, 7000, 7000, 0);
+        when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(payment));
+        when(refundService.refund(eq(paymentId), any(RefundRequest.class))).thenReturn(buildRefundResponse());
+
+        String json = objectMapper.writeValueAsString(Map.of(
+            "id", UUID.randomUUID().toString(),
+            "aggregateId", orderId.toString(),
+            "eventType", "OrderCancelled",
+            "payload", Map.of(
+                "orderId", orderId.toString(),
+                "paymentId", paymentId.toString(),
+                "totalCents", 10000,
+                "walletAmountCents", 3000,
+                "currency", "INR",
+                "reason", "Customer cancelled")));
+
+        consumer.onOrderEvent(new ConsumerRecord<>("orders.events", 0, 0L, null, json));
+
+        ArgumentCaptor<RefundRequest> captor = ArgumentCaptor.forClass(RefundRequest.class);
+        verify(refundService).refund(eq(paymentId), captor.capture());
+        assertThat(captor.getValue().amountCents()).isEqualTo(7000L);
+    }
+
+    @Test
+    @DisplayName("Full wallet order with null paymentId skips PSP operations cleanly")
+    void fullWalletOrderWithoutPaymentSkipsCleanly() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.empty());
+
+        String json = objectMapper.writeValueAsString(Map.of(
+            "id", UUID.randomUUID().toString(),
+            "aggregateId", orderId.toString(),
+            "eventType", "OrderCancelled",
+            "payload", Map.of(
+                "orderId", orderId.toString(),
+                "totalCents", 5000,
+                "walletAmountCents", 5000,
+                "currency", "INR",
+                "reason", "Wallet-only order cancelled")));
+
+        consumer.onOrderEvent(new ConsumerRecord<>("orders.events", 0, 0L, null, json));
+
+        verifyNoInteractions(paymentService, refundService);
+    }
+
     private Payment buildPayment(UUID id, UUID orderId, PaymentStatus status,
                                   long amountCents, long capturedCents, long refundedCents) {
         Payment payment = new Payment();

@@ -9,6 +9,19 @@ public record OrderCancelledEvent(
     String paymentId,
     Long totalCents,
     String currency,
-    String reason
+    String reason,
+    Long walletAmountCents,
+    Long walletRefundCents,
+    Long refundedCents
 ) {
+    public OrderCancelledEvent(
+        String orderId,
+        String userId,
+        String paymentId,
+        Long totalCents,
+        String currency,
+        String reason
+    ) {
+        this(orderId, userId, paymentId, totalCents, currency, reason, null, null, null);
+    }
 }

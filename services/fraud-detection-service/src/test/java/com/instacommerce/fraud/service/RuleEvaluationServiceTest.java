@@ -103,4 +103,24 @@ class RuleEvaluationServiceTest {
         boolean triggered = evaluationService.evaluateRule(rule, request);
         assertThat(triggered).isFalse();
     }
+
+    @Test
+    @DisplayName("evaluateRule evaluates GEO rule using GeoUtils haversine distance")
+    void evaluateRule_geo_checksDistanceBoundary() {
+        FraudRule rule = new FraudRule();
+        rule.setRuleType("GEO");
+        rule.setConditionJson(Map.of(
+            "expectedLat", 12.9716,
+            "expectedLng", 77.5946,
+            "maxDistanceKm", 25.0
+        ));
+
+        FraudCheckRequest nearby = new FraudCheckRequest(
+            UUID.randomUUID(), UUID.randomUUID(), 1000L, "dev-1", "10.0.0.1", 12.98, 77.60, 1, "UPI", false);
+        FraudCheckRequest farAway = new FraudCheckRequest(
+            UUID.randomUUID(), UUID.randomUUID(), 1000L, "dev-1", "10.0.0.1", 13.50, 77.5946, 1, "UPI", false);
+
+        assertThat(evaluationService.evaluateRule(rule, nearby)).isFalse();
+        assertThat(evaluationService.evaluateRule(rule, farAway)).isTrue();
+    }
 }

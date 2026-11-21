@@ -43,6 +43,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
@@ -414,6 +415,37 @@ class ApiObservabilityTest {
             assertThat(response.getStatusCode().value()).isEqualTo(500);
             assertThat(response.getBody()).isEqualTo("Internal Server Error");
             assertThat(response.getBody()).doesNotContain("Processing", "failed", "DB", "connection");
+        }
+
+        @Test
+        @DisplayName("lock conflict returns 409 Conflict")
+        void webhookError_lockConflict_returns409() {
+            WebhookController controller = new WebhookController(signatureVerifier, webhookEventHandler);
+
+            when(signatureVerifier.verify(anyString(), anyString())).thenReturn(true);
+            Mockito.doThrow(new PessimisticLockingFailureException("lock"))
+                .when(webhookEventHandler).handle(anyString());
+
+            ResponseEntity<String> response = controller.handleWebhook("{}", "valid-sig");
+
+            assertThat(response.getStatusCode().value()).isEqualTo(409);
+            assertThat(response.getBody()).isEqualTo("Conflict");
+        }
+
+        @Test
+        @DisplayName("transient payment state returns 503 Service Unavailable")
+        void webhookError_transientState_returns503() {
+            WebhookController controller = new WebhookController(signatureVerifier, webhookEventHandler);
+
+            when(signatureVerifier.verify(anyString(), anyString())).thenReturn(true);
+            Mockito.doThrow(new WebhookEventHandler.TransientWebhookStateException(
+                    UUID.randomUUID(), PaymentStatus.CAPTURE_PENDING))
+                .when(webhookEventHandler).handle(anyString());
+
+            ResponseEntity<String> response = controller.handleWebhook("{}", "valid-sig");
+
+            assertThat(response.getStatusCode().value()).isEqualTo(503);
+            assertThat(response.getBody()).isEqualTo("Service Unavailable");
         }
     }
 }

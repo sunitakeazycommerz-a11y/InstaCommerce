@@ -81,10 +81,13 @@ class FraudScoringServiceTest {
                 fraudSignalRepository,
                 ruleEvaluationService,
                 blocklistService,
+                null,
                 outboxService,
                 redisTemplate,
+                null,
                 meterRegistry,
-                mode
+                null,
+                mode.name()
         );
     }
 
@@ -191,7 +194,9 @@ class FraudScoringServiceTest {
                 fraudSignalRepository,
                 ruleEvaluationService,
                 blocklistService,
+                null,
                 outboxService,
+                null,
                 null,
                 null,
                 null,

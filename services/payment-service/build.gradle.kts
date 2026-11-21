@@ -6,6 +6,7 @@ plugins {
 
 dependencies {
     implementation(project(":contracts"))
+    implementation(project(":libs:platform-common"))
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.kafka:spring-kafka")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")

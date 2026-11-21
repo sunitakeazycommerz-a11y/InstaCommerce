@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
 
 @ExtendWith(MockitoExtension.class)
 class OrderServiceFulfillmentLifecycleTest {
@@ -52,7 +54,14 @@ class OrderServiceFulfillmentLifecycleTest {
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient);
+        OrderCreationService creationService = new OrderCreationService(
+            orderRepository, statusHistoryRepository, outboxService,
+            pricingQuoteClient, mock(PlatformTransactionManager.class));
+        OrderLifecycleService lifecycleService = new OrderLifecycleService(
+            orderRepository, statusHistoryRepository, outboxService, auditLogService, null, null, null);
+        OrderModificationService modificationService = new OrderModificationService(
+            orderRepository, outboxService, auditLogService, lifecycleService);
+        orderService = new OrderService(creationService, lifecycleService, modificationService);
         orderId = UUID.randomUUID();
         order = new Order();
         order.setId(orderId);

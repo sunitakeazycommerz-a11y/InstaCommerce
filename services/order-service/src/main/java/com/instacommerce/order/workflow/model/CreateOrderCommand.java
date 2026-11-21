@@ -14,6 +14,7 @@ public final class CreateOrderCommand {
     private final long discountCents;
     private final long deliveryFeeCents;
     private final long totalCents;
+    private final long walletAmountCents;
     private final String currency;
     private final String couponCode;
     private final UUID reservationId;
@@ -34,6 +35,7 @@ public final class CreateOrderCommand {
         this.discountCents = builder.discountCents;
         this.deliveryFeeCents = builder.deliveryFeeCents;
         this.totalCents = builder.totalCents;
+        this.walletAmountCents = builder.walletAmountCents;
         this.currency = builder.currency;
         this.couponCode = builder.couponCode;
         this.reservationId = builder.reservationId;
@@ -80,6 +82,10 @@ public final class CreateOrderCommand {
 
     public long getTotalCents() {
         return totalCents;
+    }
+
+    public long getWalletAmountCents() {
+        return walletAmountCents;
     }
 
     public String getCurrency() {
@@ -131,6 +137,7 @@ public final class CreateOrderCommand {
         private long discountCents;
         private long deliveryFeeCents;
         private long totalCents;
+        private long walletAmountCents;
         private String currency;
         private String couponCode;
         private UUID reservationId;
@@ -179,6 +186,11 @@ public final class CreateOrderCommand {
 
         public Builder totalCents(long totalCents) {
             this.totalCents = totalCents;
+            return this;
+        }
+
+        public Builder walletAmountCents(long walletAmountCents) {
+            this.walletAmountCents = walletAmountCents;
             return this;
         }
 

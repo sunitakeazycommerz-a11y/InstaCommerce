@@ -41,6 +41,7 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -100,7 +101,6 @@ class CheckoutSplitTenderAndDriftTest {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private CheckoutResponse executeWorkflow(CheckoutRequest request) {
         WorkflowInfo workflowInfo = mock(WorkflowInfo.class);
         when(workflowInfo.getWorkflowId()).thenReturn(WORKFLOW_ID);
@@ -111,10 +111,11 @@ class CheckoutSplitTenderAndDriftTest {
             workflowStatic.when(() -> Workflow.getLogger(any(Class.class))).thenReturn(NOPLogger.NOP_LOGGER);
             workflowStatic.when(() -> Workflow.newActivityStub(eq(WalletActivity.class), any(ActivityOptions.class)))
                 .thenReturn(walletActivity);
+            Promise<Void> mockPromise = mock();
             asyncStatic.when(() -> Async.procedure(any(Functions.Proc.class))).thenAnswer(inv -> {
                 Functions.Proc proc = inv.getArgument(0);
                 proc.apply();
-                return mock(Promise.class);
+                return mockPromise;
             });
             return workflow.checkout(request);
         }
@@ -166,6 +167,10 @@ class CheckoutSplitTenderAndDriftTest {
         verify(paymentActivity).authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth"));
         verify(paymentActivity).capturePayment("pay-1", WORKFLOW_ID + ":pay:pay-1:capture");
         verify(orderActivity).confirmOrder("ord-1", WORKFLOW_ID + ":order:confirm");
+
+        ArgumentCaptor<OrderCreateRequest> orderCaptor = ArgumentCaptor.forClass(OrderCreateRequest.class);
+        verify(orderActivity).createOrder(orderCaptor.capture());
+        assertThat(orderCaptor.getValue().walletAmountCents()).isEqualTo(3000L);
     }
 
     @Test
@@ -186,6 +191,10 @@ class CheckoutSplitTenderAndDriftTest {
         assertThat(response.status()).isEqualTo("COMPLETED");
         verifyNoInteractions(paymentActivity);
         verify(orderActivity).confirmOrder("ord-2", WORKFLOW_ID + ":order:confirm");
+
+        ArgumentCaptor<OrderCreateRequest> orderCaptor = ArgumentCaptor.forClass(OrderCreateRequest.class);
+        verify(orderActivity).createOrder(orderCaptor.capture());
+        assertThat(orderCaptor.getValue().walletAmountCents()).isEqualTo(5000L);
     }
 
     @Test
@@ -230,7 +239,8 @@ class CheckoutSplitTenderAndDriftTest {
 
         CheckoutResponse response = executeWorkflow(request);
 
-        assertThat(response.status()).contains("confirm timeout");
+        assertThat(response.status()).startsWith("FAILED: Order confirmation failed");
+        assertThat(response.status()).doesNotContain("confirm timeout");
         verify(paymentActivity).refundPayment("pay-4", 7000L, WORKFLOW_ID + ":pay:pay-4:refund");
         verify(orderActivity).cancelOrder("ord-4");
         verify(dlqActivity).recordFailedCompensation(

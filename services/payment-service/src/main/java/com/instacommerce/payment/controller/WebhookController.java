@@ -4,7 +4,10 @@ import com.instacommerce.payment.webhook.WebhookEventHandler;
 import com.instacommerce.payment.webhook.WebhookSignatureVerifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -33,6 +36,12 @@ public class WebhookController {
         }
         try {
             webhookEventHandler.handle(payload);
+        } catch (ObjectOptimisticLockingFailureException | PessimisticLockingFailureException ex) {
+            log.warn("Webhook lock conflict, signaling retry with HTTP 409", ex);
+            return ResponseEntity.status(HttpStatus.CONFLICT).body("Conflict");
+        } catch (WebhookEventHandler.TransientWebhookStateException ex) {
+            log.warn("Webhook deferred due to transient payment state, signaling retry with HTTP 503", ex);
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("Service Unavailable");
         } catch (Exception ex) {
             log.error("Webhook processing failed", ex);
             return ResponseEntity.internalServerError().body("Internal Server Error");

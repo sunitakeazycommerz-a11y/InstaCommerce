@@ -1,16 +1,20 @@
 package com.instacommerce.wallet.kafka;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.wallet.client.OrderLookupClient;
 import com.instacommerce.wallet.client.OrderSnapshot;
+import com.instacommerce.wallet.config.WalletProperties;
 import com.instacommerce.wallet.domain.model.WalletTransaction.ReferenceType;
 import com.instacommerce.wallet.exception.DuplicateTransactionException;
 import com.instacommerce.wallet.service.LoyaltyService;
@@ -24,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.TransientDataAccessResourceException;
 
 @ExtendWith(MockitoExtension.class)
 class OrderEventConsumerTest {
@@ -46,13 +51,14 @@ class OrderEventConsumerTest {
             loyaltyService,
             walletService,
             orderLookupClient,
-            objectMapper
+            objectMapper,
+            new WalletProperties()
         );
     }
 
     @Test
     @DisplayName("Awards loyalty points and cashback when OrderDelivered has complete payload")
-    void awardsPointsAndCashbackOnCompletePayload() {
+    void awardsPointsAndCashbackOnCompletePayload() throws Exception {
         UUID userId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
         long totalCents = 10000L;
@@ -82,7 +88,7 @@ class OrderEventConsumerTest {
 
     @Test
     @DisplayName("Falls back to OrderLookupClient when totalCents is missing in OrderDelivered event")
-    void fallsBackToOrderLookupClientWhenTotalCentsMissing() {
+    void fallsBackToOrderLookupClientWhenTotalCentsMissing() throws Exception {
         UUID userId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
         long resolvedTotalCents = 15000L;
@@ -115,8 +121,8 @@ class OrderEventConsumerTest {
     }
 
     @Test
-    @DisplayName("Ignores non-OrderDelivered events")
-    void ignoresNonOrderDeliveredEvents() {
+    @DisplayName("Ignores non-handled order events")
+    void ignoresNonOrderDeliveredEvents() throws Exception {
         String message = """
             {
               "eventType": "OrderPlaced",
@@ -134,7 +140,7 @@ class OrderEventConsumerTest {
 
     @Test
     @DisplayName("Still awards cashback when earnPoints throws DuplicateTransactionException")
-    void awardsCashbackEvenWhenLoyaltyPointsAlreadyEarned() {
+    void awardsCashbackEvenWhenLoyaltyPointsAlreadyEarned() throws Exception {
         UUID userId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
         long totalCents = 10000L;
@@ -167,7 +173,7 @@ class OrderEventConsumerTest {
 
     @Test
     @DisplayName("Treats duplicate points and duplicate cashback as idempotent on full replay")
-    void handlesDuplicateCashbackGracefullyOnFullReplay() {
+    void handlesDuplicateCashbackGracefullyOnFullReplay() throws Exception {
         UUID userId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
         long totalCents = 10000L;
@@ -203,5 +209,150 @@ class OrderEventConsumerTest {
             eq("cashback-" + orderId),
             anyString()
         );
+    }
+
+    @Test
+    @DisplayName("Credits wallet refund idempotently on OrderCancelled, OrderFailed, and OrderRefunded")
+    void creditsWalletRefundOnTerminalCancellationAndFailure() throws Exception {
+        UUID userId = UUID.randomUUID();
+        UUID cancelledOrderId = UUID.randomUUID();
+        UUID failedOrderId = UUID.randomUUID();
+
+        String cancelledMessage = """
+            {
+              "eventType": "OrderCancelled",
+              "payload": {
+                "orderId": "%s",
+                "userId": "%s",
+                "totalCents": 10000,
+                "walletAmountCents": 3000,
+                "walletRefundCents": 3000,
+                "reason": "CUSTOMER_REQUEST"
+              }
+            }
+            """.formatted(cancelledOrderId, userId);
+
+        consumer.consume(cancelledMessage);
+
+        verify(walletService).credit(
+            eq(userId),
+            eq(3000L),
+            eq(ReferenceType.REFUND),
+            eq("wallet-refund-" + cancelledOrderId),
+            anyString()
+        );
+
+        String failedMessage = """
+            {
+              "eventType": "OrderFailed",
+              "payload": {
+                "orderId": "%s",
+                "userId": "%s",
+                "walletAmountCents": 2500,
+                "reason": "DELIVERY_FAILED"
+              }
+            }
+            """.formatted(failedOrderId, userId);
+
+        consumer.consume(failedMessage);
+
+        verify(walletService).credit(
+            eq(userId),
+            eq(2500L),
+            eq(ReferenceType.REFUND),
+            eq("wallet-refund-" + failedOrderId),
+            anyString()
+        );
+    }
+
+    @Test
+    @DisplayName("Credits wallet partial refund using deterministic event reference and resolves missing userId")
+    void creditsPartialWalletRefundIdempotently() throws Exception {
+        UUID userId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        String eventId = UUID.randomUUID().toString();
+
+        when(orderLookupClient.findOrder(orderId)).thenReturn(Optional.of(
+            new OrderSnapshot(orderId, userId, 5000L, "INR", "PACKING", Instant.now())
+        ));
+        when(walletService.credit(eq(userId), eq(1200L), eq(ReferenceType.REFUND),
+            eq("wallet-partial-refund-" + orderId + "-" + eventId), anyString()))
+            .thenThrow(new DuplicateTransactionException("Already refunded"));
+
+        String partialMessage = """
+            {
+              "id": "%s",
+              "eventType": "OrderPartiallyRefunded",
+              "payload": {
+                "orderId": "%s",
+                "refundCents": 1200,
+                "walletAmountCents": 5000,
+                "walletRefundCents": 1200,
+                "priceDeltaCents": -1200,
+                "reason": "ORDER_MODIFIED_PARTIAL_REFUND"
+              }
+            }
+            """.formatted(eventId, orderId);
+
+        consumer.consume(partialMessage);
+
+        verify(walletService).credit(
+            eq(userId),
+            eq(1200L),
+            eq(ReferenceType.REFUND),
+            eq("wallet-partial-refund-" + orderId + "-" + eventId),
+            anyString()
+        );
+    }
+
+    @Test
+    @DisplayName("Skips saga-rollback cancellations and zero-walletRefundCents payloads")
+    void skipsSagaRollbackAndZeroWalletRefund() throws Exception {
+        UUID userId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+
+        String sagaRollback = """
+            {
+              "eventType": "OrderCancelled",
+              "payload": {
+                "orderId": "%s",
+                "userId": "%s",
+                "walletAmountCents": 3000,
+                "walletRefundCents": 0,
+                "reason": "CHECKOUT_SAGA_ROLLBACK"
+              }
+            }
+            """.formatted(orderId, userId);
+
+        consumer.consume(sagaRollback);
+        verify(walletService, never()).credit(any(), anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Propagates transient exceptions and malformed JSON instead of swallowing offsets")
+    void propagatesTransientErrorsAndMalformedJson() {
+        UUID userId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        doThrow(new TransientDataAccessResourceException("db busy"))
+            .when(walletService)
+            .credit(eq(userId), eq(1500L), eq(ReferenceType.REFUND), eq("wallet-refund-" + orderId), anyString());
+
+        String message = """
+            {
+              "eventType": "OrderCancelled",
+              "payload": {
+                "orderId": "%s",
+                "userId": "%s",
+                "walletAmountCents": 1500,
+                "walletRefundCents": 1500,
+                "reason": "CUSTOMER_REQUEST"
+              }
+            }
+            """.formatted(orderId, userId);
+
+        assertThatThrownBy(() -> consumer.consume(message))
+            .isInstanceOf(TransientDataAccessResourceException.class);
+        assertThatThrownBy(() -> consumer.consume("{invalid-json"))
+            .isInstanceOf(JsonProcessingException.class);
     }
 }

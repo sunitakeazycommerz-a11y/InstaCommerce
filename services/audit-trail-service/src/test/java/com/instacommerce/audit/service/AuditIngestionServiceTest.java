@@ -132,8 +132,7 @@ class AuditIngestionServiceTest {
         order.verify(hashChainService).getLatestHash();
         order.verify(hashChainService).nextSequenceNumber();
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<AuditEvent>> captor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List<AuditEvent>> captor = ArgumentCaptor.captor();
         order.verify(repository, times(1)).saveAll(captor.capture());
         List<AuditEvent> savedEvents = captor.getValue();
 

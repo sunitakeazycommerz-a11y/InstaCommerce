@@ -13,6 +13,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.checkout.dto.CartItem;
 import com.instacommerce.checkout.dto.CartValidationResult;
 import com.instacommerce.checkout.dto.CheckoutRequest;
@@ -88,8 +89,7 @@ class CheckoutWorkflowImplTest {
         workflowMock = mockStatic(Workflow.class);
         asyncMock = mockStatic(Async.class);
 
-        @SuppressWarnings("unchecked")
-        Promise<Void> donePromise = (Promise<Void>) mock(Promise.class);
+        Promise<Void> donePromise = mock();
         when(donePromise.get()).thenReturn(null);
         when(donePromise.isCompleted()).thenReturn(true);
 
@@ -101,7 +101,6 @@ class CheckoutWorkflowImplTest {
             });
         asyncMock.when(() -> Async.procedure(ArgumentMatchers.<Functions.Proc1<Object>>any(), any()))
             .thenAnswer(invocation -> {
-                @SuppressWarnings("unchecked")
                 Functions.Proc1<Object> proc = invocation.getArgument(0);
                 Object arg = invocation.getArgument(1);
                 proc.apply(arg);
@@ -109,7 +108,6 @@ class CheckoutWorkflowImplTest {
             });
         asyncMock.when(() -> Async.procedure(ArgumentMatchers.<Functions.Proc2<Object, Object>>any(), any(), any()))
             .thenAnswer(invocation -> {
-                @SuppressWarnings("unchecked")
                 Functions.Proc2<Object, Object> proc = invocation.getArgument(0);
                 Object arg1 = invocation.getArgument(1);
                 Object arg2 = invocation.getArgument(2);
@@ -218,7 +216,8 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
 
         when(pricingActivity.calculatePrice(any()))
-            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
+            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1",
+                couponCode, 2000L, List.of()));
 
         when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
@@ -395,7 +394,8 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
 
         when(pricingActivity.calculatePrice(any()))
-            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
+            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1",
+                couponCode, 2000L, List.of()));
 
         when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
@@ -412,8 +412,8 @@ class CheckoutWorkflowImplTest {
 
         CheckoutResponse response = workflow.checkout(request);
 
-        assertThat(response.status()).startsWith("FAILED");
-        assertThat(response.status()).contains("Payment capture timeout");
+        assertThat(response.status()).startsWith("FAILED: Order confirmation failed");
+        assertThat(response.status()).doesNotContain("Payment capture timeout");
 
         // Verify coupon was redeemed first
         verify(couponActivity).redeemCoupon(couponCode, USER_ID, ORDER_ID, 2000L);
@@ -438,7 +438,8 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
 
         when(pricingActivity.calculatePrice(any()))
-            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
+            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1",
+                couponCode, 2000L, List.of()));
 
         when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
@@ -455,8 +456,8 @@ class CheckoutWorkflowImplTest {
 
         CheckoutResponse response = workflow.checkout(request);
 
-        assertThat(response.status()).startsWith("FAILED");
-        assertThat(response.status()).contains("Warehouse unreachable");
+        assertThat(response.status()).startsWith("FAILED: Order confirmation failed");
+        assertThat(response.status()).doesNotContain("Warehouse unreachable");
 
         // Verify coupon unredeem was triggered
         verify(couponActivity).unredeemCoupon(couponCode, USER_ID, ORDER_ID);
@@ -476,7 +477,8 @@ class CheckoutWorkflowImplTest {
             .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
 
         when(pricingActivity.calculatePrice(any()))
-            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1"));
+            .thenReturn(new PricingResult(10000L, 2000L, 0L, 8000L, "INR", "quote-1", "token-1",
+                couponCode, 2000L, List.of()));
 
         when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
@@ -493,8 +495,8 @@ class CheckoutWorkflowImplTest {
 
         CheckoutResponse response = workflow.checkout(request);
 
-        assertThat(response.status()).startsWith("FAILED");
-        assertThat(response.status()).contains("Coupon already used");
+        assertThat(response.status()).startsWith("FAILED: Coupon redemption failed");
+        assertThat(response.status()).doesNotContain("Coupon already used");
 
         // Unredeem should NOT be invoked since redemption failed before compensation registration
         verify(couponActivity, never()).unredeemCoupon(any(), any(), any());
@@ -642,8 +644,8 @@ class CheckoutWorkflowImplTest {
 
         CheckoutResponse response = workflow.checkout(request);
 
-        assertThat(response.status()).startsWith("FAILED");
-        assertThat(response.status()).contains("Order service rejected status update");
+        assertThat(response.status()).startsWith("FAILED: Order confirmation failed");
+        assertThat(response.status()).doesNotContain("Order service rejected status update");
         verify(paymentActivity).refundPayment(eq(PAYMENT_ID), eq(15000L), eq(WORKFLOW_ID + ":pay:" + PAYMENT_ID + ":refund"));
         verify(orderActivity).cancelOrder(ORDER_ID);
         verify(inventoryActivity).releaseStock(RESERVATION_ID);
@@ -700,5 +702,84 @@ class CheckoutWorkflowImplTest {
         assertThat(captor.getValue().dropoffLat()).isEqualByComparingTo(dropoffLat);
         assertThat(captor.getValue().dropoffLng()).isEqualByComparingTo(dropoffLng);
         assertThat(captor.getValue().withIdempotencyKey("custom-key").dropoffLat()).isEqualByComparingTo(dropoffLat);
+    }
+
+    @Test
+    void doesNotRedeemCouponOrForwardCouponCodeWhenExclusivePromoApplied() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, "SAVE20", DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any()))
+            .thenReturn(new PricingResult(10000L, 2500L, 0L, 7500L, "INR", "quote-1", "token-1",
+                null, 0L, List.of("EXCLUSIVE_BUNDLE")));
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(anyString(), eq(7500L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 12));
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        verify(couponActivity, never()).redeemCoupon(any(), any(), any(), anyLong());
+        ArgumentCaptor<OrderCreateRequest> captor = ArgumentCaptor.forClass(OrderCreateRequest.class);
+        verify(orderActivity).createOrder(captor.capture());
+        assertThat(captor.getValue().couponCode()).isNull();
+        assertThat(captor.getValue().discountCents()).isEqualTo(2500L);
+    }
+
+    @Test
+    void redeemsAppliedCouponWithCouponSpecificDiscountWhenStackedWithPromotion() throws Exception {
+        String json = """
+            {
+              "subtotalCents": 10000,
+              "discountCents": 3500,
+              "deliveryFeeCents": 0,
+              "totalCents": 6500,
+              "currency": "INR",
+              "quoteId": "quote-2",
+              "quoteToken": "token-2",
+              "appliedCoupon": "STACK20",
+              "couponDiscountCents": 1500,
+              "appliedPromotions": ["BUNDLE_DEAL"]
+            }
+            """;
+        PricingResult deserialized = new ObjectMapper().readValue(json, PricingResult.class);
+        assertThat(deserialized.appliedPromotions()).containsExactly("BUNDLE_DEAL");
+        assertThat(deserialized.appliedCoupon()).isEqualTo("STACK20");
+        assertThat(deserialized.couponDiscountCents()).isEqualTo(1500L);
+
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, "STACK20", DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any())).thenReturn(deserialized);
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(anyString(), eq(6500L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+        when(orderActivity.createOrder(any()))
+            .thenReturn(new OrderCreationResult(ORDER_ID, 12));
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        verify(couponActivity).redeemCoupon("STACK20", USER_ID, ORDER_ID, 1500L);
+        ArgumentCaptor<OrderCreateRequest> captor = ArgumentCaptor.forClass(OrderCreateRequest.class);
+        verify(orderActivity).createOrder(captor.capture());
+        assertThat(captor.getValue().couponCode()).isEqualTo("STACK20");
+    }
+
+    @Test
+    void defaultApplicationConfigTargetsWalletServicePort8095() throws Exception {
+        String yaml = new String(
+            getClass().getClassLoader().getResourceAsStream("application.yml").readAllBytes(),
+            StandardCharsets.UTF_8);
+        assertThat(yaml).contains("http://localhost:8095");
+        assertThat(yaml).doesNotContain("http://localhost:8088");
     }
 }

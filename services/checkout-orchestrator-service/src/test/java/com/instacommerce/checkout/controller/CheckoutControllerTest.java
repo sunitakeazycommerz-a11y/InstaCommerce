@@ -76,7 +76,13 @@ class CheckoutControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new CheckoutController(workflowClient, TASK_QUEUE, idempotencyKeyRepository, objectMapper);
+        controller = new CheckoutController(
+            workflowClient,
+            TASK_QUEUE,
+            new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
+            null,
+            null,
+            1500);
     }
 
     @Test
@@ -180,6 +186,7 @@ class CheckoutControllerTest {
             TASK_QUEUE,
             new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
             null,
+            null,
             0
         );
 
@@ -201,7 +208,8 @@ class CheckoutControllerTest {
             TASK_QUEUE,
             new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
             dlqRepo,
-            replayService
+            replayService,
+            1500
         );
 
         UUID dlqId = UUID.randomUUID();
@@ -230,7 +238,8 @@ class CheckoutControllerTest {
             TASK_QUEUE,
             new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
             dlqRepo,
-            replayService
+            replayService,
+            1500
         );
 
         UUID dlqId = UUID.randomUUID();
@@ -261,7 +270,8 @@ class CheckoutControllerTest {
             TASK_QUEUE,
             new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
             dlqRepo,
-            replayService
+            replayService,
+            1500
         );
 
         UUID dlqId = UUID.randomUUID();
@@ -286,7 +296,9 @@ class CheckoutControllerTest {
             workflowClient,
             TASK_QUEUE,
             new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
-            dlqRepo
+            dlqRepo,
+            null,
+            1500
         );
 
         UUID dlqId = UUID.randomUUID();
@@ -313,7 +325,8 @@ class CheckoutControllerTest {
             TASK_QUEUE,
             new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper),
             dlqRepo,
-            replayService
+            replayService,
+            1500
         );
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(routedController)
             .setControllerAdvice(new GlobalExceptionHandler(new TraceIdProvider()))

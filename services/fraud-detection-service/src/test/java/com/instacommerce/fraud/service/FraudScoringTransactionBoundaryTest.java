@@ -105,11 +105,13 @@ class FraudScoringTransactionBoundaryTest {
                 fraudSignalRepository,
                 ruleEvaluationService,
                 blocklistService,
+                null,
                 outboxService,
                 redisTemplate,
+                null,
                 new SimpleMeterRegistry(),
                 txManager,
-                FraudOperationalMode.AUTO_BLOCK
+                FraudOperationalMode.AUTO_BLOCK.name()
         );
 
         FraudCheckRequest request = new FraudCheckRequest(

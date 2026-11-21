@@ -36,8 +36,39 @@ public record OrderCreateRequest(
     @DecimalMin(value = "-180.0", message = "dropoffLng must be >= -180.0")
     @DecimalMax(value = "180.0", message = "dropoffLng must be <= 180.0")
     BigDecimal dropoffLng,
-    String orderId
+    String orderId,
+    @PositiveOrZero Long walletAmountCents
 ) {
+    public OrderCreateRequest(
+            String userId,
+            String storeId,
+            List<CartItem> items,
+            long subtotalCents,
+            long discountCents,
+            long deliveryFeeCents,
+            long totalCents,
+            String currency,
+            String couponCode,
+            String reservationId,
+            String paymentId,
+            String deliveryAddressId,
+            String deliveryAddress,
+            String paymentMethodId,
+            String quoteId,
+            String quoteToken,
+            String idempotencyKey,
+            BigDecimal dropoffLat,
+            BigDecimal dropoffLng,
+            String orderId) {
+        this(userId, storeId, items, subtotalCents, discountCents, deliveryFeeCents, totalCents,
+            currency, couponCode, reservationId, paymentId, deliveryAddressId, deliveryAddress,
+            paymentMethodId, quoteId, quoteToken, idempotencyKey, dropoffLat, dropoffLng, orderId, 0L);
+    }
+
+    public long effectiveWalletAmountCents() {
+        return walletAmountCents != null ? Math.max(0L, walletAmountCents) : 0L;
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -76,6 +107,7 @@ public record OrderCreateRequest(
         private BigDecimal dropoffLat;
         private BigDecimal dropoffLng;
         private String orderId;
+        private Long walletAmountCents;
 
         private Builder() {
         }
@@ -100,6 +132,7 @@ public record OrderCreateRequest(
         public Builder dropoffLat(BigDecimal dropoffLat) { this.dropoffLat = dropoffLat; return this; }
         public Builder dropoffLng(BigDecimal dropoffLng) { this.dropoffLng = dropoffLng; return this; }
         public Builder orderId(String orderId) { this.orderId = orderId; return this; }
+        public Builder walletAmountCents(Long walletAmountCents) { this.walletAmountCents = walletAmountCents; return this; }
 
         public OrderCreateRequest build() {
             return new OrderCreateRequest(
@@ -122,7 +155,8 @@ public record OrderCreateRequest(
                 idempotencyKey,
                 dropoffLat,
                 dropoffLng,
-                orderId
+                orderId,
+                walletAmountCents
             );
         }
     }

@@ -60,7 +60,6 @@ class RefundServiceDuplicateKeyTest {
 
         @Test
         @DisplayName("Concurrent insert race returns the race-winner refund instead of 500")
-        @SuppressWarnings("unchecked")
         void raceWinnerReturnedOnDuplicateKey() {
             UUID paymentId = UUID.randomUUID();
             String key = "dedup-key-abc";
@@ -68,7 +67,9 @@ class RefundServiceDuplicateKeyTest {
             Refund winner = existingRefund(paymentId, key);
 
             // First lookup misses (race window)
-            when(refundRepository.findByIdempotencyKey(key)).thenReturn(Optional.empty(), Optional.of(winner));
+            when(refundRepository.findByIdempotencyKey(key))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(winner));
             when(txHelper.savePendingRefund(eq(paymentId), eq(request), eq(key)))
                 .thenThrow(new DataIntegrityViolationException("unique constraint"));
 

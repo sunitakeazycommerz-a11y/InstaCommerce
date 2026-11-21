@@ -21,8 +21,6 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
@@ -35,6 +33,7 @@ public class AuditExportService {
     private static final Logger log = LoggerFactory.getLogger(AuditExportService.class);
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_INSTANT;
     private static final int EXPORT_BATCH_SIZE = 500;
+    private static final Sort EXPORT_SORT = Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id"));
 
     private final AuditEventRepository repository;
     private final ObjectMapper objectMapper;
@@ -133,10 +132,10 @@ public class AuditExportService {
             }
             return cb.and(predicates.toArray(new Predicate[0]));
         };
-        PageRequest pageRequest = PageRequest.of(0, EXPORT_BATCH_SIZE,
-                Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
-        Page<AuditEvent> batch = repository.findAll(cursorSpec, pageRequest);
-        return batch.getContent();
+        return repository.findBy(cursorSpec, query -> query
+                .sortBy(EXPORT_SORT)
+                .limit(EXPORT_BATCH_SIZE)
+                .all());
     }
 
     private String toCsvRow(AuditEvent event) {

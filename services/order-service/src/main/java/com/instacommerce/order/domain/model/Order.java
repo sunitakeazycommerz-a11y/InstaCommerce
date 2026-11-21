@@ -52,6 +52,9 @@ public class Order implements Persistable<UUID> {
     @Column(name = "total_cents", nullable = false)
     private long totalCents;
 
+    @Column(name = "wallet_amount_cents", nullable = false)
+    private long walletAmountCents;
+
     @Column(nullable = false)
     private String currency = "INR";
 
@@ -197,6 +200,14 @@ public class Order implements Persistable<UUID> {
 
     public void setTotalCents(long totalCents) {
         this.totalCents = totalCents;
+    }
+
+    public long getWalletAmountCents() {
+        return walletAmountCents;
+    }
+
+    public void setWalletAmountCents(long walletAmountCents) {
+        this.walletAmountCents = walletAmountCents;
     }
 
     public String getCurrency() {

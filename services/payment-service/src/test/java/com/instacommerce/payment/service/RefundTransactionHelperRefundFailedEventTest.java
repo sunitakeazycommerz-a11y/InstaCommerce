@@ -109,8 +109,7 @@ class RefundTransactionHelperRefundFailedEventTest {
 
             helper.markRefundFailed(pending.getId(), "psp refund timeout");
 
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"),
                 eq(payment.getId().toString()),
@@ -194,8 +193,7 @@ class RefundTransactionHelperRefundFailedEventTest {
 
             helper.markRefundFailed(pending.getId(), "   ");
 
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"),
                 eq(payment.getId().toString()),
@@ -226,8 +224,7 @@ class RefundTransactionHelperRefundFailedEventTest {
 
             helper.resolveStaleRefundFailed(pending.getId(), "stale after 15 minutes");
 
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"),
                 eq(payment.getId().toString()),
@@ -280,8 +277,7 @@ class RefundTransactionHelperRefundFailedEventTest {
 
             helper.resolveStaleRefundFailed(pending.getId(), null);
 
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"),
                 eq(payment.getId().toString()),

@@ -30,7 +30,6 @@ class WalletActivityImplTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
     void postsDeterministicOrderReferenceOnWalletDebit() {
         WalletDebitResult ok = new WalletDebitResult("wf-1:wallet:debit", true, 1500L, null);
         when(restTemplate.postForObject(eq("/wallet/debit"), any(), eq(WalletDebitResult.class)))
@@ -39,7 +38,7 @@ class WalletActivityImplTest {
         WalletDebitResult result = activity.debitWallet("user-1", 1500L, "wf-1:wallet:debit", "split checkout");
 
         assertThat(result.debited()).isTrue();
-        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.captor();
         verify(restTemplate).postForObject(eq("/wallet/debit"), captor.capture(), eq(WalletDebitResult.class));
         assertThat(captor.getValue())
             .containsEntry("userId", "user-1")
@@ -66,11 +65,10 @@ class WalletActivityImplTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
     void postsRefundReferenceOnWalletCompensationCredit() {
         activity.refundWallet("user-1", 1500L, "wf-1:wallet:refund", "compensation");
 
-        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.captor();
         verify(restTemplate).postForObject(eq("/wallet/credit"), captor.capture(), eq(Void.class));
         assertThat(captor.getValue())
             .containsEntry("userId", "user-1")

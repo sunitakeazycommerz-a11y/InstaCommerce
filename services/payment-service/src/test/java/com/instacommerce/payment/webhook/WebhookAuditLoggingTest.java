@@ -119,7 +119,6 @@ class WebhookAuditLoggingTest {
 
         @Test
         @DisplayName("logs WEBHOOK_CAPTURED with correct payment details")
-        @SuppressWarnings("unchecked")
         void logsWebhookCaptured() {
             Payment payment = paymentInStatus(PaymentStatus.CAPTURE_PENDING, 5000);
             when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -129,7 +128,7 @@ class WebhookAuditLoggingTest {
             processor.processEvent(EVENT_ID, "payment_intent.succeeded", PSP_REF,
                 captureObjectNode(5000), "{}");
 
-            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("WEBHOOK_CAPTURED"),
@@ -165,7 +164,6 @@ class WebhookAuditLoggingTest {
 
         @Test
         @DisplayName("logs WEBHOOK_VOIDED with correct payment details")
-        @SuppressWarnings("unchecked")
         void logsWebhookVoided() {
             Payment payment = paymentInStatus(PaymentStatus.VOID_PENDING, 8000);
             when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -175,7 +173,7 @@ class WebhookAuditLoggingTest {
             processor.processEvent(EVENT_ID, "payment_intent.canceled", PSP_REF,
                 emptyObjectNode(), "{}");
 
-            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("WEBHOOK_VOIDED"),
@@ -211,7 +209,6 @@ class WebhookAuditLoggingTest {
 
         @Test
         @DisplayName("logs WEBHOOK_REFUNDED with correct refund details")
-        @SuppressWarnings("unchecked")
         void logsWebhookRefunded() {
             Payment payment = paymentInStatus(PaymentStatus.CAPTURED, 10000);
             when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -221,7 +218,7 @@ class WebhookAuditLoggingTest {
             processor.processEvent(EVENT_ID, "charge.refunded", PSP_REF,
                 refundObjectNode(3000), "{}");
 
-            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("WEBHOOK_REFUNDED"),

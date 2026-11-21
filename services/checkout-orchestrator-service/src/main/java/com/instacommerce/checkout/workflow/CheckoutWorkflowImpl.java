@@ -1,5 +1,6 @@
 package com.instacommerce.checkout.workflow;
 
+import com.instacommerce.checkout.domain.PriceDriftEvaluator;
 import com.instacommerce.checkout.dto.CartItem;
 import com.instacommerce.checkout.dto.CartValidationResult;
 import com.instacommerce.checkout.dto.CheckoutRequest;
@@ -11,16 +12,15 @@ import com.instacommerce.checkout.dto.OrderCreationResult;
 import com.instacommerce.checkout.dto.PaymentAuthResult;
 import com.instacommerce.checkout.dto.PricingRequest;
 import com.instacommerce.checkout.dto.PricingResult;
+import com.instacommerce.checkout.dto.WalletDebitResult;
 import com.instacommerce.checkout.workflow.activity.CartActivity;
+import com.instacommerce.checkout.workflow.activity.CompensationDlqActivity;
 import com.instacommerce.checkout.workflow.activity.CouponActivity;
 import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
-import com.instacommerce.checkout.domain.PriceDriftEvaluator;
-import com.instacommerce.checkout.dto.WalletDebitResult;
-import com.instacommerce.checkout.workflow.activity.WalletActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
 import com.instacommerce.checkout.workflow.activity.PricingActivity;
-import com.instacommerce.checkout.workflow.activity.CompensationDlqActivity;
+import com.instacommerce.checkout.workflow.activity.WalletActivity;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
 import io.temporal.workflow.Saga;
@@ -28,188 +28,96 @@ import io.temporal.workflow.Workflow;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public class CheckoutWorkflowImpl implements CheckoutWorkflow {
+    private static final String INSUFFICIENT_STOCK_EXCEPTION =
+        "com.instacommerce.checkout.exception.InsufficientStockException";
+    private static final String PAYMENT_DECLINED_EXCEPTION =
+        "com.instacommerce.checkout.exception.PaymentDeclinedException";
+    private static final String INVALID_COUPON_EXCEPTION =
+        "com.instacommerce.pricing.exception.InvalidCouponException";
+    private static final String COUPON_NOT_FOUND_EXCEPTION =
+        "com.instacommerce.pricing.exception.CouponNotFoundException";
+
+    private static final Map<String, String> FAILURE_MESSAGES = Map.of(
+        "VALIDATING_CART", "Cart validation failed. Please retry.",
+        "CALCULATING_PRICES", "Pricing calculation unavailable. Please retry.",
+        "RESERVING_INVENTORY", "Unable to reserve inventory. Please retry.",
+        "DEBITING_WALLET", "Wallet debit failed. Please retry.",
+        "AUTHORIZING_PAYMENT", "Payment authorization failed. Please retry.",
+        "CREATING_ORDER", "Order creation failed. Please retry.",
+        "REDEEMING_COUPON", "Coupon redemption failed. Please retry.",
+        "CONFIRMING", "Order confirmation failed. Please retry."
+    );
+
+    private final String workflowId = Workflow.getInfo().getWorkflowId();
+    // Derived from workflowId so Temporal activity retries reuse identical idempotency keys.
+    private final PaymentOperationKeys paymentKeys = new PaymentOperationKeys(workflowId);
+
+    private final CartActivity cartActivity = activityStub(CartActivity.class, 10, 1, 3, 0);
+    private final PricingActivity pricingActivity = activityStub(PricingActivity.class, 10, 1, 3, 0);
+    private final InventoryActivity inventoryActivity =
+        activityStub(InventoryActivity.class, 15, 1, 3, 0, INSUFFICIENT_STOCK_EXCEPTION);
+    private final PaymentActivity paymentActivity =
+        activityStub(PaymentActivity.class, 30, 2, 3, 45, PAYMENT_DECLINED_EXCEPTION);
+    private final OrderActivity orderActivity = activityStub(OrderActivity.class, 15, 1, 3, 0);
+    private final CouponActivity couponActivity =
+        activityStub(CouponActivity.class, 10, 1, 3, 0, INVALID_COUPON_EXCEPTION, COUPON_NOT_FOUND_EXCEPTION);
+    private final InventoryActivity compensationInventoryActivity = activityStub(InventoryActivity.class, 30, 2, 5, 0);
+    private final PaymentActivity compensationPaymentActivity = activityStub(PaymentActivity.class, 45, 1, 5, 0);
+    private final OrderActivity compensationOrderActivity = activityStub(OrderActivity.class, 30, 2, 5, 0);
+    private final CouponActivity compensationCouponActivity = activityStub(CouponActivity.class, 20, 2, 5, 0);
+    private final CompensationDlqActivity dlqActivity = activityStub(CompensationDlqActivity.class, 15, 1, 3, 0);
 
     private String currentStatus = "STARTED";
     private CheckoutResponse lastResponse;
     private WalletActivity walletActivity;
     private WalletActivity compensationWalletActivity;
 
+    private static <T> T activityStub(Class<T> iface,
+                                      int startToCloseSeconds,
+                                      int initialIntervalSeconds,
+                                      int maxAttempts,
+                                      int scheduleToCloseSeconds,
+                                      String... doNotRetry) {
+        RetryOptions.Builder retry = RetryOptions.newBuilder()
+            .setInitialInterval(Duration.ofSeconds(initialIntervalSeconds))
+            .setMaximumAttempts(maxAttempts)
+            .setBackoffCoefficient(2.0);
+        if (doNotRetry.length > 0) {
+            retry.setDoNotRetry(doNotRetry);
+        }
+        ActivityOptions.Builder options = ActivityOptions.newBuilder()
+            .setStartToCloseTimeout(Duration.ofSeconds(startToCloseSeconds))
+            .setRetryOptions(retry.build());
+        if (scheduleToCloseSeconds > 0) {
+            options.setScheduleToCloseTimeout(Duration.ofSeconds(scheduleToCloseSeconds));
+        }
+        return Workflow.newActivityStub(iface, options.build());
+    }
+
     private WalletActivity walletActivity() {
         if (walletActivity == null) {
-            walletActivity = Workflow.newActivityStub(
-                WalletActivity.class,
-                ActivityOptions.newBuilder()
-                    .setStartToCloseTimeout(Duration.ofSeconds(15))
-                    .setRetryOptions(RetryOptions.newBuilder()
-                        .setInitialInterval(Duration.ofSeconds(1))
-                        .setMaximumAttempts(3)
-                        .setBackoffCoefficient(2.0)
-                        .build())
-                    .build());
+            walletActivity = activityStub(WalletActivity.class, 15, 1, 3, 0);
         }
         return walletActivity;
     }
 
     private WalletActivity compensationWalletActivity() {
         if (compensationWalletActivity == null) {
-            compensationWalletActivity = Workflow.newActivityStub(
-                WalletActivity.class,
-                ActivityOptions.newBuilder()
-                    .setStartToCloseTimeout(Duration.ofSeconds(30))
-                    .setRetryOptions(RetryOptions.newBuilder()
-                        .setInitialInterval(Duration.ofSeconds(2))
-                        .setMaximumAttempts(5)
-                        .setBackoffCoefficient(2.0)
-                        .build())
-                    .build());
+            compensationWalletActivity = activityStub(WalletActivity.class, 30, 2, 5, 0);
         }
         return compensationWalletActivity;
     }
 
-    private final String workflowId = Workflow.getInfo().getWorkflowId();
-
-    /** Workflow-stable payment idempotency keys — never derived from activityId. */
-    private final PaymentOperationKeys paymentKeys = new PaymentOperationKeys(workflowId);
-
-    private final CartActivity cartActivity = Workflow.newActivityStub(
-        CartActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(10))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(1))
-                .setMaximumAttempts(3)
-                .setBackoffCoefficient(2.0)
-                .build())
-            .build());
-
-    private final PricingActivity pricingActivity = Workflow.newActivityStub(
-        PricingActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(10))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(1))
-                .setMaximumAttempts(3)
-                .setBackoffCoefficient(2.0)
-                .build())
-            .build());
-
-    private final InventoryActivity inventoryActivity = Workflow.newActivityStub(
-        InventoryActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(15))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(1))
-                .setMaximumAttempts(3)
-                .setBackoffCoefficient(2.0)
-                .setDoNotRetry(
-                    "com.instacommerce.checkout.exception.InsufficientStockException")
-                .build())
-            .build());
-
-    private final PaymentActivity paymentActivity = Workflow.newActivityStub(
-        PaymentActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(30))
-            .setScheduleToCloseTimeout(Duration.ofSeconds(45))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(2))
-                .setMaximumAttempts(3)
-                .setBackoffCoefficient(2.0)
-                .setDoNotRetry(
-                    "com.instacommerce.checkout.exception.PaymentDeclinedException")
-                .build())
-            .build());
-
-    private final OrderActivity orderActivity = Workflow.newActivityStub(
-        OrderActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(15))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(1))
-                .setMaximumAttempts(3)
-                .setBackoffCoefficient(2.0)
-                .build())
-            .build());
-
-    private final CouponActivity couponActivity = Workflow.newActivityStub(
-        CouponActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(10))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(1))
-                .setMaximumAttempts(3)
-                .setBackoffCoefficient(2.0)
-                .setDoNotRetry(
-                    "com.instacommerce.pricing.exception.InvalidCouponException",
-                    "com.instacommerce.pricing.exception.CouponNotFoundException")
-                .build())
-            .build());
-
-    private final InventoryActivity compensationInventoryActivity = Workflow.newActivityStub(
-        InventoryActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(30))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(2))
-                .setMaximumAttempts(5)
-                .setBackoffCoefficient(2.0)
-                .build())
-            .build());
-
-    private final PaymentActivity compensationPaymentActivity = Workflow.newActivityStub(
-        PaymentActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(45))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(1))
-                .setMaximumAttempts(5)
-                .setBackoffCoefficient(2.0)
-                .build())
-            .build());
-
-    private final OrderActivity compensationOrderActivity = Workflow.newActivityStub(
-        OrderActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(30))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(2))
-                .setMaximumAttempts(5)
-                .setBackoffCoefficient(2.0)
-                .build())
-            .build());
-
-    private final CouponActivity compensationCouponActivity = Workflow.newActivityStub(
-        CouponActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(20))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(2))
-                .setMaximumAttempts(5)
-                .setBackoffCoefficient(2.0)
-                .build())
-            .build());
-
-    private final CompensationDlqActivity dlqActivity = Workflow.newActivityStub(
-        CompensationDlqActivity.class,
-        ActivityOptions.newBuilder()
-            .setStartToCloseTimeout(Duration.ofSeconds(15))
-            .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(1))
-                .setMaximumAttempts(3)
-                .setBackoffCoefficient(2.0)
-                .build())
-            .build());
-
     @Override
     public CheckoutResponse checkout(CheckoutRequest request) {
-        Saga.Options sagaOptions = new Saga.Options.Builder()
+        Saga saga = new Saga(new Saga.Options.Builder()
             .setParallelCompensation(false)
             .setContinueWithError(true)
-            .build();
-        Saga saga = new Saga(sagaOptions);
+            .build());
         PaymentAuthResult paymentResult = null;
         Long paymentAmountCents = null;
         boolean paymentAuthorized = false;
@@ -217,45 +125,30 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
         boolean paymentCaptureAttempted = false;
 
         try {
-            // Step 1: Validate cart
             currentStatus = "VALIDATING_CART";
             CartValidationResult cartResult = cartActivity.validateCart(request.userId());
             if (!cartResult.valid() || cartResult.items() == null || cartResult.items().isEmpty()) {
-                currentStatus = "FAILED";
-                CheckoutResponse failed = CheckoutResponse.failed("Cart is empty or invalid");
-                lastResponse = failed;
-                return failed;
+                return fail("Cart is empty or invalid");
             }
             List<CartItem> items = cartResult.items();
             if (items.stream().anyMatch(i -> i == null || i.quantity() == null || i.quantity() <= 0)) {
-                currentStatus = "FAILED";
-                CheckoutResponse failed = CheckoutResponse.failed("Cart contains items with invalid or non-positive quantities");
-                lastResponse = failed;
-                return failed;
+                return fail("Cart contains items with invalid or non-positive quantities");
             }
             String storeId = cartResult.storeId();
 
-            // Step 2: Calculate prices
             currentStatus = "CALCULATING_PRICES";
             PricingRequest pricingRequest = new PricingRequest(
                 request.userId(), items, storeId, request.couponCode(), request.deliveryAddressId());
             PricingResult pricingResult = pricingActivity.calculatePrice(pricingRequest);
             if (pricingResult == null || pricingResult.totalCents() < 0) {
-                currentStatus = "FAILED";
-                CheckoutResponse failed = CheckoutResponse.failed("Pricing calculation failed: invalid total amount");
-                lastResponse = failed;
-                return failed;
+                return fail("Pricing calculation failed: invalid total amount");
             }
             PriceDriftEvaluator.Evaluation priceDrift = PriceDriftEvaluator.evaluate(
                 pricingResult.totalCents(),
                 request.expectedTotalCents(),
-                request.maxPriceDriftCents()
-            );
+                request.maxPriceDriftCents());
             if (!priceDrift.withinTolerance()) {
-                currentStatus = "FAILED";
-                CheckoutResponse failed = CheckoutResponse.failed(priceDrift.failureReason());
-                lastResponse = failed;
-                return failed;
+                return fail(priceDrift.failureReason());
             }
             long totalAmountCents = pricingResult.totalCents();
             String currency = (pricingResult.currency() != null && !pricingResult.currency().isBlank())
@@ -265,19 +158,15 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 ("order-" + workflowId).getBytes(StandardCharsets.UTF_8));
             String expectedOrderId = deterministicOrderId.toString();
 
-            // Step 3: Reserve inventory — register compensation BEFORE the activity
+            // Register each compensation immediately around its reservation/debit step.
             currentStatus = "RESERVING_INVENTORY";
             InventoryReservationResult reservationResult = inventoryActivity.reserveStock(
                 new InventoryReserveRequest(workflowId + ":inventory:reserve", storeId, items));
             if (!reservationResult.reserved()) {
-                currentStatus = "FAILED";
-                CheckoutResponse failed = CheckoutResponse.failed("Some items are out of stock");
-                lastResponse = failed;
-                return failed;
+                return fail("Some items are out of stock");
             }
             saga.addCompensation(() -> safeReleaseStock(reservationResult.reservationId()));
 
-            // Step 3.5: Split-tender wallet debit (optional)
             long walletDebitedCents = 0L;
             long requestedWalletCents = request.walletAmountCents() != null
                 ? Math.min(request.walletAmountCents(), totalAmountCents)
@@ -292,14 +181,8 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 if (walletResult == null || !walletResult.debited()) {
                     currentStatus = "COMPENSATING";
                     saga.compensate();
-                    currentStatus = "FAILED";
-                    String reason = (walletResult != null && walletResult.failureReason() != null
-                        && !walletResult.failureReason().isBlank())
-                        ? walletResult.failureReason()
-                        : "Wallet debit declined";
-                    CheckoutResponse failed = CheckoutResponse.failed("Wallet debit failed: " + reason);
-                    lastResponse = failed;
-                    return failed;
+                    return fail("Wallet debit failed: " + sanitizeClientReason(
+                        walletResult != null ? walletResult.failureReason() : null, "Wallet debit declined"));
                 }
                 final long appliedWalletCents = walletResult.amountCents() > 0
                     ? Math.min(walletResult.amountCents(), totalAmountCents)
@@ -309,7 +192,6 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             }
             paymentAmountCents = totalAmountCents - walletDebitedCents;
 
-            // Step 4: Authorize PSP payment for remaining split-tender balance
             if (paymentAmountCents > 0) {
                 currentStatus = "AUTHORIZING_PAYMENT";
                 paymentResult = paymentActivity.authorizePayment(
@@ -329,25 +211,19 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 if (!paymentAuthorized) {
                     currentStatus = "COMPENSATING";
                     saga.compensate();
-                    currentStatus = "FAILED";
                     if ("TOKEN_EXPIRED".equalsIgnoreCase(paymentResult.declineReason())) {
-                        CheckoutResponse expired = new CheckoutResponse(
-                            null,
-                            "PAYMENT_TOKEN_EXPIRED: Client re-authentication required",
-                            0,
-                            0
-                        );
-                        lastResponse = expired;
-                        return expired;
+                        return fail("PAYMENT_TOKEN_EXPIRED: Client re-authentication required");
                     }
-                    CheckoutResponse declined = CheckoutResponse.failed(
-                        "Payment declined: " + paymentResult.declineReason());
-                    lastResponse = declined;
-                    return declined;
+                    return fail("Payment declined: " + sanitizeClientReason(
+                        paymentResult.declineReason(), "Payment declined"));
                 }
             }
 
-            // Step 5: Create order
+            String appliedCoupon = (pricingResult.appliedCoupon() != null && !pricingResult.appliedCoupon().isBlank())
+                ? pricingResult.appliedCoupon()
+                : null;
+            long couponDiscountCents = Math.max(0L, pricingResult.couponDiscountCents());
+
             currentStatus = "CREATING_ORDER";
             OrderCreateRequest orderRequest = OrderCreateRequest.builder()
                 .userId(request.userId())
@@ -358,7 +234,7 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 .deliveryFeeCents(pricingResult.deliveryFeeCents())
                 .totalCents(pricingResult.totalCents())
                 .currency(currency)
-                .couponCode(request.couponCode())
+                .couponCode(appliedCoupon)
                 .reservationId(reservationResult.reservationId())
                 .paymentId(paymentResult != null ? paymentResult.paymentId() : null)
                 .deliveryAddressId(request.deliveryAddressId())
@@ -369,24 +245,21 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 .dropoffLat(request.dropoffLat())
                 .dropoffLng(request.dropoffLng())
                 .orderId(expectedOrderId)
+                .walletAmountCents(walletDebitedCents)
                 .build();
             OrderCreationResult orderResult = orderActivity.createOrder(orderRequest);
             saga.addCompensation(() -> safeCancelOrder(orderResult.orderId()));
 
-            // Step 5.5: Redeem coupon (if applicable)
-            if (request.couponCode() != null && !request.couponCode().isBlank()
-                    && pricingResult.discountCents() > 0) {
+            if (appliedCoupon != null && couponDiscountCents > 0) {
                 currentStatus = "REDEEMING_COUPON";
                 couponActivity.redeemCoupon(
-                    request.couponCode(),
+                    appliedCoupon,
                     request.userId(),
                     orderResult.orderId(),
-                    pricingResult.discountCents());
-                saga.addCompensation(() -> safeRollbackCoupon(
-                    request.couponCode(), request.userId(), orderResult.orderId()));
+                    couponDiscountCents);
+                saga.addCompensation(() -> safeRollbackCoupon(appliedCoupon, request.userId(), orderResult.orderId()));
             }
 
-            // Step 6: Confirm inventory reservation + capture payment
             currentStatus = "CONFIRMING";
             inventoryActivity.confirmStock(reservationResult.reservationId());
             if (paymentAmountCents > 0 && paymentResult != null) {
@@ -398,24 +271,18 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             }
             orderActivity.confirmOrder(orderResult.orderId(), workflowId + ":order:confirm");
 
-            // Step 7: Clear cart (best effort — don't fail checkout if this fails)
-            currentStatus = "CLEARING_CART";
-            try {
-                cartActivity.clearCart(request.userId());
-            } catch (Exception e) {
-                Workflow.getLogger(CheckoutWorkflowImpl.class)
-                    .warn("Failed to clear cart for user {}, continuing", request.userId(), e);
-            }
+            clearCartSafely(request.userId());
 
             currentStatus = "COMPLETED";
-            CheckoutResponse completed = CheckoutResponse.success(
+            lastResponse = CheckoutResponse.success(
                 orderResult.orderId(),
                 pricingResult.totalCents(),
                 orderResult.estimatedDeliveryMinutes());
-            lastResponse = completed;
-            return completed;
-
+            return lastResponse;
         } catch (Exception e) {
+            String failedStep = currentStatus;
+            Workflow.getLogger(CheckoutWorkflowImpl.class)
+                .error("Checkout workflow failed step={} workflowId={}", failedStep, workflowId, e);
             currentStatus = "COMPENSATING";
             compensatePayment(
                 paymentResult,
@@ -424,10 +291,7 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 paymentCaptureAttempted,
                 paymentAmountCents);
             saga.compensate();
-            currentStatus = "FAILED";
-            CheckoutResponse failed = CheckoutResponse.failed(e.getMessage());
-            lastResponse = failed;
-            return failed;
+            return fail(FAILURE_MESSAGES.getOrDefault(failedStep, "Checkout failed. Please retry."));
         }
     }
 
@@ -439,6 +303,22 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
     @Override
     public CheckoutResponse getResultSnapshot() {
         return lastResponse;
+    }
+
+    private CheckoutResponse fail(String reason) {
+        currentStatus = "FAILED";
+        lastResponse = CheckoutResponse.failed(reason);
+        return lastResponse;
+    }
+
+    private void clearCartSafely(String userId) {
+        currentStatus = "CLEARING_CART";
+        try {
+            cartActivity.clearCart(userId);
+        } catch (Exception e) {
+            Workflow.getLogger(CheckoutWorkflowImpl.class)
+                .warn("Failed to clear cart for user {}, continuing", userId, e);
+        }
     }
 
     private void compensatePayment(PaymentAuthResult paymentResult,
@@ -454,17 +334,17 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 .warn("Skipping refund for payment {} due to missing amount", paymentResult.paymentId());
             return;
         }
-        try {
-            String paymentId = paymentResult.paymentId();
-            String refundIdempotencyKey = paymentKeys.refund(paymentId);
-            String voidIdempotencyKey = paymentKeys.voidOp(paymentId);
+        String paymentId = paymentResult.paymentId();
+        String refundIdempotencyKey = paymentKeys.refund(paymentId);
+        String voidIdempotencyKey = paymentKeys.voidOp(paymentId);
+        String step = paymentCaptured ? "refundPayment" : "voidPayment";
+        runWithDlq(step, paymentId, String.valueOf(paymentAmountCents), () -> {
             if (paymentCaptured) {
                 compensationPaymentActivity.refundPayment(paymentId, paymentAmountCents, refundIdempotencyKey);
                 return;
             }
             try {
                 compensationPaymentActivity.voidPayment(paymentId, voidIdempotencyKey);
-                return;
             } catch (Exception voidFailure) {
                 if (paymentCaptureAttempted) {
                     Workflow.getLogger(CheckoutWorkflowImpl.class)
@@ -475,82 +355,59 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                 }
                 throw voidFailure;
             }
-        } catch (Exception compensationFailure) {
-            String workflowId = Workflow.getInfo().getWorkflowId();
-            Workflow.getLogger(CheckoutWorkflowImpl.class)
-                .error("Failed to compensate payment {}, routing to DLQ: {}", paymentResult.paymentId(), compensationFailure.getMessage());
-            dlqActivity.recordFailedCompensation(
-                workflowId,
-                paymentCaptured ? "refundPayment" : "voidPayment",
-                paymentResult.paymentId(),
-                compensationFailure.getMessage(),
-                String.valueOf(paymentAmountCents)
-            );
-        }
+        });
     }
 
     private void safeRefundWallet(String userId, long amountCents) {
         if (amountCents <= 0) {
             return;
         }
-        try {
+        runWithDlq("refundWallet", userId, String.valueOf(amountCents), () ->
             compensationWalletActivity().refundWallet(
                 userId,
                 amountCents,
                 paymentKeys.walletRefund(),
-                "Saga wallet refund for checkout " + workflowId);
-        } catch (Exception e) {
-            String workflowId = Workflow.getInfo().getWorkflowId();
-            Workflow.getLogger(CheckoutWorkflowImpl.class)
-                .error("Failed to refund wallet for user {}, routing to DLQ: {}", userId, e.getMessage());
-            dlqActivity.recordFailedCompensation(
-                workflowId,
-                "refundWallet",
-                userId,
-                e.getMessage(),
-                String.valueOf(amountCents)
-            );
-        }
+                "Saga wallet refund for checkout " + workflowId));
     }
 
     private void safeReleaseStock(String reservationId) {
-        try {
-            compensationInventoryActivity.releaseStock(reservationId);
-        } catch (Exception e) {
-            String workflowId = Workflow.getInfo().getWorkflowId();
-            Workflow.getLogger(CheckoutWorkflowImpl.class)
-                .error("Failed to release stock for reservation {}, routing to DLQ: {}", reservationId, e.getMessage());
-            dlqActivity.recordFailedCompensation(workflowId, "releaseStock", reservationId, e.getMessage(), null);
-        }
+        runWithDlq("releaseStock", reservationId, null, () ->
+            compensationInventoryActivity.releaseStock(reservationId));
     }
 
     private void safeCancelOrder(String orderId) {
-        try {
-            compensationOrderActivity.cancelOrder(orderId);
-        } catch (Exception e) {
-            String workflowId = Workflow.getInfo().getWorkflowId();
-            Workflow.getLogger(CheckoutWorkflowImpl.class)
-                .error("Failed to cancel order {}, routing to DLQ: {}", orderId, e.getMessage());
-            dlqActivity.recordFailedCompensation(workflowId, "cancelOrder", orderId, e.getMessage(), null);
-        }
+        runWithDlq("cancelOrder", orderId, null, () ->
+            compensationOrderActivity.cancelOrder(orderId));
     }
 
     private void safeRollbackCoupon(String couponCode, String userId, String orderId) {
-        try {
-            if (orderId != null && !orderId.isBlank()) {
+        boolean hasOrder = orderId != null && !orderId.isBlank();
+        String step = hasOrder ? "unredeemCoupon" : "rollbackUsage";
+        String targetId = hasOrder ? couponCode + ":" + userId + ":" + orderId : couponCode + ":" + userId;
+        runWithDlq(step, targetId, null, () -> {
+            if (hasOrder) {
                 compensationCouponActivity.unredeemCoupon(couponCode, userId, orderId);
             } else {
                 compensationCouponActivity.rollbackUsage(couponCode, userId);
             }
+        });
+    }
+
+    private void runWithDlq(String step, String targetId, String payload, Runnable action) {
+        try {
+            action.run();
         } catch (Exception e) {
-            String workflowId = Workflow.getInfo().getWorkflowId();
             Workflow.getLogger(CheckoutWorkflowImpl.class)
-                .error("Failed to rollback coupon {} for user {}, routing to DLQ: {}", couponCode, userId, e.getMessage());
-            String step = (orderId != null && !orderId.isBlank()) ? "unredeemCoupon" : "rollbackUsage";
-            String targetId = (orderId != null && !orderId.isBlank())
-                ? couponCode + ":" + userId + ":" + orderId
-                : couponCode + ":" + userId;
-            dlqActivity.recordFailedCompensation(workflowId, step, targetId, e.getMessage(), null);
+                .error("Failed to compensate step={} targetId={}, routing to DLQ: {}", step, targetId, e.getMessage());
+            dlqActivity.recordFailedCompensation(workflowId, step, targetId, e.getMessage(), payload);
         }
+    }
+
+    private String sanitizeClientReason(String reason, String fallback) {
+        if (reason == null || reason.isBlank()) {
+            return fallback;
+        }
+        String sanitized = reason.replaceAll("[\\r\\n]+", " ").trim();
+        return sanitized.length() > 160 ? fallback : sanitized;
     }
 }

@@ -42,6 +42,18 @@ public class OrderItem {
     @Column(name = "picked_status")
     private String pickedStatus = "PENDING";
 
+    @Column(name = "cold_chain", nullable = false)
+    private boolean coldChain;
+
+    @Column(name = "fragile", nullable = false)
+    private boolean fragile;
+
+    @Column(name = "storage_temperature", length = 64)
+    private String storageTemperature;
+
+    @Column(name = "tare_weight_grams", nullable = false)
+    private int tareWeightGrams;
+
     public UUID getId() {
         return id;
     }
@@ -112,5 +124,37 @@ public class OrderItem {
 
     public void setPickedStatus(String pickedStatus) {
         this.pickedStatus = pickedStatus;
+    }
+
+    public boolean isColdChain() {
+        return coldChain;
+    }
+
+    public void setColdChain(boolean coldChain) {
+        this.coldChain = coldChain;
+    }
+
+    public boolean isFragile() {
+        return fragile;
+    }
+
+    public void setFragile(boolean fragile) {
+        this.fragile = fragile;
+    }
+
+    public String getStorageTemperature() {
+        return storageTemperature;
+    }
+
+    public void setStorageTemperature(String storageTemperature) {
+        this.storageTemperature = storageTemperature;
+    }
+
+    public int getTareWeightGrams() {
+        return tareWeightGrams;
+    }
+
+    public void setTareWeightGrams(int tareWeightGrams) {
+        this.tareWeightGrams = tareWeightGrams;
     }
 }

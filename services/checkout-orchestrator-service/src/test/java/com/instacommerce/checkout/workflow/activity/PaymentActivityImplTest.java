@@ -49,8 +49,7 @@ class PaymentActivityImplTest {
 
                 activity.authorizePayment("order-1", 5000L, "INR", "pm_abc", stableKey);
 
-                @SuppressWarnings("unchecked")
-                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
+                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.captor();
                 verify(restTemplate).postForObject(eq("/payments/authorize"), bodyCaptor.capture(), eq(PaymentAuthResult.class));
 
                 Map<String, Object> body = bodyCaptor.getValue();
@@ -80,8 +79,7 @@ class PaymentActivityImplTest {
 
                 activity.authorizePayment("order-2", 3000L, null, "pm_xyz", null);
 
-                @SuppressWarnings("unchecked")
-                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
+                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.captor();
                 verify(restTemplate).postForObject(eq("/payments/authorize"), bodyCaptor.capture(), eq(PaymentAuthResult.class));
 
                 assertEquals(activityId, bodyCaptor.getValue().get("idempotencyKey"),
@@ -108,8 +106,7 @@ class PaymentActivityImplTest {
 
                 activity.authorizePayment("order-3", 1000L, " ", "pm_blank", "   ");
 
-                @SuppressWarnings("unchecked")
-                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
+                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.captor();
                 verify(restTemplate).postForObject(eq("/payments/authorize"), bodyCaptor.capture(), eq(PaymentAuthResult.class));
 
                 assertEquals(activityId, bodyCaptor.getValue().get("idempotencyKey"),
@@ -139,8 +136,7 @@ class PaymentActivityImplTest {
 
                 activity.capturePayment("pay_1", captureKey);
 
-                @SuppressWarnings("unchecked")
-                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
+                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.captor();
                 verify(restTemplate).postForObject(eq("/payments/{paymentId}/capture"), bodyCaptor.capture(), eq(Void.class), eq("pay_1"));
 
                 assertEquals(captureKey, bodyCaptor.getValue().get("idempotencyKey"));
@@ -169,8 +165,7 @@ class PaymentActivityImplTest {
 
                 activity.refundPayment("pay_1", 5000L, refundKey);
 
-                @SuppressWarnings("unchecked")
-                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
+                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.captor();
                 verify(restTemplate).postForObject(eq("/payments/{paymentId}/refund"), bodyCaptor.capture(), eq(Void.class), eq("pay_1"));
 
                 assertEquals(refundKey, bodyCaptor.getValue().get("idempotencyKey"));
@@ -199,8 +194,7 @@ class PaymentActivityImplTest {
 
                 activity.voidPayment("pay_1", voidKey);
 
-                @SuppressWarnings("unchecked")
-                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.forClass(Map.class);
+                ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.captor();
                 verify(restTemplate).postForObject(eq("/payments/{paymentId}/void"), bodyCaptor.capture(), eq(Void.class), eq("pay_1"));
 
                 assertEquals(voidKey, bodyCaptor.getValue().get("idempotencyKey"));

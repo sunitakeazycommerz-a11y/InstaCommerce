@@ -15,9 +15,13 @@ import com.instacommerce.order.exception.TraceIdProvider;
 import com.instacommerce.order.repository.OrderRepository;
 import com.instacommerce.order.repository.OrderStatusHistoryRepository;
 import com.instacommerce.order.service.AuditLogService;
+import com.instacommerce.order.service.OrderCreationService;
+import com.instacommerce.order.service.OrderLifecycleService;
+import com.instacommerce.order.service.OrderModificationService;
 import com.instacommerce.order.service.OrderService;
 import com.instacommerce.order.service.OutboxService;
 import com.instacommerce.order.workflow.model.CreateOrderCommand;
+import org.springframework.transaction.PlatformTransactionManager;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import java.math.BigDecimal;
@@ -320,8 +324,23 @@ class OrderControllerTest {
             .andExpect(jsonPath("$.status").value("PLACED"));
     }
 
+    private OrderService buildRealOrderService(OrderRepository orderRepository,
+                                             OrderStatusHistoryRepository statusHistoryRepository,
+                                             OutboxService outboxService,
+                                             AuditLogService auditLogService,
+                                             PricingQuoteClient pricingQuoteClient) {
+        OrderCreationService creationService = new OrderCreationService(
+            orderRepository, statusHistoryRepository, outboxService,
+            pricingQuoteClient, mock(PlatformTransactionManager.class));
+        OrderLifecycleService lifecycleService = new OrderLifecycleService(
+            orderRepository, statusHistoryRepository, outboxService, auditLogService, null, null, null);
+        OrderModificationService modificationService = new OrderModificationService(
+            orderRepository, outboxService, auditLogService, lifecycleService);
+        return new OrderService(creationService, lifecycleService, modificationService);
+    }
+
     private MockMvc standaloneMockMvcWithOrderService(OrderRepository orderRepository) {
-        OrderService realOrderService = new OrderService(
+        OrderService realOrderService = buildRealOrderService(
             orderRepository,
             mock(OrderStatusHistoryRepository.class),
             mock(OutboxService.class),
@@ -346,14 +365,13 @@ class OrderControllerTest {
 
     @Test
     @DisplayName("createOrder propagates dropoff coordinates into OrderPlaced outbox payload and validates coordinate pairs")
-    @SuppressWarnings("unchecked")
     void shouldPersistAndPublishDropoffCoordinatesAndValidateBounds() {
         OrderRepository orderRepository = mock(OrderRepository.class);
         OrderStatusHistoryRepository statusHistoryRepository = mock(OrderStatusHistoryRepository.class);
         OutboxService outboxService = mock(OutboxService.class);
         AuditLogService auditLogService = mock(AuditLogService.class);
         PricingQuoteClient pricingQuoteClient = mock(PricingQuoteClient.class);
-        OrderService realOrderService = new OrderService(
+        OrderService realOrderService = buildRealOrderService(
             orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient);
         OrderController controller = new OrderController(realOrderService);
 
@@ -403,7 +421,7 @@ class OrderControllerTest {
         when(orderRepository.findByIdForUpdate(orderId)).thenReturn(Optional.of(savedOrder));
         realOrderService.updateOrderStatus(orderId, OrderStatus.PLACED, "system", "Payment captured");
 
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderPlaced"), payloadCaptor.capture());
         assertThat(payloadCaptor.getValue())
             .containsEntry("dropoffLat", dropoffLat)

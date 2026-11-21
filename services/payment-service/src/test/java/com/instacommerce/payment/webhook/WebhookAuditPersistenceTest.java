@@ -67,8 +67,7 @@ class WebhookAuditPersistenceTest {
             paymentRepository, processedWebhookEventRepository, refundRepository,
             ledgerEntryRepository, ledgerService, outboxService, auditLogService, meterRegistry, false, false);
         ReflectionTestUtils.setField(processor, "entityManager", entityManager);
-        handler = new WebhookEventHandler(
-            objectMapper, processedWebhookEventRepository, processor);
+        handler = new WebhookEventHandler(objectMapper, processor);
     }
 
     // ── helpers ──────────────────────────────────────────────────────

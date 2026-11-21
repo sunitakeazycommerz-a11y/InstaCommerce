@@ -81,8 +81,7 @@ class WebhookRefundHandlerTest {
             ledgerEntryRepository, ledgerService, outboxService, auditLogService, meterRegistry, false, false);
         ReflectionTestUtils.setField(processorOutboxEnabled, "entityManager", entityManager);
         ReflectionTestUtils.setField(processorOutboxDisabled, "entityManager", entityManager);
-        handlerOutboxEnabled = new WebhookEventHandler(
-            objectMapper, processedWebhookEventRepository, processorOutboxEnabled);
+        handlerOutboxEnabled = new WebhookEventHandler(objectMapper, processorOutboxEnabled);
     }
 
     // --- Helpers ---
@@ -273,9 +272,7 @@ class WebhookRefundHandlerTest {
             processorOutboxEnabled.processEvent("evt_out_1", "charge.refunded", PSP_REF,
                 objectMapper.createObjectNode().put("amount_refunded", 5000), null);
 
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<Map<String, Object>> payloadCaptor =
-                ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentRefunded"), payloadCaptor.capture());
@@ -288,7 +285,8 @@ class WebhookRefundHandlerTest {
             assertThat(payload.get("paymentId")).isEqualTo(p.getId());
             assertThat(payload.get("amountCents")).isEqualTo(5000L);
             assertThat(payload.get("currency")).isEqualTo("INR");
-            assertThat(payload).containsKey("refundedAt");
+            assertThat(payload.get("refundedAt")).isInstanceOf(String.class);
+            assertThat(Instant.parse((String) payload.get("refundedAt"))).isNotNull();
             assertThat(payload.get("reason")).isEqualTo("webhook");
         }
 
@@ -430,6 +428,14 @@ class WebhookRefundHandlerTest {
         }
 
         @Test
+        @DisplayName("syntheticRefundId is deterministic even when eventId is null")
+        void syntheticRefundId_deterministicWhenNull() {
+            UUID first = WebhookEventProcessor.syntheticRefundId(null);
+            UUID second = WebhookEventProcessor.syntheticRefundId("   ");
+            assertThat(first).isEqualTo(second);
+        }
+
+        @Test
         @DisplayName("Outbox payload contains all required PaymentRefunded contract fields")
         void outboxPayload_contractSafe() {
             Payment p = payment(PaymentStatus.CAPTURED, 10000, 0);
@@ -438,9 +444,7 @@ class WebhookRefundHandlerTest {
             processorOutboxEnabled.processEvent("evt_contract", "charge.refunded", PSP_REF,
                 objectMapper.createObjectNode().put("amount_refunded", 4000), null);
 
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<Map<String, Object>> payloadCaptor =
-                ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentRefunded"), payloadCaptor.capture());
@@ -463,10 +467,7 @@ class WebhookRefundHandlerTest {
         @DisplayName("handle() calls processor.processEvent(), not self-invocation")
         void handle_delegatesToProcessorBean() {
             WebhookEventProcessor mockProcessor = mock(WebhookEventProcessor.class);
-            WebhookEventHandler handler = new WebhookEventHandler(
-                objectMapper, processedWebhookEventRepository, mockProcessor);
-
-            when(processedWebhookEventRepository.existsById("evt_delegate")).thenReturn(false);
+            WebhookEventHandler handler = new WebhookEventHandler(objectMapper, mockProcessor);
 
             handler.handle(refundWebhookPayload("evt_delegate", 5000));
 
@@ -475,21 +476,19 @@ class WebhookRefundHandlerTest {
         }
 
         @Test
-        @DisplayName("Pessimistic lock conflicts are retried locally")
-        void pessimisticLockConflict_retriesLocally() {
+        @DisplayName("Pessimistic lock conflicts propagate immediately for HTTP 409/503 without sleeping")
+        void pessimisticLockConflict_propagatesWithoutSleeping() {
             WebhookEventProcessor mockProcessor = mock(WebhookEventProcessor.class);
-            WebhookEventHandler handler = new WebhookEventHandler(
-                objectMapper, processedWebhookEventRepository, mockProcessor);
+            WebhookEventHandler handler = new WebhookEventHandler(objectMapper, mockProcessor);
 
-            when(processedWebhookEventRepository.existsById("evt_lock")).thenReturn(false);
             Mockito.doThrow(new PessimisticLockingFailureException("lock"))
-                .doNothing()
                 .when(mockProcessor)
                 .processEvent(eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class), any(String.class));
 
-            handler.handle(refundWebhookPayload("evt_lock", 5000));
+            assertThatThrownBy(() -> handler.handle(refundWebhookPayload("evt_lock", 5000)))
+                .isInstanceOf(PessimisticLockingFailureException.class);
 
-            verify(mockProcessor, Mockito.times(2)).processEvent(
+            verify(mockProcessor, Mockito.times(1)).processEvent(
                 eq("evt_lock"), eq("charge.refunded"), eq(PSP_REF), any(JsonNode.class), any(String.class));
         }
 
@@ -563,9 +562,7 @@ class WebhookRefundHandlerTest {
                 eq("REFUND"), eq(pending.getId().toString()), eq("Refund (webhook)"));
 
             // Outbox uses internal refund ID
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<Map<String, Object>> payloadCaptor =
-                ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentRefunded"), payloadCaptor.capture());

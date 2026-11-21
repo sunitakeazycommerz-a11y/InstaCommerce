@@ -8,6 +8,7 @@ import com.instacommerce.order.dto.response.OrderStatusResponse;
 import com.instacommerce.order.dto.response.OrderSummaryResponse;
 import com.instacommerce.order.service.OrderService;
 import com.instacommerce.order.workflow.model.CreateOrderCommand;
+import com.instacommerce.platform.security.SecurityRoleUtils;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -58,6 +59,7 @@ public class OrderController {
             .discountCents(request.discountCents())
             .deliveryFeeCents(request.deliveryFeeCents())
             .totalCents(request.totalCents())
+            .walletAmountCents(request.effectiveWalletAmountCents())
             .currency(request.currency())
             .couponCode(request.couponCode())
             .reservationId(parseOptionalUuid(request.reservationId()))
@@ -174,22 +176,6 @@ public class OrderController {
     }
 
     private boolean isPrivileged(Authentication authentication) {
-        return isAdmin(authentication) || isInternalService(authentication);
-    }
-
-    private boolean isAdmin(Authentication authentication) {
-        return hasAuthority(authentication, "ROLE_ADMIN");
-    }
-
-    private boolean isInternalService(Authentication authentication) {
-        return hasAuthority(authentication, "ROLE_INTERNAL_SERVICE");
-    }
-
-    private boolean hasAuthority(Authentication authentication, String expected) {
-        if (authentication == null || authentication.getAuthorities() == null) {
-            return false;
-        }
-        return authentication.getAuthorities().stream()
-            .anyMatch(authority -> expected.equals(authority.getAuthority()));
+        return SecurityRoleUtils.isPrivileged(authentication);
     }
 }

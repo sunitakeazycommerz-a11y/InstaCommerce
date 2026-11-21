@@ -22,8 +22,54 @@ public record OrderCreateRequest(
     String idempotencyKey,
     BigDecimal dropoffLat,
     BigDecimal dropoffLng,
-    String orderId
+    String orderId,
+    long walletAmountCents
 ) {
+    public OrderCreateRequest(
+        String userId,
+        String storeId,
+        List<CartItem> items,
+        long subtotalCents,
+        long discountCents,
+        long deliveryFeeCents,
+        long totalCents,
+        String currency,
+        String couponCode,
+        String reservationId,
+        String paymentId,
+        String deliveryAddressId,
+        String paymentMethodId,
+        String quoteId,
+        String quoteToken,
+        String idempotencyKey,
+        BigDecimal dropoffLat,
+        BigDecimal dropoffLng,
+        String orderId
+    ) {
+        this(
+            userId,
+            storeId,
+            items,
+            subtotalCents,
+            discountCents,
+            deliveryFeeCents,
+            totalCents,
+            currency,
+            couponCode,
+            reservationId,
+            paymentId,
+            deliveryAddressId,
+            paymentMethodId,
+            quoteId,
+            quoteToken,
+            idempotencyKey,
+            dropoffLat,
+            dropoffLng,
+            orderId,
+            0L
+        );
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -48,7 +94,8 @@ public record OrderCreateRequest(
             .idempotencyKey(idempotencyKey)
             .dropoffLat(dropoffLat)
             .dropoffLng(dropoffLng)
-            .orderId(orderId);
+            .orderId(orderId)
+            .walletAmountCents(walletAmountCents);
     }
 
     public OrderCreateRequest withIdempotencyKey(String idempotencyKey) {
@@ -75,6 +122,7 @@ public record OrderCreateRequest(
         private BigDecimal dropoffLat;
         private BigDecimal dropoffLng;
         private String orderId;
+        private long walletAmountCents;
 
         private Builder() {
         }
@@ -98,6 +146,7 @@ public record OrderCreateRequest(
         public Builder dropoffLat(BigDecimal dropoffLat) { this.dropoffLat = dropoffLat; return this; }
         public Builder dropoffLng(BigDecimal dropoffLng) { this.dropoffLng = dropoffLng; return this; }
         public Builder orderId(String orderId) { this.orderId = orderId; return this; }
+        public Builder walletAmountCents(long walletAmountCents) { this.walletAmountCents = walletAmountCents; return this; }
 
         public OrderCreateRequest build() {
             return new OrderCreateRequest(
@@ -119,7 +168,8 @@ public record OrderCreateRequest(
                 idempotencyKey,
                 dropoffLat,
                 dropoffLng,
-                orderId
+                orderId,
+                walletAmountCents
             );
         }
     }

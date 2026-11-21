@@ -428,7 +428,6 @@ class WebhookEventProcessorHardeningTest {
 
         @Test
         @DisplayName("AUTHORIZE_PENDING failure does NOT release auth hold (no hold recorded yet)")
-        @SuppressWarnings("unchecked")
         void failFromAuthorizePending_noLedgerRelease() {
             Payment p = paymentInStatus(PaymentStatus.AUTHORIZE_PENDING, 5000);
             stubPaymentLookupWithSave(p);
@@ -442,7 +441,7 @@ class WebhookEventProcessorHardeningTest {
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), any());
-            ArgumentCaptor<Map<String, Object>> auditDetailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> auditDetailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("PAYMENT_FAILED"),
@@ -462,7 +461,6 @@ class WebhookEventProcessorHardeningTest {
         @EnumSource(value = PaymentStatus.class,
             names = {"AUTHORIZED", "CAPTURE_PENDING", "VOID_PENDING"})
         @DisplayName("post-authorization failure releases auth hold")
-        @SuppressWarnings("unchecked")
         void failFromPostAuthState_releasesAuthHold(PaymentStatus status) {
             Payment p = paymentInStatus(status, 7000);
             stubPaymentLookupWithSave(p);
@@ -482,7 +480,7 @@ class WebhookEventProcessorHardeningTest {
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), any());
-            ArgumentCaptor<Map<String, Object>> auditDetailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> auditDetailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("PAYMENT_FAILED"),
@@ -570,7 +568,6 @@ class WebhookEventProcessorHardeningTest {
 
         @Test
         @DisplayName("PaymentFailed outbox payload includes reason from PSP error message")
-        @SuppressWarnings("unchecked")
         void outboxPayload_includesPspReason() {
             Payment p = paymentInStatus(PaymentStatus.AUTHORIZED, 5000);
             stubPaymentLookupWithSave(p);
@@ -585,7 +582,7 @@ class WebhookEventProcessorHardeningTest {
                 EVENT_ID, "payment_intent.payment_failed", PSP_REF,
                 node, null);
 
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), payloadCaptor.capture());
@@ -597,7 +594,6 @@ class WebhookEventProcessorHardeningTest {
 
         @Test
         @DisplayName("PaymentFailed outbox uses PSP error code when message is absent")
-        @SuppressWarnings("unchecked")
         void outboxPayload_fallsToPspCode() {
             Payment p = paymentInStatus(PaymentStatus.CAPTURE_PENDING, 5000);
             stubPaymentLookupWithSave(p);
@@ -611,7 +607,7 @@ class WebhookEventProcessorHardeningTest {
                 EVENT_ID, "payment_intent.payment_failed", PSP_REF,
                 node, null);
 
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), payloadCaptor.capture());
@@ -620,7 +616,6 @@ class WebhookEventProcessorHardeningTest {
 
         @Test
         @DisplayName("PaymentFailed outbox falls back to generic reason when no PSP error")
-        @SuppressWarnings("unchecked")
         void outboxPayload_fallsToGenericReason() {
             Payment p = paymentInStatus(PaymentStatus.VOID_PENDING, 5000);
             stubPaymentLookupWithSave(p);
@@ -629,7 +624,7 @@ class WebhookEventProcessorHardeningTest {
                 EVENT_ID, "payment_intent.payment_failed", PSP_REF,
                 emptyObjectNode(), null);
 
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"), eq(p.getId().toString()),
                 eq("PaymentFailed"), payloadCaptor.capture());

@@ -28,8 +28,7 @@ class CouponActivityImplTest {
     void redeemCouponPostsPayload() {
         activity.redeemCoupon("SAVE20", "user-1", "order-1", 1500L);
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.captor();
         verify(restTemplate).postForObject(eq("/pricing/coupons/redeem"), captor.capture(), eq(Void.class));
 
         Map<String, Object> body = captor.getValue();
@@ -44,8 +43,7 @@ class CouponActivityImplTest {
     void unredeemCouponPostsPayload() {
         activity.unredeemCoupon("SAVE20", "user-1", "order-1");
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.captor();
         verify(restTemplate).postForObject(eq("/pricing/coupons/unredeem"), captor.capture(), eq(Void.class));
 
         Map<String, Object> body = captor.getValue();
@@ -59,8 +57,7 @@ class CouponActivityImplTest {
     void rollbackUsagePostsPayload() {
         activity.rollbackUsage("SAVE20", "user-1");
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.captor();
         verify(restTemplate).postForObject(eq("/pricing/coupons/rollback-usage"), captor.capture(), eq(Void.class));
 
         Map<String, Object> body = captor.getValue();

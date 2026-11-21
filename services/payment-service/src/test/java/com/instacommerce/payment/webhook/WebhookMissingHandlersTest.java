@@ -147,7 +147,6 @@ class WebhookMissingHandlersTest {
 
         @Test
         @DisplayName("PSP failed + local COMPLETED → logs critical alert")
-        @SuppressWarnings("unchecked")
         void refundUpdated_pspFailed_localCompleted_logsAlert() {
             Payment payment = paymentInStatus(PaymentStatus.CAPTURED, 10000);
             stubPaymentLookup(payment);
@@ -158,7 +157,7 @@ class WebhookMissingHandlersTest {
             processor.processEvent(EVENT_ID, "charge.refund.updated",
                 PSP_REF, refundUpdateObjectNode(pspRefundId, "failed"), "{}");
 
-            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("WEBHOOK_REFUND_PSP_FAILURE"),
@@ -226,7 +225,6 @@ class WebhookMissingHandlersTest {
 
         @Test
         @DisplayName("General case records WEBHOOK_REFUND_UPDATED audit log")
-        @SuppressWarnings("unchecked")
         void refundUpdated_recordsAuditLog() {
             Payment payment = paymentInStatus(PaymentStatus.CAPTURED, 10000);
             stubPaymentLookup(payment);
@@ -237,7 +235,7 @@ class WebhookMissingHandlersTest {
             processor.processEvent(EVENT_ID, "charge.refund.updated",
                 PSP_REF, refundUpdateObjectNode(pspRefundId, "pending"), "{}");
 
-            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("WEBHOOK_REFUND_UPDATED"),
@@ -415,7 +413,6 @@ class WebhookMissingHandlersTest {
 
         @Test
         @DisplayName("Publishes outbox when captureVoidOutboxEnabled")
-        @SuppressWarnings("unchecked")
         void expired_publishesOutboxWhenEnabled() {
             Payment payment = paymentInStatus(PaymentStatus.AUTHORIZED, 10000);
             stubPaymentLookupWithSave(payment);
@@ -428,7 +425,7 @@ class WebhookMissingHandlersTest {
 
             assertThat(payment.getStatus()).isEqualTo(PaymentStatus.VOIDED);
 
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"),
                 eq(payment.getId().toString()),

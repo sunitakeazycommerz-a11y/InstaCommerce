@@ -2,6 +2,7 @@ package com.instacommerce.fraud.service;
 
 import com.instacommerce.fraud.domain.model.FraudRule;
 import com.instacommerce.fraud.dto.request.FraudCheckRequest;
+import com.instacommerce.platform.geo.GeoUtils;
 import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -95,7 +96,7 @@ public class RuleEvaluationService {
             return false;
         }
 
-        double distance = haversineDistanceKm(expectedLat, expectedLng,
+        double distance = GeoUtils.haversineKm(expectedLat, expectedLng,
                 request.deliveryLat(), request.deliveryLng());
         return distance > maxDistanceKm;
     }
@@ -193,6 +194,21 @@ public class RuleEvaluationService {
         };
     }
 
+    public int evaluateDefaultCombinationScore(FraudCheckRequest request) {
+        String method = request.paymentMethodType();
+        if (!isHighRiskPaymentMethod(method, Map.of())) {
+            return 0;
+        }
+        boolean missingDevice = request.deviceFingerprint() == null || request.deviceFingerprint().isBlank();
+        if (!missingDevice && !request.isNewUser()) {
+            return 0;
+        }
+        String normalized = method.trim().toUpperCase(Locale.ROOT);
+        return "COD".equals(normalized)
+                ? (request.totalCents() >= 100_000L ? (missingDevice ? 60 : 35) : 0)
+                : ((missingDevice || request.totalCents() >= 100_000L) ? 80 : 55);
+    }
+
     private String resolveEntityId(String entityType, FraudCheckRequest request) {
         return switch (entityType) {
             case "USER" -> request.userId() != null ? request.userId().toString() : null;
@@ -200,16 +216,5 @@ public class RuleEvaluationService {
             case "IP" -> request.ipAddress();
             default -> null;
         };
-    }
-
-    private static double haversineDistanceKm(double lat1, double lng1, double lat2, double lng2) {
-        double earthRadiusKm = 6371.0;
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLng = Math.toRadians(lng2 - lng1);
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
-                        Math.sin(dLng / 2) * Math.sin(dLng / 2);
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return earthRadiusKm * c;
     }
 }

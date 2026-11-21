@@ -32,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
 
 class OrderSlaAndPartialCancellationTest {
 
@@ -69,16 +70,14 @@ class OrderSlaAndPartialCancellationTest {
         };
         OrderProperties properties = new OrderProperties();
         properties.getSla().setPromisedDeliveryMinutes(15);
-        orderService = new OrderService(
-            orderRepository,
-            historyRepository,
-            outboxService,
-            auditLogService,
-            pricingQuoteClient,
-            null,
-            properties,
-            clock
-        );
+        OrderCreationService creationService = new OrderCreationService(
+            orderRepository, historyRepository, outboxService,
+            pricingQuoteClient, mock(PlatformTransactionManager.class));
+        OrderLifecycleService lifecycleService = new OrderLifecycleService(
+            orderRepository, historyRepository, outboxService, auditLogService, null, properties, clock);
+        OrderModificationService modificationService = new OrderModificationService(
+            orderRepository, outboxService, auditLogService, lifecycleService);
+        orderService = new OrderService(creationService, lifecycleService, modificationService);
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 

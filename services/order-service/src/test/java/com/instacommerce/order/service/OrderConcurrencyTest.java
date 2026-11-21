@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.PlatformTransactionManager;
 
 @ExtendWith(MockitoExtension.class)
 class OrderConcurrencyTest {
@@ -51,7 +53,14 @@ class OrderConcurrencyTest {
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient);
+        OrderCreationService creationService = new OrderCreationService(
+            orderRepository, statusHistoryRepository, outboxService,
+            pricingQuoteClient, mock(PlatformTransactionManager.class));
+        OrderLifecycleService lifecycleService = new OrderLifecycleService(
+            orderRepository, statusHistoryRepository, outboxService, auditLogService, null, null, null);
+        OrderModificationService modificationService = new OrderModificationService(
+            orderRepository, outboxService, auditLogService, lifecycleService);
+        orderService = new OrderService(creationService, lifecycleService, modificationService);
         orderId = UUID.randomUUID();
         userId = UUID.randomUUID();
         order = new Order();
@@ -136,8 +145,14 @@ class OrderConcurrencyTest {
     @DisplayName("measures lock contention duration via Micrometer timer")
     void measuresLockContentionDurationViaMicrometerTimer() {
         SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
-        OrderService serviceWithMetrics = new OrderService(
-            orderRepository, statusHistoryRepository, outboxService, auditLogService, pricingQuoteClient, meterRegistry);
+        OrderCreationService creationService = new OrderCreationService(
+            orderRepository, statusHistoryRepository, outboxService,
+            pricingQuoteClient, mock(PlatformTransactionManager.class));
+        OrderLifecycleService lifecycleService = new OrderLifecycleService(
+            orderRepository, statusHistoryRepository, outboxService, auditLogService, meterRegistry, null, null);
+        OrderModificationService modificationService = new OrderModificationService(
+            orderRepository, outboxService, auditLogService, lifecycleService);
+        OrderService serviceWithMetrics = new OrderService(creationService, lifecycleService, modificationService);
 
         when(orderRepository.findByIdForUpdate(orderId)).thenReturn(Optional.of(order));
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));

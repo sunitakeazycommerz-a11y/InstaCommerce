@@ -1,16 +1,15 @@
 package com.instacommerce.checkout.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.checkout.domain.CompensationDlq;
 import com.instacommerce.checkout.dto.CheckoutRequest;
 import com.instacommerce.checkout.dto.CheckoutResponse;
 import com.instacommerce.checkout.exception.CheckoutException;
 import com.instacommerce.checkout.interceptor.TemporalHeaderInterceptor;
-import com.instacommerce.checkout.repository.CheckoutIdempotencyKeyRepository;
 import com.instacommerce.checkout.repository.CompensationDlqRepository;
 import com.instacommerce.checkout.service.CheckoutIdempotencyService;
 import com.instacommerce.checkout.service.CompensationReplayService;
 import com.instacommerce.checkout.workflow.CheckoutWorkflow;
+import com.instacommerce.platform.security.SecurityRoleUtils;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowException;
 import io.temporal.client.WorkflowExecutionAlreadyStarted;
@@ -26,7 +25,6 @@ import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -43,10 +41,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * REST entry point for the checkout saga. Intentionally has NO {@code @Transactional} annotation
- * — all DB operations are delegated to {@link CheckoutIdempotencyService} which wraps them in
- * short, self-contained transactions that commit before the long-running Temporal workflow call
- * is made. This prevents HikariCP connection exhaustion during 5-minute workflow executions.
+ * REST entry point for the checkout saga. DB idempotency work is delegated to
+ * {@link CheckoutIdempotencyService} so connections return to the pool before
+ * invoking Temporal.
  */
 @RestController
 @RequestMapping({"/checkout", "/api/v1/checkout"})
@@ -60,55 +57,18 @@ public class CheckoutController {
     private final CompensationReplayService compensationReplayService;
     private final Semaphore checkoutRateLimiter;
 
-    @Autowired
     public CheckoutController(WorkflowClient workflowClient,
                               @Value("${temporal.task-queue}") String taskQueue,
                               CheckoutIdempotencyService idempotencyService,
-                              CompensationDlqRepository dlqRepository,
-                              @Nullable CompensationReplayService compensationReplayService) {
-        this(workflowClient, taskQueue, idempotencyService, dlqRepository, compensationReplayService, 1500);
-    }
-
-    public CheckoutController(WorkflowClient workflowClient,
-                              String taskQueue,
-                              CheckoutIdempotencyService idempotencyService,
-                              CompensationDlqRepository dlqRepository,
+                              @Nullable CompensationDlqRepository dlqRepository,
                               @Nullable CompensationReplayService compensationReplayService,
-                              int maxConcurrentCheckouts) {
+                              @Value("${checkout.concurrency.max-in-flight:1500}") int maxConcurrentCheckouts) {
         this.workflowClient = workflowClient;
         this.taskQueue = taskQueue;
         this.idempotencyService = idempotencyService;
         this.dlqRepository = dlqRepository;
         this.compensationReplayService = compensationReplayService;
         this.checkoutRateLimiter = new Semaphore(maxConcurrentCheckouts >= 0 ? maxConcurrentCheckouts : 1500);
-    }
-
-    public CheckoutController(WorkflowClient workflowClient,
-                              String taskQueue,
-                              CheckoutIdempotencyService idempotencyService,
-                              CompensationDlqRepository dlqRepository) {
-        this(workflowClient, taskQueue, idempotencyService, dlqRepository, null, 1500);
-    }
-
-    public CheckoutController(WorkflowClient workflowClient,
-                              String taskQueue,
-                              CheckoutIdempotencyService idempotencyService,
-                              CompensationDlqRepository dlqRepository,
-                              int maxConcurrentCheckouts) {
-        this(workflowClient, taskQueue, idempotencyService, dlqRepository, null, maxConcurrentCheckouts);
-    }
-
-    public CheckoutController(WorkflowClient workflowClient,
-                              String taskQueue,
-                              CheckoutIdempotencyService idempotencyService) {
-        this(workflowClient, taskQueue, idempotencyService, null, null, 1500);
-    }
-
-    public CheckoutController(WorkflowClient workflowClient,
-                              String taskQueue,
-                              CheckoutIdempotencyKeyRepository idempotencyKeyRepository,
-                              ObjectMapper objectMapper) {
-        this(workflowClient, taskQueue, new CheckoutIdempotencyService(idempotencyKeyRepository, objectMapper), null, null, 1500);
     }
 
     @PostMapping
@@ -123,7 +83,7 @@ public class CheckoutController {
             log.warn("Checkout request rate limit exceeded under flash sale traffic");
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", "5")
-                .body(new CheckoutResponse(null, "RATE_LIMIT_EXCEEDED: Flash sale checkout spike backpressure active", 0, 0));
+                .body(CheckoutResponse.failed("RATE_LIMIT_EXCEEDED: Flash sale checkout spike backpressure active"));
         }
         TemporalHeaderInterceptor.setTenantContext(tenantId, storeId);
         try {
@@ -136,8 +96,6 @@ public class CheckoutController {
             }
             String scopedIdempotencyKey = principal + ":" + idempotencyKey;
 
-            // DB-backed idempotency check committed in its own short TX;
-            // the DB connection is returned to the pool before the workflow call below.
             Optional<CheckoutResponse> cached = idempotencyService.findValidResponse(scopedIdempotencyKey);
             if (cached.isPresent()) {
                 log.info("Duplicate checkout detected idempotencyKey={}, returning cached response", idempotencyKey);
@@ -162,13 +120,12 @@ public class CheckoutController {
                 return handleAlreadyStarted(workflowId, scopedIdempotencyKey);
             } catch (WorkflowException ex) {
                 if (ex.getCause() instanceof WorkflowExecutionAlreadyStarted
-                        || (ex.getMessage() != null && ex.getMessage().contains("WorkflowExecutionAlreadyStarted"))) {
+                    || (ex.getMessage() != null && ex.getMessage().contains("WorkflowExecutionAlreadyStarted"))) {
                     return handleAlreadyStarted(workflowId, scopedIdempotencyKey);
                 }
                 throw ex;
             }
 
-            // Persist idempotency key + response in its own short TX (connection returned immediately)
             try {
                 idempotencyService.recordResponse(scopedIdempotencyKey, result);
             } catch (DataIntegrityViolationException dupEx) {
@@ -205,9 +162,7 @@ public class CheckoutController {
         if (authentication == null) {
             return false;
         }
-        boolean isPrivileged = authentication.getAuthorities().stream()
-            .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()) || "ROLE_INTERNAL_SERVICE".equals(a.getAuthority()));
-        if (isPrivileged) {
+        if (SecurityRoleUtils.isPrivileged(authentication)) {
             return true;
         }
         String principal = authentication.getName();

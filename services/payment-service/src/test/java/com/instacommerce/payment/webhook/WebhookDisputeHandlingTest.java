@@ -214,7 +214,6 @@ class WebhookDisputeHandlingTest {
 
         @Test
         @DisplayName("Publishes PaymentDisputed outbox event")
-        @SuppressWarnings("unchecked")
         void disputeCreated_publishesOutboxEvent() {
             Payment payment = paymentInStatus(PaymentStatus.CAPTURED, 5000);
             stubPaymentLookupWithSave(payment);
@@ -222,7 +221,7 @@ class WebhookDisputeHandlingTest {
             processor.processEvent(EVENT_ID, "charge.dispute.created",
                 PSP_REF, disputeObjectNode(5000, "product_not_received"), "{}");
 
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"),
                 eq(payment.getId().toString()),
@@ -239,7 +238,6 @@ class WebhookDisputeHandlingTest {
 
         @Test
         @DisplayName("Records WEBHOOK_DISPUTE_CREATED audit log")
-        @SuppressWarnings("unchecked")
         void disputeCreated_recordsAuditLog() {
             Payment payment = paymentInStatus(PaymentStatus.CAPTURED, 6000);
             stubPaymentLookupWithSave(payment);
@@ -247,7 +245,7 @@ class WebhookDisputeHandlingTest {
             processor.processEvent(EVENT_ID, "charge.dispute.created",
                 PSP_REF, disputeObjectNode(6000, "duplicate"), "{}");
 
-            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("WEBHOOK_DISPUTE_CREATED"),
@@ -286,7 +284,6 @@ class WebhookDisputeHandlingTest {
 
         @Test
         @DisplayName("Records audit log only, no state change")
-        @SuppressWarnings("unchecked")
         void disputeUpdated_recordsAuditOnly() {
             Payment payment = paymentInStatus(PaymentStatus.DISPUTED, 10000);
             stubPaymentLookup(payment);
@@ -304,7 +301,7 @@ class WebhookDisputeHandlingTest {
                 eq("PaymentDisputeUpdated"),
                 any());
 
-            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.captor();
             verify(auditLogService).logSafely(
                 isNull(),
                 eq("WEBHOOK_DISPUTE_UPDATED"),
@@ -392,7 +389,6 @@ class WebhookDisputeHandlingTest {
 
         @Test
         @DisplayName("Lost: publishes PaymentDisputeLost outbox event")
-        @SuppressWarnings("unchecked")
         void disputeClosed_lost_publishesOutboxEvent() {
             Payment payment = paymentInStatus(PaymentStatus.DISPUTED, 7500);
             stubPaymentLookupWithSave(payment);
@@ -400,7 +396,7 @@ class WebhookDisputeHandlingTest {
             processor.processEvent(EVENT_ID, "charge.dispute.closed",
                 PSP_REF, disputeCloseObjectNode(7500, "lost"), "{}");
 
-            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
             verify(outboxService).publish(
                 eq("Payment"),
                 eq(payment.getId().toString()),

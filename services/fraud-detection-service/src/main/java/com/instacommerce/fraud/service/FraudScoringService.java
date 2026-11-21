@@ -14,14 +14,14 @@ import com.instacommerce.fraud.repository.FraudRuleRepository;
 import com.instacommerce.fraud.repository.FraudSignalRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import jakarta.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.BiPredicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
@@ -41,142 +41,37 @@ public class FraudScoringService {
     private final FraudSignalRepository fraudSignalRepository;
     private final RuleEvaluationService ruleEvaluationService;
     private final BlocklistService blocklistService;
+    private final AllowlistService allowlistService;
     private final OutboxService outboxService;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
     private final FraudOperationalMode operationalMode;
     private final TransactionTemplate persistenceTxTemplate;
-    private AllowlistService allowlistService;
-
-    @Autowired(required = false)
-    public void setAllowlistService(AllowlistService allowlistService) {
-        this.allowlistService = allowlistService;
-    }
 
     @Autowired
-    public FraudScoringService(FraudRuleRepository fraudRuleRepository,
-                               FraudSignalRepository fraudSignalRepository,
-                               RuleEvaluationService ruleEvaluationService,
-                               BlocklistService blocklistService,
-                               OutboxService outboxService,
-                               ObjectProvider<StringRedisTemplate> redisTemplateProvider,
-                               ObjectProvider<ObjectMapper> objectMapperProvider,
-                               ObjectProvider<MeterRegistry> meterRegistryProvider,
-                               ObjectProvider<PlatformTransactionManager> transactionManagerProvider,
-                               @Value("${fraud.operational-mode:AUTO_BLOCK}") String operationalModeStr) {
-        this(
-                fraudRuleRepository,
-                fraudSignalRepository,
-                ruleEvaluationService,
-                blocklistService,
-                outboxService,
-                redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null,
-                objectMapperProvider != null ? objectMapperProvider.getIfAvailable(ObjectMapper::new) : new ObjectMapper(),
-                meterRegistryProvider != null ? meterRegistryProvider.getIfAvailable(SimpleMeterRegistry::new) : new SimpleMeterRegistry(),
-                transactionManagerProvider != null ? transactionManagerProvider.getIfAvailable() : null,
-                parseOperationalMode(operationalModeStr)
-        );
-    }
-
-    public FraudScoringService(FraudRuleRepository fraudRuleRepository,
-                               FraudSignalRepository fraudSignalRepository,
-                               RuleEvaluationService ruleEvaluationService,
-                               BlocklistService blocklistService,
-                               OutboxService outboxService,
-                               ObjectProvider<StringRedisTemplate> redisTemplateProvider,
-                               ObjectProvider<ObjectMapper> objectMapperProvider,
-                               ObjectProvider<MeterRegistry> meterRegistryProvider,
-                               @Value("${fraud.operational-mode:AUTO_BLOCK}") String operationalModeStr) {
-        this(
-                fraudRuleRepository,
-                fraudSignalRepository,
-                ruleEvaluationService,
-                blocklistService,
-                outboxService,
-                redisTemplateProvider,
-                objectMapperProvider,
-                meterRegistryProvider,
-                null,
-                operationalModeStr
-        );
-    }
-
-    public FraudScoringService(FraudRuleRepository fraudRuleRepository,
-                               FraudSignalRepository fraudSignalRepository,
-                               RuleEvaluationService ruleEvaluationService,
-                               BlocklistService blocklistService,
-                               OutboxService outboxService,
-                               ObjectProvider<StringRedisTemplate> redisTemplateProvider,
-                               ObjectProvider<ObjectMapper> objectMapperProvider) {
-        this(fraudRuleRepository, fraudSignalRepository, ruleEvaluationService, blocklistService,
-                outboxService, redisTemplateProvider, objectMapperProvider, null,
-                FraudOperationalMode.AUTO_BLOCK.name());
-    }
-
-    public FraudScoringService(FraudRuleRepository fraudRuleRepository,
-                               FraudSignalRepository fraudSignalRepository,
-                               RuleEvaluationService ruleEvaluationService,
-                               BlocklistService blocklistService,
-                               OutboxService outboxService,
-                               StringRedisTemplate redisTemplate) {
-        this(fraudRuleRepository, fraudSignalRepository, ruleEvaluationService, blocklistService,
-                outboxService, redisTemplate, new SimpleMeterRegistry(), FraudOperationalMode.AUTO_BLOCK);
-    }
-
-    public FraudScoringService(FraudRuleRepository fraudRuleRepository,
-                               FraudSignalRepository fraudSignalRepository,
-                               RuleEvaluationService ruleEvaluationService,
-                               BlocklistService blocklistService,
-                               OutboxService outboxService) {
-        this(fraudRuleRepository, fraudSignalRepository, ruleEvaluationService, blocklistService,
-                outboxService, (StringRedisTemplate) null);
-    }
-
-    FraudScoringService(FraudRuleRepository fraudRuleRepository,
-                        FraudSignalRepository fraudSignalRepository,
-                        RuleEvaluationService ruleEvaluationService,
-                        BlocklistService blocklistService,
-                        OutboxService outboxService,
-                        StringRedisTemplate redisTemplate,
-                        MeterRegistry meterRegistry,
-                        FraudOperationalMode operationalMode) {
-        this(fraudRuleRepository, fraudSignalRepository, ruleEvaluationService, blocklistService,
-                outboxService, redisTemplate, new ObjectMapper(), meterRegistry, null, operationalMode);
-    }
-
-    FraudScoringService(FraudRuleRepository fraudRuleRepository,
-                        FraudSignalRepository fraudSignalRepository,
-                        RuleEvaluationService ruleEvaluationService,
-                        BlocklistService blocklistService,
-                        OutboxService outboxService,
-                        StringRedisTemplate redisTemplate,
-                        MeterRegistry meterRegistry,
-                        PlatformTransactionManager transactionManager,
-                        FraudOperationalMode operationalMode) {
-        this(fraudRuleRepository, fraudSignalRepository, ruleEvaluationService, blocklistService,
-                outboxService, redisTemplate, new ObjectMapper(), meterRegistry, transactionManager, operationalMode);
-    }
-
-    private FraudScoringService(FraudRuleRepository fraudRuleRepository,
-                                FraudSignalRepository fraudSignalRepository,
-                                RuleEvaluationService ruleEvaluationService,
-                                BlocklistService blocklistService,
-                                OutboxService outboxService,
-                                StringRedisTemplate redisTemplate,
-                                ObjectMapper objectMapper,
-                                MeterRegistry meterRegistry,
-                                PlatformTransactionManager transactionManager,
-                                FraudOperationalMode operationalMode) {
+    public FraudScoringService(
+            FraudRuleRepository fraudRuleRepository,
+            FraudSignalRepository fraudSignalRepository,
+            RuleEvaluationService ruleEvaluationService,
+            BlocklistService blocklistService,
+            @Nullable AllowlistService allowlistService,
+            OutboxService outboxService,
+            @Nullable StringRedisTemplate redisTemplate,
+            @Nullable ObjectMapper objectMapper,
+            @Nullable MeterRegistry meterRegistry,
+            @Nullable PlatformTransactionManager transactionManager,
+            @Value("${fraud.operational-mode:AUTO_BLOCK}") String operationalModeStr) {
         this.fraudRuleRepository = fraudRuleRepository;
         this.fraudSignalRepository = fraudSignalRepository;
         this.ruleEvaluationService = ruleEvaluationService;
         this.blocklistService = blocklistService;
+        this.allowlistService = allowlistService;
         this.outboxService = outboxService;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
         this.meterRegistry = meterRegistry != null ? meterRegistry : new SimpleMeterRegistry();
-        this.operationalMode = operationalMode != null ? operationalMode : FraudOperationalMode.AUTO_BLOCK;
+        this.operationalMode = parseOperationalMode(operationalModeStr);
         this.persistenceTxTemplate = createRequiresNewTemplate(transactionManager);
     }
 
@@ -209,7 +104,7 @@ public class FraudScoringService {
         }
 
         try {
-            if (isAnyEntityBlocked(request)) {
+            if (matchesAnyEntity(request, blocklistService::isBlocked)) {
                 if (mode == FraudOperationalMode.SHADOW) {
                     log.info("fraud.shadow_mode blocklist_hit order={}", request.orderId());
                     return allowResponse();
@@ -226,7 +121,7 @@ public class FraudScoringService {
                     RiskLevel.CRITICAL, FraudAction.BLOCK, "BLOCKLIST_EVALUATION_ERROR");
         }
 
-        if (isAnyEntityAllowlisted(request)) {
+        if (allowlistService != null && matchesAnyEntity(request, allowlistService::isAllowlisted)) {
             return persistAndRespond(request, 0, RiskLevel.LOW, FraudAction.ALLOW,
                     List.of("ALLOWLIST_BYPASS"));
         }
@@ -240,8 +135,6 @@ public class FraudScoringService {
             FraudAction scoreAction = mode == FraudOperationalMode.MANUAL_REVIEW
                     ? FraudAction.REVIEW
                     : FraudAction.BLOCK;
-            log.warn("Flagging checkout ({}): customer fraud risk score {} exceeds threshold 0.85 for user {}",
-                    scoreAction, cachedFraudScore, request.userId());
             int score = (int) Math.round(cachedFraudScore * 100);
             return persistAndRespond(request, Math.min(100, Math.max(0, score)),
                     RiskLevel.CRITICAL, scoreAction, List.of("HIGH_FRAUD_RISK_SCORE"));
@@ -259,6 +152,12 @@ public class FraudScoringService {
                     RiskLevel.CRITICAL, FraudAction.BLOCK, "RULE_LOAD_ERROR");
         }
 
+        return evaluateRulesAndRespond(request, mode, rules);
+    }
+
+    private FraudCheckResponse evaluateRulesAndRespond(FraudCheckRequest request,
+                                                       FraudOperationalMode mode,
+                                                       List<FraudRule> rules) {
         int totalScore = 0;
         int minimumErrorScore = 0;
         FraudAction highestAction = FraudAction.ALLOW;
@@ -297,7 +196,7 @@ public class FraudScoringService {
         }
 
         if (!allowRuleMatched) {
-            int comboScore = evaluateHighRiskPaymentAndNewDeviceCombo(request);
+            int comboScore = ruleEvaluationService.evaluateDefaultCombinationScore(request);
             if (comboScore > 0 && !triggeredRules.contains("HIGH_RISK_PAYMENT_NEW_DEVICE")) {
                 totalScore += comboScore;
                 triggeredRules.add("HIGH_RISK_PAYMENT_NEW_DEVICE");
@@ -312,20 +211,14 @@ public class FraudScoringService {
 
         int clampedScore = Math.min(100, Math.max(minimumErrorScore, Math.max(0, totalScore)));
         RiskLevel riskLevel = RiskLevel.fromScore(clampedScore);
-        FraudAction finalAction = FraudAction.escalate(
-                FraudAction.fromRiskLevel(riskLevel), highestAction);
+        FraudAction finalAction = FraudAction.escalate(FraudAction.fromRiskLevel(riskLevel), highestAction);
 
         if (mode == FraudOperationalMode.SHADOW) {
             log.info("fraud.shadow_mode score={} -- would have {}", clampedScore,
                     finalAction != FraudAction.ALLOW ? finalAction : "ALLOWED");
             return allowResponse();
         }
-        FraudAction responseAction = mode == FraudOperationalMode.MANUAL_REVIEW
-                ? FraudAction.REVIEW
-                : finalAction;
-        if (mode == FraudOperationalMode.MANUAL_REVIEW) {
-            log.info("fraud.manual_review_mode score={}", clampedScore);
-        }
+        FraudAction responseAction = mode == FraudOperationalMode.MANUAL_REVIEW ? FraudAction.REVIEW : finalAction;
         return minimumErrorScore > 0
                 ? persistFailClosedSafe(request, mode, clampedScore, riskLevel, responseAction, triggeredRules)
                 : persistAndRespond(request, clampedScore, riskLevel, responseAction, triggeredRules);
@@ -345,24 +238,20 @@ public class FraudScoringService {
             return null;
         }
         try {
-            String key = "fraud:score:" + userId;
-            String rawVal = redisTemplate.opsForValue().get(key);
+            String rawVal = redisTemplate.opsForValue().get("fraud:score:" + userId);
             if (rawVal == null || rawVal.isBlank()) {
                 return null;
             }
             if (rawVal.trim().startsWith("{")) {
                 JsonNode node = objectMapper.readTree(rawVal);
-                if (node.has("fraud_risk_score")) {
-                    return node.get("fraud_risk_score").asDouble();
-                }
-            } else {
-                return Double.parseDouble(rawVal.trim());
+                return node.has("fraud_risk_score") ? node.get("fraud_risk_score").asDouble() : null;
             }
+            return Double.parseDouble(rawVal.trim());
         } catch (Exception e) {
             recordErrorMetric("redis_cache", mode, "FALLBACK_RULES");
             log.warn("Failed reading cached fraud risk score for userId {}: {}", userId, e.getMessage());
+            return null;
         }
-        return null;
     }
 
     private FraudCheckResponse failClosedOnDependencyError(FraudCheckRequest request,
@@ -376,12 +265,9 @@ public class FraudScoringService {
         if (mode == FraudOperationalMode.SHADOW) {
             return allowResponse();
         }
-        RiskLevel effectiveRisk = mode == FraudOperationalMode.MANUAL_REVIEW
-                ? RiskLevel.HIGH
-                : activeRiskLevel;
+        RiskLevel effectiveRisk = mode == FraudOperationalMode.MANUAL_REVIEW ? RiskLevel.HIGH : activeRiskLevel;
         int score = effectiveAction == FraudAction.BLOCK ? 100 : RiskLevel.HIGH.getMinScore();
-        return persistFailClosedSafe(request, mode, score, effectiveRisk, effectiveAction,
-                List.of(failureSignalTag));
+        return persistFailClosedSafe(request, mode, score, effectiveRisk, effectiveAction, List.of(failureSignalTag));
     }
 
     private FraudCheckResponse persistFailClosedSafe(FraudCheckRequest request,
@@ -431,59 +317,16 @@ public class FraudScoringService {
         return new FraudCheckResponse(0, RiskLevel.LOW.name(), FraudAction.ALLOW.name(), List.of(), null);
     }
 
-    private boolean isAnyEntityBlocked(FraudCheckRequest request) {
-        if (blocklistService.isBlocked("USER", request.userId().toString())) {
+    private boolean matchesAnyEntity(FraudCheckRequest request, BiPredicate<String, String> matcher) {
+        if (request.userId() != null && matcher.test("USER", request.userId().toString())) {
             return true;
         }
-        if (request.deviceFingerprint() != null &&
-                blocklistService.isBlocked("DEVICE", request.deviceFingerprint())) {
+        if (request.deviceFingerprint() != null && !request.deviceFingerprint().isBlank()
+                && matcher.test("DEVICE", request.deviceFingerprint())) {
             return true;
         }
-        if (request.ipAddress() != null &&
-                blocklistService.isBlocked("IP", request.ipAddress())) {
-            return true;
-        }
-        return false;
-    }
-
-    private boolean isAnyEntityAllowlisted(FraudCheckRequest request) {
-        if (allowlistService == null) {
-            return false;
-        }
-        if (request.userId() != null && allowlistService.isAllowlisted("USER", request.userId().toString())) {
-            return true;
-        }
-        if (request.deviceFingerprint() != null
-                && !request.deviceFingerprint().isBlank()
-                && allowlistService.isAllowlisted("DEVICE", request.deviceFingerprint())) {
-            return true;
-        }
-        if (request.ipAddress() != null
-                && !request.ipAddress().isBlank()
-                && allowlistService.isAllowlisted("IP", request.ipAddress())) {
-            return true;
-        }
-        return false;
-    }
-
-    private int evaluateHighRiskPaymentAndNewDeviceCombo(FraudCheckRequest request) {
-        String method = request.paymentMethodType();
-        if (method == null || method.isBlank()) {
-            return 0;
-        }
-        boolean missingDevice = request.deviceFingerprint() == null || request.deviceFingerprint().isBlank();
-        boolean newDeviceContext = missingDevice || request.isNewUser();
-        if (!newDeviceContext) {
-            return 0;
-        }
-        String normalized = method.trim().toUpperCase(Locale.ROOT);
-        return switch (normalized) {
-            case "CRYPTO", "GIFT_CARD", "PREPAID_CARD", "INTERNATIONAL_CARD" ->
-                (missingDevice || request.totalCents() >= 100_000L) ? 80 : 55;
-            case "COD" ->
-                request.totalCents() >= 100_000L ? (missingDevice ? 60 : 35) : 0;
-            default -> 0;
-        };
+        return request.ipAddress() != null && !request.ipAddress().isBlank()
+                && matcher.test("IP", request.ipAddress());
     }
 
     private FraudCheckResponse persistAndRespond(FraudCheckRequest request, int score,

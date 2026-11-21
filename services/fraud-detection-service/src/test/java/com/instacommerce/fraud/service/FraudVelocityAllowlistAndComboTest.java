@@ -135,8 +135,8 @@ class FraudVelocityAllowlistAndComboTest {
         });
 
         FraudScoringService scoringService = new FraudScoringService(
-            ruleRepo, signalRepo, evalService, blocklistService, outboxService);
-        scoringService.setAllowlistService(allowlistService);
+            ruleRepo, signalRepo, evalService, blocklistService, allowlistService,
+            outboxService, null, null, null, null, "AUTO_BLOCK");
 
         UUID userId = UUID.randomUUID();
         AllowlistedEntity activeAllow = new AllowlistedEntity();
@@ -144,7 +144,7 @@ class FraudVelocityAllowlistAndComboTest {
         activeAllow.setEntityValue(userId.toString());
         activeAllow.setActive(true);
         activeAllow.setExpiresAt(Instant.parse("2026-11-20T00:00:00Z"));
-        when(allowlistRepository.findActiveAllowlistEntry("USER", userId.toString(), fixedClock.instant()))
+        when(allowlistRepository.findActiveAllowlistEntry("USER", userId.toString()))
             .thenReturn(Optional.of(activeAllow));
 
         when(blocklistService.isBlocked("USER", userId.toString())).thenReturn(true);
@@ -160,7 +160,7 @@ class FraudVelocityAllowlistAndComboTest {
         assertThat(allowedResp.score()).isZero();
         assertThat(allowedResp.rulesTriggered()).contains("ALLOWLIST_BYPASS");
 
-        when(allowlistRepository.findActiveAllowlistEntry("USER", userId.toString(), fixedClock.instant()))
+        when(allowlistRepository.findActiveAllowlistEntry("USER", userId.toString()))
             .thenReturn(Optional.empty());
         when(ruleRepo.findActiveOrderByPriority()).thenReturn(List.of());
 
@@ -195,5 +195,35 @@ class FraudVelocityAllowlistAndComboTest {
         assertThatThrownBy(() -> allowlistService.allowEntity(
             new BlockRequest("USER", userId.toString(), "expired", Instant.parse("2026-11-19T11:00:00Z")), "admin"))
             .isInstanceOf(ApiException.class);
+    }
+
+    @Test
+    void reAllowlistingExpiredEntryDeactivatesOldRowAndFlushesBeforeInsert() {
+        AllowlistRepository allowlistRepository = mock(AllowlistRepository.class);
+        Clock fixedClock = Clock.fixed(Instant.parse("2026-11-19T12:00:00Z"), ZoneOffset.UTC);
+        AllowlistService allowlistService = new AllowlistService(allowlistRepository, fixedClock);
+
+        AllowlistedEntity expiredActive = new AllowlistedEntity();
+        expiredActive.setEntityType("USER");
+        expiredActive.setEntityValue("user-expired");
+        expiredActive.setActive(true);
+        expiredActive.setExpiresAt(Instant.parse("2026-11-19T10:00:00Z"));
+
+        when(allowlistRepository.findActiveAllowlistEntry("USER", "user-expired"))
+            .thenReturn(Optional.of(expiredActive));
+        when(allowlistRepository.saveAndFlush(any(AllowlistedEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(allowlistRepository.save(any(AllowlistedEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        assertThat(allowlistService.isAllowlisted("USER", "user-expired")).isFalse();
+
+        Instant newExpiry = Instant.parse("2026-11-20T12:00:00Z");
+        AllowlistedEntity saved = allowlistService.allowEntity(
+            new BlockRequest("user", "user-expired", "renewed trust", newExpiry), "admin-2");
+
+        assertThat(expiredActive.isActive()).isFalse();
+        verify(allowlistRepository).saveAndFlush(expiredActive);
+        assertThat(saved.isActive()).isTrue();
+        assertThat(saved.getExpiresAt()).isEqualTo(newExpiry);
+        assertThat(saved.getAllowedBy()).isEqualTo("admin-2");
     }
 }

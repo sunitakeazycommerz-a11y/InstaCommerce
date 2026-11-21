@@ -124,9 +124,17 @@ public class OrderCancelledEventConsumer {
                 paymentService.voidAuth(payment.getId(), idempotencyKey);
             }
             case CAPTURED, PARTIALLY_REFUNDED -> {
-                long refundableAmount = payment.getCapturedCents() - payment.getRefundedCents();
+                long remainingCaptured = Math.max(0L, payment.getCapturedCents() - payment.getRefundedCents());
+                long walletAmount = event.walletAmountCents() != null
+                    ? Math.max(0L, event.walletAmountCents())
+                    : 0L;
+                long refundableAmount = remainingCaptured;
+                if (walletAmount > 0 && event.totalCents() != null) {
+                    long pspChargePortion = Math.max(0L, event.totalCents() - walletAmount);
+                    refundableAmount = Math.min(remainingCaptured, pspChargePortion);
+                }
                 if (refundableAmount <= 0) {
-                    log.info("Payment {} fully refunded (refundable=0), skipping eventId={}",
+                    log.info("Payment {} has no PSP refundable balance remaining (refundable=0), skipping eventId={}",
                         payment.getId(), eventId);
                     return;
                 }

@@ -1,5 +1,6 @@
 package com.instacommerce.wallet.service;
 
+import com.instacommerce.platform.web.PageableUtils;
 import com.instacommerce.wallet.domain.model.Wallet;
 import com.instacommerce.wallet.domain.model.WalletTransaction;
 import com.instacommerce.wallet.domain.model.WalletTransaction.ReferenceType;
@@ -71,18 +72,10 @@ public class WalletService {
 
         WalletTransaction txn = recordTransaction(
             wallet, Type.CREDIT, amountCents, refType, normalizedRefId, description);
-        recordLedgerEntry(wallet.getId(), userId, refType, amountCents, normalizedRefId, true);
+        walletLedgerService.recordDoubleEntry(wallet.getId(), userId, refType, amountCents, normalizedRefId, true);
         log.info("Credited {} cents to wallet for user={} ref={}/{}", amountCents, userId, refType, normalizedRefId);
 
-        Map<String, Object> creditPayload = new LinkedHashMap<>();
-        creditPayload.put("transactionId", txn.getId().toString());
-        creditPayload.put("walletId", wallet.getId().toString());
-        creditPayload.put("userId", userId.toString());
-        creditPayload.put("amountCents", amountCents);
-        creditPayload.put("balanceCents", wallet.getBalanceCents());
-        creditPayload.put("referenceType", refType.name());
-        creditPayload.put("referenceId", normalizedRefId);
-        outboxService.publish("Wallet", wallet.getId().toString(), "WalletCredited", creditPayload);
+        publishWalletEvent("WalletCredited", wallet, txn, userId, amountCents, refType, normalizedRefId);
         return toResponse(txn);
     }
 
@@ -110,19 +103,29 @@ public class WalletService {
 
         WalletTransaction txn = recordTransaction(
             wallet, Type.DEBIT, amountCents, refType, normalizedRefId, description);
-        recordLedgerEntry(wallet.getId(), userId, refType, amountCents, normalizedRefId, false);
+        walletLedgerService.recordDoubleEntry(wallet.getId(), userId, refType, amountCents, normalizedRefId, false);
         log.info("Debited {} cents from wallet for user={} ref={}/{}", amountCents, userId, refType, normalizedRefId);
 
-        Map<String, Object> debitPayload = new LinkedHashMap<>();
-        debitPayload.put("transactionId", txn.getId().toString());
-        debitPayload.put("walletId", wallet.getId().toString());
-        debitPayload.put("userId", userId.toString());
-        debitPayload.put("amountCents", amountCents);
-        debitPayload.put("balanceCents", wallet.getBalanceCents());
-        debitPayload.put("referenceType", refType.name());
-        debitPayload.put("referenceId", normalizedRefId);
-        outboxService.publish("Wallet", wallet.getId().toString(), "WalletDebited", debitPayload);
+        publishWalletEvent("WalletDebited", wallet, txn, userId, amountCents, refType, normalizedRefId);
         return toResponse(txn);
+    }
+
+    private void publishWalletEvent(String eventType,
+                                    Wallet wallet,
+                                    WalletTransaction txn,
+                                    UUID userId,
+                                    long amountCents,
+                                    ReferenceType refType,
+                                    String normalizedRefId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("transactionId", txn.getId().toString());
+        payload.put("walletId", wallet.getId().toString());
+        payload.put("userId", userId.toString());
+        payload.put("amountCents", amountCents);
+        payload.put("balanceCents", wallet.getBalanceCents());
+        payload.put("referenceType", refType.name());
+        payload.put("referenceId", normalizedRefId);
+        outboxService.publish("Wallet", wallet.getId().toString(), eventType, payload);
     }
 
     @Transactional(readOnly = true)
@@ -173,7 +176,7 @@ public class WalletService {
     public Page<WalletTransactionResponse> getTransactions(UUID userId, Pageable pageable) {
         Wallet wallet = walletRepository.findByUserId(userId)
             .orElseThrow(() -> new WalletNotFoundException("Wallet not found for user: " + userId));
-        return transactionRepository.findByWalletIdOrderByCreatedAtDesc(wallet.getId(), pageable)
+        return transactionRepository.findByWalletIdOrderByCreatedAtDesc(wallet.getId(), PageableUtils.sanitize(pageable))
             .map(this::toResponse);
     }
 
@@ -216,10 +219,5 @@ public class WalletService {
             txn.getDescription(),
             txn.getCreatedAt()
         );
-    }
-
-    private void recordLedgerEntry(UUID walletId, UUID userId, ReferenceType refType,
-                                   long amountCents, String refId, boolean isCredit) {
-        walletLedgerService.recordDoubleEntry(walletId, userId, refType, amountCents, refId, isCredit);
     }
 }

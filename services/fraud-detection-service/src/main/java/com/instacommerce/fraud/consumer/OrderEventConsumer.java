@@ -1,5 +1,6 @@
 package com.instacommerce.fraud.consumer;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.events.EventEnvelope;
@@ -26,48 +27,49 @@ public class OrderEventConsumer {
 
     @KafkaListener(topics = TopicNames.ORDERS_EVENTS, groupId = "fraud-detection-orders")
     public void onOrderEvent(ConsumerRecord<String, String> record) {
+        EventEnvelope envelope;
         try {
-            EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
-            if (!"OrderPlaced".equals(envelope.eventType())) {
-                return;
-            }
-
-            JsonNode payload = envelope.payload();
-            String userId = payload.path("userId").asText(null);
-            String orderId = payload.path("orderId").asText(null);
-            long totalCents = payload.path("totalCents").asLong(0);
-
-            if (userId == null) {
-                log.warn("OrderPlaced event missing userId at offset={}", record.offset());
-                return;
-            }
-
-            velocityService.incrementCounter("USER", userId, "ORDERS_5M");
-            velocityService.incrementCounter("USER", userId, "ORDERS_1H");
-            velocityService.incrementCounter("USER", userId, "ORDERS_24H");
-
-            if (totalCents > 0) {
-                velocityService.incrementAmountCounter("USER", userId, "AMOUNT_24H", totalCents);
-            }
-
-            String deviceFingerprint = payload.path("deviceFingerprint").asText(null);
-            if (deviceFingerprint != null && !deviceFingerprint.isBlank()) {
-                velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_5M");
-                velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_1H");
-                velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_24H");
-            }
-
-            String ipAddress = payload.path("ipAddress").asText(null);
-            if (ipAddress != null && !ipAddress.isBlank()) {
-                velocityService.incrementCounter("IP", ipAddress, "ORDERS_5M");
-                velocityService.incrementCounter("IP", ipAddress, "ORDERS_1H");
-                velocityService.incrementCounter("IP", ipAddress, "ORDERS_24H");
-            }
-
-            log.debug("Processed OrderPlaced velocity update for user={}, order={}", userId, orderId);
-        } catch (Exception ex) {
-            log.error("Failed to process order event: skipping record at offset={}, partition={}",
-                    record.offset(), record.partition(), ex);
+            envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException(
+                    "Failed to deserialize order event at offset=" + record.offset(), ex);
         }
+        if (!"OrderPlaced".equals(envelope.eventType())) {
+            return;
+        }
+
+        JsonNode payload = envelope.payload();
+        String userId = payload.path("userId").asText(null);
+        String orderId = payload.path("orderId").asText(null);
+        long totalCents = payload.path("totalCents").asLong(0);
+
+        if (userId == null) {
+            log.warn("OrderPlaced event missing userId at offset={}", record.offset());
+            return;
+        }
+
+        velocityService.incrementCounter("USER", userId, "ORDERS_5M");
+        velocityService.incrementCounter("USER", userId, "ORDERS_1H");
+        velocityService.incrementCounter("USER", userId, "ORDERS_24H");
+
+        if (totalCents > 0) {
+            velocityService.incrementAmountCounter("USER", userId, "AMOUNT_24H", totalCents);
+        }
+
+        String deviceFingerprint = payload.path("deviceFingerprint").asText(null);
+        if (deviceFingerprint != null && !deviceFingerprint.isBlank()) {
+            velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_5M");
+            velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_1H");
+            velocityService.incrementCounter("DEVICE", deviceFingerprint, "ORDERS_24H");
+        }
+
+        String ipAddress = payload.path("ipAddress").asText(null);
+        if (ipAddress != null && !ipAddress.isBlank()) {
+            velocityService.incrementCounter("IP", ipAddress, "ORDERS_5M");
+            velocityService.incrementCounter("IP", ipAddress, "ORDERS_1H");
+            velocityService.incrementCounter("IP", ipAddress, "ORDERS_24H");
+        }
+
+        log.debug("Processed OrderPlaced velocity update for user={}, order={}", userId, orderId);
     }
 }
