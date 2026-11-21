@@ -10,6 +10,7 @@
     "refundCents": { "type": "integer", "minimum": 0 },
     "walletAmountCents": { "type": "integer", "minimum": 0 },
     "walletRefundCents": { "type": "integer", "minimum": 0 },
+    "pspRefundCents": { "type": "integer", "minimum": 0 },
     "refundedCents": { "type": "integer", "minimum": 0 },
     "priceDeltaCents": { "type": "integer" },
     "reason": { "type": "string", "minLength": 1 }

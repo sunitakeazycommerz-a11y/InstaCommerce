@@ -148,11 +148,49 @@ def check_topic_dlt() -> list[str]:
     ]
 
 
+def verify_dockerfile_ports() -> list[str]:
+    """Verify every service Dockerfile EXPOSE, env port, and healthcheck matches GLOSSARY.md."""
+    glossary = (REPO_ROOT / "GLOSSARY.md").read_text(encoding="utf-8")
+    ports = re.findall(r"^\| `([a-z0-9-]+)` \| [^|]+ \| ([0-9]+) \|", glossary, re.M)
+    issues: list[str] = []
+
+    for svc, expected in sorted(ports):
+        df = REPO_ROOT / "services" / svc / "Dockerfile"
+        if not df.is_file():
+            issues.append(f"{svc}: missing Dockerfile")
+            continue
+        text = df.read_text(encoding="utf-8")
+        expose_match = re.search(r"^EXPOSE\s+([^\n]+)", text, re.M)
+        if not expose_match:
+            issues.append(f"{svc}: missing EXPOSE directive")
+        else:
+            exposed = re.findall(r"\b([0-9]+)\b", expose_match.group(1))
+            if not exposed or exposed[0] != expected:
+                issues.append(f"{svc}: EXPOSE {expose_match.group(1).strip()} expected {expected}")
+
+        for env_key, env_port in re.findall(r"^ENV\s+(SERVER_PORT|PORT)=([0-9]+)", text, re.M):
+            if env_port != expected:
+                issues.append(f"{svc}: ENV {env_key}={env_port} expected {expected}")
+
+        health_addr = re.search(r'^ENV\s+HEALTH_ADDR=":([0-9]+)"', text, re.M)
+        allowed_hc_port = health_addr.group(1) if health_addr else expected
+        for hc_port in re.findall(r"http://localhost:([0-9]+)\b", text):
+            if hc_port != allowed_hc_port:
+                issues.append(f"{svc}: HEALTHCHECK localhost:{hc_port} expected {allowed_hc_port}")
+
+        if (REPO_ROOT / "services" / svc / "build.gradle.kts").is_file():
+            if f"ENV SERVER_PORT={expected}" not in text:
+                issues.append(f"{svc}: Java Dockerfile missing ENV SERVER_PORT={expected}")
+
+    return issues
+
+
 CHECKS: dict[str, Callable[[], list[str]]] = {
     "istio-policies": check_istio_policies,
     "dependabot": check_dependabot,
     "argocd-apps": check_argocd_apps,
     "argocd-ports": check_argocd_ports,
+    "dockerfile-ports": verify_dockerfile_ports,
     "topic-dlt": check_topic_dlt,
 }
 

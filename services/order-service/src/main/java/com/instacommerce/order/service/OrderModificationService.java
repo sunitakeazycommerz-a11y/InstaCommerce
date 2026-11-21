@@ -83,7 +83,7 @@ public class OrderModificationService {
         long priceDeltaCents;
         long refundCents;
         boolean hasExplicitPriceAdjustment = event.priceDeltaCents() != null
-            || (event.refundCents() != null && event.refundCents() > 0);
+            || (computedGrossRemoved == 0L && event.refundCents() != null && event.refundCents() > 0);
         if (hasExplicitPriceAdjustment) {
             long rawDelta = event.priceDeltaCents() != null
                 ? event.priceDeltaCents()
@@ -334,6 +334,7 @@ public class OrderModificationService {
         refundPayload.put("refundCents", refundCents);
         refundPayload.put("walletAmountCents", walletAmountCents);
         refundPayload.put("walletRefundCents", walletRefundCents);
+        refundPayload.put("pspRefundCents", Math.max(0L, refundCents - walletRefundCents));
         refundPayload.put("refundedCents", refundCents);
         refundPayload.put("priceDeltaCents", priceDeltaCents);
         refundPayload.put("reason", reason);

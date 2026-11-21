@@ -43,7 +43,7 @@ public class NotificationRetryJob {
         logger.info("Retrying {} pending notifications", pending.size());
         for (NotificationLog log : pending) {
             try {
-                sender.attemptSend(log.getChannel().name(), log.getRecipient(), log, null);
+                sender.retry(log);
             } catch (Exception ex) {
                 logger.error("Unexpected error retrying notification {}", log.getId(), ex);
             }

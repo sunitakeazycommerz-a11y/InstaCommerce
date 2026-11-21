@@ -8,7 +8,7 @@ USER app
 ENV SERVER_PORT=8099
 EXPOSE 8099
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://localhost:8099/actuator/health/liveness || exit 1
+  CMD wget -qO- http://localhost:${SERVER_PORT}/actuator/health/liveness || exit 1
 
 ENTRYPOINT ["java", \
   "-XX:MaxRAMPercentage=75.0", \

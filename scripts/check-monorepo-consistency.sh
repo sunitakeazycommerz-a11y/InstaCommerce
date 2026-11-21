@@ -254,6 +254,7 @@ check_contracts_and_argocd() {
 
     run_python_check "argocd-apps" "No duplicate ArgoCD Application metadata.name in argocd/" "Duplicate ArgoCD Application metadata.name found"
     run_python_check "argocd-ports" "ArgoCD Rollout containerPorts match canonical GLOSSARY.md ports" "ArgoCD Rollout containerPort drift detected"
+    run_python_check "dockerfile-ports" "Service Dockerfiles match canonical GLOSSARY.md ports" "Dockerfile port drift detected"
 
     stale_hikari=$(grep -rnE 'hikaricp_(active_connections|max_connections|pending_threads|connection_timeout_total)' monitoring/ prometheus/ || true)
     assert_check "Monitoring rules and dashboards use canonical Micrometer hikaricp_connections_* metrics" \

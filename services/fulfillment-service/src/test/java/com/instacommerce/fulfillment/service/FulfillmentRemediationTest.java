@@ -9,7 +9,6 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.fulfillment.client.InventoryClient;
-import com.instacommerce.fulfillment.client.PaymentClient;
 import com.instacommerce.fulfillment.client.WarehouseClient;
 import com.instacommerce.fulfillment.config.FulfillmentProperties;
 import com.instacommerce.fulfillment.domain.model.Delivery;
@@ -50,9 +49,6 @@ class FulfillmentRemediationTest {
 
     @Mock
     private InventoryClient inventoryClient;
-
-    @Mock
-    private PaymentClient paymentClient;
 
     @Mock
     private OutboxService outboxService;
@@ -111,15 +107,17 @@ class FulfillmentRemediationTest {
         item.setSubstituteProductId(replacementProductId);
 
         SubstitutionService service = new SubstitutionService(
-            inventoryClient, paymentClient, outboxService, eventPublisher);
+            inventoryClient, outboxService, eventPublisher);
         service.handleMissingItem(task, item, 1);
 
-        verifyNoInteractions(inventoryClient, paymentClient);
+        verifyNoInteractions(inventoryClient);
         verify(outboxService).publish(
             eq("Fulfillment"), eq(orderId.toString()), eq("ItemSubstituted"), any());
         verify(outboxService).publish(
             eq("Fulfillment"), eq(orderId.toString()), eq("OrderModified"), payloadCaptor.capture());
-        assertThat(payloadCaptor.getValue()).containsEntry("missingQty", 1);
+        assertThat(payloadCaptor.getValue())
+            .containsEntry("missingQty", 1)
+            .containsEntry("refundCents", 1000L);
 
         ArgumentCaptor<Object> eventsCaptor = ArgumentCaptor.forClass(Object.class);
         verify(eventPublisher, Mockito.times(2)).publishEvent(eventsCaptor.capture());
@@ -146,7 +144,6 @@ class FulfillmentRemediationTest {
             eq(originalProductId), eq(storeId), eq(2), eq("FULFILLMENT_SUBSTITUTED_ORIGINAL_RELEASE"), any());
         verify(inventoryClient).reserveOrDeductStock(
             eq(replacementProductId), eq(storeId), eq(2), eq("FULFILLMENT_SUBSTITUTION_REPLACEMENT"), any());
-        verify(paymentClient).refund(eq(paymentId), eq(1000L), eq("Item missing"), any());
     }
 
     @Test
@@ -170,7 +167,7 @@ class FulfillmentRemediationTest {
         item.setStatus(PickItemStatus.MISSING);
 
         SubstitutionService service = new SubstitutionService(
-            inventoryClient, paymentClient, outboxService, eventPublisher);
+            inventoryClient, outboxService, eventPublisher);
         service.handleMissingItem(task, item, 2);
 
         verify(outboxService).publish(
@@ -187,7 +184,6 @@ class FulfillmentRemediationTest {
 
         verify(inventoryClient).reserveOrDeductStock(
             eq(productId), eq(storeId), eq(2), eq("FULFILLMENT_MISSING"), any());
-        verifyNoInteractions(paymentClient);
     }
 
     @Test
@@ -212,7 +208,7 @@ class FulfillmentRemediationTest {
         item.setStatus(PickItemStatus.PICKED);
 
         SubstitutionService service = new SubstitutionService(
-            inventoryClient, paymentClient, outboxService, eventPublisher);
+            inventoryClient, outboxService, eventPublisher);
         service.handleMissingItem(task, item, 2);
 
         verify(outboxService).publish(
@@ -230,7 +226,6 @@ class FulfillmentRemediationTest {
 
         verify(inventoryClient).reserveOrDeductStock(
             eq(productId), eq(storeId), eq(2), eq("FULFILLMENT_MISSING"), any());
-        verifyNoInteractions(paymentClient);
     }
 
     @Test

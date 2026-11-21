@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.order.client.PricingQuoteClient;
+import com.instacommerce.order.consumer.FulfillmentOrderEvent;
 import com.instacommerce.order.domain.model.Order;
 import com.instacommerce.order.domain.model.OrderItem;
 import com.instacommerce.order.domain.model.OrderStatus;
@@ -235,7 +236,74 @@ class OrderWalletAndMetadataTest {
         assertThat(partialCaptor.getValue())
             .containsEntry("walletAmountCents", 3_000L)
             .containsEntry("walletRefundCents", 0L)
+            .containsEntry("pspRefundCents", 5_000L)
             .containsEntry("refundedCents", 5_000L);
+    }
+
+    @Test
+    void applyOrderModificationComputesProRataDiscountedAndSplitTenderRefundDespiteGrossHint() {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        UUID milkId = UUID.randomUUID();
+        UUID breadId = UUID.randomUUID();
+
+        Order order = new Order();
+        order.setId(orderId);
+        order.setUserId(userId);
+        order.setPaymentId(paymentId);
+        order.setStatus(OrderStatus.PACKED);
+        order.setSubtotalCents(10_000L);
+        order.setDiscountCents(2_000L);
+        order.setTotalCents(8_000L);
+        order.setWalletAmountCents(2_000L);
+        order.setCurrency("INR");
+
+        OrderItem milk = new OrderItem();
+        milk.setProductId(milkId);
+        milk.setProductName("Milk");
+        milk.setProductSku("MILK-1");
+        milk.setQuantity(2);
+        milk.setUnitPriceCents(2_500L);
+        milk.setLineTotalCents(5_000L);
+
+        OrderItem bread = new OrderItem();
+        bread.setProductId(breadId);
+        bread.setProductName("Bread");
+        bread.setProductSku("BREAD-1");
+        bread.setQuantity(1);
+        bread.setUnitPriceCents(5_000L);
+        bread.setLineTotalCents(5_000L);
+
+        order.setItems(new ArrayList<>(List.of(milk, bread)));
+        when(orderRepository.findByIdForUpdate(orderId)).thenReturn(Optional.of(order));
+        when(orderRepository.save(order)).thenReturn(order);
+
+        FulfillmentOrderEvent modified = new FulfillmentOrderEvent(
+            orderId,
+            milkId,
+            2,
+            5_000L,
+            null,
+            null,
+            null
+        );
+        orderService.applyOrderModification(modified);
+
+        // Removing 5000 gross out of 10000 subtotal with 8000 total -> pro-rata refund 4000 (not 5000 gross)
+        // Previous total 8000 - remaining wallet 2000 = 6000 PSP capacity -> pspRefundCents=4000, walletRefundCents=0
+        assertThat(order.getTotalCents()).isEqualTo(4_000L);
+        assertThat(order.getDiscountCents()).isEqualTo(1_000L);
+        assertThat(order.getWalletAmountCents()).isEqualTo(2_000L);
+
+        ArgumentCaptor<Map<String, Object>> partialCaptor = ArgumentCaptor.captor();
+        verify(outboxService).publish(
+            eq("Order"), eq(orderId.toString()), eq("OrderPartiallyRefunded"), partialCaptor.capture());
+        assertThat(partialCaptor.getValue())
+            .containsEntry("refundCents", 4_000L)
+            .containsEntry("refundedCents", 4_000L)
+            .containsEntry("walletRefundCents", 0L)
+            .containsEntry("pspRefundCents", 4_000L);
     }
 
     @Test

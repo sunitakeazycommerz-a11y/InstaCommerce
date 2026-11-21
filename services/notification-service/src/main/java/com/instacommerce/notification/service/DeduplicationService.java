@@ -6,6 +6,7 @@ import com.instacommerce.notification.domain.model.NotificationLog;
 import com.instacommerce.notification.domain.model.NotificationStatus;
 import com.instacommerce.notification.dto.NotificationRequest;
 import com.instacommerce.notification.repository.NotificationLogRepository;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -35,9 +36,10 @@ public class DeduplicationService {
             : MaskingUtil.maskRecipient(request.recipient());
         log.setRecipient(sanitizedRecipient);
         log.setStatus(NotificationStatus.PENDING);
-        if (request.variables() != null && !request.variables().isEmpty()) {
+        Map<String, Object> safeVariables = MaskingUtil.stripPiiVariables(request.variables());
+        if (!safeVariables.isEmpty()) {
             try {
-                log.setTemplateContext(objectMapper.writeValueAsString(request.variables()));
+                log.setTemplateContext(objectMapper.writeValueAsString(safeVariables));
             } catch (JsonProcessingException ex) {
                 logger.warn("Unable to serialize template context for event {} channel {}: {}",
                     request.eventId(), request.channel(), ex.getMessage());

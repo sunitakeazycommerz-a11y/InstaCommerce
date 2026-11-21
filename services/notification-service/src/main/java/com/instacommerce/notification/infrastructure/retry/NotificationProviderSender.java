@@ -77,13 +77,17 @@ public class NotificationProviderSender {
                 masked, currentRetry + 1, log.getNextRetryAt());
             return new DispatchResult(DispatchStatus.RETRY_SCHEDULED, null);
         } catch (ProviderPermanentException ex) {
-            log.setStatus(NotificationStatus.FAILED);
-            log.setLastError(ex.getMessage());
-            log.setAttempts(log.getRetryCount() + 1);
-            logRepository.save(log);
-            metrics.incrementFailed();
+            markPermanentFailure(log, ex.getMessage());
             return new DispatchResult(DispatchStatus.FALLBACK_REQUIRED, ex.getMessage());
         }
+    }
+
+    public void markPermanentFailure(NotificationLog log, String reason) {
+        log.setStatus(NotificationStatus.FAILED);
+        log.setLastError(reason);
+        log.setAttempts(log.getRetryCount() + 1);
+        logRepository.save(log);
+        metrics.incrementFailed();
     }
 
     public enum DispatchStatus {

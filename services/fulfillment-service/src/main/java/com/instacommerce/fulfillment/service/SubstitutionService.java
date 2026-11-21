@@ -1,7 +1,6 @@
 package com.instacommerce.fulfillment.service;
 
 import com.instacommerce.fulfillment.client.InventoryClient;
-import com.instacommerce.fulfillment.client.PaymentClient;
 import com.instacommerce.fulfillment.domain.model.PickItem;
 import com.instacommerce.fulfillment.domain.model.PickItemStatus;
 import com.instacommerce.fulfillment.domain.model.PickTask;
@@ -21,16 +20,13 @@ public class SubstitutionService {
     private static final Logger logger = LoggerFactory.getLogger(SubstitutionService.class);
 
     private final InventoryClient inventoryClient;
-    private final PaymentClient paymentClient;
     private final OutboxService outboxService;
     private final ApplicationEventPublisher eventPublisher;
 
     public SubstitutionService(InventoryClient inventoryClient,
-                               PaymentClient paymentClient,
                                OutboxService outboxService,
                                ApplicationEventPublisher eventPublisher) {
         this.inventoryClient = inventoryClient;
-        this.paymentClient = paymentClient;
         this.outboxService = outboxService;
         this.eventPublisher = eventPublisher;
     }
@@ -148,17 +144,8 @@ public class SubstitutionService {
             }
         }
         if (event.refundAmountCents() > 0) {
-            if (event.paymentId() != null) {
-                try {
-                    paymentClient.refund(event.paymentId(), event.refundAmountCents(),
-                        "Item missing", "missing-" + event.referenceId());
-                } catch (Exception ex) {
-                    logger.error("Failed to refund for reference {}: {}", event.referenceId(), ex.getMessage());
-                }
-            } else {
-                logger.info("Skipping PSP refund for wallet/non-PSP order reference {} (refundCents={}); "
-                    + "OrderModified triggers downstream refund", event.referenceId(), event.refundAmountCents());
-            }
+            logger.info("Deferring refund calculation and execution for reference {} (grossHintCents={}) to downstream OrderModified handling",
+                event.referenceId(), event.refundAmountCents());
         }
     }
 

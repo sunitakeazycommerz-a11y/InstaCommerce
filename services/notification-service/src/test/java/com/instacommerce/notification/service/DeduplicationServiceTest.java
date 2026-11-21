@@ -36,8 +36,8 @@ class DeduplicationServiceTest {
     private DeduplicationService deduplicationService;
 
     @Test
-    @DisplayName("createLog persists maskedRecipient instead of raw plaintext recipient")
-    void createLogPersistsMaskedRecipient() {
+    @DisplayName("createLog persists maskedRecipient and strips PII variables from templateContext")
+    void createLogPersistsMaskedRecipientAndStripsPiiTemplateVariables() {
         NotificationRequest request = new NotificationRequest(
             "evt-123",
             "OrderPlaced",
@@ -45,7 +45,15 @@ class DeduplicationServiceTest {
             NotificationChannel.EMAIL,
             "order_confirmed",
             "alice@example.com",
-            Map.of()
+            Map.of(
+                "orderId", "ord-42",
+                "eta", "12 mins",
+                "totalFormatted", "₹450.00",
+                "userName", "Alice",
+                "email", "alice@example.com",
+                "phone", "+919876543210",
+                "deviceToken", "fcm-secret-token"
+            )
         );
         when(logRepository.save(any(NotificationLog.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -57,6 +65,9 @@ class DeduplicationServiceTest {
         assertThat(captor.getValue().getRecipient()).isEqualTo("a***@example.com");
         assertThat(captor.getValue().getRecipient()).doesNotContain("alice@example.com");
         assertThat(captor.getValue().getStatus()).isEqualTo(NotificationStatus.PENDING);
+        assertThat(captor.getValue().getTemplateContext())
+            .contains("ord-42", "12 mins", "₹450.00", "Alice")
+            .doesNotContain("alice@example.com", "+919876543210", "fcm-secret-token", "\"phone\"", "\"email\"", "\"deviceToken\"");
     }
 
     @Test

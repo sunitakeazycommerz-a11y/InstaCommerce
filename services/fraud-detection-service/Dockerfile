@@ -5,10 +5,10 @@ COPY build/libs/*.jar app.jar
 RUN chown -R app:app /app
 
 USER app
-ENV SERVER_PORT=8095
-EXPOSE 8095
+ENV SERVER_PORT=8097
+EXPOSE 8097
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://localhost:8095/actuator/health/liveness || exit 1
+  CMD wget -qO- http://localhost:${SERVER_PORT}/actuator/health/liveness || exit 1
 
 ENTRYPOINT ["java", \
   "-XX:MaxRAMPercentage=75.0", \

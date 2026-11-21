@@ -27,6 +27,7 @@ public class OrderCancelledEventConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(OrderCancelledEventConsumer.class);
     private static final String EVENT_TYPE = "OrderCancelled";
+    private static final String PARTIAL_REFUND_EVENT_TYPE = "OrderPartiallyRefunded";
     private static final Set<PaymentStatus> TERMINAL_SKIP = Set.of(
         PaymentStatus.VOIDED,
         PaymentStatus.REFUNDED,
@@ -60,45 +61,98 @@ public class OrderCancelledEventConsumer {
     public void onOrderEvent(ConsumerRecord<String, String> record) throws Exception {
         EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);
 
-        if (!EVENT_TYPE.equals(envelope.eventType())) {
+        if (EVENT_TYPE.equals(envelope.eventType())) {
+            handleOrderCancelled(envelope, record);
+        } else if (PARTIAL_REFUND_EVENT_TYPE.equals(envelope.eventType())) {
+            handleOrderPartiallyRefunded(envelope);
+        } else {
             log.debug("Ignoring event type={} at offset={}", envelope.eventType(), record.offset());
-            return;
         }
-
-        handleOrderCancelled(envelope, record);
     }
 
     // Visible for testing
     void handleOrderCancelled(EventEnvelope envelope, ConsumerRecord<String, String> record) throws Exception {
         OrderCancelledEvent event = parsePayload(envelope);
-
-        UUID paymentId = resolvePaymentId(event, envelope.id());
-        Payment payment = null;
-        if (paymentId != null) {
-            payment = paymentRepository.findById(paymentId)
-                .orElseThrow(() -> new IllegalStateException(
-                    "Payment not found for paymentId=%s, orderId=%s, eventId=%s"
-                        .formatted(paymentId, event.orderId(), envelope.id())));
-        } else {
-            String orderIdStr = event.orderId() != null && !event.orderId().isBlank()
-                ? event.orderId() : envelope.aggregateId();
-            if (orderIdStr != null && !orderIdStr.isBlank()) {
-                try {
-                    UUID orderUuid = UUID.fromString(orderIdStr);
-                    payment = paymentRepository.findByOrderId(orderUuid).orElse(null);
-                } catch (IllegalArgumentException ignored) {
-                }
-            }
-            if (payment == null) {
-                log.info("OrderCancelled event has no active payment found. eventId={}, orderId={}",
-                    envelope.id(), orderIdStr);
-                return;
-            }
+        Payment payment = resolvePaymentOrNull(event, envelope.aggregateId(), envelope.id(), EVENT_TYPE);
+        if (payment == null) {
+            return;
         }
         String orderId = event.orderId() != null ? event.orderId() : envelope.aggregateId();
         String idempotencyKey = orderId + "-cancellation-refund";
 
         routeByPaymentState(payment, event, idempotencyKey, envelope.id());
+    }
+
+    void handleOrderPartiallyRefunded(EventEnvelope envelope) throws Exception {
+        OrderCancelledEvent event = parsePayload(envelope);
+        Payment payment = resolvePaymentOrNull(event, envelope.aggregateId(), envelope.id(), PARTIAL_REFUND_EVENT_TYPE);
+        if (payment == null) {
+            return;
+        }
+        PaymentStatus status = payment.getStatus();
+        if (TERMINAL_SKIP.contains(status)) {
+            log.info("Payment {} already in terminal state {}, skipping OrderPartiallyRefunded eventId={}",
+                payment.getId(), status, envelope.id());
+            return;
+        }
+        if (RETRYABLE_PENDING_STATES.contains(status)) {
+            throw new IllegalStateException(
+                "Payment %s still in pending state %s for OrderPartiallyRefunded eventId=%s"
+                    .formatted(payment.getId(), status, envelope.id()));
+        }
+        if (status != PaymentStatus.CAPTURED && status != PaymentStatus.PARTIALLY_REFUNDED) {
+            log.info("Ignoring OrderPartiallyRefunded in state {} for payment={}, eventId={}",
+                status, payment.getId(), envelope.id());
+            return;
+        }
+        long targetPspRefund = event.pspRefundCents() != null
+            ? Math.max(0L, event.pspRefundCents())
+            : Math.max(0L,
+                (event.refundedCents() != null ? event.refundedCents() : 0L)
+                    - (event.walletRefundCents() != null ? event.walletRefundCents() : 0L));
+        long remainingCaptured = Math.max(0L, payment.getCapturedCents() - payment.getRefundedCents());
+        long refundable = Math.min(remainingCaptured, targetPspRefund);
+        if (refundable <= 0L) {
+            log.info("OrderPartiallyRefunded requires 0 PSP refund for payment={}, eventId={}",
+                payment.getId(), envelope.id());
+            return;
+        }
+        String orderId = event.orderId() != null ? event.orderId() : envelope.aggregateId();
+        String idempotencyKey = orderId + "-partial-refund-" + envelope.id();
+        String reason = event.reason() != null && !event.reason().isBlank()
+            ? event.reason()
+            : "Order partial refund";
+        log.info("Refunding {} PSP cents for partial refund payment={}, orderId={}, eventId={}",
+            refundable, payment.getId(), orderId, envelope.id());
+        refundService.refund(payment.getId(), new RefundRequest(refundable, reason, idempotencyKey));
+    }
+
+    private Payment resolvePaymentOrNull(OrderCancelledEvent event,
+                                         String aggregateId,
+                                         String eventId,
+                                         String eventType) {
+        UUID paymentId = resolvePaymentId(event, eventId);
+        if (paymentId != null) {
+            return paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new IllegalStateException(
+                    "Payment not found for paymentId=%s, orderId=%s, eventId=%s"
+                        .formatted(paymentId, event.orderId(), eventId)));
+        }
+        String orderIdStr = event.orderId() != null && !event.orderId().isBlank()
+            ? event.orderId() : aggregateId;
+        Payment payment = null;
+        if (orderIdStr != null && !orderIdStr.isBlank()) {
+            try {
+                UUID orderUuid = UUID.fromString(orderIdStr);
+                payment = paymentRepository.findByOrderId(orderUuid).orElse(null);
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        if (payment == null) {
+            log.info("{} event has no active payment found. eventId={}, orderId={}",
+                eventType, eventId, orderIdStr);
+        }
+        return payment;
     }
 
     // Package-private for testing

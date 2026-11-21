@@ -78,6 +78,7 @@ final class DomainPayloadFixtures {
                                 "refundCents", 500,
                                 "walletAmountCents", 200,
                                 "walletRefundCents", 200,
+                                "pspRefundCents", 300,
                                 "refundedCents", 500,
                                 "priceDeltaCents", -500,
                                 "reason", "ORDER_MODIFIED_PARTIAL_REFUND")),

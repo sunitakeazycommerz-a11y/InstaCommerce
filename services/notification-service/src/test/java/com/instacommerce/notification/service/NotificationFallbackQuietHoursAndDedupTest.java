@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.notification.config.NotificationProperties;
+import com.instacommerce.notification.domain.model.DeviceToken;
 import com.instacommerce.notification.domain.model.NotificationChannel;
 import com.instacommerce.notification.domain.model.NotificationLog;
 import com.instacommerce.notification.domain.model.NotificationStatus;
@@ -118,7 +119,7 @@ class NotificationFallbackQuietHoursAndDedupTest {
             providerSender
         );
         RetryableNotificationSender sender = new RetryableNotificationSender(
-            providerSender, dlqPublisher, fallbackService, objectMapper);
+            providerSender, dlqPublisher, fallbackService, userDirectoryClient, deviceTokenRepository, objectMapper);
 
         UserPreferenceService.Preferences prefs = new UserPreferenceService.Preferences(
             userId, false, false, false, false);
@@ -297,7 +298,7 @@ class NotificationFallbackQuietHoursAndDedupTest {
         ChannelFallbackService fallbackService = new ChannelFallbackService(
             realDedup, templateRegistry, templateService, userPreferenceService, userDirectoryClient, providerSender);
         RetryableNotificationSender retrySender = new RetryableNotificationSender(
-            providerSender, dlqPublisher, fallbackService, objectMapper);
+            providerSender, dlqPublisher, fallbackService, userDirectoryClient, deviceTokenRepository, objectMapper);
 
         NotificationRequest pushReq = new NotificationRequest(
             eventId,
@@ -306,17 +307,31 @@ class NotificationFallbackQuietHoursAndDedupTest {
             NotificationChannel.PUSH,
             "eta_delayed",
             "fcm-token-retry",
-            Map.of("orderId", "ord-retry-99", "eta", "18 mins", "userName", "Asha")
+            Map.of(
+                "orderId", "ord-retry-99",
+                "eta", "18 mins",
+                "totalFormatted", "₹320.00",
+                "userName", "Asha",
+                "phone", "+919876543210",
+                "email", "asha@example.com"
+            )
         );
         NotificationLog persistedPushLog = realDedup.createLog(pushReq, "fcm-***");
         assertThat(persistedPushLog).isNotNull();
-        assertThat(persistedPushLog.getTemplateContext()).contains("ord-retry-99").contains("18 mins");
+        assertThat(persistedPushLog.getTemplateContext())
+            .contains("ord-retry-99", "18 mins", "₹320.00", "Asha")
+            .doesNotContain("+919876543210", "asha@example.com", "\"phone\"", "\"email\"");
 
         persistedPushLog.setRetryCount(2);
         persistedPushLog.setNextRetryAt(Instant.now().minusSeconds(5));
         persistedPushLog.setStatus(NotificationStatus.RETRY_PENDING);
         persistedPushLog.setSubject("Delivery delayed");
         persistedPushLog.setBody("Delayed");
+
+        DeviceToken activeToken = new DeviceToken();
+        activeToken.setToken("fcm-live-token-99");
+        when(deviceTokenRepository.findFirstByUserIdAndActiveTrueOrderByUpdatedAtDesc(userId))
+            .thenReturn(Optional.of(activeToken));
 
         UserPreferenceService.Preferences prefs = new UserPreferenceService.Preferences(
             userId, false, false, false, false);
@@ -330,8 +345,13 @@ class NotificationFallbackQuietHoursAndDedupTest {
         NotificationRetryJob retryJob = new NotificationRetryJob(logRepository, retrySender, new NotificationProperties());
         retryJob.retryPendingNotifications();
 
+        ArgumentCaptor<NotificationSendRequest> pushCaptor = ArgumentCaptor.forClass(NotificationSendRequest.class);
+        verify(pushProvider).send(pushCaptor.capture());
+        assertThat(pushCaptor.getValue().recipient()).isEqualTo("fcm-live-token-99");
+
         ArgumentCaptor<NotificationSendRequest> smsCaptor = ArgumentCaptor.forClass(NotificationSendRequest.class);
         verify(smsProvider).send(smsCaptor.capture());
+        assertThat(smsCaptor.getValue().recipient()).isEqualTo("+919876543210");
         assertThat(smsCaptor.getValue().body())
             .contains("Asha")
             .contains("ord-retry-99")
@@ -339,9 +359,79 @@ class NotificationFallbackQuietHoursAndDedupTest {
 
         ArgumentCaptor<NotificationSendRequest> emailCaptor = ArgumentCaptor.forClass(NotificationSendRequest.class);
         verify(emailProvider).send(emailCaptor.capture());
+        assertThat(emailCaptor.getValue().recipient()).isEqualTo("asha@example.com");
         assertThat(emailCaptor.getValue().body())
             .contains("ord-retry-99")
             .contains("18 mins");
         verify(dlqPublisher, never()).publish(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Scheduled SMS retry dispatches to live unmasked phone and triggers fallback if contact disappears")
+    void scheduledRetryResolvesLiveContactOrFallsBackWhenMissing() {
+        UUID userId = UUID.randomUUID();
+        NotificationProvider smsProvider = mock(NotificationProvider.class);
+        when(smsProvider.supports(NotificationChannel.SMS)).thenReturn(true);
+        when(smsProvider.send(any())).thenReturn("twilio-sid-live");
+
+        NotificationProvider emailProvider = mock(NotificationProvider.class);
+        when(emailProvider.supports(NotificationChannel.EMAIL)).thenReturn(true);
+        when(emailProvider.send(any())).thenReturn("sg-live-1");
+
+        NotificationProviderRegistry registry = new NotificationProviderRegistry(
+            List.of(smsProvider, emailProvider));
+        NotificationProviderSender providerSender = new NotificationProviderSender(registry, logRepository, metrics);
+        DeduplicationService realDedup = new DeduplicationService(logRepository, objectMapper);
+        when(logRepository.save(any(NotificationLog.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ChannelFallbackService fallbackService = new ChannelFallbackService(
+            realDedup, templateRegistry, templateService, userPreferenceService, userDirectoryClient, providerSender);
+        RetryableNotificationSender retrySender = new RetryableNotificationSender(
+            providerSender, dlqPublisher, fallbackService, userDirectoryClient, deviceTokenRepository, objectMapper);
+
+        NotificationLog smsRetryLog = new NotificationLog();
+        smsRetryLog.setUserId(userId);
+        smsRetryLog.setEventId("status:ord-live-1:OrderPlaced");
+        smsRetryLog.setEventType("OrderPlaced");
+        smsRetryLog.setChannel(NotificationChannel.SMS);
+        smsRetryLog.setTemplateId("order_confirmed");
+        smsRetryLog.setRecipient("+91****3210");
+        smsRetryLog.setTemplateContext("{\"orderId\":\"ord-live-1\",\"totalFormatted\":\"₹250.00\",\"userName\":\"Asha\"}");
+        smsRetryLog.setRetryCount(1);
+        smsRetryLog.setBody("Order confirmed");
+
+        when(userDirectoryClient.findUser(userId))
+            .thenReturn(Optional.of(new UserContact(userId, "asha@example.com", "+919876543210", "Asha", "en")));
+
+        retrySender.retry(smsRetryLog);
+
+        ArgumentCaptor<NotificationSendRequest> smsCaptor = ArgumentCaptor.forClass(NotificationSendRequest.class);
+        verify(smsProvider).send(smsCaptor.capture());
+        assertThat(smsCaptor.getValue().recipient()).isEqualTo("+919876543210");
+        assertThat(smsRetryLog.getStatus()).isEqualTo(NotificationStatus.SENT);
+
+        NotificationLog pushFallbackLog = new NotificationLog();
+        pushFallbackLog.setUserId(userId);
+        pushFallbackLog.setEventId("status:ord-live-2:OrderPlaced");
+        pushFallbackLog.setEventType("OrderPlaced");
+        pushFallbackLog.setChannel(NotificationChannel.PUSH);
+        pushFallbackLog.setTemplateId("order_confirmed");
+        pushFallbackLog.setRecipient("fcm-***");
+        pushFallbackLog.setTemplateContext(
+            "{\"orderId\":\"ord-live-2\",\"totalFormatted\":\"₹250.00\",\"eta\":\"15 mins\",\"userName\":\"Asha\"}");
+
+        when(deviceTokenRepository.findFirstByUserIdAndActiveTrueOrderByUpdatedAtDesc(userId))
+            .thenReturn(Optional.empty());
+        UserPreferenceService.Preferences prefs = new UserPreferenceService.Preferences(
+            userId, false, false, false, false);
+        when(userPreferenceService.getPreferences(userId)).thenReturn(prefs);
+        when(userPreferenceService.allowNotification(prefs, NotificationChannel.SMS, false)).thenReturn(false);
+        when(userPreferenceService.allowNotification(prefs, NotificationChannel.EMAIL, false)).thenReturn(true);
+
+        retrySender.retry(pushFallbackLog);
+
+        ArgumentCaptor<NotificationSendRequest> emailCaptor = ArgumentCaptor.forClass(NotificationSendRequest.class);
+        verify(emailProvider).send(emailCaptor.capture());
+        assertThat(emailCaptor.getValue().recipient()).isEqualTo("asha@example.com");
     }
 }

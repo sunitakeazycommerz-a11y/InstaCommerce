@@ -517,6 +517,80 @@ class OrderCancelledEventConsumerTest {
         verifyNoInteractions(paymentService, refundService);
     }
 
+    @Test
+    @DisplayName("OrderPartiallyRefunded refunds split-tender PSP portion bounded by remaining captured")
+    void partialRefundRefundsSplitTenderPspPortionBounded() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        Payment payment = buildPayment(paymentId, orderId, PaymentStatus.CAPTURED, 6000, 6000, 0);
+        when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(payment));
+        when(refundService.refund(eq(paymentId), any(RefundRequest.class))).thenReturn(buildRefundResponse());
+
+        String json = objectMapper.writeValueAsString(Map.of(
+            "id", eventId.toString(),
+            "aggregateId", orderId.toString(),
+            "eventType", "OrderPartiallyRefunded",
+            "payload", Map.of(
+                "orderId", orderId.toString(),
+                "paymentId", paymentId.toString(),
+                "refundedCents", 4000,
+                "walletRefundCents", 1000,
+                "pspRefundCents", 3000,
+                "reason", "ORDER_MODIFIED_PARTIAL_REFUND")));
+
+        consumer.onOrderEvent(new ConsumerRecord<>("orders.events", 0, 0L, null, json));
+
+        ArgumentCaptor<RefundRequest> captor = ArgumentCaptor.forClass(RefundRequest.class);
+        verify(refundService).refund(eq(paymentId), captor.capture());
+        assertThat(captor.getValue().amountCents()).isEqualTo(3000L);
+        assertThat(captor.getValue().idempotencyKey()).isEqualTo(orderId + "-partial-refund-" + eventId);
+
+        Payment partialPayment = buildPayment(paymentId, orderId, PaymentStatus.PARTIALLY_REFUNDED, 6000, 6000, 5000);
+        when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(partialPayment));
+        UUID secondEventId = UUID.randomUUID();
+        String cappedJson = objectMapper.writeValueAsString(Map.of(
+            "id", secondEventId.toString(),
+            "aggregateId", orderId.toString(),
+            "eventType", "OrderPartiallyRefunded",
+            "payload", Map.of(
+                "orderId", orderId.toString(),
+                "paymentId", paymentId.toString(),
+                "refundedCents", 3000,
+                "walletRefundCents", 500,
+                "reason", "Partial cancel")));
+
+        consumer.onOrderEvent(new ConsumerRecord<>("orders.events", 0, 1L, null, cappedJson));
+        ArgumentCaptor<RefundRequest> cappedCaptor = ArgumentCaptor.forClass(RefundRequest.class);
+        verify(refundService, org.mockito.Mockito.times(2)).refund(eq(paymentId), cappedCaptor.capture());
+        assertThat(cappedCaptor.getAllValues().get(1).amountCents()).isEqualTo(1000L);
+    }
+
+    @Test
+    @DisplayName("OrderPartiallyRefunded with zero pspRefundCents skips PSP call")
+    void partialRefundZeroPspPortionSkipsRefund() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        Payment payment = buildPayment(paymentId, orderId, PaymentStatus.CAPTURED, 6000, 6000, 0);
+        when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(payment));
+
+        String json = objectMapper.writeValueAsString(Map.of(
+            "id", UUID.randomUUID().toString(),
+            "aggregateId", orderId.toString(),
+            "eventType", "OrderPartiallyRefunded",
+            "payload", Map.of(
+                "orderId", orderId.toString(),
+                "paymentId", paymentId.toString(),
+                "refundedCents", 1500,
+                "walletRefundCents", 1500,
+                "pspRefundCents", 0,
+                "reason", "Wallet-covered partial refund")));
+
+        consumer.onOrderEvent(new ConsumerRecord<>("orders.events", 0, 0L, null, json));
+
+        verifyNoInteractions(paymentService, refundService);
+    }
+
     private Payment buildPayment(UUID id, UUID orderId, PaymentStatus status,
                                   long amountCents, long capturedCents, long refundedCents) {
         Payment payment = new Payment();
