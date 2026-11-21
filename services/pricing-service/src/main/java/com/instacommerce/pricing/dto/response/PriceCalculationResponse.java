@@ -16,8 +16,38 @@ public record PriceCalculationResponse(
     UUID quoteId,
     String quoteToken,
     long estimatedTaxCents,
-    BigDecimal taxRate
+    BigDecimal taxRate,
+    long couponDiscountCents
 ) {
+    public PriceCalculationResponse(
+            List<PricedItem> items,
+            long subtotalCents,
+            long discountCents,
+            long deliveryFeeCents,
+            long totalCents,
+            String currency,
+            List<String> appliedPromotions,
+            String appliedCoupon,
+            UUID quoteId,
+            String quoteToken,
+            long estimatedTaxCents,
+            BigDecimal taxRate) {
+        this(
+                items,
+                subtotalCents,
+                discountCents,
+                deliveryFeeCents,
+                totalCents,
+                currency,
+                appliedPromotions,
+                appliedCoupon,
+                quoteId,
+                quoteToken,
+                estimatedTaxCents,
+                taxRate,
+                0L);
+    }
+
     public PriceCalculationResponse(
             List<PricedItem> items,
             long subtotalCents,
@@ -41,7 +71,8 @@ public record PriceCalculationResponse(
                 quoteId,
                 quoteToken,
                 estimatedTaxCents,
-                taxRate);
+                taxRate,
+                0L);
     }
 
     public PriceCalculationResponse(
@@ -65,6 +96,7 @@ public record PriceCalculationResponse(
                 quoteId,
                 quoteToken,
                 0L,
-                null);
+                null,
+                0L);
     }
 }

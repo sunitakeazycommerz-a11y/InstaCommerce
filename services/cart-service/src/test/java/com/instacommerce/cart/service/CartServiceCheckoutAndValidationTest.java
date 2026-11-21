@@ -32,6 +32,12 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.TestingAuthenticationToken;
@@ -46,7 +52,7 @@ class CartServiceCheckoutAndValidationTest {
         CartStore cartStore = mock(CartStore.class);
         PricingClient pricingClient = mock(PricingClient.class);
         CartProperties props = new CartProperties();
-        CartService service = new CartService(cartStore, props, pricingClient);
+        CartService service = new CartService(cartStore, props, pricingClient, null);
 
         UUID userId = UUID.randomUUID();
         UUID cartId = UUID.randomUUID();
@@ -66,6 +72,8 @@ class CartServiceCheckoutAndValidationTest {
 
         CartResponse response = service.validateCart(userId);
 
+        assertThat(response.valid()).isTrue();
+        assertThat(response.unavailableProductIds()).isEmpty();
         assertThat(response.priceChanged()).isTrue();
         assertThat(response.priceChanges()).hasSize(1);
         assertThat(response.priceChanges().getFirst().productId()).isEqualTo(p1);
@@ -77,6 +85,57 @@ class CartServiceCheckoutAndValidationTest {
     }
 
     @Test
+    @DisplayName("validateCart flags deactivated SKUs from batch pricing as unavailable instead of failing with 503")
+    void validateCartFlagsUnavailableProductsFromBatch() {
+        CartStore cartStore = mock(CartStore.class);
+        PricingClient pricingClient = mock(PricingClient.class);
+        CartProperties props = new CartProperties();
+        CartService service = new CartService(cartStore, props, pricingClient, null);
+
+        UUID userId = UUID.randomUUID();
+        UUID cartId = UUID.randomUUID();
+        UUID activeProduct = UUID.randomUUID();
+        UUID deactivatedProduct = UUID.randomUUID();
+
+        Cart cart = buildCart(cartId, userId, "store-blr-01",
+                List.of(item(activeProduct, "Milk", 5000L, 1), item(deactivatedProduct, "Old Snack", 2000L, 1)), 1L);
+
+        when(cartStore.validateCart(userId)).thenReturn(cart);
+        when(pricingClient.getPricesBatch(anyCollection())).thenReturn(Map.of(
+                activeProduct, new PricingClient.PriceResponse(activeProduct, 5000L, "INR")));
+
+        CartResponse response = service.validateCart(userId);
+
+        assertThat(response.valid()).isFalse();
+        assertThat(response.unavailableProductIds()).containsExactly(deactivatedProduct);
+    }
+
+    @Test
+    @DisplayName("validateCart flags single deactivated SKU when getPrice throws 404 PRODUCT_UNAVAILABLE")
+    void validateCartFlagsSingleUnavailableProduct() {
+        CartStore cartStore = mock(CartStore.class);
+        PricingClient pricingClient = mock(PricingClient.class);
+        CartProperties props = new CartProperties();
+        CartService service = new CartService(cartStore, props, pricingClient, null);
+
+        UUID userId = UUID.randomUUID();
+        UUID cartId = UUID.randomUUID();
+        UUID deactivatedProduct = UUID.randomUUID();
+
+        Cart cart = buildCart(cartId, userId, "store-blr-01",
+                List.of(item(deactivatedProduct, "Old Snack", 2000L, 1)), 1L);
+
+        when(cartStore.validateCart(userId)).thenReturn(cart);
+        when(pricingClient.getPrice(deactivatedProduct))
+                .thenThrow(new ApiException(HttpStatus.NOT_FOUND, "PRODUCT_UNAVAILABLE", "Unavailable"));
+
+        CartResponse response = service.validateCart(userId);
+
+        assertThat(response.valid()).isFalse();
+        assertThat(response.unavailableProductIds()).containsExactly(deactivatedProduct);
+    }
+
+    @Test
     @DisplayName("validateCart enforces store serviceability and minimum order amount bounds")
     void validateCartEnforcesStoreServiceabilityAndMinOrder() {
         CartStore cartStore = mock(CartStore.class);
@@ -84,7 +143,7 @@ class CartServiceCheckoutAndValidationTest {
         CartProperties props = new CartProperties();
         props.setServiceableStores(List.of("store-blr-01", "store-blr-02"));
         props.setMinOrderCents(10000L);
-        CartService service = new CartService(cartStore, props, pricingClient);
+        CartService service = new CartService(cartStore, props, pricingClient, null);
 
         UUID userId = UUID.randomUUID();
         UUID cartId = UUID.randomUUID();
@@ -110,7 +169,67 @@ class CartServiceCheckoutAndValidationTest {
     }
 
     @Test
-    @DisplayName("addItem rejects store mismatch, non-serviceable store, and distinct item limit")
+    @DisplayName("validateCart evicts carts cache before throwing IllegalStateException on min/max subtotal bounds")
+    void validateCartEvictsCacheEvenWhenMinOrderValidationFails() {
+        CartStore cartStore = mock(CartStore.class);
+        PricingClient pricingClient = mock(PricingClient.class);
+        CartProperties props = new CartProperties();
+        props.setMinOrderCents(10_000L);
+
+        try (AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext()) {
+            ctx.registerBean(CartStore.class, () -> cartStore);
+            ctx.registerBean(PricingClient.class, () -> pricingClient);
+            ctx.registerBean(CartProperties.class, () -> props);
+            ctx.register(CachingTestConfig.class);
+            ctx.refresh();
+
+            CartService proxiedService = ctx.getBean(CartService.class);
+            CacheManager cacheManager = ctx.getBean(CacheManager.class);
+
+            UUID userId = UUID.randomUUID();
+            UUID cartId = UUID.randomUUID();
+            UUID p1 = UUID.randomUUID();
+            Cart initialCart = buildCart(cartId, userId, "store-blr-01",
+                    List.of(item(p1, "Milk", 12_000L, 1)), 1L);
+            Cart loweredCart = buildCart(cartId, userId, "store-blr-01",
+                    List.of(item(p1, "Milk", 4_000L, 1)), 2L);
+
+            when(cartStore.getCart(userId))
+                    .thenReturn(Optional.of(initialCart))
+                    .thenReturn(Optional.of(loweredCart));
+            when(cartStore.validateCart(userId)).thenReturn(initialCart);
+            when(pricingClient.getPrice(p1)).thenReturn(new PricingClient.PriceResponse(p1, 4_000L, "INR"));
+            when(cartStore.updateItemPrices(userId, Map.of(p1, 4_000L))).thenReturn(loweredCart);
+
+            CartResponse cached = proxiedService.getCart(userId);
+            assertThat(cached.subtotalCents()).isEqualTo(12_000L);
+            assertThat(cacheManager.getCache("carts").get(userId)).isNotNull();
+
+            assertThatThrownBy(() -> proxiedService.validateCart(userId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("at least 10000");
+
+            assertThat(cacheManager.getCache("carts").get(userId)).isNull();
+            assertThat(proxiedService.getCart(userId).subtotalCents()).isEqualTo(4_000L);
+        }
+    }
+
+    @Configuration
+    @EnableCaching
+    static class CachingTestConfig {
+        @Bean
+        CacheManager cacheManager() {
+            return new ConcurrentMapCacheManager("carts");
+        }
+
+        @Bean
+        CartService cartService(CartStore cartStore, CartProperties props, PricingClient pricingClient) {
+            return new CartService(cartStore, props, pricingClient, null);
+        }
+    }
+
+    @Test
+    @DisplayName("addItem validates request bounds and JpaCartStore enforces store mismatch and limits atomically")
     void addItemRejectsStoreMismatchAndLimitViolations() {
         CartStore cartStore = mock(CartStore.class);
         PricingClient pricingClient = mock(PricingClient.class);
@@ -118,15 +237,11 @@ class CartServiceCheckoutAndValidationTest {
         props.setServiceableStores(List.of("store-blr-01"));
         props.setMaxItemsPerCart(2);
         props.setMaxQuantityPerItem(5);
-        CartService service = new CartService(cartStore, props, pricingClient);
+        CartService service = new CartService(cartStore, props, pricingClient, null);
 
         UUID userId = UUID.randomUUID();
         UUID cartId = UUID.randomUUID();
         UUID p1 = UUID.randomUUID();
-
-        Cart existingCart = buildCart(cartId, userId, "store-blr-01",
-                List.of(item(p1, "Milk", 3000L, 1)), 1L);
-        when(cartStore.getCart(userId)).thenReturn(Optional.of(existingCart));
 
         assertThatThrownBy(() -> service.addItem(
                 userId, new AddItemRequest(UUID.randomUUID(), "Coffee", 1000L, 1, "store-blr-99")))
@@ -134,13 +249,27 @@ class CartServiceCheckoutAndValidationTest {
                 .extracting("code")
                 .isEqualTo("UNSERVICEABLE_STORE");
 
-        props.setServiceableStores(List.of("store-blr-01", "store-blr-02"));
         assertThatThrownBy(() -> service.addItem(
+                userId, new AddItemRequest(p1, "Milk", 3000L, 6, "store-blr-01")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exceed maximum of 5");
+
+        CartRepository cartRepo = mock(CartRepository.class);
+        CartItemRepository itemRepo = mock(CartItemRepository.class);
+        OutboxService outbox = mock(OutboxService.class);
+        JpaCartStore store = new JpaCartStore(cartRepo, itemRepo, outbox, props);
+
+        CartItem existingItem = item(p1, "Milk", 3000L, 1);
+        Cart existingCart = buildCart(cartId, userId, "store-blr-01", List.of(existingItem), 1L);
+        when(cartRepo.findByUserIdForUpdate(userId)).thenReturn(Optional.of(existingCart));
+        when(itemRepo.findByCartIdAndProductId(cartId, p1)).thenReturn(Optional.of(existingItem));
+
+        assertThatThrownBy(() -> store.addItem(
                 userId, new AddItemRequest(UUID.randomUUID(), "Coffee", 1000L, 1, "store-blr-02")))
                 .isInstanceOf(ApiException.class)
                 .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        assertThatThrownBy(() -> service.addItem(
+        assertThatThrownBy(() -> store.addItem(
                 userId, new AddItemRequest(p1, "Milk", 3000L, 5, "store-blr-01")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exceed maximum of 5");

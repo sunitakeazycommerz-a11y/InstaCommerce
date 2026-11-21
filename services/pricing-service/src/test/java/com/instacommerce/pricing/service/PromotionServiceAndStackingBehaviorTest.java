@@ -19,6 +19,7 @@ import com.instacommerce.pricing.domain.PromotionRedemption;
 import com.instacommerce.pricing.dto.request.CartItem;
 import com.instacommerce.pricing.dto.request.CreatePromotionRequest;
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
+import com.instacommerce.pricing.dto.response.BatchPriceResponse;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
 import com.instacommerce.pricing.exception.InvalidPromotionException;
@@ -97,6 +98,7 @@ class PromotionServiceAndStackingBehaviorTest {
         assertThat(response.discountCents()).isEqualTo(4000L);
         assertThat(response.appliedPromotions()).containsExactly("FLASH_EXCLUSIVE_4000");
         assertThat(response.appliedCoupon()).isNull();
+        assertThat(response.couponDiscountCents()).isZero();
     }
 
     @Test
@@ -274,7 +276,7 @@ class PromotionServiceAndStackingBehaviorTest {
     void catalogEventConsumerSyncsPriceAndDeactivatesInactive() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper();
         PriceRuleRepository ruleRepo = mock(PriceRuleRepository.class);
-        CatalogEventConsumer consumer = new CatalogEventConsumer(objectMapper, ruleRepo);
+        CatalogEventConsumer consumer = new CatalogEventConsumer(objectMapper, ruleRepo, null);
 
         UUID productId = UUID.randomUUID();
         when(ruleRepo.findActiveRuleByProductId(any(), any())).thenReturn(Optional.empty());
@@ -313,7 +315,7 @@ class PromotionServiceAndStackingBehaviorTest {
     @Test
     @DisplayName("PromoReservationService evicts expired locks past threshold and allows re-acquisition")
     void promoReservationEvictsExpiredLocks() {
-        PromoReservationService reservationService = new PromoReservationService();
+        PromoReservationService reservationService = new PromoReservationService(null);
         for (int i = 0; i < 1030; i++) {
             reservationService.tryAcquire("CODE_" + i, UUID.randomUUID(), 0L);
         }
@@ -322,5 +324,116 @@ class PromotionServiceAndStackingBehaviorTest {
         assertThat(reservationService.tryAcquire("FRESH", user, 300L)).isFalse();
         reservationService.release("FRESH", user);
         assertThat(reservationService.tryAcquire("FRESH", user, 300L)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Stackable promotion + coupon sets couponDiscountCents and appliedCoupon accurately")
+    void stackablePromotionAndCouponExposeCouponDiscountCents() {
+        PriceRuleRepository ruleRepo = mock(PriceRuleRepository.class);
+        PromotionRepository promoRepo = mock(PromotionRepository.class);
+        PromotionRedemptionRepository promoRedemptionRepo = mock(PromotionRedemptionRepository.class);
+        PromotionService promoService = new PromotionService(promoRepo, mock(OutboxService.class), promoRedemptionRepo);
+        CouponService couponService = mock(CouponService.class);
+        PriceQuoteRepository quoteRepo = mock(PriceQuoteRepository.class);
+
+        QuoteTokenProperties quoteProps = new QuoteTokenProperties();
+        quoteProps.setHmacSecret("test-pricing-hmac-secret-32-bytes-minimum");
+        quoteProps.setTtlSeconds(300);
+        QuoteTokenService quoteTokenService = new QuoteTokenService(quoteRepo, quoteProps);
+
+        PricingService pricingService = new PricingService(
+                ruleRepo, promoService, couponService, quoteTokenService,
+                new DiscountCalculator(), new TaxCalculationService(), null);
+
+        UUID productId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Instant now = Instant.now();
+
+        PriceRule rule = new PriceRule();
+        rule.setProductId(productId);
+        rule.setBasePriceCents(10_000L);
+        rule.setMultiplier(BigDecimal.ONE);
+        when(ruleRepo.findActiveRuleByProductId(any(), any())).thenReturn(Optional.of(rule));
+
+        Promotion stackablePromo = new Promotion();
+        stackablePromo.setId(UUID.randomUUID());
+        stackablePromo.setName("STACKABLE_1000");
+        stackablePromo.setDiscountType("FIXED_AMOUNT");
+        stackablePromo.setDiscountValue(BigDecimal.valueOf(1000));
+        stackablePromo.setMinOrderCents(1000L);
+        stackablePromo.setStartAt(now.minusSeconds(60));
+        stackablePromo.setEndAt(now.plusSeconds(300));
+        stackablePromo.setActive(true);
+        stackablePromo.setStackableWithCoupon(true);
+        when(promoRepo.findActivePromotions(any())).thenReturn(List.of(stackablePromo));
+        when(promoRedemptionRepo.countByUserIdAndPromotionIds(any(), anyCollection())).thenReturn(List.of());
+        when(couponService.validateCoupon("SAVE500", userId, 9_000L))
+                .thenReturn(new CouponService.CouponValidationResult(500L, "SAVE500"));
+        when(quoteRepo.save(any(PriceQuote.class))).thenAnswer(inv -> {
+            PriceQuote q = inv.getArgument(0);
+            q.setId(UUID.randomUUID());
+            return q;
+        });
+
+        PriceCalculationResponse response = pricingService.calculateCartPrice(
+                new PriceCalculationRequest(List.of(new CartItem(productId, 1)), userId, "SAVE500"));
+
+        assertThat(response.discountCents()).isEqualTo(1500L);
+        assertThat(response.couponDiscountCents()).isEqualTo(500L);
+        assertThat(response.appliedCoupon()).isEqualTo("SAVE500");
+        assertThat(response.appliedPromotions()).containsExactly("STACKABLE_1000");
+    }
+
+    @Test
+    @DisplayName("calculateBatchPrices returns active SKU prices and unavailableProductIds without 404")
+    void calculateBatchPricesReturnsUnavailableIdsInsteadOf404() {
+        PriceRuleRepository ruleRepo = mock(PriceRuleRepository.class);
+        PricingService pricingService = new PricingService(
+                ruleRepo,
+                mock(PromotionService.class),
+                mock(CouponService.class),
+                mock(QuoteTokenService.class),
+                new DiscountCalculator(),
+                new TaxCalculationService(),
+                null);
+
+        UUID activeId = UUID.randomUUID();
+        UUID inactiveId = UUID.randomUUID();
+        PriceRule activeRule = new PriceRule();
+        activeRule.setProductId(activeId);
+        activeRule.setBasePriceCents(2500L);
+        activeRule.setMultiplier(BigDecimal.ONE);
+        when(ruleRepo.findActiveRulesByProductIds(anyCollection(), any())).thenReturn(List.of(activeRule));
+
+        BatchPriceResponse response = pricingService.calculateBatchPrices(List.of(activeId, inactiveId));
+
+        assertThat(response.items()).hasSize(1);
+        assertThat(response.items().getFirst().productId()).isEqualTo(activeId);
+        assertThat(response.items().getFirst().unitPriceCents()).isEqualTo(2500L);
+        assertThat(response.unavailableProductIds()).containsExactly(inactiveId);
+    }
+
+    @Test
+    @DisplayName("CatalogEventConsumer rethrows transient runtime failures and malformed payloads for DLT retry")
+    void catalogEventConsumerRethrowsFailuresInsteadOfSwallowing() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        PriceRuleRepository ruleRepo = mock(PriceRuleRepository.class);
+        CatalogEventConsumer consumer = new CatalogEventConsumer(objectMapper, ruleRepo, null);
+
+        UUID productId = UUID.randomUUID();
+        String validJson = objectMapper.writeValueAsString(Map.of(
+                "eventType", "ProductCreated",
+                "payload", Map.of("id", productId.toString(), "sku", "MILK", "name", "Milk", "active", true, "basePriceCents", 5000L)));
+        when(ruleRepo.findActiveRuleByProductId(any(), any())).thenThrow(new IllegalStateException("DB transient failure"));
+
+        assertThatThrownBy(() -> consumer.onCatalogEvent(
+                new ConsumerRecord<>("catalog.events", 0, 1L, productId.toString(), validJson)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("DB transient failure");
+
+        assertThatThrownBy(() -> consumer.onCatalogEvent(
+                new ConsumerRecord<>("catalog.events", 0, 2L, productId.toString(), "{not-json")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Failed to deserialize");
     }
 }

@@ -47,10 +47,6 @@ public class PromotionService {
         this.promotionRedemptionRepository = promotionRedemptionRepository;
     }
 
-    public PromotionService(PromotionRepository promotionRepository, OutboxService outboxService) {
-        this(promotionRepository, outboxService, null);
-    }
-
     @Cacheable(value = "activePromotions", key = "'all'")
     @Transactional(readOnly = true)
     public List<Promotion> findActivePromotions() {
@@ -81,14 +77,18 @@ public class PromotionService {
         return Math.min(discount, subtotalCents);
     }
 
-    public boolean isEligibleAt(Promotion promotion, Instant now, long userRedemptionCount) {
+    public static boolean isWindowActiveAt(Promotion promotion, Instant now) {
         if (promotion == null || !promotion.isActive()) {
             return false;
         }
         if (promotion.getStartAt() != null && now.isBefore(promotion.getStartAt())) {
             return false;
         }
-        if (promotion.getEndAt() != null && !now.isBefore(promotion.getEndAt())) {
+        return promotion.getEndAt() == null || now.isBefore(promotion.getEndAt());
+    }
+
+    public static boolean isEligibleAt(Promotion promotion, Instant now, long userRedemptionCount) {
+        if (!isWindowActiveAt(promotion, now)) {
             return false;
         }
         if (promotion.getMaxUses() != null && promotion.getCurrentUses() >= promotion.getMaxUses()) {
@@ -246,9 +246,7 @@ public class PromotionService {
         }
         Promotion promo = promoOpt.get();
         Instant now = Instant.now();
-        if (!promo.isActive()
-                || (promo.getStartAt() != null && now.isBefore(promo.getStartAt()))
-                || (promo.getEndAt() != null && !now.isBefore(promo.getEndAt()))) {
+        if (!isWindowActiveAt(promo, now)) {
             log.warn("Promotion inactive or outside window for promo={}", promotionId);
             return false;
         }

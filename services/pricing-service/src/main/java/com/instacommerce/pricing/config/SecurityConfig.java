@@ -47,6 +47,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/pricing/products/**", "/api/pricing/products/**", "/api/v1/pricing/products/**").permitAll()
                 .requestMatchers(
                     "/pricing/coupons/**", "/api/pricing/coupons/**", "/api/v1/pricing/coupons/**",
+                    "/pricing/promotions/**", "/api/pricing/promotions/**", "/api/v1/pricing/promotions/**",
                     "/pricing/quotes/validate", "/api/pricing/quotes/validate", "/api/v1/pricing/quotes/validate"
                 ).hasAnyRole("INTERNAL_SERVICE", "ADMIN")
                 .requestMatchers("/actuator/**", "/error").permitAll()

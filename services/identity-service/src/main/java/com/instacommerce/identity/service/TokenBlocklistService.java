@@ -1,39 +1,54 @@
 package com.instacommerce.identity.service;
 
 import com.instacommerce.identity.config.IdentityProperties;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.stereotype.Service;
 
 @Service
 public class TokenBlocklistService {
+    private static final Logger log = LoggerFactory.getLogger(TokenBlocklistService.class);
     private static final String JTI_PREFIX = "identity:revoked_jti:";
     private static final String USER_REVOKED_PREFIX = "identity:revoked_user_before:";
     private static final int LOCAL_PRUNE_THRESHOLD = 4096;
 
     private final StringRedisTemplate redisTemplate;
     private final long accessTtlSeconds;
+    private final Counter writeFailureCounter;
+    private final Counter lookupFailureCounter;
     private final Map<String, Long> localRevokedJtis = new ConcurrentHashMap<>();
     private final Map<String, Long> localUserRevokedBefore = new ConcurrentHashMap<>();
 
     @Autowired
     public TokenBlocklistService(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
-                                 IdentityProperties identityProperties) {
+                                 IdentityProperties identityProperties,
+                                 ObjectProvider<MeterRegistry> meterRegistryProvider) {
         this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;
         long configuredTtl = identityProperties != null ? identityProperties.getToken().getAccessTtlSeconds() : 900L;
         this.accessTtlSeconds = Math.max(60L, configuredTtl);
-    }
-
-    public TokenBlocklistService(StringRedisTemplate redisTemplate, long accessTtlSeconds) {
-        this.redisTemplate = redisTemplate;
-        this.accessTtlSeconds = Math.max(60L, accessTtlSeconds);
+        MeterRegistry registry = meterRegistryProvider != null ? meterRegistryProvider.getIfAvailable() : null;
+        if (registry == null) {
+            registry = new SimpleMeterRegistry();
+        }
+        this.writeFailureCounter = Counter.builder("auth.token.blocklist.redis.failures")
+                .tag("operation", "write")
+                .register(registry);
+        this.lookupFailureCounter = Counter.builder("auth.token.blocklist.redis.failures")
+                .tag("operation", "lookup")
+                .register(registry);
     }
 
     public void revokeAccessToken(String jti, long ttlSeconds) {
@@ -47,9 +62,15 @@ public class TokenBlocklistService {
 
         if (redisTemplate != null) {
             try {
-                redisTemplate.opsForValue().set(JTI_PREFIX + jti, "1", Duration.ofSeconds(effectiveTtl));
-            } catch (Exception ignored) {
-                // Local blocklist remains active as degraded fallback
+                ValueOperations<String, String> ops = redisTemplate.opsForValue();
+                if (ops == null) {
+                    throw new IllegalStateException("Redis ValueOperations unavailable for token blocklist write");
+                }
+                ops.set(JTI_PREFIX + jti, "1", Duration.ofSeconds(effectiveTtl));
+            } catch (Exception ex) {
+                writeFailureCounter.increment();
+                log.error("Failed to persist JTI revocation to Redis jti={}", jti, ex);
+                throw new IllegalStateException("Failed to persist access token revocation", ex);
             }
         }
     }
@@ -67,12 +88,18 @@ public class TokenBlocklistService {
 
         if (redisTemplate != null) {
             try {
-                redisTemplate.opsForValue().set(
+                ValueOperations<String, String> ops = redisTemplate.opsForValue();
+                if (ops == null) {
+                    throw new IllegalStateException("Redis ValueOperations unavailable for user revocation write");
+                }
+                ops.set(
                         USER_REVOKED_PREFIX + userId,
                         Long.toString(nowMillis),
                         Duration.ofSeconds(accessTtlSeconds));
-            } catch (Exception ignored) {
-                // Local cutoff remains active as degraded fallback
+            } catch (Exception ex) {
+                writeFailureCounter.increment();
+                log.error("Failed to persist user token revocation cutoff to Redis userId={}", userId, ex);
+                throw new IllegalStateException("Failed to persist user token revocation", ex);
             }
         }
     }
@@ -92,14 +119,20 @@ public class TokenBlocklistService {
                     if (Boolean.TRUE.equals(redisTemplate.hasKey(JTI_PREFIX + jti))) {
                         return true;
                     }
-                } catch (Exception ignored) {
-                    // Fall through to local/user checks
+                } catch (Exception ex) {
+                    lookupFailureCounter.increment();
+                    log.error("Redis lookup failed checking JTI revocation jti={}; failing closed", jti, ex);
+                    return true;
                 }
             }
         }
 
         if (subject != null && !subject.isBlank()) {
-            Long revokedBeforeMillis = resolveUserRevokedBefore(subject);
+            UserRevocationLookup lookup = resolveUserRevokedBefore(subject);
+            if (lookup.unavailable()) {
+                return true;
+            }
+            Long revokedBeforeMillis = lookup.revokedBeforeMillis();
             if (revokedBeforeMillis != null) {
                 if (issuedAtMillis != null) {
                     return issuedAtMillis <= revokedBeforeMillis;
@@ -115,20 +148,34 @@ public class TokenBlocklistService {
         return false;
     }
 
-    private Long resolveUserRevokedBefore(String subject) {
+    private record UserRevocationLookup(boolean unavailable, Long revokedBeforeMillis) {
+    }
+
+    private UserRevocationLookup resolveUserRevokedBefore(String subject) {
         Long local = localUserRevokedBefore.get(subject);
         if (redisTemplate != null) {
             try {
-                String value = redisTemplate.opsForValue().get(USER_REVOKED_PREFIX + subject);
+                ValueOperations<String, String> ops = redisTemplate.opsForValue();
+                if (ops == null) {
+                    lookupFailureCounter.increment();
+                    log.error("Redis ValueOperations unavailable resolving revocation cutoff userId={}; failing closed",
+                            subject);
+                    return new UserRevocationLookup(true, local);
+                }
+                String value = ops.get(USER_REVOKED_PREFIX + subject);
                 if (value != null) {
                     long parsed = Long.parseLong(value);
-                    return local != null ? Math.max(local, parsed) : parsed;
+                    Long resolved = local != null ? Math.max(local, parsed) : parsed;
+                    return new UserRevocationLookup(false, resolved);
                 }
-            } catch (Exception ignored) {
-                // Fall back to local cutoff
+            } catch (Exception ex) {
+                lookupFailureCounter.increment();
+                log.error("Redis lookup failed resolving user revocation cutoff userId={}; failing closed",
+                        subject, ex);
+                return new UserRevocationLookup(true, local);
             }
         }
-        return local;
+        return new UserRevocationLookup(false, local);
     }
 
     private void pruneIfNeeded(Map<String, Long> map, long nowMillis) {

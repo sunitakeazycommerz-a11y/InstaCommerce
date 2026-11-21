@@ -42,9 +42,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 @DisplayName("Catalog CacheConfig Pub/Sub Tests")
 class CacheConfigPubSubTest {
 
-    @SuppressWarnings("unchecked")
     private static <T> ObjectProvider<T> providerOf(T instance) {
-        ObjectProvider<T> provider = mock(ObjectProvider.class);
+        ObjectProvider<T> provider = mock();
         when(provider.getIfAvailable()).thenReturn(instance);
         return provider;
     }

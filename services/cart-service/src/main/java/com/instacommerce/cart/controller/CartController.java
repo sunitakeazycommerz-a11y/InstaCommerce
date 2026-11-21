@@ -5,13 +5,13 @@ import com.instacommerce.cart.dto.request.UpdateQuantityRequest;
 import com.instacommerce.cart.dto.response.CartResponse;
 import com.instacommerce.cart.exception.ApiException;
 import com.instacommerce.cart.service.CartService;
+import com.instacommerce.platform.security.SecurityRoleUtils;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -68,13 +68,6 @@ public class CartController {
                                                        @RequestHeader(value = "If-Match", required = false) String ifMatch) {
         UUID userId = extractUserId(authentication);
         Long expectedVersion = parseIfMatchVersion(ifMatch);
-        if (expectedVersion != null) {
-            CartResponse current = cartService.getCart(userId);
-            if (current.version() != null && !current.version().equals(expectedVersion)) {
-                throw new ApiException(HttpStatus.PRECONDITION_FAILED, "PRECONDITION_FAILED",
-                    "Cart version mismatch; client version is stale.");
-            }
-        }
         CartResponse response = cartService.updateQuantity(userId, productId, request.quantity(), expectedVersion);
         return ResponseEntity.ok()
             .eTag("\"" + response.version() + "\"")
@@ -171,22 +164,13 @@ public class CartController {
         if (authentication == null) {
             throw new AccessDeniedException("Access denied");
         }
-        if (hasPrivilegedRole(authentication)) {
+        if (SecurityRoleUtils.isPrivileged(authentication)) {
             return;
         }
         UUID principalId = parseUuidOrNull(authentication.getName());
         if (principalId == null || !principalId.equals(targetUserId)) {
             throw new AccessDeniedException("Access denied");
         }
-    }
-
-    private boolean hasPrivilegedRole(Authentication authentication) {
-        if (authentication.getAuthorities() == null) {
-            return false;
-        }
-        return authentication.getAuthorities().stream()
-            .map(GrantedAuthority::getAuthority)
-            .anyMatch(role -> "ROLE_ADMIN".equals(role) || "ROLE_INTERNAL_SERVICE".equals(role));
     }
 
     private UUID parseUuidOrNull(String value) {

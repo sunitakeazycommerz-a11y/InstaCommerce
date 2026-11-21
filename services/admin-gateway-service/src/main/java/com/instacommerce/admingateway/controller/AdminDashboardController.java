@@ -4,6 +4,7 @@ import com.instacommerce.admingateway.service.DashboardAggregationService;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,7 +21,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 @RestController
@@ -55,21 +55,14 @@ public class AdminDashboardController {
 
     @GetMapping("/flags")
     public Map<String, Object> featureFlags() {
-        try {
-            var response = restTemplate.exchange(
-                featureFlagUrl + "/flags",
-                HttpMethod.GET,
-                null,
-                MAP_TYPE
-            );
-            var flags = response.getBody();
-            return flags != null ? flags : Map.of("error", "No flags configured");
-        } catch (Exception ex) {
-            if (ex instanceof RestClientException rce) {
-                throw rce;
-            }
-            return Map.of("error", "Failed to fetch feature flags: " + ex.getMessage());
-        }
+        var response = restTemplate.exchange(
+            featureFlagUrl + "/flags",
+            HttpMethod.GET,
+            null,
+            MAP_TYPE
+        );
+        var flags = response.getBody();
+        return flags != null ? flags : Map.of();
     }
 
     @PostMapping("/flags/{id}/override")
@@ -115,21 +108,14 @@ public class AdminDashboardController {
 
     @GetMapping("/reconciliation/pending")
     public Map<String, Object> pendingReconciliation() {
-        try {
-            var response = restTemplate.exchange(
-                reconciliationUrl + "/pending",
-                HttpMethod.GET,
-                null,
-                MAP_TYPE
-            );
-            var reconciliation = response.getBody();
-            return reconciliation != null ? reconciliation : Map.of("items", new Object[0]);
-        } catch (Exception ex) {
-            if (ex instanceof RestClientException rce) {
-                throw rce;
-            }
-            return Map.of("error", "Failed to fetch pending reconciliation: " + ex.getMessage());
-        }
+        var response = restTemplate.exchange(
+            reconciliationUrl + "/pending",
+            HttpMethod.GET,
+            null,
+            MAP_TYPE
+        );
+        var reconciliation = response.getBody();
+        return reconciliation != null ? reconciliation : Map.of("items", List.of());
     }
 
     @GetMapping("/reconciliation/summary")

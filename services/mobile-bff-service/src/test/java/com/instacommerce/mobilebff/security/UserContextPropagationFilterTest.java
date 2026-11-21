@@ -84,13 +84,12 @@ class UserContextPropagationFilterTest {
 
     @Test
     @DisplayName("Should populate X-User-Id and X-User-Roles and strip internal headers when valid token provided")
-    @SuppressWarnings("unchecked")
     void shouldMutateRequestWithUserHeaders() {
         when(keyLoader.hasKey()).thenReturn(true);
 
         Claims claims = mock(Claims.class);
         when(claims.getSubject()).thenReturn("usr_test_999");
-        Jws<Claims> jws = mock(Jws.class);
+        Jws<Claims> jws = mock();
         when(jws.getPayload()).thenReturn(claims);
         when(jwtService.validateAccessToken("valid-test-token")).thenReturn(jws);
         Collection<? extends GrantedAuthority> authorities = List.of(

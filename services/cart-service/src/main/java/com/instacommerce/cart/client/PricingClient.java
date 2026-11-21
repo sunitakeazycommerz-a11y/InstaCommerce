@@ -3,6 +3,8 @@ package com.instacommerce.cart.client;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.cart.exception.ApiException;
 import com.instacommerce.cart.security.InternalServiceAuthInterceptor;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -12,6 +14,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +22,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
@@ -30,6 +34,7 @@ import org.springframework.web.client.RestTemplate;
 @Component
 public class PricingClient {
     private static final Logger log = LoggerFactory.getLogger(PricingClient.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final RestTemplate restTemplate;
     private final String baseUrl;
@@ -63,6 +68,10 @@ public class PricingClient {
                         "Pricing service returned null for product: " + productId);
             }
             return response;
+        } catch (HttpClientErrorException.NotFound ex) {
+            log.info("No active price found in pricing-service for product={}", productId);
+            throw new ApiException(HttpStatus.NOT_FOUND, "PRODUCT_UNAVAILABLE",
+                    "Product is currently unavailable: " + productId);
         } catch (ResourceAccessException ex) {
             log.warn("Pricing service network/timeout failure for product {}: {}", productId, ex.getMessage());
             throw ex;
@@ -90,15 +99,16 @@ public class PricingClient {
             return Map.of();
         }
         try {
-            PriceResponse[] responses = restTemplate.postForObject(
-                    baseUrl + "/pricing/products/batch", List.copyOf(productIds), PriceResponse[].class);
-            if (responses == null) {
-                return Map.of();
-            }
+            JsonNode root = restTemplate.postForObject(
+                    baseUrl + "/pricing/products/batch", List.copyOf(productIds), JsonNode.class);
+            return parseBatchResponse(root);
+        } catch (HttpClientErrorException.NotFound ex) {
+            log.info("Batch price lookup returned 404; resolving per-item availability for {} products",
+                    productIds.size());
             Map<UUID, PriceResponse> prices = new LinkedHashMap<>();
-            for (PriceResponse price : responses) {
-                if (price != null && price.productId() != null) {
-                    prices.put(price.productId(), price);
+            for (UUID productId : productIds) {
+                if (productId != null) {
+                    findPriceIfAvailable(productId).ifPresent(price -> prices.put(productId, price));
                 }
             }
             return prices;
@@ -110,6 +120,35 @@ public class PricingClient {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE",
                     "Unable to verify product prices: " + ex.getMessage());
         }
+    }
+
+    private Optional<PriceResponse> findPriceIfAvailable(UUID productId) {
+        try {
+            return Optional.of(getPrice(productId));
+        } catch (ApiException ex) {
+            if (ex.getStatus() == HttpStatus.NOT_FOUND) {
+                return Optional.empty();
+            }
+            throw ex;
+        }
+    }
+
+    private Map<UUID, PriceResponse> parseBatchResponse(JsonNode root) {
+        if (root == null || root.isNull()) {
+            return Map.of();
+        }
+        JsonNode itemsNode = root.isArray() ? root : root.get("items");
+        if (itemsNode == null || !itemsNode.isArray()) {
+            return Map.of();
+        }
+        Map<UUID, PriceResponse> prices = new LinkedHashMap<>();
+        for (JsonNode node : itemsNode) {
+            PriceResponse price = OBJECT_MAPPER.convertValue(node, PriceResponse.class);
+            if (price != null && price.productId() != null) {
+                prices.put(price.productId(), price);
+            }
+        }
+        return prices;
     }
 
     @SuppressWarnings("unused")

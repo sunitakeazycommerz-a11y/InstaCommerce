@@ -1,11 +1,14 @@
 package com.instacommerce.search.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.search.dto.FacetValue;
 import com.instacommerce.search.repository.SearchDocumentRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 @ExtendWith(MockitoExtension.class)
 class FacetedSearchServiceTest {
@@ -23,13 +27,17 @@ class FacetedSearchServiceTest {
     @Mock
     private SearchDocumentRepository searchDocumentRepository;
 
+    private SimpleMeterRegistry meterRegistry;
     private FacetedSearchService facetedSearchService;
 
     private static final UUID STORE_ID = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
-        facetedSearchService = new FacetedSearchService(searchDocumentRepository);
+        meterRegistry = new SimpleMeterRegistry();
+        ObjectProvider<MeterRegistry> registryProvider = mock();
+        when(registryProvider.getIfAvailable()).thenReturn(meterRegistry);
+        facetedSearchService = new FacetedSearchService(searchDocumentRepository, registryProvider);
     }
 
     @Test
@@ -76,5 +84,17 @@ class FacetedSearchServiceTest {
 
         verify(searchDocumentRepository).facetByBrand("unknown");
         verify(searchDocumentRepository).facetByCategory("unknown");
+    }
+
+    @Test
+    @DisplayName("computeFilteredFacets increments failure metric and returns empty facet lists on repository error")
+    void incrementsFailureMetricWhenFacetQueryThrows() {
+        when(searchDocumentRepository.facetByBrand("milk")).thenThrow(new IllegalStateException("DB timeout"));
+
+        Map<String, List<FacetValue>> facets = facetedSearchService.computeStoreScopedFacets("milk", null);
+
+        assertThat(facets.get("brand")).isEmpty();
+        assertThat(facets.get("category")).isEmpty();
+        assertThat(meterRegistry.get("search.facets.compute.failures").counter().count()).isEqualTo(1.0);
     }
 }

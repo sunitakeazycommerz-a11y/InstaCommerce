@@ -57,19 +57,22 @@ class JwksKeyRotationTest {
     void shouldPublishMultipleKeysInJwks() {
         Map<String, Object> jwks = jwksController.jwks();
         assertThat(jwks).containsKey("keys");
+        assertThat(jwks.get("keys")).isInstanceOf(List.class);
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> keys = (List<Map<String, Object>>) jwks.get("keys");
+        List<?> keys = (List<?>) jwks.get("keys");
         assertThat(keys).hasSize(2);
+        assertThat(keys.get(0)).isInstanceOf(Map.class);
+        assertThat(keys.get(1)).isInstanceOf(Map.class);
 
-        // Verify active key is present
-        assertThat(keys.get(0).get("kid")).isEqualTo(keyLoader.getKeyId());
-        assertThat(keys.get(0).get("alg")).isEqualTo("RS256");
-        assertThat(keys.get(0).get("kty")).isEqualTo("RSA");
+        Map<?, ?> activeKey = (Map<?, ?>) keys.get(0);
+        Map<?, ?> previousKey = (Map<?, ?>) keys.get(1);
 
-        // Verify previous grace period key is present with distinct kid
-        assertThat(keys.get(1).get("kid")).isNotNull();
-        assertThat(keys.get(1).get("kid")).isNotEqualTo(keyLoader.getKeyId());
+        assertThat(activeKey.get("kid")).isEqualTo(keyLoader.getKeyId());
+        assertThat(activeKey.get("alg")).isEqualTo("RS256");
+        assertThat(activeKey.get("kty")).isEqualTo("RSA");
+
+        assertThat(previousKey.get("kid")).isNotNull();
+        assertThat(previousKey.get("kid")).isNotEqualTo(keyLoader.getKeyId());
     }
 
     @Test

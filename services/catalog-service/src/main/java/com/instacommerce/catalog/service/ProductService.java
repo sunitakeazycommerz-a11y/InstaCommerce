@@ -11,20 +11,19 @@ import com.instacommerce.catalog.exception.DuplicateSkuException;
 import com.instacommerce.catalog.exception.ProductNotFoundException;
 import com.instacommerce.catalog.repository.CategoryRepository;
 import com.instacommerce.catalog.repository.ProductRepository;
+import com.instacommerce.platform.web.PageableUtils;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ProductService {
-    private static final int MAX_PAGE_SIZE = 100;
     private final ProductRepository productRepository;
     private final CategoryRepository categoryRepository;
     private final OutboxService outboxService;
@@ -55,7 +54,7 @@ public class ProductService {
 
     @Transactional(readOnly = true)
     public Page<ProductResponse> listProducts(String categorySlug, UUID storeId, Pageable pageable) {
-        Pageable sanitized = sanitize(pageable);
+        Pageable sanitized = PageableUtils.sanitize(pageable);
         String normalizedCategory = (categorySlug == null || categorySlug.isBlank()) ? null : categorySlug.trim();
         Page<Product> products;
         if (storeId != null) {
@@ -192,11 +191,6 @@ public class ProductService {
             "Product",
             saved.getId().toString(),
             Map.of("sku", saved.getSku(), "active", saved.isActive()));
-    }
-
-    private Pageable sanitize(Pageable pageable) {
-        int size = Math.min(pageable.getPageSize(), MAX_PAGE_SIZE);
-        return PageRequest.of(pageable.getPageNumber(), size, pageable.getSort());
     }
 
     private String resolveUniqueSlug(String name, String currentSlug) {

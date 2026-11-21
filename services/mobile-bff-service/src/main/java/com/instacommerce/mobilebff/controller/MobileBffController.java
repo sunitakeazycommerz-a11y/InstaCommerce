@@ -3,6 +3,7 @@ package com.instacommerce.mobilebff.controller;
 import com.instacommerce.mobilebff.aggregator.HomeAggregator;
 import com.instacommerce.mobilebff.dto.HomeResponse;
 import com.instacommerce.mobilebff.service.CartSyncService;
+import com.instacommerce.platform.security.SecurityRoleUtils;
 import java.util.Map;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.ObjectProvider;
@@ -11,7 +12,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -85,10 +85,7 @@ public class MobileBffController {
         if (!isAuthenticatedUser(authentication) || targetUserId == null || targetUserId.isBlank()) {
             throw new AccessDeniedException("Access denied");
         }
-        boolean isPrivileged = authentication.getAuthorities().stream()
-            .map(GrantedAuthority::getAuthority)
-            .anyMatch(authority -> "ROLE_ADMIN".equals(authority) || "ROLE_INTERNAL_SERVICE".equals(authority));
-        if (!isPrivileged && !targetUserId.equals(authentication.getName())) {
+        if (!SecurityRoleUtils.isPrivileged(authentication) && !targetUserId.equals(authentication.getName())) {
             throw new AccessDeniedException("Access denied");
         }
     }

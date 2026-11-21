@@ -2,6 +2,10 @@ package com.instacommerce.pricing.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.pricing.domain.Coupon;
@@ -11,6 +15,7 @@ import com.instacommerce.pricing.exception.InvalidCouponException;
 import com.instacommerce.pricing.repository.CouponRedemptionRepository;
 import com.instacommerce.pricing.repository.CouponRepository;
 import com.instacommerce.pricing.repository.PromotionRepository;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -28,6 +33,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 @ExtendWith(MockitoExtension.class)
 class CouponConcurrencyTest {
@@ -40,7 +48,7 @@ class CouponConcurrencyTest {
     @Test
     @DisplayName("PromoReservationService atomic reservation prevents simultaneous exploit across 20 threads")
     void promoReservationServicePreventsConcurrentExploit() throws InterruptedException {
-        PromoReservationService reservationService = new PromoReservationService();
+        PromoReservationService reservationService = new PromoReservationService(null);
         int threadCount = 20;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         CountDownLatch readyLatch = new CountDownLatch(threadCount);
@@ -87,7 +95,7 @@ class CouponConcurrencyTest {
     @Test
     @DisplayName("CouponService.redeemCoupon rejects concurrent duplicate redemptions for same user")
     void couponServiceRejectsConcurrentDuplicateRedemptions() throws InterruptedException {
-        PromoReservationService reservationService = new PromoReservationService();
+        PromoReservationService reservationService = new PromoReservationService(null);
         CouponService couponService = new CouponService(
                 couponRepository,
                 couponRedemptionRepository,
@@ -120,7 +128,7 @@ class CouponConcurrencyTest {
 
         AtomicLong savedRedemptions = new AtomicLong(0);
         when(couponRepository.findByCodeIgnoreCaseForUpdate(code)).thenReturn(Optional.of(coupon));
-        when(promotionService.recordPromotionUsage(promoId)).thenReturn(true);
+        when(promotionService.recordPromotionUsage(eq(promoId), eq(userId), any(UUID.class), anyLong())).thenReturn(true);
         when(couponRedemptionRepository.countByCouponIdAndUserId(couponId, userId))
                 .thenAnswer(inv -> savedRedemptions.get());
         when(couponRedemptionRepository.save(any(CouponRedemption.class))).thenAnswer(inv -> {
@@ -165,5 +173,29 @@ class CouponConcurrencyTest {
         assertThat(exceptions)
                 .hasSize(9)
                 .allMatch(ex -> ex instanceof InvalidCouponException);
+    }
+
+    @Test
+    @DisplayName("PromoReservationService uses Redis SET NX EX and delete when StringRedisTemplate is available")
+    void promoReservationServiceUsesRedisSetIfAbsentAndDelete() {
+        StringRedisTemplate redisTemplate = mock();
+        ValueOperations<String, String> valueOps = mock();
+        ObjectProvider<StringRedisTemplate> provider = mock();
+        when(provider.getIfAvailable()).thenReturn(redisTemplate);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+
+        UUID userId = UUID.randomUUID();
+        String expectedKey = "promo:SAVE20:" + userId;
+        when(valueOps.setIfAbsent(expectedKey, "1", Duration.ofSeconds(300)))
+                .thenReturn(Boolean.TRUE)
+                .thenReturn(Boolean.FALSE);
+
+        PromoReservationService service = new PromoReservationService(provider);
+
+        assertThat(service.tryAcquire(" save20 ", userId)).isTrue();
+        assertThat(service.tryAcquire("SAVE20", userId)).isFalse();
+
+        service.release("SAVE20", userId);
+        verify(redisTemplate).delete(expectedKey);
     }
 }

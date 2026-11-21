@@ -20,6 +20,7 @@ import com.instacommerce.pricing.exception.GlobalExceptionHandler;
 import com.instacommerce.pricing.exception.TraceIdProvider;
 import com.instacommerce.pricing.service.CouponService;
 import com.instacommerce.pricing.service.PricingService;
+import com.instacommerce.pricing.service.PromotionService;
 import com.instacommerce.pricing.service.QuoteTokenService;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,6 +83,11 @@ class PricingSecuritySliceTest {
         }
 
         @Bean
+        PromotionService promotionService() {
+            return mock(PromotionService.class);
+        }
+
+        @Bean
         JwtService jwtService() {
             return mock(JwtService.class);
         }
@@ -95,6 +101,9 @@ class PricingSecuritySliceTest {
 
     @Autowired
     private QuoteTokenService quoteTokenService;
+
+    @Autowired
+    private PromotionService promotionService;
 
     private MockMvc mockMvc;
 
@@ -129,13 +138,24 @@ class PricingSecuritySliceTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(quoteBody))
             .andExpect(status().isForbidden());
+
+        String promoBody = """
+            {"promotionId":"%s","userId":"%s","orderId":"%s","discountCents":300}
+            """.formatted(UUID.randomUUID(), userId, orderId);
+
+        mockMvc.perform(post("/pricing/promotions/redeem")
+                .with(user("cust-1").roles("CUSTOMER"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(promoBody))
+            .andExpect(status().isForbidden());
     }
 
     @Test
-    @DisplayName("Internal service token authorizes coupon redemption and quote validation on /pricing and /api/v1/pricing")
+    @DisplayName("Internal service token authorizes coupon redemption, promotion redemption/rollback, and quote validation")
     void internalServiceAuthorizesRedeemAndValidate() throws Exception {
         when(quoteTokenService.validate(any(), any(), anyLong(), anyLong(), anyLong()))
             .thenReturn(QuoteTokenService.ValidationResult.valid());
+        when(promotionService.recordPromotionUsage(any(), any(), any(), anyLong())).thenReturn(true);
 
         UUID userId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
@@ -151,6 +171,33 @@ class PricingSecuritySliceTest {
             .andExpect(status().isOk());
 
         verify(couponService).redeemCoupon("SAVE10", userId, orderId, 500L);
+
+        UUID promotionId = UUID.randomUUID();
+        String promoRedeemBody = """
+            {"promotionId":"%s","userId":"%s","orderId":"%s","discountCents":300}
+            """.formatted(promotionId, userId, orderId);
+
+        mockMvc.perform(post("/pricing/promotions/redeem")
+                .header("X-Internal-Service", "order-service")
+                .header("X-Internal-Token", "test-internal-secret")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(promoRedeemBody))
+            .andExpect(status().isOk());
+
+        verify(promotionService).recordPromotionUsage(promotionId, userId, orderId, 300L);
+
+        String promoRollbackBody = """
+            {"promotionId":"%s","userId":"%s","orderId":"%s"}
+            """.formatted(promotionId, userId, orderId);
+
+        mockMvc.perform(post("/pricing/promotions/rollback")
+                .header("X-Internal-Service", "order-service")
+                .header("X-Internal-Token", "test-internal-secret")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(promoRollbackBody))
+            .andExpect(status().isOk());
+
+        verify(promotionService).rollbackPromotionUsage(promotionId, userId, orderId);
 
         String quoteBody = """
             {"quoteId":"%s","quoteToken":"sig","totalCents":1000,"subtotalCents":1000,"discountCents":0}

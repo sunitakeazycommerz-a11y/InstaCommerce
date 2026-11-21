@@ -236,8 +236,42 @@ class AdminDashboardControllerTest {
 
         mockMvc.perform(get("/admin/v1/flags")
                 .with(csrf()))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.error").exists());
+            .andExpect(status().isInternalServerError())
+            .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
+            .andExpect(jsonPath("$.status").value(500))
+            .andExpect(jsonPath("$.detail").exists());
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = "ADMIN")
+    void shouldReturnBadGatewayProblemDetailWhenFlagsOrReconciliationUnreachable() throws Exception {
+        when(restTemplate.exchange(
+                eq("http://config-feature-flag-service:8098/flags"),
+                eq(HttpMethod.GET),
+                isNull(),
+                anyMapType()))
+            .thenThrow(new ResourceAccessException("Connection refused"));
+
+        mockMvc.perform(get("/admin/v1/flags")
+                .with(csrf()))
+            .andExpect(status().isBadGateway())
+            .andExpect(jsonPath("$.code").value("UPSTREAM_UNAVAILABLE"))
+            .andExpect(jsonPath("$.status").value(502))
+            .andExpect(jsonPath("$.detail").value("Connection refused"));
+
+        when(restTemplate.exchange(
+                eq("http://reconciliation-engine:8107/pending"),
+                eq(HttpMethod.GET),
+                isNull(),
+                anyMapType()))
+            .thenThrow(new ResourceAccessException("Timeout"));
+
+        mockMvc.perform(get("/admin/v1/reconciliation/pending")
+                .with(csrf()))
+            .andExpect(status().isBadGateway())
+            .andExpect(jsonPath("$.code").value("UPSTREAM_UNAVAILABLE"))
+            .andExpect(jsonPath("$.status").value(502))
+            .andExpect(jsonPath("$.detail").value("Timeout"));
     }
 
     @Test
@@ -311,7 +345,8 @@ class AdminDashboardControllerTest {
                 .content("{\"userId\": \"11111111-1111-1111-1111-111111111111\", \"value\": \"true\"}"))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value("FLAG_NOT_FOUND"))
-            .andExpect(jsonPath("$.message").value("Flag not found: missing-flag"));
+            .andExpect(jsonPath("$.detail").value("Flag not found: missing-flag"))
+            .andExpect(jsonPath("$.status").value(404));
     }
 
     @Test

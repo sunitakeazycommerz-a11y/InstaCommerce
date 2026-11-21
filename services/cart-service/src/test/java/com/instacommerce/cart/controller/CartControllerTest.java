@@ -21,6 +21,7 @@ import com.instacommerce.cart.dto.request.AddItemRequest;
 import com.instacommerce.cart.dto.request.UpdateQuantityRequest;
 import com.instacommerce.cart.dto.response.CartItemResponse;
 import com.instacommerce.cart.dto.response.CartResponse;
+import com.instacommerce.cart.exception.ApiException;
 import com.instacommerce.cart.exception.GlobalExceptionHandler;
 import com.instacommerce.cart.exception.TraceIdProvider;
 import com.instacommerce.cart.security.JwtAuthenticationFilter;
@@ -37,6 +38,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -289,10 +291,11 @@ class CartControllerTest {
 
     @Test
     void updateQuantityFailsOnStaleIfMatchHeader() throws Exception {
-        CartResponse currentResponse = new CartResponse(
-            cartId, userId, List.of(), 500L, 1, Instant.now(), 2L
-        );
-        when(cartService.getCart(userId)).thenReturn(currentResponse);
+        when(cartService.updateQuantity(userId, productId, 3, 1L))
+            .thenThrow(new ApiException(
+                HttpStatus.PRECONDITION_FAILED,
+                "PRECONDITION_FAILED",
+                "Cart version mismatch; client version is stale."));
 
         UpdateQuantityRequest request = new UpdateQuantityRequest(3);
         mockMvc.perform(patch("/api/v1/cart/items/{productId}", productId)
@@ -302,6 +305,8 @@ class CartControllerTest {
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isPreconditionFailed())
             .andExpect(jsonPath("$.code").value("PRECONDITION_FAILED"));
+
+        verify(cartService).updateQuantity(userId, productId, 3, 1L);
     }
 
     @Test

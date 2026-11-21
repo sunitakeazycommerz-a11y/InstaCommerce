@@ -45,7 +45,6 @@ class JwtAuthenticationFilterTest {
 
     @Test
     @DisplayName("Preserves ROLE_INTERNAL_SERVICE and ROLE_SERVICE_* when Bearer JWT is also present")
-    @SuppressWarnings("unchecked")
     void mergesInternalServiceAuthoritiesWithJwtAuthorities() throws Exception {
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
                 "mobile-bff-service",
@@ -54,7 +53,7 @@ class JwtAuthenticationFilterTest {
                         new SimpleGrantedAuthority("ROLE_INTERNAL_SERVICE"),
                         new SimpleGrantedAuthority("ROLE_SERVICE_MOBILE_BFF_SERVICE"))));
 
-        Jws<Claims> jws = mock(Jws.class);
+        Jws<Claims> jws = mock();
         Claims claims = mock(Claims.class);
         when(jwtService.validateAccessToken("customer-jwt")).thenReturn(jws);
         when(jws.getPayload()).thenReturn(claims);

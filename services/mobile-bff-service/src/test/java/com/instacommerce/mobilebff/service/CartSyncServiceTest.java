@@ -46,13 +46,12 @@ class CartSyncServiceTest {
 
   @Test
   @DisplayName("Lifecycle with connection factory initializes and destroys listener container")
-  @SuppressWarnings("unchecked")
   void shouldInitializeAndDestroyListenerContainerWhenConnectionFactoryAvailable() {
     RedisConnectionFactory connectionFactory = mock(RedisConnectionFactory.class);
     RedisConnection connection = mock(RedisConnection.class);
     when(connectionFactory.getConnection()).thenReturn(connection);
 
-    ObjectProvider<RedisConnectionFactory> provider = mock(ObjectProvider.class);
+    ObjectProvider<RedisConnectionFactory> provider = mock();
     when(provider.getIfAvailable()).thenReturn(connectionFactory);
 
     CartSyncService service = new CartSyncService(objectMapper, provider);

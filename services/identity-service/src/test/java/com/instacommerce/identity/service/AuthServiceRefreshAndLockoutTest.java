@@ -65,7 +65,9 @@ class AuthServiceRefreshAndLockoutTest {
             rateLimitService,
             authMetrics,
             userService,
-            outboxService);
+            outboxService,
+            null,
+            null);
     }
 
     @Test

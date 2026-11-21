@@ -6,6 +6,7 @@ import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -15,7 +16,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -46,9 +46,8 @@ class RateLimitServiceTest {
         redisTemplate = mock(StringRedisTemplate.class);
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
     private static RedisScript<Long> anyLongScript() {
-        return any(RedisScript.class);
+        return ArgumentMatchers.<RedisScript<Long>>any();
     }
 
     @Test

@@ -12,6 +12,7 @@ import com.instacommerce.catalog.exception.DuplicateCategoryException;
 import com.instacommerce.catalog.exception.InvalidCategoryHierarchyException;
 import com.instacommerce.catalog.repository.CategoryRepository;
 import com.instacommerce.catalog.repository.ProductRepository;
+import com.instacommerce.platform.web.PageableUtils;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -25,14 +26,12 @@ import java.util.UUID;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class CategoryService {
-    private static final int MAX_PAGE_SIZE = 100;
     public static final int MAX_CATEGORY_DEPTH = 5;
 
     private final CategoryRepository categoryRepository;
@@ -85,7 +84,7 @@ public class CategoryService {
         if (!categoryRepository.existsById(categoryId)) {
             throw new CategoryNotFoundException(categoryId);
         }
-        Pageable sanitized = sanitize(pageable);
+        Pageable sanitized = PageableUtils.sanitize(pageable);
         Page<Product> products = productRepository.findByCategory_IdAndIsActiveTrue(categoryId, sanitized);
         return products.map(ProductMapper::toResponse);
     }
@@ -277,9 +276,4 @@ public class CategoryService {
     }
 
     private record HierarchyPosition(int depth, String parentPath) {}
-
-    private Pageable sanitize(Pageable pageable) {
-        int size = Math.min(pageable.getPageSize(), MAX_PAGE_SIZE);
-        return PageRequest.of(pageable.getPageNumber(), size, pageable.getSort());
-    }
 }

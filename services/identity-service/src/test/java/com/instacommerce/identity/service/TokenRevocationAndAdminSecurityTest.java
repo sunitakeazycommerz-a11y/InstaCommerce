@@ -3,8 +3,11 @@ package com.instacommerce.identity.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -25,14 +28,17 @@ import com.instacommerce.identity.repository.UserRepository;
 import com.instacommerce.identity.security.DefaultJwtService;
 import com.instacommerce.identity.security.JwtAuthenticationFilter;
 import com.instacommerce.identity.security.JwtKeyLoader;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.FilterChain;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,6 +48,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mapstruct.factory.Mappers;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -52,6 +63,12 @@ class TokenRevocationAndAdminSecurityTest {
     @AfterEach
     void cleanup() {
         SecurityContextHolder.clearContext();
+    }
+
+    private static <T> ObjectProvider<T> providerOf(T instance) {
+        ObjectProvider<T> provider = mock();
+        when(provider.getIfAvailable()).thenReturn(instance);
+        return provider;
     }
 
     @Test
@@ -70,7 +87,7 @@ class TokenRevocationAndAdminSecurityTest {
 
         JwtKeyLoader keyLoader = new JwtKeyLoader(props);
         DefaultJwtService jwtService = new DefaultJwtService(keyLoader, props);
-        TokenBlocklistService blocklistService = new TokenBlocklistService(null, 900);
+        TokenBlocklistService blocklistService = new TokenBlocklistService(null, props, null);
         ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
         JwtAuthenticationFilter filter = new JwtAuthenticationFilter(
                 jwtService, new TraceIdProvider(), objectMapper, blocklistService);
@@ -133,7 +150,8 @@ class TokenRevocationAndAdminSecurityTest {
 
         AuthService authService = new AuthService(
                 userRepo, refreshRepo, encoder, tokenService, auditService,
-                rateLimit, new AuthMetrics(new SimpleMeterRegistry()), userService, outboxService, blocklistService);
+                rateLimit, new AuthMetrics(new SimpleMeterRegistry()), userService, outboxService,
+                null, providerOf(blocklistService));
 
         UUID userId = UUID.randomUUID();
         User user = new User();
@@ -169,9 +187,7 @@ class TokenRevocationAndAdminSecurityTest {
         OutboxService outbox = mock(OutboxService.class);
         TokenBlocklistService blocklist = mock(TokenBlocklistService.class);
 
-        @SuppressWarnings("unchecked")
-        ObjectProvider<TokenBlocklistService> blocklistProvider = mock(ObjectProvider.class);
-        when(blocklistProvider.getIfAvailable()).thenReturn(blocklist);
+        ObjectProvider<TokenBlocklistService> blocklistProvider = providerOf(blocklist);
 
         UserService service = new UserService(
                 userRepo, mapper, encoder, audit, refreshRepo, outbox, null, blocklistProvider);
@@ -195,5 +211,74 @@ class TokenRevocationAndAdminSecurityTest {
         assertThat(updated.roles()).containsExactly("ADMIN", "SUPPORT");
         verify(refreshRepo).revokeAllByUserId(userId);
         verify(blocklist).revokeAllUserTokens(userId);
+    }
+
+    @Test
+    @DisplayName("TokenBlocklistService fails closed on lookup error, propagates write error, and records failure counters")
+    void tokenBlocklistFailsClosedAndIncrementsMetricsOnRedisFailure() {
+        StringRedisTemplate redisTemplate = mock();
+        ValueOperations<String, String> valueOps = mock();
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(redisTemplate.hasKey(any())).thenThrow(new RedisConnectionFailureException("Redis down"));
+        when(valueOps.get(any())).thenThrow(new RedisConnectionFailureException("Redis down"));
+        doThrow(new RedisConnectionFailureException("Redis down"))
+                .when(valueOps).set(any(), any(), any(Duration.class));
+
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        ObjectProvider<MeterRegistry> registryProvider = providerOf(meterRegistry);
+        IdentityProperties props = new IdentityProperties();
+        props.getToken().setAccessTtlSeconds(900);
+
+        TokenBlocklistService service = new TokenBlocklistService(
+                providerOf(redisTemplate), props, registryProvider);
+
+        assertThat(service.isTokenRevoked("jti-1", "user-1", new Date(), System.currentTimeMillis())).isTrue();
+        assertThat(service.isTokenRevoked(null, "user-1", new Date(), System.currentTimeMillis())).isTrue();
+        assertThat(meterRegistry.get("auth.token.blocklist.redis.failures").tag("operation", "lookup").counter().count())
+                .isEqualTo(2.0);
+
+        assertThatThrownBy(() -> service.revokeAccessToken("jti-2", 60))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> service.revokeAllUserTokens(UUID.randomUUID()))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(meterRegistry.get("auth.token.blocklist.redis.failures").tag("operation", "write").counter().count())
+                .isEqualTo(2.0);
+    }
+
+    @Test
+    @DisplayName("UserService.unlockUser clears Redis failed login keys via cursor SCAN instead of blocking KEYS")
+    void unlockUserUsesRedisScanInsteadOfKeys() {
+        UserRepository userRepo = mock(UserRepository.class);
+        UserMapper mapper = Mappers.getMapper(UserMapper.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        AuditService audit = mock(AuditService.class);
+        RefreshTokenRepository refreshRepo = mock(RefreshTokenRepository.class);
+        OutboxService outbox = mock(OutboxService.class);
+        StringRedisTemplate redisTemplate = mock();
+        Cursor<String> cursor = mock();
+
+        UUID userId = UUID.randomUUID();
+        User user = new User();
+        user.setId(userId);
+        user.setEmail("locked@instacommerce.dev");
+        user.setFailedAttempts(5);
+        user.setLockedUntil(Instant.now().plusSeconds(600));
+
+        when(userRepo.findById(userId)).thenReturn(Optional.of(user));
+        when(cursor.hasNext()).thenReturn(true, true, false);
+        when(cursor.next()).thenReturn(
+                "identity:failed_logins:locked@instacommerce.dev:10.0.0.1",
+                "identity:failed_logins:locked@instacommerce.dev:10.0.0.2");
+        when(redisTemplate.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+        UserService service = new UserService(
+                userRepo, mapper, encoder, audit, refreshRepo, outbox, providerOf(redisTemplate), null);
+
+        service.unlockUser(userId, "10.0.0.9", "admin-ua", "trace-unlock");
+
+        verify(redisTemplate, never()).keys(any());
+        verify(redisTemplate).scan(any(ScanOptions.class));
+        verify(redisTemplate).delete(anyCollection());
+        verify(cursor).close();
     }
 }

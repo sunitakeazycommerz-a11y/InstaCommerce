@@ -23,9 +23,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -36,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AuthService {
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
     private static final String TARGET_TYPE_USER = "User";
     private static final int MAX_FAILED_ATTEMPTS = 5;
     private static final long LOCKOUT_DURATION_MINUTES = 15;
@@ -77,54 +81,6 @@ public class AuthService {
         this.tokenBlocklistService = tokenBlocklistServiceProvider != null
                 ? tokenBlocklistServiceProvider.getIfAvailable()
                 : null;
-    }
-
-    public AuthService(UserRepository userRepository,
-                       RefreshTokenRepository refreshTokenRepository,
-                       PasswordEncoder passwordEncoder,
-                       TokenService tokenService,
-                       AuditService auditService,
-                       RateLimitService rateLimitService,
-                       AuthMetrics authMetrics,
-                       UserService userService,
-                       OutboxService outboxService,
-                       ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
-        this(userRepository, refreshTokenRepository, passwordEncoder, tokenService, auditService, rateLimitService, authMetrics, userService, outboxService, redisTemplateProvider, null);
-    }
-
-    public AuthService(UserRepository userRepository,
-                       RefreshTokenRepository refreshTokenRepository,
-                       PasswordEncoder passwordEncoder,
-                       TokenService tokenService,
-                       AuditService auditService,
-                       RateLimitService rateLimitService,
-                       AuthMetrics authMetrics,
-                       UserService userService,
-                       OutboxService outboxService) {
-        this(userRepository, refreshTokenRepository, passwordEncoder, tokenService, auditService, rateLimitService, authMetrics, userService, outboxService, null, null);
-    }
-
-    public AuthService(UserRepository userRepository,
-                       RefreshTokenRepository refreshTokenRepository,
-                       PasswordEncoder passwordEncoder,
-                       TokenService tokenService,
-                       AuditService auditService,
-                       RateLimitService rateLimitService,
-                       AuthMetrics authMetrics,
-                       UserService userService,
-                       OutboxService outboxService,
-                       TokenBlocklistService tokenBlocklistService) {
-        this.userRepository = userRepository;
-        this.refreshTokenRepository = refreshTokenRepository;
-        this.passwordEncoder = passwordEncoder;
-        this.tokenService = tokenService;
-        this.auditService = auditService;
-        this.rateLimitService = rateLimitService;
-        this.authMetrics = authMetrics;
-        this.userService = userService;
-        this.outboxService = outboxService;
-        this.redisTemplate = null;
-        this.tokenBlocklistService = tokenBlocklistService;
     }
 
     @Transactional
@@ -195,7 +151,7 @@ public class AuthService {
                 } catch (UserInactiveException e) {
                     throw e;
                 } catch (Exception e) {
-                    // Fall back to database lockout
+                    log.warn("Redis lockout check failed for key={}; falling back to database lockout", lockoutKey, e);
                 }
             }
 
@@ -227,7 +183,7 @@ public class AuthService {
                             redisTemplate.expire(lockoutKey, Duration.ofMinutes(LOCKOUT_DURATION_MINUTES));
                         }
                     } catch (Exception e) {
-                        // Ignore redis error
+                        log.warn("Redis failed login increment failed for key={}", lockoutKey, e);
                     }
                 }
 
@@ -279,7 +235,7 @@ public class AuthService {
                 try {
                     redisTemplate.delete(lockoutKey);
                 } catch (Exception e) {
-                    // Ignore redis error
+                    log.warn("Redis failed login lockout clear failed for key={}", lockoutKey, e);
                 }
             }
             String accessToken = tokenService.generateAccessToken(user);
@@ -432,6 +388,6 @@ public class AuthService {
     }
 
     private String normalizeEmail(String email) {
-        return email == null ? null : email.trim().toLowerCase();
+        return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
     }
 }

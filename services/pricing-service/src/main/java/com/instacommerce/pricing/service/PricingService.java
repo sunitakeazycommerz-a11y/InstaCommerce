@@ -5,6 +5,7 @@ import com.instacommerce.pricing.domain.Promotion;
 import com.instacommerce.pricing.dto.request.CartItem;
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
 import com.instacommerce.pricing.dto.request.TaxCalculationRequest;
+import com.instacommerce.pricing.dto.response.BatchPriceResponse;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
 import com.instacommerce.pricing.dto.response.TaxCalculationResponse;
@@ -16,8 +17,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,33 +58,6 @@ public class PricingService {
         this.surgePricingService = surgePricingService;
     }
 
-    public PricingService(PriceRuleRepository priceRuleRepository,
-                          PromotionService promotionService,
-                          CouponService couponService,
-                          QuoteTokenService quoteTokenService,
-                          DiscountCalculator discountCalculator,
-                          TaxCalculationService taxCalculationService) {
-        this(priceRuleRepository, promotionService, couponService, quoteTokenService,
-                discountCalculator, taxCalculationService, null);
-    }
-
-    public PricingService(PriceRuleRepository priceRuleRepository,
-                          PromotionService promotionService,
-                          CouponService couponService,
-                          QuoteTokenService quoteTokenService,
-                          DiscountCalculator discountCalculator) {
-        this(priceRuleRepository, promotionService, couponService, quoteTokenService,
-                discountCalculator, new TaxCalculationService(), null);
-    }
-
-    public PricingService(PriceRuleRepository priceRuleRepository,
-                          PromotionService promotionService,
-                          CouponService couponService,
-                          QuoteTokenService quoteTokenService) {
-        this(priceRuleRepository, promotionService, couponService, quoteTokenService,
-                new DiscountCalculator(), new TaxCalculationService(), null);
-    }
-
     @Cacheable(value = "productPrices", key = "#productId")
     @Transactional(readOnly = true)
     public long calculatePrice(UUID productId) {
@@ -92,23 +68,39 @@ public class PricingService {
     }
 
     @Transactional(readOnly = true)
-    public List<PricedItem> calculateBatchPrices(Collection<UUID> productIds) {
+    public BatchPriceResponse calculateBatchPrices(Collection<UUID> productIds) {
         if (productIds == null || productIds.isEmpty()) {
-            return List.of();
+            return new BatchPriceResponse(List.of(), List.of());
+        }
+        List<UUID> uniqueIds = new ArrayList<>(new LinkedHashSet<>(productIds.stream()
+                .filter(Objects::nonNull)
+                .toList()));
+        if (uniqueIds.isEmpty()) {
+            return new BatchPriceResponse(List.of(), List.of());
         }
         Instant now = Instant.now();
-        Map<UUID, PriceRule> rulesByProduct = loadActiveRules(productIds, now);
-        List<PricedItem> result = new ArrayList<>(productIds.size());
-        for (UUID productId : productIds) {
+        Map<UUID, PriceRule> rulesByProduct = new LinkedHashMap<>();
+        if (uniqueIds.size() == 1) {
+            UUID singleId = uniqueIds.getFirst();
+            priceRuleRepository.findActiveRuleByProductId(singleId, now)
+                    .ifPresent(rule -> rulesByProduct.put(singleId, rule));
+        } else {
+            for (PriceRule rule : priceRuleRepository.findActiveRulesByProductIds(uniqueIds, now)) {
+                rulesByProduct.putIfAbsent(rule.getProductId(), rule);
+            }
+        }
+        List<PricedItem> items = new ArrayList<>(rulesByProduct.size());
+        List<UUID> unavailableProductIds = new ArrayList<>();
+        for (UUID productId : uniqueIds) {
             PriceRule rule = rulesByProduct.get(productId);
             if (rule == null) {
-                rule = priceRuleRepository.findActiveRuleByProductId(productId, now)
-                        .orElseThrow(() -> new PriceRuleNotFoundException(productId.toString()));
+                unavailableProductIds.add(productId);
+                continue;
             }
             long unitPrice = applyMultiplier(rule.getBasePriceCents(), rule.getMultiplier());
-            result.add(new PricedItem(productId, unitPrice, 1, unitPrice, "INR"));
+            items.add(new PricedItem(productId, unitPrice, 1, unitPrice, "INR"));
         }
-        return result;
+        return new BatchPriceResponse(items, unavailableProductIds);
     }
 
     @Transactional
@@ -137,12 +129,12 @@ public class PricingService {
         List<Promotion> candidatePromotions = promotionService.findActivePromotions();
         List<UUID> promoIds = candidatePromotions.stream()
                 .map(Promotion::getId)
-                .filter(id -> id != null)
+                .filter(Objects::nonNull)
                 .toList();
         Map<UUID, Long> userPromoRedemptions = promotionService.findUserRedemptionCounts(request.userId(), promoIds);
 
         List<Promotion> activePromotions = candidatePromotions.stream()
-                .filter(p -> isPromotionEligible(p, now,
+                .filter(p -> PromotionService.isEligibleAt(p, now,
                         p.getId() != null ? userPromoRedemptions.getOrDefault(p.getId(), 0L) : 0L))
                 .toList();
 
@@ -186,16 +178,17 @@ public class PricingService {
         }
 
         long totalDiscount = calcResult.totalDiscountCents();
+        long couponDiscountCents = calcResult.couponDiscountCents();
         long netGoodsTotal = calcResult.netTotalCents();
         long totalCents = Math.addExact(netGoodsTotal, deliveryFeeCents);
-        String appliedCoupon = calcResult.couponDiscountCents() > 0 ? validatedCouponCode : null;
+        String appliedCoupon = couponDiscountCents > 0 ? validatedCouponCode : null;
         List<String> appliedPromotions = calcResult.appliedPromotionNames();
         long estimatedTaxCents = taxCalculationService.calculateTaxForSubtotal(
                 netGoodsTotal, TaxCalculationService.DEFAULT_TAX_RATE);
         BigDecimal taxRate = TaxCalculationService.DEFAULT_TAX_RATE;
 
-        log.info("Cart pricing calculated: subtotal={}, discount={}, delivery={}, total={}, estimatedTax={}",
-                subtotalCents, totalDiscount, deliveryFeeCents, totalCents, estimatedTaxCents);
+        log.info("Cart pricing calculated: subtotal={}, discount={}, couponDiscount={}, delivery={}, total={}, estimatedTax={}",
+                subtotalCents, totalDiscount, couponDiscountCents, deliveryFeeCents, totalCents, estimatedTaxCents);
 
         PriceCalculationResponse intermediateResponse = new PriceCalculationResponse(
                 pricedItems,
@@ -209,7 +202,8 @@ public class PricingService {
                 null,
                 null,
                 estimatedTaxCents,
-                taxRate);
+                taxRate,
+                couponDiscountCents);
 
         QuoteTokenService.QuoteResult quoteResult = quoteTokenService.issueQuote(
                 request.userId(), intermediateResponse, appliedCoupon);
@@ -226,7 +220,8 @@ public class PricingService {
                 quoteResult.quoteId(),
                 quoteResult.quoteToken(),
                 estimatedTaxCents,
-                taxRate);
+                taxRate,
+                couponDiscountCents);
     }
 
     private Map<UUID, PriceRule> loadActiveRules(Collection<UUID> productIds, Instant now) {
@@ -237,23 +232,6 @@ public class PricingService {
             }
         }
         return rules;
-    }
-
-    private static boolean isPromotionEligible(Promotion promotion, Instant now, long userRedemptionCount) {
-        if (promotion == null || !promotion.isActive()) {
-            return false;
-        }
-        if (promotion.getStartAt() != null && now.isBefore(promotion.getStartAt())) {
-            return false;
-        }
-        if (promotion.getEndAt() != null && !now.isBefore(promotion.getEndAt())) {
-            return false;
-        }
-        if (promotion.getMaxUses() != null && promotion.getCurrentUses() >= promotion.getMaxUses()) {
-            return false;
-        }
-        Integer maxPerUser = promotion.getMaxRedemptionsPerUser();
-        return maxPerUser == null || maxPerUser <= 0 || userRedemptionCount < maxPerUser;
     }
 
     public TaxCalculationResponse calculateTax(TaxCalculationRequest request) {

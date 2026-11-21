@@ -12,6 +12,7 @@ import com.instacommerce.catalog.config.SecurityConfig;
 import com.instacommerce.catalog.controller.PricingController;
 import com.instacommerce.catalog.dto.response.PricingBreakdownResponse;
 import com.instacommerce.catalog.exception.GlobalExceptionHandler;
+import com.instacommerce.catalog.exception.ProductNotFoundException;
 import com.instacommerce.catalog.exception.TraceIdProvider;
 import com.instacommerce.catalog.service.PricingService;
 import java.util.List;
@@ -92,5 +93,31 @@ class CatalogSecuritySliceTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
             .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("GlobalExceptionHandler serializes ProblemDetail with top-level code and RFC 7807 fields via JacksonConfig")
+    void problemDetailSerializesWithTopLevelCode() throws Exception {
+        UUID missingId = UUID.randomUUID();
+        when(pricingService.compute(any())).thenThrow(new ProductNotFoundException(missingId));
+
+        String body = """
+            {
+              "storeId": "store-1",
+              "items": [{"productId": "%s", "quantity": 1}]
+            }
+            """.formatted(missingId);
+
+        mockMvc.perform(post("/pricing/compute")
+                .header("X-Internal-Service", "checkout-orchestrator-service")
+                .header("X-Internal-Token", "test-internal-secret")
+                .header("X-Trace-Id", "trace-slice-404")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("PRODUCT_NOT_FOUND"))
+            .andExpect(jsonPath("$.status").value(404))
+            .andExpect(jsonPath("$.traceId").value("trace-slice-404"))
+            .andExpect(jsonPath("$.type").value("urn:instacommerce:problem:product_not_found"));
     }
 }

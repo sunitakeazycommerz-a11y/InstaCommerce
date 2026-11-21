@@ -14,6 +14,7 @@ import com.instacommerce.pricing.repository.PromotionRepository;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -53,21 +54,6 @@ public class CouponService {
         this.promoReservationService = promoReservationService;
     }
 
-    public CouponService(CouponRepository couponRepository,
-                         CouponRedemptionRepository couponRedemptionRepository,
-                         PromotionRepository promotionRepository,
-                         PromotionService promotionService,
-                         OutboxService outboxService) {
-        this(couponRepository, couponRedemptionRepository, promotionRepository, promotionService, outboxService, new PromoReservationService());
-    }
-
-    public CouponService(CouponRepository couponRepository,
-                         CouponRedemptionRepository couponRedemptionRepository,
-                         PromotionRepository promotionRepository,
-                         PromotionService promotionService) {
-        this(couponRepository, couponRedemptionRepository, promotionRepository, promotionService, null, new PromoReservationService());
-    }
-
     public record CouponValidationResult(long discountCents, String couponCode) {}
 
     @Transactional(readOnly = true)
@@ -85,7 +71,7 @@ public class CouponService {
 
         Promotion promotion = coupon.getPromotion();
         Instant now = Instant.now();
-        if (!isPromotionWindowActive(promotion, now)) {
+        if (!PromotionService.isWindowActiveAt(promotion, now)) {
             throw new InvalidCouponException("Coupon promotion has expired or is inactive");
         }
 
@@ -143,7 +129,7 @@ public class CouponService {
 
             Promotion promotion = coupon.getPromotion();
             Instant now = Instant.now();
-            if (!isPromotionWindowActive(promotion, now)) {
+            if (!PromotionService.isWindowActiveAt(promotion, now)) {
                 throw new InvalidCouponException("Coupon promotion has expired or is inactive");
             }
 
@@ -156,7 +142,7 @@ public class CouponService {
                 throw new InvalidCouponException("You have already used this coupon the maximum number of times");
             }
 
-            if (!promotionService.recordPromotionUsage(promotion.getId())) {
+            if (!promotionService.recordPromotionUsage(promotion.getId(), userId, orderId, discountCents)) {
                 throw new InvalidCouponException("Coupon promotion has reached its usage limit");
             }
 
@@ -206,16 +192,6 @@ public class CouponService {
         }
     }
 
-    private boolean isPromotionWindowActive(Promotion promotion, Instant now) {
-        if (promotion == null || !promotion.isActive()) {
-            return false;
-        }
-        if (promotion.getStartAt() != null && now.isBefore(promotion.getStartAt())) {
-            return false;
-        }
-        return promotion.getEndAt() == null || now.isBefore(promotion.getEndAt());
-    }
-
     private String normalizeCode(String code) {
         return code == null ? "" : code.trim();
     }
@@ -245,7 +221,7 @@ public class CouponService {
                 coupon.setTotalRedeemed(coupon.getTotalRedeemed() - 1);
                 couponRepository.save(coupon);
             }
-            promotionService.rollbackPromotionUsage(coupon.getPromotion().getId());
+            promotionService.rollbackPromotionUsage(coupon.getPromotion().getId(), userId, orderId);
             log.info("Un-redeemed coupon code={} userId={} orderId={}", code, userId, orderId);
         });
     }
@@ -263,7 +239,7 @@ public class CouponService {
                 .orElseThrow(() -> new PromotionNotFoundException(request.promotionId().toString()));
 
         Coupon coupon = new Coupon();
-        coupon.setCode(request.code().trim().toUpperCase());
+        coupon.setCode(request.code().trim().toUpperCase(Locale.ROOT));
         coupon.setPromotion(promotion);
         coupon.setSingleUse(request.singleUse());
         coupon.setPerUserLimit(request.perUserLimit() > 0 ? request.perUserLimit() : 1);

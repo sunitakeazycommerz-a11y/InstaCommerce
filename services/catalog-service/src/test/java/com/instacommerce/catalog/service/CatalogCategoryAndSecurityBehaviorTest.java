@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.instacommerce.catalog.domain.model.Category;
@@ -15,7 +16,10 @@ import com.instacommerce.catalog.dto.request.CreateProductRequest;
 import com.instacommerce.catalog.dto.request.UpdateCategoryRequest;
 import com.instacommerce.catalog.dto.response.CategoryResponse;
 import com.instacommerce.catalog.dto.response.ProductResponse;
+import com.instacommerce.catalog.exception.GlobalExceptionHandler;
 import com.instacommerce.catalog.exception.InvalidCategoryHierarchyException;
+import com.instacommerce.catalog.exception.ProductNotFoundException;
+import com.instacommerce.catalog.exception.TraceIdProvider;
 import com.instacommerce.catalog.repository.CategoryRepository;
 import com.instacommerce.catalog.repository.ProductRepository;
 import com.instacommerce.catalog.security.InternalServiceAuthFilter;
@@ -33,9 +37,14 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.Authentication;
@@ -172,14 +181,17 @@ class CatalogCategoryAndSecurityBehaviorTest {
         when(productRepo.findActiveByOptionalCategoryAndStore(eq("dairy"), eq(storeId), any()))
                 .thenReturn(new PageImpl<>(List.of(activeProduct)));
 
-        Page<ProductResponse> page = service.listProducts("dairy", storeId, PageRequest.of(0, 20));
+        Page<ProductResponse> page = service.listProducts("dairy", storeId, PageRequest.of(0, 500));
         assertThat(page.getContent()).hasSize(1);
         assertThat(page.getContent().getFirst().storeId()).isEqualTo(storeId);
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(productRepo).findActiveByOptionalCategoryAndStore(
+                eq("dairy"), eq(storeId), pageableCaptor.capture());
+        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(100);
     }
 
     @Test
     @DisplayName("JwtAuthenticationFilter preserves ROLE_INTERNAL_SERVICE granted by InternalServiceAuthFilter")
-    @SuppressWarnings("unchecked")
     void jwtFilterPreservesInternalServiceRole() throws Exception {
         JwtService jwtService = mock(JwtService.class);
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(
@@ -188,7 +200,7 @@ class CatalogCategoryAndSecurityBehaviorTest {
 
         Claims claims = mock(Claims.class);
         when(claims.getSubject()).thenReturn(UUID.randomUUID().toString());
-        Jws<Claims> jws = mock(Jws.class);
+        Jws<Claims> jws = mock();
         when(jws.getPayload()).thenReturn(claims);
         when(jwtService.validateAccessToken("valid-jwt")).thenReturn(jws);
         doReturn(List.of(new SimpleGrantedAuthority("ROLE_USER"))).when(jwtService).extractAuthorities(claims);
@@ -208,6 +220,28 @@ class CatalogCategoryAndSecurityBehaviorTest {
         assertThat(auth.getAuthorities())
                 .extracting("authority")
                 .containsExactlyInAnyOrder("ROLE_USER", "ROLE_INTERNAL_SERVICE");
+    }
+
+    @Test
+    @DisplayName("GlobalExceptionHandler emits RFC 7807 ProblemDetail via ProblemDetailFactory")
+    void globalExceptionHandlerEmitsProblemDetail() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/products/123");
+        request.addHeader("X-Trace-Id", "trace-cat-404");
+
+        UUID missingId = UUID.randomUUID();
+        ResponseEntity<ProblemDetail> response = handler.handleApiException(
+                new ProductNotFoundException(missingId), request);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
+        ProblemDetail problem = response.getBody();
+        assertThat(problem).isNotNull();
+        assertThat(problem.getStatus()).isEqualTo(404);
+        assertThat(problem.getProperties())
+                .containsEntry("code", "PRODUCT_NOT_FOUND")
+                .containsEntry("traceId", "trace-cat-404");
+        assertThat(problem.getType().toString()).isEqualTo("urn:instacommerce:problem:product_not_found");
     }
 
     private static Category category(UUID id, String slug, UUID parentId, String path, int depth) {

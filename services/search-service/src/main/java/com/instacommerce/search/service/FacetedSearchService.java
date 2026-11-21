@@ -2,33 +2,39 @@ package com.instacommerce.search.service;
 
 import com.instacommerce.search.dto.FacetValue;
 import com.instacommerce.search.repository.SearchDocumentRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Dark store aware faceted search aggregation service.
- *
- * Scopes brand and category attribute facets to the customer's active dark store
- * and rolls up in-stock variants, preventing customers from selecting facet filters
- * that yield zero available items.
- */
 @Service
 public class FacetedSearchService {
 
     private static final Logger log = LoggerFactory.getLogger(FacetedSearchService.class);
 
     private final SearchDocumentRepository searchDocumentRepository;
+    private final Counter facetFailureCounter;
 
-    public FacetedSearchService(SearchDocumentRepository searchDocumentRepository) {
+    @Autowired
+    public FacetedSearchService(SearchDocumentRepository searchDocumentRepository,
+                                ObjectProvider<MeterRegistry> meterRegistryProvider) {
         this.searchDocumentRepository = searchDocumentRepository;
+        MeterRegistry registry = meterRegistryProvider != null ? meterRegistryProvider.getIfAvailable() : null;
+        if (registry == null) {
+            registry = new SimpleMeterRegistry();
+        }
+        this.facetFailureCounter = Counter.builder("search.facets.compute.failures")
+                .register(registry);
     }
 
     public record FacetRollupResult(
@@ -37,13 +43,6 @@ public class FacetedSearchService {
             UUID storeId
     ) {}
 
-    /**
-     * Computes facet distribution scoped to the customer's active dark store ID.
-     *
-     * @param query Search query string
-     * @param storeId Customer's local dark store UUID (optional)
-     * @return Map of facet category to list of facet values with available stock counts
-     */
     @Transactional(readOnly = true)
     public Map<String, List<FacetValue>> computeStoreScopedFacets(String query, UUID storeId) {
         return computeFilteredFacets(query, null, null, null, null, storeId);
@@ -83,6 +82,7 @@ public class FacetedSearchService {
             log.debug("Computed facets for query='{}' storeId={}: brands={}, categories={}",
                     query, storeId, brandFacets.size(), categoryFacets.size());
         } catch (Exception ex) {
+            facetFailureCounter.increment();
             log.warn("Failed to compute store-scoped facets for query='{}' storeId={}", query, storeId, ex);
             facets.put("brand", new ArrayList<>());
             facets.put("category", new ArrayList<>());
@@ -97,6 +97,6 @@ public class FacetedSearchService {
         return rows.stream()
                 .filter(row -> row[0] != null && !((String) row[0]).isBlank())
                 .map(row -> new FacetValue((String) row[0], ((Number) row[1]).longValue()))
-                .collect(Collectors.toList());
+                .toList();
     }
 }

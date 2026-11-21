@@ -17,9 +17,11 @@ import com.instacommerce.pricing.domain.Promotion;
 import com.instacommerce.pricing.repository.PriceQuoteRepository;
 import com.instacommerce.pricing.repository.PriceRuleRepository;
 import com.instacommerce.pricing.service.CouponService;
+import com.instacommerce.pricing.service.DiscountCalculator;
 import com.instacommerce.pricing.service.PricingService;
 import com.instacommerce.pricing.service.PromotionService;
 import com.instacommerce.pricing.service.QuoteTokenService;
+import com.instacommerce.pricing.service.TaxCalculationService;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -61,9 +63,13 @@ class PricingTaxCompatibilityTest {
             priceRuleRepository,
             promotionService,
             couponService,
-            quoteTokenService);
+            quoteTokenService,
+            new DiscountCalculator(),
+            new TaxCalculationService(),
+            null);
 
-        PricingController controller = new PricingController(pricingService, couponService, quoteTokenService);
+        PricingController controller = new PricingController(
+            pricingService, couponService, quoteTokenService, promotionService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

@@ -12,6 +12,7 @@ import com.instacommerce.identity.exception.UserNotFoundException;
 import com.instacommerce.identity.repository.RefreshTokenRepository;
 import com.instacommerce.identity.repository.UserRepository;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -19,10 +20,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
@@ -34,6 +39,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class UserService {
+    private static final Logger log = LoggerFactory.getLogger(UserService.class);
+    private static final int REDIS_SCAN_BATCH_SIZE = 100;
+
     private final UserRepository userRepository;
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
@@ -62,24 +70,6 @@ public class UserService {
         this.tokenBlocklistService = tokenBlocklistServiceProvider != null
                 ? tokenBlocklistServiceProvider.getIfAvailable()
                 : null;
-    }
-
-    public UserService(UserRepository userRepository,
-                       UserMapper userMapper,
-                       PasswordEncoder passwordEncoder,
-                       AuditService auditService,
-                       RefreshTokenRepository refreshTokenRepository,
-                       OutboxService outboxService,
-                       ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
-        this(userRepository, userMapper, passwordEncoder, auditService, refreshTokenRepository, outboxService, redisTemplateProvider, null);
-    }
-
-    public UserService(UserRepository userRepository,
-                       UserMapper userMapper,
-                       PasswordEncoder passwordEncoder,
-                       AuditService auditService,
-                       RefreshTokenRepository refreshTokenRepository) {
-        this(userRepository, userMapper, passwordEncoder, auditService, refreshTokenRepository, null, null, null);
     }
 
     public UserResponse getCurrentUser() {
@@ -235,13 +225,27 @@ public class UserService {
         userRepository.save(user);
 
         if (redisTemplate != null) {
-            try {
-                Set<String> keys = redisTemplate.keys("identity:failed_logins:" + user.getEmail() + ":*");
-                if (keys != null && !keys.isEmpty()) {
-                    redisTemplate.delete(keys);
+            String pattern = "identity:failed_logins:" + user.getEmail() + ":*";
+            ScanOptions options = ScanOptions.scanOptions()
+                .match(pattern)
+                .count(REDIS_SCAN_BATCH_SIZE)
+                .build();
+            try (Cursor<String> cursor = redisTemplate.scan(options)) {
+                if (cursor != null) {
+                    List<String> keysBatch = new ArrayList<>(REDIS_SCAN_BATCH_SIZE);
+                    while (cursor.hasNext()) {
+                        keysBatch.add(cursor.next());
+                        if (keysBatch.size() >= REDIS_SCAN_BATCH_SIZE) {
+                            redisTemplate.delete(keysBatch);
+                            keysBatch.clear();
+                        }
+                    }
+                    if (!keysBatch.isEmpty()) {
+                        redisTemplate.delete(keysBatch);
+                    }
                 }
-            } catch (Exception ignored) {
-                // Ignore Redis errors
+            } catch (Exception ex) {
+                log.warn("Failed to scan and clear Redis failed login lockout keys for userId={}", user.getId(), ex);
             }
         }
 

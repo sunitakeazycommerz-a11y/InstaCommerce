@@ -15,7 +15,6 @@ import com.instacommerce.cart.domain.model.CartItem;
 import com.instacommerce.cart.dto.request.AddItemRequest;
 import com.instacommerce.cart.dto.response.CartResponse;
 import java.time.Instant;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -27,13 +26,12 @@ class CartServiceConcurrentTest {
         CartStore cartStore = mock(CartStore.class);
         PricingClient pricingClient = mock(PricingClient.class);
         CartProperties properties = new CartProperties();
-        CartService cartService = new CartService(cartStore, properties, pricingClient);
+        CartService cartService = new CartService(cartStore, properties, pricingClient, null);
 
         UUID userId = UUID.randomUUID();
         UUID cartId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
-        when(cartStore.getCart(userId)).thenReturn(Optional.empty());
         when(pricingClient.getPrice(productId))
                 .thenReturn(new PricingClient.PriceResponse(productId, 1200L, "INR"));
 

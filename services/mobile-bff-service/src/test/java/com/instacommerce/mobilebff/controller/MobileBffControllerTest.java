@@ -41,11 +41,10 @@ class MobileBffControllerTest {
     private MobileBffController controller;
 
     @BeforeEach
-    @SuppressWarnings("unchecked")
     void setUp() {
         homeAggregator = mock(HomeAggregator.class);
         cartSyncService = mock(CartSyncService.class);
-        ObjectProvider<CartSyncService> provider = mock(ObjectProvider.class);
+        ObjectProvider<CartSyncService> provider = mock();
         when(provider.getIfAvailable()).thenReturn(cartSyncService);
         controller = new MobileBffController(homeAggregator, provider);
     }
@@ -139,7 +138,7 @@ class MobileBffControllerTest {
     }
 
     @Test
-    @DisplayName("Controller advice renders 403 ACCESS_DENIED JSON even for SSE Accept header")
+    @DisplayName("Controller advice renders 403 ACCESS_DENIED RFC 7807 ProblemDetail even for SSE Accept header")
     void controllerAdviceRendersJson403ForSseAccept() {
         WebTestClient client = WebTestClient.bindToController(controller)
             .controllerAdvice(new GlobalExceptionHandler(new MobileBffAccessDeniedHandler(new ObjectMapper())))
@@ -150,9 +149,35 @@ class MobileBffControllerTest {
             .accept(MediaType.TEXT_EVENT_STREAM)
             .exchange()
             .expectStatus().isForbidden()
-            .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+            .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
             .expectBody()
-            .jsonPath("$.code").isEqualTo("ACCESS_DENIED");
+            .jsonPath("$.code").isEqualTo("ACCESS_DENIED")
+            .jsonPath("$.status").isEqualTo(403)
+            .jsonPath("$.title").isEqualTo("Forbidden")
+            .jsonPath("$.detail").isEqualTo("Insufficient permissions");
+    }
+
+    @Test
+    @DisplayName("Controller advice renders RFC 7807 ProblemDetail on IllegalArgumentException")
+    void controllerAdviceRendersProblemDetailOnValidationError() {
+        WebTestClient client = WebTestClient.bindToController(controller)
+            .controllerAdvice(new GlobalExceptionHandler(new MobileBffAccessDeniedHandler(new ObjectMapper())))
+            .build();
+
+        client.get()
+            .uri("/bff/mobile/v1/home?storeId=../bad")
+            .header("X-Correlation-Id", "corr-bff-400")
+            .exchange()
+            .expectStatus().isBadRequest()
+            .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+            .expectBody()
+            .jsonPath("$.code").isEqualTo("VALIDATION_ERROR")
+            .jsonPath("$.status").isEqualTo(400)
+            .jsonPath("$.title").isEqualTo("Bad Request")
+            .jsonPath("$.detail").isEqualTo("Invalid storeId format")
+            .jsonPath("$.traceId").isEqualTo("corr-bff-400")
+            .jsonPath("$.type").isEqualTo("urn:instacommerce:problem:validation_error")
+            .jsonPath("$.instance").isEqualTo("/bff/mobile/v1/home");
     }
 
     @Test

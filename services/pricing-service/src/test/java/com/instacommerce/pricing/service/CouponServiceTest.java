@@ -49,7 +49,9 @@ class CouponServiceTest {
                 couponRepository,
                 couponRedemptionRepository,
                 promotionRepository,
-                promotionService);
+                promotionService,
+                null,
+                new PromoReservationService(null));
     }
 
     private Coupon createSampleCoupon(boolean active, int totalRedeemed, Integer totalLimit, int perUserLimit) {
@@ -118,23 +120,23 @@ class CouponServiceTest {
     }
 
     @Test
-    @DisplayName("redeemCoupon persists redemption and increments counter")
+    @DisplayName("redeemCoupon persists redemption, records per-user promotion usage, and increments counter")
     void redeemCouponSuccess() {
         Coupon coupon = createSampleCoupon(true, 0, 10, 2);
         when(couponRepository.findByCodeIgnoreCaseForUpdate(CODE)).thenReturn(Optional.of(coupon));
         when(couponRedemptionRepository.countByCouponIdAndUserId(COUPON_ID, USER_ID)).thenReturn(0L);
-        when(promotionService.recordPromotionUsage(PROMO_ID)).thenReturn(true);
+        when(promotionService.recordPromotionUsage(PROMO_ID, USER_ID, ORDER_ID, 1000L)).thenReturn(true);
 
         couponService.redeemCoupon(CODE, USER_ID, ORDER_ID, 1000L);
 
         verify(couponRedemptionRepository).save(any(CouponRedemption.class));
         assertThat(coupon.getTotalRedeemed()).isEqualTo(1);
         verify(couponRepository).save(coupon);
-        verify(promotionService).recordPromotionUsage(PROMO_ID);
+        verify(promotionService).recordPromotionUsage(PROMO_ID, USER_ID, ORDER_ID, 1000L);
     }
 
     @Test
-    @DisplayName("unredeemCoupon with orderId removes redemption, decrements total, and rolls back promo")
+    @DisplayName("unredeemCoupon with orderId removes redemption, decrements total, and rolls back per-user promo")
     void unredeemCouponWithOrderId() {
         Coupon coupon = createSampleCoupon(true, 1, 10, 2);
         CouponRedemption redemption = new CouponRedemption();
@@ -151,7 +153,7 @@ class CouponServiceTest {
         verify(couponRedemptionRepository).delete(redemption);
         assertThat(coupon.getTotalRedeemed()).isEqualTo(0);
         verify(couponRepository).save(coupon);
-        verify(promotionService).rollbackPromotionUsage(PROMO_ID);
+        verify(promotionService).rollbackPromotionUsage(PROMO_ID, USER_ID, ORDER_ID);
     }
 
     @Test
@@ -172,7 +174,7 @@ class CouponServiceTest {
         verify(couponRedemptionRepository).delete(redemption);
         assertThat(coupon.getTotalRedeemed()).isEqualTo(2);
         verify(couponRepository).save(coupon);
-        verify(promotionService).rollbackPromotionUsage(PROMO_ID);
+        verify(promotionService).rollbackPromotionUsage(PROMO_ID, USER_ID, null);
     }
 
     @Test
@@ -204,7 +206,7 @@ class CouponServiceTest {
     @Test
     @DisplayName("redeemCoupon is idempotent for same (coupon, user, order) and always releases reservation lock")
     void redeemCouponIdempotentAndReleasesLock() {
-        PromoReservationService reservationService = new PromoReservationService();
+        PromoReservationService reservationService = new PromoReservationService(null);
         OutboxService outboxService = mock(OutboxService.class);
         CouponService wiredService = new CouponService(
                 couponRepository,
@@ -236,7 +238,7 @@ class CouponServiceTest {
     @Test
     @DisplayName("redeemCoupon uses aggregateType 'pricing' in outbox event and releases lock on success")
     void redeemCouponEmitsPricingOutboxAndReleasesLock() {
-        PromoReservationService reservationService = new PromoReservationService();
+        PromoReservationService reservationService = new PromoReservationService(null);
         OutboxService outboxService = mock(OutboxService.class);
         CouponService wiredService = new CouponService(
                 couponRepository,
@@ -251,7 +253,7 @@ class CouponServiceTest {
         when(couponRedemptionRepository.findByCouponIdAndUserIdAndOrderId(COUPON_ID, USER_ID, ORDER_ID))
                 .thenReturn(Optional.empty());
         when(couponRedemptionRepository.countByCouponIdAndUserId(COUPON_ID, USER_ID)).thenReturn(0L);
-        when(promotionService.recordPromotionUsage(PROMO_ID)).thenReturn(true);
+        when(promotionService.recordPromotionUsage(PROMO_ID, USER_ID, ORDER_ID, 500L)).thenReturn(true);
 
         wiredService.redeemCoupon(CODE, USER_ID, ORDER_ID, 500L);
 
@@ -270,7 +272,7 @@ class CouponServiceTest {
         Coupon coupon = createSampleCoupon(true, 0, 10, 2);
         when(couponRepository.findByCodeIgnoreCaseForUpdate(CODE)).thenReturn(Optional.of(coupon));
         when(couponRedemptionRepository.countByCouponIdAndUserId(COUPON_ID, USER_ID)).thenReturn(0L);
-        when(promotionService.recordPromotionUsage(PROMO_ID)).thenReturn(false);
+        when(promotionService.recordPromotionUsage(PROMO_ID, USER_ID, ORDER_ID, 500L)).thenReturn(false);
 
         assertThatThrownBy(() -> couponService.redeemCoupon(CODE, USER_ID, ORDER_ID, 500L))
                 .isInstanceOf(InvalidCouponException.class)

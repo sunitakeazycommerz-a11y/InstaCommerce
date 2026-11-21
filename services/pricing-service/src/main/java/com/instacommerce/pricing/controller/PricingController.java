@@ -3,15 +3,19 @@ package com.instacommerce.pricing.controller;
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
 import com.instacommerce.pricing.dto.request.QuoteValidationRequest;
 import com.instacommerce.pricing.dto.request.RedeemCouponRequest;
+import com.instacommerce.pricing.dto.request.RedeemPromotionRequest;
 import com.instacommerce.pricing.dto.request.RollbackCouponUsageRequest;
+import com.instacommerce.pricing.dto.request.RollbackPromotionUsageRequest;
 import com.instacommerce.pricing.dto.request.TaxCalculationRequest;
 import com.instacommerce.pricing.dto.request.UnredeemCouponRequest;
+import com.instacommerce.pricing.dto.response.BatchPriceResponse;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
 import com.instacommerce.pricing.dto.response.QuoteValidationResponse;
 import com.instacommerce.pricing.dto.response.TaxCalculationResponse;
 import com.instacommerce.pricing.service.CouponService;
 import com.instacommerce.pricing.service.PricingService;
+import com.instacommerce.pricing.service.PromotionService;
 import com.instacommerce.pricing.service.QuoteTokenService;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
@@ -19,6 +23,7 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
@@ -37,13 +42,16 @@ public class PricingController {
     private final PricingService pricingService;
     private final CouponService couponService;
     private final QuoteTokenService quoteTokenService;
+    private final PromotionService promotionService;
 
     public PricingController(PricingService pricingService,
                              CouponService couponService,
-                             QuoteTokenService quoteTokenService) {
+                             QuoteTokenService quoteTokenService,
+                             PromotionService promotionService) {
         this.pricingService = pricingService;
         this.couponService = couponService;
         this.quoteTokenService = quoteTokenService;
+        this.promotionService = promotionService;
     }
 
     @PostMapping("/calculate")
@@ -71,7 +79,7 @@ public class PricingController {
 
     @PostMapping("/products/batch")
     @RateLimiter(name = "pricingLimiter")
-    public ResponseEntity<List<PricedItem>> getBatchProductPrices(
+    public ResponseEntity<BatchPriceResponse> getBatchProductPrices(
             @RequestBody @NotEmpty @Size(max = 200) List<UUID> productIds) {
         return ResponseEntity.ok(pricingService.calculateBatchPrices(productIds));
     }
@@ -97,6 +105,26 @@ public class PricingController {
     @RateLimiter(name = "pricingLimiter")
     public ResponseEntity<Void> rollbackUsage(@Valid @RequestBody RollbackCouponUsageRequest request) {
         couponService.rollbackUsage(request.code(), request.userId());
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/promotions/redeem")
+    @PreAuthorize("hasAnyRole('INTERNAL_SERVICE', 'ADMIN')")
+    @RateLimiter(name = "pricingLimiter")
+    public ResponseEntity<Void> redeemPromotion(@Valid @RequestBody RedeemPromotionRequest request) {
+        boolean recorded = promotionService.recordPromotionUsage(
+                request.promotionId(), request.userId(), request.orderId(), request.discountCents());
+        if (!recorded) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        }
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/promotions/rollback")
+    @PreAuthorize("hasAnyRole('INTERNAL_SERVICE', 'ADMIN')")
+    @RateLimiter(name = "pricingLimiter")
+    public ResponseEntity<Void> rollbackPromotion(@Valid @RequestBody RollbackPromotionUsageRequest request) {
+        promotionService.rollbackPromotionUsage(request.promotionId(), request.userId(), request.orderId());
         return ResponseEntity.ok().build();
     }
 
