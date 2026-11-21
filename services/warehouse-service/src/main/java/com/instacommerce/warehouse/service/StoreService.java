@@ -28,8 +28,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
@@ -46,40 +44,6 @@ public class StoreService {
     private final WarehouseProperties warehouseProperties;
     private final Clock clock;
     private final StoreBlackoutWindowRepository blackoutWindowRepository;
-
-    public StoreService(StoreRepository storeRepository,
-                        StoreHoursRepository storeHoursRepository,
-                        OutboxService outboxService,
-                        WarehouseProperties warehouseProperties) {
-        this(storeRepository, storeHoursRepository, outboxService, warehouseProperties, Clock.systemUTC(),
-                (StoreBlackoutWindowRepository) null);
-    }
-
-    public StoreService(StoreRepository storeRepository,
-                        StoreHoursRepository storeHoursRepository,
-                        OutboxService outboxService,
-                        WarehouseProperties warehouseProperties,
-                        Clock clock) {
-        this(storeRepository, storeHoursRepository, outboxService, warehouseProperties, clock,
-                (StoreBlackoutWindowRepository) null);
-    }
-
-    @Autowired
-    public StoreService(StoreRepository storeRepository,
-                        StoreHoursRepository storeHoursRepository,
-                        OutboxService outboxService,
-                        WarehouseProperties warehouseProperties,
-                        Clock clock,
-                        ObjectProvider<StoreBlackoutWindowRepository> blackoutWindowProvider) {
-        this(
-            storeRepository,
-            storeHoursRepository,
-            outboxService,
-            warehouseProperties,
-            clock,
-            blackoutWindowProvider != null ? blackoutWindowProvider.getIfAvailable() : null
-        );
-    }
 
     public StoreService(StoreRepository storeRepository,
                         StoreHoursRepository storeHoursRepository,

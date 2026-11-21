@@ -35,8 +35,11 @@ class ZoneCacheEvictionTest {
     @Import(CacheConfig.class)
     static class TestConfig {
         @Bean
-        ZoneService zoneService(StoreZoneRepository storeZoneRepository, StoreRepository storeRepository) {
-            return new ZoneService(storeZoneRepository, storeRepository);
+        ZoneService zoneService(StoreZoneRepository storeZoneRepository,
+                                StoreRepository storeRepository,
+                                StoreService storeService,
+                                CapacityService capacityService) {
+            return new ZoneService(storeZoneRepository, storeRepository, storeService, capacityService);
         }
     }
 
@@ -45,6 +48,12 @@ class ZoneCacheEvictionTest {
 
     @MockitoBean
     private StoreRepository storeRepository;
+
+    @MockitoBean
+    private StoreService storeService;
+
+    @MockitoBean
+    private CapacityService capacityService;
 
     @Autowired
     private ZoneService zoneService;

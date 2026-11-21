@@ -96,6 +96,8 @@ public class PickService {
         List<PickItem> optimized = aisleRoutingOptimizer.optimizePickPath(items);
         task.setColdChainRequired(optimized.stream().anyMatch(PickItem::isColdChain));
         task.setFragileRequired(optimized.stream().anyMatch(PickItem::isFragile));
+        int totalWeightGrams = calculateItemsWeightGrams(optimized, true);
+        task.setOrderWeightGrams(totalWeightGrams > 0 ? totalWeightGrams : null);
         task.setItems(optimized);
         try {
             pickTaskRepository.save(task);
@@ -243,6 +245,7 @@ public class PickService {
         }
         task.setCompletedAt(Instant.now());
         task.setStatus(PickTaskStatus.COMPLETED);
+        refreshTaskOrderWeight(task);
         PickTask saved = pickTaskRepository.save(task);
         if (saved.getStartedAt() != null && saved.getCompletedAt() != null) {
             pickDurationTimer.record(Duration.between(saved.getStartedAt(), saved.getCompletedAt()));
@@ -366,6 +369,7 @@ public class PickService {
             locked.setCompletedAt(Instant.now());
         }
         locked.setStatus(PickTaskStatus.COMPLETED);
+        refreshTaskOrderWeight(locked);
         PickTask saved = pickTaskRepository.save(locked);
         if (saved.getStartedAt() != null && saved.getCompletedAt() != null) {
             pickDurationTimer.record(Duration.between(saved.getStartedAt(), saved.getCompletedAt()));
@@ -376,6 +380,7 @@ public class PickService {
     private void completeTask(PickTask task) {
         task.setStatus(PickTaskStatus.COMPLETED);
         task.setCompletedAt(Instant.now());
+        refreshTaskOrderWeight(task);
         PickTask saved = pickTaskRepository.save(task);
         if (saved.getStartedAt() != null && saved.getCompletedAt() != null) {
             pickDurationTimer.record(Duration.between(saved.getStartedAt(), saved.getCompletedAt()));
@@ -391,6 +396,9 @@ public class PickService {
         payload.put("storeId", task.getStoreId());
         payload.put("packedAt", task.getCompletedAt());
         payload.put("note", note == null ? "" : note);
+        payload.put("orderWeightGrams", resolvePackedWeightGrams(task));
+        payload.put("coldChain", task.isColdChainRequired());
+        payload.put("fragile", task.isFragileRequired());
         payload.put("coldChainRequired", task.isColdChainRequired());
         payload.put("fragileRequired", task.isFragileRequired());
         StoreCoordinates coords = warehouseClient.getStoreCoordinates(task.getStoreId());
@@ -430,5 +438,54 @@ public class PickService {
         pickItem.setFragile(item.isFragileRequired());
         pickItem.setStorageTemperature(item.storageTemperature());
         return pickItem;
+    }
+
+    private void refreshTaskOrderWeight(PickTask task) {
+        int packedWeight = resolvePackedWeightGrams(task);
+        if (packedWeight > 0) {
+            task.setOrderWeightGrams(packedWeight);
+        }
+    }
+
+    private int resolvePackedWeightGrams(PickTask task) {
+        List<PickItem> items = task.getItems();
+        if ((items == null || items.isEmpty()) && task.getId() != null) {
+            items = pickItemRepository.findByPickTask_IdOrderByPickSequenceAsc(task.getId());
+        }
+        int computed = calculateItemsWeightGrams(items, false);
+        if (computed > 0) {
+            return computed;
+        }
+        return task.getOrderWeightGrams() != null && task.getOrderWeightGrams() > 0
+            ? task.getOrderWeightGrams()
+            : 0;
+    }
+
+    private int calculateItemsWeightGrams(List<PickItem> items, boolean useOrderedQuantity) {
+        if (items == null || items.isEmpty()) {
+            return 0;
+        }
+        int totalWeightGrams = 0;
+        for (PickItem item : items) {
+            Integer tareWeight = item.getTareWeightGrams();
+            if (tareWeight == null || tareWeight <= 0) {
+                continue;
+            }
+            int qty = useOrderedQuantity ? item.getQuantity() : effectivePackedQty(item);
+            if (qty > 0) {
+                totalWeightGrams += tareWeight * qty;
+            }
+        }
+        return totalWeightGrams;
+    }
+
+    private int effectivePackedQty(PickItem item) {
+        if (item.getStatus() == PickItemStatus.MISSING) {
+            return 0;
+        }
+        if (item.getStatus() == PickItemStatus.PICKED || item.getStatus() == PickItemStatus.SUBSTITUTED) {
+            return Math.max(0, item.getPickedQty());
+        }
+        return Math.max(0, item.getQuantity());
     }
 }

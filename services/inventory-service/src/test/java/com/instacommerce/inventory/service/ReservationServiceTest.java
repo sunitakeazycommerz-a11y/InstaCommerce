@@ -245,9 +245,8 @@ class ReservationServiceTest {
         verify(outboxService, never()).publish(any(), any(), any(), any());
     }
 
-    @SuppressWarnings("unchecked")
     private void stubLockStockItem(UUID productId, UUID storeId, StockItem stockItem) {
-        TypedQuery<StockItem> query = mock(TypedQuery.class);
+        TypedQuery<StockItem> query = mock();
         when(entityManager.createQuery(anyString(), eq(StockItem.class))).thenReturn(query);
         when(query.setParameter("pid", productId)).thenReturn(query);
         when(query.setParameter("sid", storeId)).thenReturn(query);

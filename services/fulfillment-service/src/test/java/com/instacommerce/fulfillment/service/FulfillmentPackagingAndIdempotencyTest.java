@@ -41,6 +41,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -78,6 +79,9 @@ class FulfillmentPackagingAndIdempotencyTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Captor
+    private ArgumentCaptor<Map<String, Object>> payloadCaptor;
+
     private PickService pickService;
     private DeliveryService deliveryService;
 
@@ -105,8 +109,7 @@ class FulfillmentPackagingAndIdempotencyTest {
     }
 
     @Test
-    @DisplayName("Cold-chain and fragile flags route fragile last and propagate to OrderPacked, Delivery, and OrderDispatched")
-    @SuppressWarnings("unchecked")
+    @DisplayName("Cold-chain and fragile flags route fragile last and propagate weight and flags to OrderPacked, Delivery, and OrderDispatched")
     void packagingFlagsPropagateAcrossPickPackAndDelivery() {
         UUID orderId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID();
@@ -138,6 +141,7 @@ class FulfillmentPackagingAndIdempotencyTest {
 
         assertThat(created.isColdChainRequired()).isTrue();
         assertThat(created.isFragileRequired()).isTrue();
+        assertThat(created.getOrderWeightGrams()).isEqualTo(800);
         assertThat(created.getItems().get(0).getProductName()).isEqualTo("Greek Yogurt");
         assertThat(created.getItems().get(1).getProductName()).isEqualTo("Glass Olive Oil");
         assertThat(created.getItems().get(1).getPickSequence()).isEqualTo(2);
@@ -152,9 +156,11 @@ class FulfillmentPackagingAndIdempotencyTest {
 
         pickService.markPacked(orderId, UUID.randomUUID(), "careful");
 
-        ArgumentCaptor<Map<String, Object>> packedPayload = ArgumentCaptor.forClass(Map.class);
-        verify(outboxService).publish(eq("Fulfillment"), eq(orderId.toString()), eq("OrderPacked"), packedPayload.capture());
-        assertThat(packedPayload.getValue())
+        verify(outboxService).publish(eq("Fulfillment"), eq(orderId.toString()), eq("OrderPacked"), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+            .containsEntry("orderWeightGrams", 800)
+            .containsEntry("coldChain", true)
+            .containsEntry("fragile", true)
             .containsEntry("coldChainRequired", true)
             .containsEntry("fragileRequired", true);
 
@@ -175,12 +181,13 @@ class FulfillmentPackagingAndIdempotencyTest {
         DeliveryResponse dispatched = deliveryService.assignRider(orderId, riderId, 12);
         assertThat(dispatched.coldChainRequired()).isTrue();
         assertThat(dispatched.fragileRequired()).isTrue();
+        assertThat(dispatched.orderWeightGrams()).isEqualTo(800);
 
-        ArgumentCaptor<Map<String, Object>> dispatchedPayload = ArgumentCaptor.forClass(Map.class);
-        verify(outboxService).publish(eq("Fulfillment"), eq(orderId.toString()), eq("OrderDispatched"), dispatchedPayload.capture());
-        assertThat(dispatchedPayload.getValue())
+        verify(outboxService).publish(eq("Fulfillment"), eq(orderId.toString()), eq("OrderDispatched"), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
             .containsEntry("coldChainRequired", true)
-            .containsEntry("fragileRequired", true);
+            .containsEntry("fragileRequired", true)
+            .containsEntry("orderWeightGrams", 800);
     }
 
     @Test

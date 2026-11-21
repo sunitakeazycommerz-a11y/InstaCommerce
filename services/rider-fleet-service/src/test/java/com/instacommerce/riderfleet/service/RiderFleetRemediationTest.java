@@ -21,6 +21,7 @@ import com.instacommerce.riderfleet.repository.RiderAssignmentRepository;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -62,12 +63,11 @@ class RiderFleetRemediationTest {
 
     @Test
     @DisplayName("updateLocation writes strictly to Redis and Kafka without PostgreSQL reads or writes")
-    @SuppressWarnings("unchecked")
     void updateLocationWritesRedisAndKafkaWithoutDatabaseAccess() {
         UUID riderId = UUID.randomUUID();
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
-        GeoOperations<String, String> geoOps = mock(GeoOperations.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+        GeoOperations<String, String> geoOps = mock();
+        HashOperations<String, Object, Object> hashOps = mock();
         when(redisTemplate.opsForGeo()).thenReturn(geoOps);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
 
@@ -110,7 +110,8 @@ class RiderFleetRemediationTest {
 
         RiderAssignmentService service = new RiderAssignmentService(
             riderRepository, availabilityRepository, assignmentRepository,
-            outboxService, new RiderFleetProperties(), dispatchOptimizerClient, riderEarningsService);
+            outboxService, new RiderFleetProperties(), dispatchOptimizerClient,
+            riderEarningsService, null, null, Clock.systemUTC());
         service.completeDelivery(orderId);
         // Redelivery of same Kafka completion event must be idempotent
         service.completeDelivery(orderId);
@@ -141,7 +142,6 @@ class RiderFleetRemediationTest {
 
     @Test
     @DisplayName("assignRider prefers fresh Redis coordinates over stale DB coordinates for optimizer")
-    @SuppressWarnings("unchecked")
     void optimizerPrefersRedisCoordinatesOverDbFallback() {
         UUID orderId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID();
@@ -163,7 +163,7 @@ class RiderFleetRemediationTest {
         rider.setVehicleType(VehicleType.MOTORCYCLE);
 
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+        HashOperations<String, Object, Object> hashOps = mock();
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
         when(hashOps.get("rider:location:" + riderId, "lat")).thenReturn("12.9812");
         when(hashOps.get("rider:location:" + riderId, "lng")).thenReturn("77.6123");
@@ -175,12 +175,13 @@ class RiderFleetRemediationTest {
             new DispatchOptimizerClient.OptimizationResult(
                 List.of(new DispatchOptimizerClient.Assignment(riderId.toString(), List.of(orderId.toString()), 6.0)),
                 List.of())));
-        when(availabilityRepository.findByRiderIdForUpdate(riderId)).thenReturn(Optional.of(availability));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(riderId)).thenReturn(Optional.of(availability));
         when(riderRepository.findById(riderId)).thenReturn(Optional.of(rider));
 
         RiderAssignmentService service = new RiderAssignmentService(
             riderRepository, availabilityRepository, assignmentRepository,
-            outboxService, props, dispatchOptimizerClient, riderEarningsService, redisTemplate);
+            outboxService, props, dispatchOptimizerClient, riderEarningsService,
+            redisTemplate, null, Clock.systemUTC());
         service.assignRider(orderId, storeId, new BigDecimal("12.97"), new BigDecimal("77.59"));
 
         verify(dispatchOptimizerClient).requestAssignment(optCaptor.capture());
@@ -220,12 +221,13 @@ class RiderFleetRemediationTest {
             new DispatchOptimizerClient.OptimizationResult(
                 List.of(new DispatchOptimizerClient.Assignment(riderId.toString(), List.of(orderId.toString()), 8.0)),
                 List.of())));
-        when(availabilityRepository.findByRiderIdForUpdate(riderId)).thenReturn(Optional.of(availability));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(riderId)).thenReturn(Optional.of(availability));
         when(riderRepository.findById(riderId)).thenReturn(Optional.of(rider));
 
         RiderAssignmentService service = new RiderAssignmentService(
             riderRepository, availabilityRepository, assignmentRepository,
-            outboxService, props, dispatchOptimizerClient, riderEarningsService);
+            outboxService, props, dispatchOptimizerClient, riderEarningsService,
+            null, null, Clock.systemUTC());
         service.assignRider(orderId, storeId, new BigDecimal("12.97"), new BigDecimal("77.59"));
 
         verify(dispatchOptimizerClient).requestAssignment(optCaptor.capture());

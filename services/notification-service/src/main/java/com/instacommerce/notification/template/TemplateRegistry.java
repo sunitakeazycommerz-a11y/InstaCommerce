@@ -44,4 +44,14 @@ public class TemplateRegistry {
     public Optional<TemplateDefinition> resolve(String eventType) {
         return Optional.ofNullable(definitions.get(eventType));
     }
+
+    public static boolean isPromotionalEvent(String eventType) {
+        if (eventType == null) {
+            return false;
+        }
+        return eventType.startsWith("Promotion")
+            || eventType.startsWith("Marketing")
+            || eventType.contains("Campaign")
+            || eventType.contains("Promo");
+    }
 }

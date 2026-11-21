@@ -14,8 +14,7 @@ class KafkaErrorConfigTest {
     @Test
     @DisplayName("kafkaErrorHandler configures DeadLetterPublishingRecoverer and non-retryable exceptions")
     void kafkaErrorHandlerConfiguresRecovererAndNotRetryableExceptions() {
-        @SuppressWarnings("unchecked")
-        KafkaTemplate<String, String> kafkaTemplate = mock(KafkaTemplate.class);
+        KafkaTemplate<String, String> kafkaTemplate = mock();
         KafkaErrorConfig config = new KafkaErrorConfig();
 
         CommonErrorHandler errorHandler = config.kafkaErrorHandler(kafkaTemplate);

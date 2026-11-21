@@ -13,17 +13,21 @@ import com.instacommerce.warehouse.domain.model.Store;
 import com.instacommerce.warehouse.domain.model.StoreCapacity;
 import com.instacommerce.warehouse.dto.response.CapacityResponse;
 import com.instacommerce.warehouse.exception.CapacityExceededException;
+import com.instacommerce.warehouse.repository.StoreBlackoutWindowRepository;
 import com.instacommerce.warehouse.repository.StoreCapacityRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -39,8 +43,22 @@ class CapacityServiceTest {
     @Mock
     private OutboxService outboxService;
 
-    @InjectMocks
+    @Mock
+    private StoreBlackoutWindowRepository blackoutWindowRepository;
+
     private CapacityService capacityService;
+
+    @BeforeEach
+    void setUp() {
+        capacityService = new CapacityService(
+            capacityRepository,
+            storeRepository,
+            outboxService,
+            new CapacityAlertPublisher(outboxService),
+            blackoutWindowRepository,
+            Clock.systemUTC()
+        );
+    }
 
     private Store buildStore(UUID id, int hourlyCap, int maxConcurrent, int currentPending) {
         Store store = new Store();
@@ -133,5 +151,36 @@ class CapacityServiceTest {
         store.setCurrentPendingOrders(0);
         capacityService.releaseOrderSlot(storeId);
         verify(storeRepository).save(store);
+    }
+
+    @Test
+    @DisplayName("getStoreCapacity and acquireOrderSlot convert Clock instant directly into store timezone when now is null")
+    void convertsClockInstantDirectlyToStoreTimezone() {
+        UUID storeId = UUID.randomUUID();
+        Clock utcClock = Clock.fixed(Instant.parse("2026-11-19T20:00:00Z"), ZoneOffset.UTC);
+        CapacityService zonedService = new CapacityService(
+            capacityRepository,
+            storeRepository,
+            outboxService,
+            new CapacityAlertPublisher(outboxService),
+            blackoutWindowRepository,
+            utcClock
+        );
+
+        Store istStore = buildStore(storeId, 100, 50, 0);
+        istStore.setTimezone("Asia/Kolkata");
+        when(storeRepository.findById(storeId)).thenReturn(Optional.of(istStore));
+        when(storeRepository.findByIdForUpdate(storeId)).thenReturn(Optional.of(istStore));
+        when(capacityRepository.findByStoreIdAndDateAndHour(storeId, LocalDate.of(2026, 11, 20), 1))
+            .thenReturn(Optional.empty());
+        when(capacityRepository.incrementOrderCount(storeId, LocalDate.of(2026, 11, 20), 1, 100))
+            .thenReturn(1);
+
+        CapacityResponse response = zonedService.getStoreCapacity(storeId, null);
+        assertThat(response.date()).isEqualTo(LocalDate.of(2026, 11, 20));
+        assertThat(response.hour()).isEqualTo(1);
+
+        assertThat(zonedService.acquireOrderSlot(storeId, null)).isTrue();
+        verify(capacityRepository).incrementOrderCount(storeId, LocalDate.of(2026, 11, 20), 1, 100);
     }
 }

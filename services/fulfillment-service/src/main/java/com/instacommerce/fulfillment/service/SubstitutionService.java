@@ -49,9 +49,7 @@ public class SubstitutionService {
         if (item.getQuantity() <= 0) {
             throw new IllegalStateException("Invalid item quantity for product " + item.getProductId());
         }
-        long refundAmount = (missingQty > 0 && task.getPaymentId() != null)
-            ? Math.round((double) item.getLineTotalCents() * missingQty / item.getQuantity())
-            : 0L;
+        long refundAmount = computeRefundAmountCents(item, missingQty);
         String referenceId = task.getOrderId() + ":" + item.getProductId();
 
         if (isSubstituted && substitutedQty > 0) {
@@ -149,13 +147,31 @@ public class SubstitutionService {
                 logger.error("Failed to adjust stock for reference {}: {}", event.referenceId(), ex.getMessage());
             }
         }
-        if (event.refundAmountCents() > 0 && event.paymentId() != null) {
-            try {
-                paymentClient.refund(event.paymentId(), event.refundAmountCents(),
-                    "Item missing", "missing-" + event.referenceId());
-            } catch (Exception ex) {
-                logger.error("Failed to refund for reference {}: {}", event.referenceId(), ex.getMessage());
+        if (event.refundAmountCents() > 0) {
+            if (event.paymentId() != null) {
+                try {
+                    paymentClient.refund(event.paymentId(), event.refundAmountCents(),
+                        "Item missing", "missing-" + event.referenceId());
+                } catch (Exception ex) {
+                    logger.error("Failed to refund for reference {}: {}", event.referenceId(), ex.getMessage());
+                }
+            } else {
+                logger.info("Skipping PSP refund for wallet/non-PSP order reference {} (refundCents={}); "
+                    + "OrderModified triggers downstream refund", event.referenceId(), event.refundAmountCents());
             }
         }
+    }
+
+    private long computeRefundAmountCents(PickItem item, int missingQty) {
+        if (missingQty <= 0) {
+            return 0L;
+        }
+        if (item.getLineTotalCents() > 0) {
+            return Math.round((double) item.getLineTotalCents() * missingQty / item.getQuantity());
+        }
+        if (item.getUnitPriceCents() > 0) {
+            return item.getUnitPriceCents() * missingQty;
+        }
+        return 0L;
     }
 }

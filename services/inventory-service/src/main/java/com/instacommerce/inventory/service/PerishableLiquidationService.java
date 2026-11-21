@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -128,36 +129,53 @@ public class PerishableLiquidationService {
     @Transactional
     public List<StockBatchResponse> writeOffExpiredBatches(UUID storeId) {
         Instant now = Instant.now();
-        List<StockBatch> expired = batchRepository.findExpiredBatchesForWriteOff(storeId, now);
+        List<UUID> productIds = batchRepository.findExpiredBatchesForWriteOff(storeId, now).stream()
+            .map(StockBatch::getProductId)
+            .distinct()
+            .sorted()
+            .toList();
         List<StockBatchResponse> writtenOff = new ArrayList<>();
-        for (StockBatch batch : expired) {
-            int expiredQty = batch.getQuantity();
-            if (expiredQty <= 0) {
+        for (UUID productId : productIds) {
+            Optional<StockItem> stockOpt = stockItemRepository.findByProductIdAndStoreIdForUpdate(productId, storeId);
+            if (stockOpt == null || stockOpt.isEmpty()) {
+                log.warn("Skipping expired batch write-off for missing stock item: store={} product={}", storeId, productId);
                 continue;
             }
-            batch.setQuantity(0);
-            StockBatch savedBatch = batchRepository.save(batch);
+            StockItem stock = stockOpt.get();
+            int remainingDeductible = Math.max(0, stock.getOnHand() - stock.getReserved());
+            if (remainingDeductible <= 0) {
+                continue;
+            }
 
-            stockItemRepository.findByStoreIdAndProductId(storeId, batch.getProductId())
-                .ifPresent(stock -> {
-                    int maxDeductible = Math.max(0, stock.getOnHand() - stock.getReserved());
-                    int writeOffQty = Math.min(expiredQty, maxDeductible);
-                    if (writeOffQty > 0) {
-                        stock.setOnHand(stock.getOnHand() - writeOffQty);
-                        stockItemRepository.save(stock);
-                    }
-                });
+            List<StockBatch> lockedBatches = batchRepository.findExpiredBatchesForProductUpdate(storeId, productId, now);
+            int totalWrittenOffForProduct = 0;
+            for (StockBatch batch : lockedBatches) {
+                int expiredQty = batch.getQuantity();
+                if (expiredQty <= 0 || remainingDeductible <= 0) {
+                    continue;
+                }
+                int writeOffQty = Math.min(expiredQty, remainingDeductible);
+                batch.setQuantity(expiredQty - writeOffQty);
+                StockBatch savedBatch = batchRepository.save(batch);
 
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("store_id", storeId.toString());
-            payload.put("product_id", batch.getProductId().toString());
-            payload.put("batch_number", batch.getBatchNumber());
-            payload.put("written_off_quantity", expiredQty);
-            payload.put("expiry_date", batch.getExpiryDate().toString());
-            payload.put("timestamp", now.toString());
-            outboxService.publish("STOCK_BATCH", savedBatch.getId().toString(), "ExpiredStockWrittenOff", payload);
+                remainingDeductible -= writeOffQty;
+                totalWrittenOffForProduct += writeOffQty;
 
-            writtenOff.add(toResponse(savedBatch));
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("store_id", storeId.toString());
+                payload.put("product_id", productId.toString());
+                payload.put("batch_number", savedBatch.getBatchNumber());
+                payload.put("written_off_quantity", writeOffQty);
+                payload.put("expiry_date", savedBatch.getExpiryDate().toString());
+                payload.put("timestamp", now.toString());
+                outboxService.publish("STOCK_BATCH", savedBatch.getId().toString(), "ExpiredStockWrittenOff", payload);
+
+                writtenOff.add(toResponse(savedBatch));
+            }
+            if (totalWrittenOffForProduct > 0) {
+                stock.setOnHand(stock.getOnHand() - totalWrittenOffForProduct);
+                stockItemRepository.save(stock);
+            }
         }
         return writtenOff;
     }

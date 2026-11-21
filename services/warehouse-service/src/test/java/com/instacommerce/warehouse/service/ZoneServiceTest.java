@@ -38,6 +38,12 @@ class ZoneServiceTest {
     @Mock
     private StoreRepository storeRepository;
 
+    @Mock
+    private StoreService storeService;
+
+    @Mock
+    private CapacityService capacityService;
+
     @InjectMocks
     private ZoneService zoneService;
 

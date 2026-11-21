@@ -71,7 +71,6 @@ class InventoryRemediationTest {
 
     @Test
     @DisplayName("confirm and cancel declare noRollbackFor ReservationExpiredException and persist EXPIRED")
-    @SuppressWarnings("unchecked")
     void expiredReservationMarksExpiredWithoutRollback() throws NoSuchMethodException {
         Transactional confirmTx = ReservationService.class.getMethod("confirm", UUID.class)
             .getAnnotation(Transactional.class);
@@ -101,7 +100,7 @@ class InventoryRemediationTest {
         stock.setOnHand(10);
         stock.setReserved(3);
 
-        TypedQuery<StockItem> query = mock(TypedQuery.class);
+        TypedQuery<StockItem> query = mock();
         when(reservationRepository.findByIdForUpdate(reservationId)).thenReturn(Optional.of(reservation));
         when(entityManager.createQuery(any(String.class), eq(StockItem.class))).thenReturn(query);
         when(query.setParameter("pid", productId)).thenReturn(query);

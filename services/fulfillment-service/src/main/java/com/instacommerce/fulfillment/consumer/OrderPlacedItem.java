@@ -1,6 +1,7 @@
 package com.instacommerce.fulfillment.consumer;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import java.util.Locale;
 import java.util.UUID;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -40,7 +41,7 @@ public record OrderPlacedItem(
         if (storageTemperature == null || storageTemperature.isBlank()) {
             return false;
         }
-        String normalized = storageTemperature.trim().toUpperCase();
+        String normalized = storageTemperature.trim().toUpperCase(Locale.ROOT);
         return normalized.contains("CHILL") || normalized.contains("FROZEN")
             || normalized.contains("COLD") || normalized.contains("REFRIGERATED");
     }

@@ -4,6 +4,7 @@ import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.domain.model.Delivery;
 import com.instacommerce.routing.domain.model.DeliveryStatus;
 import com.instacommerce.routing.dto.response.ETAEstimate;
+import com.instacommerce.routing.exception.InvalidDeliveryStateException;
 import com.instacommerce.routing.repository.DeliveryRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -27,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -98,7 +100,7 @@ class DeliveryServiceTest {
     }
 
     @Test
-    @DisplayName("SLA breach early warning issues automated $2 apology credit and ETA_BREACH_RISK outbox event (Issue #596)")
+    @DisplayName("SLA breach early warning issues configurable INR apology credit and ETABreachRisk outbox event")
     void shouldTriggerSlaBreachEarlyWarningAndApologyCredit() {
         UUID deliveryId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
@@ -115,32 +117,29 @@ class DeliveryServiceTest {
         when(deliveryRepository.findById(deliveryId)).thenReturn(Optional.of(delivery));
         when(deliveryRepository.save(any(Delivery.class))).thenAnswer(i -> i.getArgument(0));
 
-        // High breach probability (0.95) with ETA exceeding SLA
         ETAEstimate breachEstimate = new ETAEstimate(
             28, 24, 32, new BigDecimal("5.500"), 0.95, Instant.now()
         );
 
         deliveryService.updateETA(deliveryId, breachEstimate);
 
-        // Verify delivery marked as breach risk with $2 credit
         assertTrue(delivery.isBreachRisk());
         assertTrue(delivery.isCompensationTriggered());
-        assertEquals(200, delivery.getCompensationAmountCents());
+        assertEquals(5000, delivery.getCompensationAmountCents());
 
-        // Verify ETABreachRisk event published once (and not duplicated on subsequent pings)
         ArgumentCaptor<Map<String, Object>> breachCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(
             eq("Delivery"), eq(deliveryId.toString()), eq("ETABreachRisk"), breachCaptor.capture());
 
         Map<String, Object> payload = breachCaptor.getValue();
-        assertEquals(200, payload.get("autoCompensationCents"));
+        assertEquals(5000, payload.get("autoCompensationCents"));
+        assertEquals("INR", payload.get("currency"));
+        assertTrue(String.valueOf(payload.get("customerMessage")).contains("₹50"));
         assertTrue((Boolean) payload.get("priorityEscalation"));
         assertNotNull(payload.get("customerMessage"));
 
-        // Verify breach risk WebSocket broadcast
         verify(messagingTemplate).convertAndSend(eq("/topic/deliveries/" + deliveryId + "/breach-risk"), any(Object.class));
 
-        // Second recalculation with ongoing breach must NOT emit duplicate ETABreachRisk compensation event
         deliveryService.updateETA(deliveryId, breachEstimate);
         verify(outboxService).publish(
             eq("Delivery"), eq(deliveryId.toString()), eq("ETABreachRisk"), any());
@@ -220,5 +219,36 @@ class DeliveryServiceTest {
 
         assertEquals(0, deliveryService.countPrecedingStops(firstStop, 12.9000, 77.5000));
         assertEquals(1, deliveryService.countPrecedingStops(secondStop, 12.9000, 77.5000));
+    }
+
+    @Test
+    @DisplayName("advanceOrderDelivered routes PENDING delivery through validated transitions and emits status events")
+    void advanceOrderDeliveredEmitsStatusUpdatesAndValidatesTransitions() {
+        UUID deliveryId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        Delivery delivery = new Delivery();
+        delivery.setId(deliveryId);
+        delivery.setOrderId(orderId);
+        delivery.setStatus(DeliveryStatus.PENDING);
+
+        when(deliveryRepository.findByOrderId(orderId)).thenReturn(Optional.of(delivery));
+        when(deliveryRepository.save(any(Delivery.class))).thenAnswer(i -> i.getArgument(0));
+
+        deliveryService.advanceOrderDelivered(orderId);
+
+        assertEquals(DeliveryStatus.DELIVERED, delivery.getStatus());
+        verify(outboxService, times(3)).publish(
+            eq("Delivery"), eq(deliveryId.toString()), eq("DeliveryStatusUpdated"), any());
+        verify(outboxService).publish(
+            eq("Delivery"), eq(deliveryId.toString()), eq("DeliveryCompleted"), any());
+
+        Delivery failed = new Delivery();
+        failed.setId(UUID.randomUUID());
+        failed.setOrderId(UUID.randomUUID());
+        failed.setStatus(DeliveryStatus.FAILED);
+        when(deliveryRepository.findByOrderId(failed.getOrderId())).thenReturn(Optional.of(failed));
+
+        assertThrows(InvalidDeliveryStateException.class,
+            () -> deliveryService.advanceOrderDelivered(failed.getOrderId()));
     }
 }

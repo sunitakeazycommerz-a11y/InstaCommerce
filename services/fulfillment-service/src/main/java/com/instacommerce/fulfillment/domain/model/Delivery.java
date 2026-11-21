@@ -72,6 +72,9 @@ public class Delivery {
     @Column(name = "fragile_required", nullable = false)
     private boolean fragileRequired;
 
+    @Column(name = "order_weight_grams")
+    private Integer orderWeightGrams;
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) {
@@ -205,5 +208,13 @@ public class Delivery {
 
     public void setFragileRequired(boolean fragileRequired) {
         this.fragileRequired = fragileRequired;
+    }
+
+    public Integer getOrderWeightGrams() {
+        return orderWeightGrams;
+    }
+
+    public void setOrderWeightGrams(Integer orderWeightGrams) {
+        this.orderWeightGrams = orderWeightGrams;
     }
 }

@@ -9,6 +9,7 @@ import com.instacommerce.routing.repository.RoutingBarrierRepository;
 import com.instacommerce.routing.repository.TrafficCongestionFeedRepository;
 import com.instacommerce.routing.repository.WeatherConditionRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -57,7 +58,8 @@ class ETAServiceTest {
             routingProperties,
             barrierRepository,
             weatherRepository,
-            trafficFeedRepository
+            trafficFeedRepository,
+            Clock.systemUTC()
         );
     }
 

@@ -3,7 +3,9 @@ package com.instacommerce.notification.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -69,16 +71,15 @@ class DeviceTokenControllerSecurityTest {
     @MockitoBean
     private DeviceTokenService deviceTokenService;
 
-    @SuppressWarnings("unchecked")
     private void stubJwt(String token, String subject, String role) {
-        Jws<Claims> jws = Mockito.mock(Jws.class);
+        Jws<Claims> jws = mock();
         Claims claims = Mockito.mock(Claims.class);
         when(jws.getPayload()).thenReturn(claims);
         when(claims.getSubject()).thenReturn(subject);
         Collection<? extends GrantedAuthority> authorities =
             List.of(new SimpleGrantedAuthority("ROLE_" + role));
         when(jwtService.validateAccessToken(token)).thenReturn(jws);
-        when(jwtService.extractAuthorities(claims)).thenReturn((Collection) authorities);
+        doReturn(authorities).when(jwtService).extractAuthorities(claims);
     }
 
     @Test

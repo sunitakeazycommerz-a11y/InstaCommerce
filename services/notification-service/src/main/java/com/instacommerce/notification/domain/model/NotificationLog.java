@@ -69,6 +69,9 @@ public class NotificationLog {
     @Column(name = "body", columnDefinition = "TEXT")
     private String body;
 
+    @Column(name = "template_context", columnDefinition = "TEXT")
+    private String templateContext;
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) {
@@ -210,5 +213,13 @@ public class NotificationLog {
 
     public void setBody(String body) {
         this.body = body;
+    }
+
+    public String getTemplateContext() {
+        return templateContext;
+    }
+
+    public void setTemplateContext(String templateContext) {
+        this.templateContext = templateContext;
     }
 }

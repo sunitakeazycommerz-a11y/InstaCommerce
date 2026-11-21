@@ -70,7 +70,7 @@ class WarehouseRemediationTest {
         // 2026-11-16T01:00:00Z = 06:30 Asia/Kolkata (Monday = dayOfWeek 1)
         Clock fixedClock = Clock.fixed(Instant.parse("2026-11-16T01:00:00Z"), ZoneId.of("UTC"));
         StoreService storeService = new StoreService(
-            storeRepository, storeHoursRepository, outboxService, new WarehouseProperties(), fixedClock);
+            storeRepository, storeHoursRepository, outboxService, new WarehouseProperties(), fixedClock, null);
 
         StoreHours hours = new StoreHours();
         hours.setId(UUID.randomUUID());
@@ -108,7 +108,7 @@ class WarehouseRemediationTest {
             .thenReturn(0);
 
         CapacityService service = new CapacityService(
-            capacityRepository, storeRepository, outboxService, capacityAlertPublisher);
+            capacityRepository, storeRepository, outboxService, capacityAlertPublisher, null, Clock.systemUTC());
 
         assertThatThrownBy(() -> service.acquireOrderSlot(storeId, LocalDateTime.of(2026, 11, 16, 12, 0)))
             .isInstanceOf(CapacityExceededException.class);

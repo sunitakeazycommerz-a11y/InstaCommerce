@@ -83,6 +83,9 @@ public class PickTask {
     @Column(name = "fragile_required", nullable = false)
     private boolean fragileRequired;
 
+    @Column(name = "order_weight_grams")
+    private Integer orderWeightGrams;
+
     @OneToMany(mappedBy = "pickTask", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PickItem> items = new ArrayList<>();
 
@@ -251,5 +254,13 @@ public class PickTask {
 
     public void setFragileRequired(boolean fragileRequired) {
         this.fragileRequired = fragileRequired;
+    }
+
+    public Integer getOrderWeightGrams() {
+        return orderWeightGrams;
+    }
+
+    public void setOrderWeightGrams(Integer orderWeightGrams) {
+        this.orderWeightGrams = orderWeightGrams;
     }
 }

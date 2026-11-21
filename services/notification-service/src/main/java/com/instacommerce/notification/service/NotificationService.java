@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -26,8 +27,6 @@ import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -58,79 +57,6 @@ public class NotificationService {
     private final NotificationProperties notificationProperties;
     private final DeviceTokenRepository deviceTokenRepository;
     private final ChannelFallbackService channelFallbackService;
-
-    public NotificationService(TemplateRegistry templateRegistry,
-                               TemplateService templateService,
-                               DeduplicationService deduplicationService,
-                               NotificationLogRepository logRepository,
-                               RetryableNotificationSender sender,
-                               NotificationDlqPublisher dlqPublisher,
-                               UserPreferenceService userPreferenceService,
-                               UserDirectoryClient userDirectoryClient,
-                               OrderLookupClient orderLookupClient,
-                               NotificationMetrics metrics,
-                               NotificationProperties notificationProperties,
-                               DeviceTokenRepository deviceTokenRepository) {
-        this(
-            templateRegistry,
-            templateService,
-            deduplicationService,
-            logRepository,
-            sender,
-            dlqPublisher,
-            userPreferenceService,
-            userDirectoryClient,
-            orderLookupClient,
-            metrics,
-            notificationProperties,
-            deviceTokenRepository,
-            new ChannelFallbackService(
-                deduplicationService,
-                templateRegistry,
-                templateService,
-                userPreferenceService,
-                userDirectoryClient,
-                sender
-            )
-        );
-    }
-
-    @Autowired
-    public NotificationService(TemplateRegistry templateRegistry,
-                               TemplateService templateService,
-                               DeduplicationService deduplicationService,
-                               NotificationLogRepository logRepository,
-                               RetryableNotificationSender sender,
-                               NotificationDlqPublisher dlqPublisher,
-                               UserPreferenceService userPreferenceService,
-                               UserDirectoryClient userDirectoryClient,
-                               OrderLookupClient orderLookupClient,
-                               NotificationMetrics metrics,
-                               NotificationProperties notificationProperties,
-                               DeviceTokenRepository deviceTokenRepository,
-                               ObjectProvider<ChannelFallbackService> fallbackServiceProvider) {
-        this(
-            templateRegistry,
-            templateService,
-            deduplicationService,
-            logRepository,
-            sender,
-            dlqPublisher,
-            userPreferenceService,
-            userDirectoryClient,
-            orderLookupClient,
-            metrics,
-            notificationProperties,
-            deviceTokenRepository,
-            fallbackServiceProvider != null
-                ? fallbackServiceProvider.getIfAvailable(() -> new ChannelFallbackService(
-                    deduplicationService, templateRegistry, templateService,
-                    userPreferenceService, userDirectoryClient, sender))
-                : new ChannelFallbackService(
-                    deduplicationService, templateRegistry, templateService,
-                    userPreferenceService, userDirectoryClient, sender)
-        );
-    }
 
     public NotificationService(TemplateRegistry templateRegistry,
                                TemplateService templateService,
@@ -186,7 +112,7 @@ public class NotificationService {
         Map<String, Object> variables = buildVariables(envelope.eventType(), payload, userId,
             orderSnapshot.orElse(null), cachedUserContact.orElse(null));
         UserPreferenceService.Preferences preferences = userPreferenceService.getPreferences(userId);
-        boolean promotional = isPromotionalEvent(envelope.eventType());
+        boolean promotional = TemplateRegistry.isPromotionalEvent(envelope.eventType());
         for (NotificationChannel channel : template.channels()) {
             if (!userPreferenceService.allowNotification(preferences, channel, promotional)) {
                 persistSkipped(eventId, envelope.eventType(), userId, channel, template.templateId(),
@@ -237,16 +163,6 @@ public class NotificationService {
             String subject = channel == NotificationChannel.EMAIL ? template.subject() : null;
             sender.send(request, log, subject, body);
         }
-    }
-
-    private boolean isPromotionalEvent(String eventType) {
-        if (eventType == null) {
-            return false;
-        }
-        return eventType.startsWith("Promotion")
-            || eventType.startsWith("Marketing")
-            || eventType.contains("Campaign")
-            || eventType.contains("Promo");
     }
 
     private void persistSkipped(String eventId, String eventType, UUID userId, NotificationChannel channel,
@@ -433,7 +349,7 @@ public class NotificationService {
     }
 
     private String formatCurrency(long amountCents, String currency) {
-        String normalized = currency == null || currency.isBlank() ? "INR" : currency.trim().toUpperCase();
+        String normalized = currency == null || currency.isBlank() ? "INR" : currency.trim().toUpperCase(Locale.ROOT);
         long whole = amountCents / 100;
         long cents = Math.abs(amountCents % 100);
         return normalized + " " + whole + "." + String.format("%02d", cents);

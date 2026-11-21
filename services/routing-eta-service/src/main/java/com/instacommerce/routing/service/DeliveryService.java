@@ -1,25 +1,23 @@
 package com.instacommerce.routing.service;
 
+import com.instacommerce.platform.geo.GeoUtils;
+import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.domain.model.Delivery;
 import com.instacommerce.routing.domain.model.DeliveryStatus;
 import com.instacommerce.routing.dto.response.DeliveryResponse;
 import com.instacommerce.routing.dto.response.ETAEstimate;
-import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.exception.DeliveryNotFoundException;
 import com.instacommerce.routing.exception.InvalidDeliveryStateException;
 import com.instacommerce.routing.repository.DeliveryRepository;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,26 +35,6 @@ public class DeliveryService {
     private final OutboxService outboxService;
     private final RoutingProperties routingProperties;
     private final SimpMessagingTemplate messagingTemplate;
-
-    public DeliveryService(DeliveryRepository deliveryRepository,
-                           ETAService etaService,
-                           OutboxService outboxService,
-                           RoutingProperties routingProperties) {
-        this(deliveryRepository, etaService, outboxService, routingProperties, (SimpMessagingTemplate) null);
-    }
-
-    @Autowired
-    public DeliveryService(DeliveryRepository deliveryRepository,
-                           ETAService etaService,
-                           OutboxService outboxService,
-                           RoutingProperties routingProperties,
-                           ObjectProvider<SimpMessagingTemplate> messagingTemplateProvider) {
-        this.deliveryRepository = deliveryRepository;
-        this.etaService = etaService;
-        this.outboxService = outboxService;
-        this.routingProperties = routingProperties;
-        this.messagingTemplate = messagingTemplateProvider != null ? messagingTemplateProvider.getIfAvailable() : null;
-    }
 
     public DeliveryService(DeliveryRepository deliveryRepository,
                            ETAService etaService,
@@ -131,35 +109,17 @@ public class DeliveryService {
     public DeliveryResponse updateStatus(UUID deliveryId, DeliveryStatus newStatus) {
         Delivery delivery = deliveryRepository.findById(deliveryId)
             .orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
-
-        validateTransition(delivery.getStatus(), newStatus);
-        delivery.setStatus(newStatus);
-
-        if ((newStatus == DeliveryStatus.RIDER_ASSIGNED || newStatus == DeliveryStatus.ASSIGNED) && delivery.getStartedAt() == null) {
-            delivery.setStartedAt(Instant.now());
-        }
-
-        delivery = deliveryRepository.save(delivery);
-        log.info("Delivery {} status updated to {}", deliveryId, newStatus);
-
-        Map<String, Object> statusPayload = new HashMap<>();
-        statusPayload.put("deliveryId", delivery.getId().toString());
-        statusPayload.put("orderId", delivery.getOrderId().toString());
-        statusPayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
-        statusPayload.put("status", delivery.getStatus().name());
-        statusPayload.put("updatedAt", delivery.getUpdatedAt() != null
-            ? delivery.getUpdatedAt().toString() : Instant.now().toString());
-        outboxService.publish("Delivery", deliveryId.toString(),
-            "DeliveryStatusUpdated", statusPayload);
-
-        return toResponse(delivery);
+        return toResponse(applyTransition(delivery, newStatus));
     }
 
     @Transactional
     public DeliveryResponse completeDelivery(UUID deliveryId) {
         Delivery delivery = deliveryRepository.findById(deliveryId)
             .orElseThrow(() -> new DeliveryNotFoundException(deliveryId));
+        return completeDeliveryInternal(delivery);
+    }
 
+    private DeliveryResponse completeDeliveryInternal(Delivery delivery) {
         validateTransition(delivery.getStatus(), DeliveryStatus.DELIVERED);
         delivery.setStatus(DeliveryStatus.DELIVERED);
         delivery.setDeliveredAt(Instant.now());
@@ -170,11 +130,8 @@ public class DeliveryService {
         }
 
         delivery = deliveryRepository.save(delivery);
-        log.info("Delivery {} completed for order {}", deliveryId, delivery.getOrderId());
-
-        outboxService.publish("Delivery", deliveryId.toString(),
-            "DeliveryCompleted", toResponse(delivery));
-
+        log.info("Delivery {} completed for order {}", delivery.getId(), delivery.getOrderId());
+        outboxService.publish("Delivery", delivery.getId().toString(), "DeliveryCompleted", toResponse(delivery));
         return toResponse(delivery);
     }
 
@@ -195,24 +152,7 @@ public class DeliveryService {
             delivery.setWeatherDelayActive(true);
         }
 
-        // 1. Continuous ETA update broadcast and event (Issue #595)
-        Map<String, Object> updatePayload = new HashMap<>();
-        updatePayload.put("deliveryId", deliveryId.toString());
-        updatePayload.put("orderId", delivery.getOrderId().toString());
-        updatePayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
-        updatePayload.put("estimatedMinutes", estimate.etaMinutes());
-        updatePayload.put("etaLowMinutes", estimate.etaLowMinutes());
-        updatePayload.put("etaHighMinutes", estimate.etaHighMinutes());
-        updatePayload.put("distanceKm", estimate.distanceKm());
-        updatePayload.put("detourDetected", estimate.detourDetected());
-        updatePayload.put("monsoonDelayActive", estimate.monsoonDelayActive());
-        updatePayload.put("delayBanner", estimate.delayBanner());
-        updatePayload.put("vehicleRecommendation", estimate.vehicleRecommendation());
-        updatePayload.put("batchStops", estimate.batchStops());
-        updatePayload.put("dwellMinutes", estimate.dwellMinutes());
-        updatePayload.put("breachProbability", estimate.breachProbability());
-        updatePayload.put("calculatedAt", estimate.calculatedAt().toString());
-
+        Map<String, Object> updatePayload = DeliveryPayloadSupport.etaUpdatePayload(delivery, estimate);
         outboxService.publish("Delivery", deliveryId.toString(), "EtaUpdated", updatePayload);
 
         if (messagingTemplate != null) {
@@ -220,42 +160,35 @@ public class DeliveryService {
             messagingTemplate.convertAndSend("/topic/orders/" + delivery.getOrderId() + "/eta", (Object) updatePayload);
         }
 
-        // 2. Early-warning SLA breach risk and automated compensation (Issue #596)
         double threshold = routingProperties.getBreach().getBreachAlertThreshold();
         if (estimate.breachProbability() > threshold || estimate.etaMinutes() > routingProperties.getBreach().getSlaThresholdMinutes()) {
-            boolean firstBreach = !delivery.isCompensationTriggered();
-            delivery.setBreachRisk(true);
-            if (firstBreach) {
-                delivery.setCompensationTriggered(true);
-                delivery.setCompensationAmountCents(200); // Automated $2 apology wallet credit per Issue #596
-
-                log.warn("ETA breach risk for delivery {}: probability={}, eta={}min, sla={}min",
-                    deliveryId, estimate.breachProbability(), estimate.etaMinutes(),
-                    routingProperties.getBreach().getSlaThresholdMinutes());
-
-                Map<String, Object> breachPayload = new HashMap<>();
-                breachPayload.put("deliveryId", deliveryId.toString());
-                breachPayload.put("orderId", delivery.getOrderId().toString());
-                breachPayload.put("riderId", delivery.getRiderId() != null ? delivery.getRiderId().toString() : "");
-                breachPayload.put("currentEtaMinutes", estimate.etaMinutes());
-                breachPayload.put("etaLowMinutes", estimate.etaLowMinutes());
-                breachPayload.put("etaHighMinutes", estimate.etaHighMinutes());
-                breachPayload.put("slaMinutes", routingProperties.getBreach().getSlaThresholdMinutes());
-                breachPayload.put("breachProbability", estimate.breachProbability());
-                breachPayload.put("timestamp", Instant.now().toString());
-                breachPayload.put("autoCompensationCents", 200);
-                breachPayload.put("customerMessage", "We're running slightly late! Here is a $2 apology wallet credit on us.");
-                breachPayload.put("priorityEscalation", true);
-
-                outboxService.publish("Delivery", deliveryId.toString(), "ETABreachRisk", breachPayload);
-
-                if (messagingTemplate != null) {
-                    messagingTemplate.convertAndSend("/topic/deliveries/" + deliveryId + "/breach-risk", (Object) breachPayload);
-                }
-            }
+            recordBreachRiskIfFirst(delivery, estimate);
         }
 
-        delivery = deliveryRepository.save(delivery);
+        deliveryRepository.save(delivery);
+    }
+
+    private void recordBreachRiskIfFirst(Delivery delivery, ETAEstimate estimate) {
+        delivery.setBreachRisk(true);
+        if (delivery.isCompensationTriggered()) {
+            return;
+        }
+        int creditCents = Math.max(0, routingProperties.getBreach().getApologyCreditCents());
+        String currency = DeliveryPayloadSupport.resolveApologyCurrency(routingProperties);
+        delivery.setCompensationTriggered(true);
+        delivery.setCompensationAmountCents(creditCents);
+
+        log.warn("ETA breach risk for delivery {}: probability={}, eta={}min, sla={}min",
+            delivery.getId(), estimate.breachProbability(), estimate.etaMinutes(),
+            routingProperties.getBreach().getSlaThresholdMinutes());
+
+        Map<String, Object> breachPayload = DeliveryPayloadSupport.breachRiskPayload(
+            delivery, estimate, routingProperties, creditCents, currency);
+        outboxService.publish("Delivery", delivery.getId().toString(), "ETABreachRisk", breachPayload);
+
+        if (messagingTemplate != null) {
+            messagingTemplate.convertAndSend("/topic/deliveries/" + delivery.getId() + "/breach-risk", (Object) breachPayload);
+        }
     }
 
     @Transactional
@@ -269,17 +202,19 @@ public class DeliveryService {
         if (delivery.getRiderId() == null && riderId != null) {
             delivery.setRiderId(riderId);
         }
+        if (delivery.getStatus() == DeliveryStatus.EN_ROUTE
+            || delivery.getStatus() == DeliveryStatus.IN_TRANSIT
+            || delivery.getStatus() == DeliveryStatus.NEAR_DESTINATION
+            || delivery.getStatus() == DeliveryStatus.DELIVERED) {
+            return;
+        }
         if (delivery.getStatus() == DeliveryStatus.PENDING) {
-            delivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
-            if (delivery.getStartedAt() == null) {
-                delivery.setStartedAt(Instant.now());
-            }
-            deliveryRepository.save(delivery);
+            delivery = applyTransition(delivery, DeliveryStatus.RIDER_ASSIGNED);
         }
         if (delivery.getStatus() == DeliveryStatus.RIDER_ASSIGNED || delivery.getStatus() == DeliveryStatus.ASSIGNED) {
-            updateStatus(delivery.getId(), DeliveryStatus.PICKED_UP);
-            updateStatus(delivery.getId(), DeliveryStatus.EN_ROUTE);
+            delivery = applyTransition(delivery, DeliveryStatus.PICKED_UP);
         }
+        applyTransition(delivery, DeliveryStatus.EN_ROUTE);
     }
 
     @Transactional
@@ -290,20 +225,19 @@ public class DeliveryService {
             return;
         }
         Delivery delivery = deliveryOpt.get();
-        if (delivery.getStatus().isTerminal()) {
+        if (delivery.getStatus() == DeliveryStatus.DELIVERED) {
             return;
         }
         if (delivery.getStatus() == DeliveryStatus.PENDING) {
-            delivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+            delivery = applyTransition(delivery, DeliveryStatus.RIDER_ASSIGNED);
         }
         if (delivery.getStatus() == DeliveryStatus.RIDER_ASSIGNED || delivery.getStatus() == DeliveryStatus.ASSIGNED) {
-            delivery.setStatus(DeliveryStatus.PICKED_UP);
+            delivery = applyTransition(delivery, DeliveryStatus.PICKED_UP);
         }
         if (delivery.getStatus() == DeliveryStatus.PICKED_UP) {
-            delivery.setStatus(DeliveryStatus.EN_ROUTE);
+            delivery = applyTransition(delivery, DeliveryStatus.EN_ROUTE);
         }
-        deliveryRepository.save(delivery);
-        completeDelivery(delivery.getId());
+        completeDeliveryInternal(delivery);
     }
 
     @Transactional(readOnly = true)
@@ -346,7 +280,7 @@ public class DeliveryService {
             return 0;
         }
         double targetDistanceKm = (targetDropoffLat != null && targetDropoffLng != null)
-            ? haversineKm(fromLat, fromLng, targetDropoffLat.doubleValue(), targetDropoffLng.doubleValue())
+            ? GeoUtils.haversineKm(fromLat, fromLng, targetDropoffLat.doubleValue(), targetDropoffLng.doubleValue())
             : Double.MAX_VALUE;
         int preceding = 0;
         for (Delivery other : active) {
@@ -354,7 +288,7 @@ public class DeliveryService {
                 continue;
             }
             if (other.getDropoffLat() != null && other.getDropoffLng() != null) {
-                double otherDistanceKm = haversineKm(
+                double otherDistanceKm = GeoUtils.haversineKm(
                     fromLat, fromLng, other.getDropoffLat().doubleValue(), other.getDropoffLng().doubleValue());
                 if (otherDistanceKm < targetDistanceKm - 1e-6) {
                     preceding++;
@@ -370,13 +304,18 @@ public class DeliveryService {
         return preceding;
     }
 
-    private static double haversineKm(double lat1, double lon1, double lat2, double lon2) {
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLon = Math.toRadians(lon2 - lon1);
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
-            + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
-            * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        return 6371.0 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    private Delivery applyTransition(Delivery delivery, DeliveryStatus targetStatus) {
+        validateTransition(delivery.getStatus(), targetStatus);
+        delivery.setStatus(targetStatus);
+        if ((targetStatus == DeliveryStatus.RIDER_ASSIGNED || targetStatus == DeliveryStatus.ASSIGNED)
+            && delivery.getStartedAt() == null) {
+            delivery.setStartedAt(Instant.now());
+        }
+        Delivery saved = deliveryRepository.save(delivery);
+        log.info("Delivery {} status updated to {}", saved.getId(), targetStatus);
+        outboxService.publish("Delivery", saved.getId().toString(),
+            "DeliveryStatusUpdated", DeliveryPayloadSupport.statusPayload(saved));
+        return saved;
     }
 
     private void validateTransition(DeliveryStatus current, DeliveryStatus target) {
@@ -394,13 +333,6 @@ public class DeliveryService {
     }
 
     private DeliveryResponse toResponse(Delivery d) {
-        return new DeliveryResponse(
-            d.getId(), d.getOrderId(), d.getRiderId(), d.getStoreId(),
-            d.getPickupLat(), d.getPickupLng(), d.getDropoffLat(), d.getDropoffLng(),
-            d.getStatus(), d.getEstimatedMinutes(), d.getActualMinutes(),
-            d.getDistanceKm(), d.getStartedAt(), d.getDeliveredAt(),
-            d.getCreatedAt(), d.getUpdatedAt(),
-            d.isBreachRisk(), d.isCompensationTriggered(), d.getCompensationAmountCents(),
-            d.getVehicleType(), d.isWeatherDelayActive());
+        return DeliveryPayloadSupport.toResponse(d);
     }
 }

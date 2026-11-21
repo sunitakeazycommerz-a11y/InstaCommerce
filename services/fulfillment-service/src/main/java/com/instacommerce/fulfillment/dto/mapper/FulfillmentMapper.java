@@ -24,7 +24,8 @@ public final class FulfillmentMapper {
             task.getCompletedAt(),
             task.getCreatedAt(),
             task.isColdChainRequired(),
-            task.isFragileRequired()
+            task.isFragileRequired(),
+            task.getOrderWeightGrams()
         );
     }
 
@@ -67,7 +68,8 @@ public final class FulfillmentMapper {
             delivery.getDispatchOtp(),
             delivery.getPodPhotoUrl(),
             delivery.isColdChainRequired(),
-            delivery.isFragileRequired()
+            delivery.isFragileRequired(),
+            delivery.getOrderWeightGrams()
         );
     }
 

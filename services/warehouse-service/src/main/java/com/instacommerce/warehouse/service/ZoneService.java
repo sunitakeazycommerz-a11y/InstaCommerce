@@ -15,15 +15,13 @@ import com.instacommerce.warehouse.repository.StoreRepository;
 import com.instacommerce.warehouse.repository.StoreZoneRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
@@ -42,31 +40,14 @@ public class ZoneService {
     private final StoreService storeService;
     private final CapacityService capacityService;
 
-    public ZoneService(StoreZoneRepository storeZoneRepository, StoreRepository storeRepository) {
-        this(storeZoneRepository, storeRepository, (StoreService) null, null);
-    }
-
-    @Autowired
-    public ZoneService(StoreZoneRepository storeZoneRepository,
-                       StoreRepository storeRepository,
-                       ObjectProvider<StoreService> storeServiceProvider,
-                       ObjectProvider<CapacityService> capacityServiceProvider) {
-        this(
-            storeZoneRepository,
-            storeRepository,
-            storeServiceProvider != null ? storeServiceProvider.getIfAvailable() : null,
-            capacityServiceProvider != null ? capacityServiceProvider.getIfAvailable() : null
-        );
-    }
-
     public ZoneService(StoreZoneRepository storeZoneRepository,
                        StoreRepository storeRepository,
                        StoreService storeService,
                        CapacityService capacityService) {
-        this.storeZoneRepository = storeZoneRepository;
-        this.storeRepository = storeRepository;
-        this.storeService = storeService;
-        this.capacityService = capacityService;
+        this.storeZoneRepository = Objects.requireNonNull(storeZoneRepository, "storeZoneRepository must not be null");
+        this.storeRepository = Objects.requireNonNull(storeRepository, "storeRepository must not be null");
+        this.storeService = Objects.requireNonNull(storeService, "storeService must not be null");
+        this.capacityService = Objects.requireNonNull(capacityService, "capacityService must not be null");
     }
 
     @Transactional(readOnly = true)
@@ -124,13 +105,9 @@ public class ZoneService {
             return new ZoneResolutionResponse(store.getId(), store.getName(), pincode, source,
                     false, false, "PAUSED", 0);
         }
-        boolean open = storeService == null || storeService.isStoreOpen(store.getId(), (Instant) null);
-        CapacityResponse capacity = capacityService != null
-                ? capacityService.getStoreCapacity(store.getId(), LocalDateTime.now())
-                : null;
-        boolean canAccept = open && (capacity == null || capacity.canAcceptOrders());
-        String throttleStatus = capacity != null ? capacity.throttleStatus() : (open ? "NORMAL" : "PAUSED");
-        int etaExt = capacity != null ? capacity.etaExtensionMinutes() : 0;
+        boolean open = storeService.isStoreOpen(store.getId(), (Instant) null);
+        CapacityResponse capacity = capacityService.getStoreCapacity(store.getId(), null);
+        boolean canAccept = open && capacity.canAcceptOrders();
         return new ZoneResolutionResponse(
                 store.getId(),
                 store.getName(),
@@ -138,8 +115,8 @@ public class ZoneService {
                 source,
                 open,
                 canAccept,
-                throttleStatus,
-                etaExt);
+                capacity.throttleStatus(),
+                capacity.etaExtensionMinutes());
     }
 
     private int throttlePriority(ZoneResolutionResponse r) {

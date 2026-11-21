@@ -77,6 +77,9 @@ class NotificationServiceTest {
     @Mock
     private DeviceTokenRepository deviceTokenRepository;
 
+    @Mock
+    private ChannelFallbackService channelFallbackService;
+
     private NotificationService notificationService;
 
     @BeforeEach
@@ -94,7 +97,8 @@ class NotificationServiceTest {
             orderLookupClient,
             metrics,
             properties,
-            deviceTokenRepository
+            deviceTokenRepository,
+            channelFallbackService
         );
     }
 

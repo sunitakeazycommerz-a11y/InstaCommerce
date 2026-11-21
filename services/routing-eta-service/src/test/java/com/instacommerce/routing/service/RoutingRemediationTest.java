@@ -32,6 +32,7 @@ import com.instacommerce.routing.security.JwtService;
 import com.instacommerce.routing.security.RestAccessDeniedHandler;
 import com.instacommerce.routing.security.RestAuthenticationEntryPoint;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -146,7 +147,7 @@ class RoutingRemediationTest {
         when(wr.findByStoreId(storeId)).thenReturn(Optional.of(monsoon));
         when(tr.findByZoneId(any())).thenReturn(Optional.empty());
 
-        ETAService realEta = new ETAService(new RoutingProperties(), br, wr, tr);
+        ETAService realEta = new ETAService(new RoutingProperties(), br, wr, tr, Clock.systemUTC());
         var withWeather = realEta.calculateETA(12.90, 77.50, 12.92, 77.52, storeId, "MOTORCYCLE", 0.0);
         var withoutWeather = realEta.calculateETA(12.90, 77.50, 12.92, 77.52);
         assertThat(withWeather.estimatedMinutes()).isGreaterThan(withoutWeather.estimatedMinutes());
@@ -158,10 +159,9 @@ class RoutingRemediationTest {
         persisted.setRiderId(delivery.riderId());
         persisted.setStatus(DeliveryStatus.RIDER_ASSIGNED);
         when(repo.findByOrderId(delivery.orderId())).thenReturn(Optional.of(persisted));
-        when(repo.findById(deliveryId)).thenReturn(Optional.of(persisted));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         OutboxService outbox = Mockito.mock(OutboxService.class);
-        DeliveryService ds = new DeliveryService(repo, realEta, outbox, new RoutingProperties());
+        DeliveryService ds = new DeliveryService(repo, realEta, outbox, new RoutingProperties(), null);
         ds.advanceOrderDispatched(delivery.orderId(), delivery.riderId());
         verify(outbox, Mockito.times(2)).publish(eq("Delivery"), eq(deliveryId.toString()),
             eq("DeliveryStatusUpdated"), any());

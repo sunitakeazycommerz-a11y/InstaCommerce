@@ -191,6 +191,49 @@ class FulfillmentRemediationTest {
     }
 
     @Test
+    @DisplayName("SubstitutionService records non-zero refundCents on OrderModified for 100%-wallet short-picks with null paymentId")
+    void walletOnlyOrderShortPickRecordsRefundAmountInsteadOfZero() {
+        UUID orderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+
+        PickTask task = new PickTask();
+        task.setId(UUID.randomUUID());
+        task.setOrderId(orderId);
+        task.setStoreId(storeId);
+        task.setPaymentId(null);
+
+        PickItem item = new PickItem();
+        item.setProductId(productId);
+        item.setQuantity(3);
+        item.setPickedQty(1);
+        item.setUnitPriceCents(450L);
+        item.setLineTotalCents(0L);
+        item.setStatus(PickItemStatus.PICKED);
+
+        SubstitutionService service = new SubstitutionService(
+            inventoryClient, paymentClient, outboxService, eventPublisher);
+        service.handleMissingItem(task, item, 2);
+
+        verify(outboxService).publish(
+            eq("Fulfillment"), eq(orderId.toString()), eq("OrderModified"), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+            .containsEntry("missingQty", 2)
+            .containsEntry("refundCents", 900L);
+
+        ArgumentCaptor<MissingItemEvent> eventCaptor = ArgumentCaptor.forClass(MissingItemEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().refundAmountCents()).isEqualTo(900L);
+
+        MissingItemEventListener listener = new MissingItemEventListener(service);
+        listener.handleMissingItem(eventCaptor.getValue());
+
+        verify(inventoryClient).reserveOrDeductStock(
+            eq(productId), eq(storeId), eq(2), eq("FULFILLMENT_MISSING"), any());
+        verifyNoInteractions(paymentClient);
+    }
+
+    @Test
     @DisplayName("PickService includes SUBSTITUTED shortfall in missingQty refund calculation")
     void pickServiceCalculatesSubstitutedShortfall() {
         UUID orderId = UUID.randomUUID();

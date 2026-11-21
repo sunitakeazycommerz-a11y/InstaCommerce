@@ -57,8 +57,6 @@ public interface StockBatchRepository extends JpaRepository<StockBatch, UUID> {
         @Param("productId") UUID productId,
         @Param("now") Instant now);
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "2000")})
     @Query("""
         SELECT b FROM StockBatch b
         WHERE b.storeId = :storeId
@@ -68,5 +66,20 @@ public interface StockBatchRepository extends JpaRepository<StockBatch, UUID> {
         """)
     List<StockBatch> findExpiredBatchesForWriteOff(
         @Param("storeId") UUID storeId,
+        @Param("now") Instant now);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "2000")})
+    @Query("""
+        SELECT b FROM StockBatch b
+        WHERE b.storeId = :storeId
+          AND b.productId = :productId
+          AND b.quantity > 0
+          AND b.expiryDate <= :now
+        ORDER BY b.expiryDate ASC, b.createdAt ASC
+        """)
+    List<StockBatch> findExpiredBatchesForProductUpdate(
+        @Param("storeId") UUID storeId,
+        @Param("productId") UUID productId,
         @Param("now") Instant now);
 }

@@ -24,8 +24,6 @@ import java.util.UUID;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -41,37 +39,6 @@ public class CapacityService {
     private final CapacityAlertPublisher capacityAlertPublisher;
     private final StoreBlackoutWindowRepository blackoutWindowRepository;
     private final Clock clock;
-
-    public CapacityService(StoreCapacityRepository capacityRepository,
-                           StoreRepository storeRepository,
-                           OutboxService outboxService) {
-        this(capacityRepository, storeRepository, outboxService, new CapacityAlertPublisher(outboxService),
-                null, Clock.systemUTC());
-    }
-
-    public CapacityService(StoreCapacityRepository capacityRepository,
-                           StoreRepository storeRepository,
-                           OutboxService outboxService,
-                           CapacityAlertPublisher capacityAlertPublisher) {
-        this(capacityRepository, storeRepository, outboxService, capacityAlertPublisher, null, Clock.systemUTC());
-    }
-
-    @Autowired
-    public CapacityService(StoreCapacityRepository capacityRepository,
-                           StoreRepository storeRepository,
-                           OutboxService outboxService,
-                           CapacityAlertPublisher capacityAlertPublisher,
-                           ObjectProvider<StoreBlackoutWindowRepository> blackoutWindowProvider,
-                           ObjectProvider<Clock> clockProvider) {
-        this(
-            capacityRepository,
-            storeRepository,
-            outboxService,
-            capacityAlertPublisher,
-            blackoutWindowProvider != null ? blackoutWindowProvider.getIfAvailable() : null,
-            clockProvider != null ? clockProvider.getIfAvailable(Clock::systemUTC) : Clock.systemUTC()
-        );
-    }
 
     public CapacityService(StoreCapacityRepository capacityRepository,
                            StoreRepository storeRepository,
@@ -121,15 +88,14 @@ public class CapacityService {
                         "surgeModeEnabled", saved.isSurgeModeEnabled(),
                         "etaExtensionMinutes", saved.getSurgeEtaExtensionMinutes(),
                         "thresholdPercent", saved.getSurgeThresholdPercent()));
-        return buildCapacityResponse(saved, LocalDateTime.now(clock));
+        return buildCapacityResponse(saved, null);
     }
 
     @Transactional
     public boolean acquireOrderSlot(UUID storeId, LocalDateTime now) {
         Store store = storeRepository.findByIdForUpdate(storeId)
                 .orElseThrow(() -> new StoreNotFoundException(storeId));
-        LocalDateTime effectiveNow = now != null ? now : LocalDateTime.now(clock);
-        ZonedDateTime storeNow = toStoreTime(store, effectiveNow);
+        ZonedDateTime storeNow = toStoreTime(store, now);
 
         if (store.getStatus() != StoreStatus.ACTIVE) {
             throw new StoreClosedException(storeId.toString(), "status is " + store.getStatus().name());
@@ -187,8 +153,7 @@ public class CapacityService {
     public boolean incrementOrderCount(UUID storeId, LocalDateTime now) {
         Store store = storeRepository.findById(storeId)
                 .orElseThrow(() -> new StoreNotFoundException(storeId));
-        LocalDateTime effectiveNow = now != null ? now : LocalDateTime.now(clock);
-        return incrementHourlyOrderCount(store, toStoreTime(store, effectiveNow));
+        return incrementHourlyOrderCount(store, toStoreTime(store, now));
     }
 
     private boolean incrementHourlyOrderCount(Store store, ZonedDateTime storeNow) {
@@ -200,8 +165,7 @@ public class CapacityService {
     }
 
     private CapacityResponse buildCapacityResponse(Store store, LocalDateTime now) {
-        LocalDateTime effectiveNow = now != null ? now : LocalDateTime.now(clock);
-        ZonedDateTime storeNow = toStoreTime(store, effectiveNow);
+        ZonedDateTime storeNow = toStoreTime(store, now);
         LocalDate date = storeNow.toLocalDate();
         int hour = storeNow.getHour();
         Optional<StoreCapacity> capacity = capacityRepository
@@ -279,14 +243,20 @@ public class CapacityService {
     @SchedulerLock(name = "capacityCleanup", lockAtMostFor = "PT30M", lockAtLeastFor = "PT5M")
     @Transactional
     public void cleanupOldCapacityData() {
-        LocalDate cutoff = LocalDate.now().minusDays(7);
+        LocalDate cutoff = LocalDate.now(clock).minusDays(7);
         int deleted = capacityRepository.deleteOlderThan(cutoff);
         log.info("Capacity cleanup: deleted {} records older than {}", deleted, cutoff);
     }
 
+    private ZonedDateTime toStoreTime(Instant instant, Store store) {
+        return ZonedDateTime.ofInstant(instant, resolveZoneId(store.getTimezone()));
+    }
+
     private ZonedDateTime toStoreTime(Store store, LocalDateTime now) {
-        ZoneId storeZone = resolveZoneId(store.getTimezone());
-        return now.atZone(ZoneId.systemDefault()).withZoneSameInstant(storeZone);
+        if (now != null) {
+            return now.atZone(ZoneId.systemDefault()).withZoneSameInstant(resolveZoneId(store.getTimezone()));
+        }
+        return toStoreTime(clock.instant(), store);
     }
 
     private ZoneId resolveZoneId(String timezone) {

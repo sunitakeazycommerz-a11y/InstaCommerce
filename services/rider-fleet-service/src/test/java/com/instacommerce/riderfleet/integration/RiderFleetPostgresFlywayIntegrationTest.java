@@ -122,4 +122,58 @@ class RiderFleetPostgresFlywayIntegrationTest {
         );
         assertThat(riderId).isEqualTo("rider-101");
     }
+
+    @Test
+    @DisplayName("Candidate eligibility query skips off-shift and fatigued nearest riders in PostgreSQL")
+    void shouldFilterOffShiftAndFatiguedNearestRidersInPostgres() {
+        UUID storeId = UUID.randomUUID();
+        UUID offShiftNearest = UUID.randomUUID();
+        UUID fatiguedSecond = UUID.randomUUID();
+        UUID eligibleThird = UUID.randomUUID();
+
+        jdbcTemplate.update("""
+            INSERT INTO riders (id, name, phone, vehicle_type, status, rating_avg, store_id, consecutive_deliveries, last_delivery_completed_at, version)
+            VALUES (?, 'Nearest Off-Shift', '+919900000001', 'MOTORCYCLE', 'ACTIVE', 5.00, ?, 0, NULL, 0),
+                   (?, 'Second Fatigued', '+919900000002', 'MOTORCYCLE', 'ACTIVE', 4.90, ?, 8, now(), 0),
+                   (?, 'Third Eligible', '+919900000003', 'MOTORCYCLE', 'ACTIVE', 4.80, ?, 1, now() - interval '2 hours', 0)
+            """, offShiftNearest, storeId, fatiguedSecond, storeId, eligibleThird, storeId);
+
+        jdbcTemplate.update("""
+            INSERT INTO rider_availability (rider_id, is_available, current_lat, current_lng, store_id)
+            VALUES (?, true, 12.97160000, 77.59460000, ?),
+                   (?, true, 12.97200000, 77.59500000, ?),
+                   (?, true, 12.97500000, 77.59800000, ?)
+            """, offShiftNearest, storeId, fatiguedSecond, storeId, eligibleThird, storeId);
+
+        jdbcTemplate.update("""
+            INSERT INTO rider_shifts (rider_id, shift_start, shift_end, status)
+            VALUES (?, now() - interval '1 hour', now() + interval '4 hours', 'ACTIVE'),
+                   (?, now() - interval '1 hour', now() + interval '4 hours', 'ACTIVE')
+            """, fatiguedSecond, eligibleThird);
+
+        List<UUID> candidates = jdbcTemplate.queryForList("""
+            SELECT ra.rider_id FROM rider_availability ra
+            JOIN riders r ON r.id = ra.rider_id
+            WHERE ra.is_available = true
+              AND ra.store_id = ?
+              AND r.status = 'ACTIVE'
+              AND (r.consecutive_deliveries < 8
+                   OR r.last_delivery_completed_at IS NULL
+                   OR r.last_delivery_completed_at <= now() - interval '45 minutes')
+              AND EXISTS (
+                   SELECT 1 FROM rider_shifts rs
+                   WHERE rs.rider_id = r.id
+                     AND rs.status = 'ACTIVE'
+                     AND rs.shift_start <= now()
+                     AND rs.shift_end > now()
+              )
+            ORDER BY (6371 * acos(LEAST(1.0, GREATEST(-1.0,
+                cos(radians(12.9716)) * cos(radians(ra.current_lat))
+                * cos(radians(ra.current_lng) - radians(77.5946))
+                + sin(radians(12.9716)) * sin(radians(ra.current_lat)))))) ASC
+            LIMIT 20
+            """, UUID.class, storeId);
+
+        assertThat(candidates).containsExactly(eligibleThird);
+    }
 }

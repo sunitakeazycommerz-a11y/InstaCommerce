@@ -15,9 +15,11 @@ import com.instacommerce.warehouse.domain.model.StoreStatus;
 import com.instacommerce.warehouse.dto.request.CreateStoreRequest;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.exception.StoreNotFoundException;
+import com.instacommerce.warehouse.repository.StoreBlackoutWindowRepository;
 import com.instacommerce.warehouse.repository.StoreHoursRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -44,11 +46,16 @@ class StoreServiceTest {
     @Mock
     private OutboxService outboxService;
 
+    @Mock
+    private StoreBlackoutWindowRepository blackoutWindowRepository;
+
     private StoreService storeService;
 
     @BeforeEach
     void setUp() {
-        storeService = new StoreService(storeRepository, storeHoursRepository, outboxService, new WarehouseProperties());
+        storeService = new StoreService(
+            storeRepository, storeHoursRepository, outboxService,
+            new WarehouseProperties(), Clock.systemUTC(), blackoutWindowRepository);
     }
 
     private Store buildStore(UUID id, StoreStatus status, String timezone) {

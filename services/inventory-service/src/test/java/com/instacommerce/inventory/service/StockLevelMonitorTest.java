@@ -22,6 +22,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -37,9 +38,11 @@ class StockLevelMonitorTest {
     @Mock
     private OutboxService outboxService;
 
+    @Captor
+    private ArgumentCaptor<Map<String, Object>> lowStockCaptor;
+
     @Test
     @DisplayName("Emits LowStockAlert using SkuSafetyStockBuffer threshold and triggers ReorderPointReached")
-    @SuppressWarnings("unchecked")
     void usesSafetyStockBufferThresholdAndTriggersReorder() {
         UUID storeId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
@@ -68,7 +71,6 @@ class StockLevelMonitorTest {
 
         monitor.evaluateAfterStockDecrease(stock, storeId);
 
-        ArgumentCaptor<Map<String, Object>> lowStockCaptor = ArgumentCaptor.forClass(Map.class);
         verify(outboxService).publish(eq("StockItem"), eq(productId.toString()), eq("LowStockAlert"), lowStockCaptor.capture());
         assertThat(lowStockCaptor.getValue()).containsEntry("threshold", buffer.getReorderThreshold());
         verify(outboxService).publish(

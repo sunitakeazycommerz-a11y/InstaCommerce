@@ -11,7 +11,6 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -30,13 +29,6 @@ public class UserPreferenceService {
     private final Cache<UUID, Preferences> preferenceCache;
     private final Clock clock;
 
-    public UserPreferenceService(NotificationProperties notificationProperties,
-                                 @Value("${internal.service.name:${spring.application.name}}") String serviceName,
-                                 @Value("${internal.service.token}") String serviceToken) {
-        this(notificationProperties, serviceName, serviceToken, Clock.systemUTC());
-    }
-
-    @Autowired
     public UserPreferenceService(NotificationProperties notificationProperties,
                                  @Value("${internal.service.name:${spring.application.name}}") String serviceName,
                                  @Value("${internal.service.token}") String serviceToken,

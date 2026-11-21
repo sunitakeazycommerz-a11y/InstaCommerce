@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -37,6 +38,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -46,6 +48,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
@@ -79,6 +83,9 @@ class FefoAndPartialReleaseTest {
 
     @Mock
     private WarehouseClient warehouseClient;
+
+    @Captor
+    private ArgumentCaptor<Map<String, Object>> outboxPayloadCaptor;
 
     private Clock fixedClock;
     private FefoBatchAllocationService fefoService;
@@ -161,7 +168,6 @@ class FefoAndPartialReleaseTest {
 
     @Test
     @DisplayName("confirm deducts earliest expiring batches first and records batch allocations in StockConfirmed")
-    @SuppressWarnings("unchecked")
     void confirmAllocatesBatchesInFefoOrder() {
         UUID storeId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
@@ -198,10 +204,8 @@ class FefoAndPartialReleaseTest {
         assertThat(stock.getOnHand()).isEqualTo(5);
         assertThat(stock.getReserved()).isZero();
 
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(outboxService).publish(eq("Reservation"), eq(reservationId.toString()), eq("StockConfirmed"), payloadCaptor.capture());
-        List<Map<String, Object>> items = (List<Map<String, Object>>) payloadCaptor.getValue().get("items");
-        List<Map<String, Object>> batches = (List<Map<String, Object>>) items.get(0).get("batches");
+        verify(outboxService).publish(eq("Reservation"), eq(reservationId.toString()), eq("StockConfirmed"), outboxPayloadCaptor.capture());
+        List<Map<String, Object>> batches = extractFirstItemBatches(outboxPayloadCaptor.getValue());
         assertThat(batches).hasSize(2);
         assertThat(batches.get(0)).containsEntry("batchNumber", "BATCH-EARLY").containsEntry("quantity", 3);
         assertThat(batches.get(1)).containsEntry("batchNumber", "BATCH-LATER").containsEntry("quantity", 2);
@@ -281,27 +285,65 @@ class FefoAndPartialReleaseTest {
     }
 
     @Test
-    @DisplayName("writeOffExpiredBatches zeroes expired batches and adjusts unreserved onHand")
+    @DisplayName("writeOffExpiredBatches acquires StockItem lock before batch lock and keeps onHand synchronized on partial write-off")
     void writeOffExpiredBatchesDeductsUnreservedOnHand() {
         UUID storeId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
+        UUID missingStockProductId = UUID.randomUUID();
         StockBatch expired = buildBatch(storeId, productId, "EXP-OLD", 8, NOW.minus(Duration.ofHours(1)));
         expired.setId(UUID.randomUUID());
+        StockBatch orphanBatch = buildBatch(storeId, missingStockProductId, "EXP-ORPHAN", 5, NOW.minus(Duration.ofHours(2)));
+        orphanBatch.setId(UUID.randomUUID());
         StockItem stock = buildStock(storeId, productId, 10, 4);
 
         when(stockBatchRepository.findExpiredBatchesForWriteOff(eq(storeId), any(Instant.class)))
+            .thenReturn(List.of(expired, orphanBatch));
+        when(stockItemRepository.findByProductIdAndStoreIdForUpdate(productId, storeId))
+            .thenReturn(Optional.of(stock));
+        when(stockItemRepository.findByProductIdAndStoreIdForUpdate(missingStockProductId, storeId))
+            .thenReturn(Optional.empty());
+        when(stockBatchRepository.findExpiredBatchesForProductUpdate(eq(storeId), eq(productId), any(Instant.class)))
             .thenReturn(List.of(expired));
         when(stockBatchRepository.save(any(StockBatch.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(stockItemRepository.findByStoreIdAndProductId(storeId, productId)).thenReturn(Optional.of(stock));
 
         PerishableLiquidationService service = new PerishableLiquidationService(
             stockBatchRepository, stockItemRepository, outboxService);
         List<StockBatchResponse> writtenOff = service.writeOffExpiredBatches(storeId);
 
         assertThat(writtenOff).hasSize(1);
-        assertThat(expired.getQuantity()).isZero();
+        assertThat(expired.getQuantity()).isEqualTo(2);
+        assertThat(orphanBatch.getQuantity()).isEqualTo(5);
         assertThat(stock.getOnHand()).isEqualTo(4);
-        verify(outboxService).publish(eq("STOCK_BATCH"), eq(expired.getId().toString()), eq("ExpiredStockWrittenOff"), any());
+
+        InOrder lockOrder = inOrder(stockItemRepository, stockBatchRepository);
+        lockOrder.verify(stockItemRepository).findByProductIdAndStoreIdForUpdate(productId, storeId);
+        lockOrder.verify(stockBatchRepository).findExpiredBatchesForProductUpdate(eq(storeId), eq(productId), any(Instant.class));
+
+        verify(outboxService).publish(
+            eq("STOCK_BATCH"),
+            eq(expired.getId().toString()),
+            eq("ExpiredStockWrittenOff"),
+            outboxPayloadCaptor.capture());
+        assertThat(outboxPayloadCaptor.getValue()).containsEntry("written_off_quantity", 6);
+        verify(outboxService, never()).publish(eq("STOCK_BATCH"), eq(orphanBatch.getId().toString()), any(), any());
+    }
+
+    private List<Map<String, Object>> extractFirstItemBatches(Map<String, Object> payload) {
+        Object rawItems = payload.get("items");
+        assertThat(rawItems).isInstanceOf(List.class);
+        List<?> items = (List<?>) rawItems;
+        assertThat(items).isNotEmpty();
+        assertThat(items.get(0)).isInstanceOf(Map.class);
+        Object rawBatches = ((Map<?, ?>) items.get(0)).get("batches");
+        assertThat(rawBatches).isInstanceOf(List.class);
+        return ((List<?>) rawBatches).stream()
+            .filter(Map.class::isInstance)
+            .map(entry -> {
+                Map<String, Object> copy = new LinkedHashMap<>();
+                ((Map<?, ?>) entry).forEach((k, v) -> copy.put(String.valueOf(k), v));
+                return copy;
+            })
+            .toList();
     }
 
     private StockItem buildStock(UUID storeId, UUID productId, int onHand, int reserved) {
@@ -323,9 +365,8 @@ class FefoAndPartialReleaseTest {
         return batch;
     }
 
-    @SuppressWarnings("unchecked")
     private void stubLockStockItem(UUID productId, UUID storeId, StockItem stockItem) {
-        TypedQuery<StockItem> query = mock(TypedQuery.class);
+        TypedQuery<StockItem> query = mock();
         when(entityManager.createQuery(anyString(), eq(StockItem.class))).thenReturn(query);
         when(query.setParameter("pid", productId)).thenReturn(query);
         when(query.setParameter("sid", storeId)).thenReturn(query);
@@ -334,9 +375,8 @@ class FefoAndPartialReleaseTest {
         when(query.getSingleResult()).thenReturn(stockItem);
     }
 
-    @SuppressWarnings("unchecked")
     private void stubLockStockItemForMultiple(Map<UUID, StockItem> items) {
-        TypedQuery<StockItem> query = mock(TypedQuery.class);
+        TypedQuery<StockItem> query = mock();
         when(entityManager.createQuery(anyString(), eq(StockItem.class))).thenReturn(query);
         final UUID[] requestedPid = new UUID[1];
         when(query.setParameter(eq("pid"), any())).thenAnswer(inv -> {

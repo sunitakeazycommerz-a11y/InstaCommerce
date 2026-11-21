@@ -1,79 +1,37 @@
 package com.instacommerce.notification.infrastructure.retry;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.notification.domain.model.NotificationLog;
-import com.instacommerce.notification.domain.model.NotificationStatus;
 import com.instacommerce.notification.dto.NotificationRequest;
-import com.instacommerce.notification.infrastructure.metrics.NotificationMetrics;
-import com.instacommerce.notification.provider.NotificationProvider;
-import com.instacommerce.notification.provider.NotificationProviderRegistry;
-import com.instacommerce.notification.provider.NotificationSendRequest;
-import com.instacommerce.notification.provider.ProviderPermanentException;
-import com.instacommerce.notification.provider.ProviderTemporaryException;
-import com.instacommerce.notification.repository.NotificationLogRepository;
+import com.instacommerce.notification.infrastructure.retry.NotificationProviderSender.DispatchResult;
+import com.instacommerce.notification.infrastructure.retry.NotificationProviderSender.DispatchStatus;
 import com.instacommerce.notification.service.ChannelFallbackService;
-import com.instacommerce.notification.service.MaskingUtil;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.Map;
-import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 @Component
 public class RetryableNotificationSender {
     private static final Logger logger = LoggerFactory.getLogger(RetryableNotificationSender.class);
-    static final int MAX_RETRIES = 3;
-    static final Duration[] BACKOFF = {
-        Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofMinutes(5)
-    };
+    private static final TypeReference<Map<String, Object>> VARIABLES_TYPE = new TypeReference<>() {};
 
-    private final NotificationProviderRegistry providerRegistry;
-    private final NotificationLogRepository logRepository;
+    private final NotificationProviderSender providerSender;
     private final NotificationDlqPublisher dlqPublisher;
-    private final NotificationMetrics metrics;
-    private final ObjectProvider<ChannelFallbackService> fallbackServiceProvider;
-    private final ChannelFallbackService directFallbackService;
+    private final ChannelFallbackService channelFallbackService;
+    private final ObjectMapper objectMapper;
 
-    public RetryableNotificationSender(NotificationProviderRegistry providerRegistry,
-                                       NotificationLogRepository logRepository,
+    public RetryableNotificationSender(NotificationProviderSender providerSender,
                                        NotificationDlqPublisher dlqPublisher,
-                                       NotificationMetrics metrics) {
-        this(providerRegistry, logRepository, dlqPublisher, metrics, null, null);
-    }
-
-    @Autowired
-    public RetryableNotificationSender(NotificationProviderRegistry providerRegistry,
-                                       NotificationLogRepository logRepository,
-                                       NotificationDlqPublisher dlqPublisher,
-                                       NotificationMetrics metrics,
-                                       ObjectProvider<ChannelFallbackService> fallbackServiceProvider) {
-        this(providerRegistry, logRepository, dlqPublisher, metrics, fallbackServiceProvider, null);
-    }
-
-    public RetryableNotificationSender(NotificationProviderRegistry providerRegistry,
-                                       NotificationLogRepository logRepository,
-                                       NotificationDlqPublisher dlqPublisher,
-                                       NotificationMetrics metrics,
-                                       ChannelFallbackService directFallbackService) {
-        this(providerRegistry, logRepository, dlqPublisher, metrics, null, directFallbackService);
-    }
-
-    private RetryableNotificationSender(NotificationProviderRegistry providerRegistry,
-                                        NotificationLogRepository logRepository,
-                                        NotificationDlqPublisher dlqPublisher,
-                                        NotificationMetrics metrics,
-                                        ObjectProvider<ChannelFallbackService> fallbackServiceProvider,
-                                        ChannelFallbackService directFallbackService) {
-        this.providerRegistry = providerRegistry;
-        this.logRepository = logRepository;
+                                       ChannelFallbackService channelFallbackService,
+                                       ObjectMapper objectMapper) {
+        this.providerSender = providerSender;
         this.dlqPublisher = dlqPublisher;
-        this.metrics = metrics;
-        this.fallbackServiceProvider = fallbackServiceProvider;
-        this.directFallbackService = directFallbackService;
+        this.channelFallbackService = channelFallbackService;
+        this.objectMapper = objectMapper;
     }
 
     @Async("notificationExecutor")
@@ -81,73 +39,24 @@ public class RetryableNotificationSender {
         log.setEventType(request.eventType());
         log.setSubject(subject);
         log.setBody(body);
+        if (log.getTemplateContext() == null && request.variables() != null && !request.variables().isEmpty()) {
+            try {
+                log.setTemplateContext(objectMapper.writeValueAsString(request.variables()));
+            } catch (JsonProcessingException ex) {
+                logger.warn("Unable to serialize template context for event {}: {}", request.eventId(), ex.getMessage());
+            }
+        }
         attemptSend(request.channel().name(), request.recipient(), log, request);
     }
 
-    /**
-     * Attempt to send a notification. On temporary failure, schedule a DB-based retry
-     * instead of blocking the thread with Thread.sleep.
-     */
     void attemptSend(String channelName, String recipient, NotificationLog log, NotificationRequest request) {
-        Optional<NotificationProvider> providerOpt = providerRegistry.findProvider(log.getChannel());
-        if (providerOpt.isEmpty()) {
-            log.setStatus(NotificationStatus.SKIPPED);
-            log.setLastError("No provider configured");
-            logRepository.save(log);
-            metrics.incrementSkipped();
-            triggerFallback(request != null ? request : fallbackRequest(log), log);
-            return;
-        }
-        NotificationProvider provider = providerOpt.get();
-        String masked = MaskingUtil.maskRecipient(recipient);
-        try {
-            String providerRef = provider.send(new NotificationSendRequest(
-                log.getChannel(), recipient, log.getSubject(), log.getBody()));
-            log.setStatus(NotificationStatus.SENT);
-            log.setProviderRef(providerRef);
-            log.setSentAt(Instant.now());
-            log.setAttempts(log.getRetryCount() + 1);
-            logRepository.save(log);
-            metrics.incrementSent();
-        } catch (ProviderTemporaryException ex) {
-            int currentRetry = log.getRetryCount();
-            log.setAttempts(currentRetry + 1);
-            log.setLastError(ex.getMessage());
-            if (currentRetry + 1 >= MAX_RETRIES) {
-                log.setStatus(NotificationStatus.FAILED);
-                logRepository.save(log);
-                metrics.incrementFailed();
-                NotificationRequest req = request != null ? request : fallbackRequest(log);
-                if (!triggerFallback(req, log)) {
-                    dlqPublisher.publish(req, "Retries exhausted");
-                }
-                return;
-            }
-            Duration backoff = BACKOFF[Math.min(currentRetry, BACKOFF.length - 1)];
-            log.setRetryCount(currentRetry + 1);
-            log.setNextRetryAt(Instant.now().plus(backoff));
-            log.setStatus(NotificationStatus.RETRY_PENDING);
-            logRepository.save(log);
-            logger.warn("Temporary notification failure for {} attempt {}, scheduled retry at {}",
-                masked, currentRetry + 1, log.getNextRetryAt());
-        } catch (ProviderPermanentException ex) {
-            log.setStatus(NotificationStatus.FAILED);
-            log.setLastError(ex.getMessage());
-            log.setAttempts(log.getRetryCount() + 1);
-            logRepository.save(log);
-            metrics.incrementFailed();
+        DispatchResult result = providerSender.dispatch(log, recipient);
+        if (result.status() == DispatchStatus.FALLBACK_REQUIRED) {
             NotificationRequest req = request != null ? request : fallbackRequest(log);
-            if (!triggerFallback(req, log)) {
-                dlqPublisher.publish(req, ex.getMessage());
+            if (!channelFallbackService.tryFallback(req, log) && result.dlqReason() != null) {
+                dlqPublisher.publish(req, result.dlqReason());
             }
         }
-    }
-
-    private boolean triggerFallback(NotificationRequest request, NotificationLog log) {
-        ChannelFallbackService fallbackService = directFallbackService != null
-            ? directFallbackService
-            : (fallbackServiceProvider != null ? fallbackServiceProvider.getIfAvailable() : null);
-        return fallbackService != null && fallbackService.tryFallback(request, log);
     }
 
     private NotificationRequest fallbackRequest(NotificationLog log) {
@@ -158,7 +67,20 @@ public class RetryableNotificationSender {
             log.getChannel(),
             log.getTemplateId(),
             log.getRecipient(),
-            Map.of()
+            restoreTemplateContext(log.getTemplateContext(), log.getEventId())
         );
+    }
+
+    private Map<String, Object> restoreTemplateContext(String templateContext, String eventId) {
+        if (templateContext == null || templateContext.isBlank()) {
+            return Map.of();
+        }
+        try {
+            Map<String, Object> restored = objectMapper.readValue(templateContext, VARIABLES_TYPE);
+            return restored != null ? restored : Map.of();
+        } catch (JsonProcessingException ex) {
+            logger.warn("Unable to deserialize template context for event {}: {}", eventId, ex.getMessage());
+            return Map.of();
+        }
     }
 }

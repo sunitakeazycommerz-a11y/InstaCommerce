@@ -15,6 +15,8 @@ import com.instacommerce.riderfleet.repository.RiderAssignmentRepository;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,6 +25,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -34,6 +37,8 @@ class RiderAssignmentServiceTest {
     @Mock private RiderAssignmentRepository assignmentRepository;
     @Mock private OutboxService outboxService;
     @Mock private DispatchOptimizerClient dispatchOptimizerClient;
+
+    @Captor private ArgumentCaptor<Map<String, Object>> payloadCaptor;
 
     private RiderFleetProperties properties;
     private RiderAssignmentService service;
@@ -47,7 +52,11 @@ class RiderAssignmentServiceTest {
             assignmentRepository,
             outboxService,
             properties,
-            dispatchOptimizerClient
+            dispatchOptimizerClient,
+            null,
+            null,
+            null,
+            Clock.systemUTC()
         );
     }
 
@@ -154,7 +163,6 @@ class RiderAssignmentServiceTest {
 
     @Test
     @DisplayName("assignRider emits pickup coordinates in RiderAssigned outbox payload")
-    @SuppressWarnings("unchecked")
     void assignRiderEmitsPickupCoordinatesInOutboxPayload() {
         UUID orderId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID();
@@ -173,14 +181,17 @@ class RiderAssignmentServiceTest {
         rider.setStatus(RiderStatus.ACTIVE);
 
         when(assignmentRepository.existsByOrderId(orderId)).thenReturn(false);
-        when(availabilityRepository.findNearestAvailable(pickupLat, pickupLng, 5.0, storeId))
+        when(availabilityRepository.findEligibleNearestCandidates(
+            eq(pickupLat), eq(pickupLng), eq(5.0), eq(storeId), eq(0),
+            anyInt(), anyInt(), any(), eq(false), any(), anyInt()))
+            .thenReturn(List.of(availability));
+        when(riderRepository.findAllById(List.of(riderId))).thenReturn(List.of(rider));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(riderId))
             .thenReturn(Optional.of(availability));
-        when(riderRepository.findById(riderId)).thenReturn(Optional.of(rider));
 
         UUID assignedRiderId = service.assignRider(orderId, storeId, pickupLat, pickupLng);
 
         assertThat(assignedRiderId).isEqualTo(riderId);
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(outboxService).publish(
             eq("Rider"), eq(riderId.toString()), eq("RiderAssigned"), payloadCaptor.capture());
         Map<String, Object> payload = payloadCaptor.getValue();
@@ -196,7 +207,6 @@ class RiderAssignmentServiceTest {
 
     @Test
     @DisplayName("assignRider emits dropoff coordinates in RiderAssigned outbox payload when provided")
-    @SuppressWarnings("unchecked")
     void assignRiderEmitsDropoffCoordinatesWhenPresent() {
         UUID orderId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID();
@@ -217,15 +227,18 @@ class RiderAssignmentServiceTest {
         rider.setStatus(RiderStatus.ACTIVE);
 
         when(assignmentRepository.existsByOrderId(orderId)).thenReturn(false);
-        when(availabilityRepository.findNearestAvailable(pickupLat, pickupLng, 5.0, storeId))
+        when(availabilityRepository.findEligibleNearestCandidates(
+            eq(pickupLat), eq(pickupLng), eq(5.0), eq(storeId), eq(0),
+            anyInt(), anyInt(), any(), eq(false), any(), anyInt()))
+            .thenReturn(List.of(availability));
+        when(riderRepository.findAllById(List.of(riderId))).thenReturn(List.of(rider));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(riderId))
             .thenReturn(Optional.of(availability));
-        when(riderRepository.findById(riderId)).thenReturn(Optional.of(rider));
 
         UUID assignedRiderId = service.assignRider(
             orderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng);
 
         assertThat(assignedRiderId).isEqualTo(riderId);
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(outboxService).publish(
             eq("Rider"), eq(riderId.toString()), eq("RiderAssigned"), payloadCaptor.capture());
         Map<String, Object> payload = payloadCaptor.getValue();

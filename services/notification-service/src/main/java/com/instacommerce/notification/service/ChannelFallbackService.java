@@ -3,7 +3,8 @@ package com.instacommerce.notification.service;
 import com.instacommerce.notification.domain.model.NotificationChannel;
 import com.instacommerce.notification.domain.model.NotificationLog;
 import com.instacommerce.notification.dto.NotificationRequest;
-import com.instacommerce.notification.infrastructure.retry.RetryableNotificationSender;
+import com.instacommerce.notification.infrastructure.retry.NotificationProviderSender;
+import com.instacommerce.notification.infrastructure.retry.NotificationProviderSender.DispatchStatus;
 import com.instacommerce.notification.template.TemplateDefinition;
 import com.instacommerce.notification.template.TemplateRegistry;
 import java.util.HashMap;
@@ -12,8 +13,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -25,44 +24,20 @@ public class ChannelFallbackService {
     private final TemplateService templateService;
     private final UserPreferenceService userPreferenceService;
     private final UserDirectoryClient userDirectoryClient;
-    private final ObjectProvider<RetryableNotificationSender> senderProvider;
-    private final RetryableNotificationSender directSender;
-
-    @Autowired
-    public ChannelFallbackService(DeduplicationService deduplicationService,
-                                  TemplateRegistry templateRegistry,
-                                  TemplateService templateService,
-                                  UserPreferenceService userPreferenceService,
-                                  UserDirectoryClient userDirectoryClient,
-                                  ObjectProvider<RetryableNotificationSender> senderProvider) {
-        this(deduplicationService, templateRegistry, templateService,
-            userPreferenceService, userDirectoryClient, senderProvider, null);
-    }
+    private final NotificationProviderSender providerSender;
 
     public ChannelFallbackService(DeduplicationService deduplicationService,
                                   TemplateRegistry templateRegistry,
                                   TemplateService templateService,
                                   UserPreferenceService userPreferenceService,
                                   UserDirectoryClient userDirectoryClient,
-                                  RetryableNotificationSender directSender) {
-        this(deduplicationService, templateRegistry, templateService,
-            userPreferenceService, userDirectoryClient, null, directSender);
-    }
-
-    private ChannelFallbackService(DeduplicationService deduplicationService,
-                                   TemplateRegistry templateRegistry,
-                                   TemplateService templateService,
-                                   UserPreferenceService userPreferenceService,
-                                   UserDirectoryClient userDirectoryClient,
-                                   ObjectProvider<RetryableNotificationSender> senderProvider,
-                                   RetryableNotificationSender directSender) {
+                                  NotificationProviderSender providerSender) {
         this.deduplicationService = deduplicationService;
         this.templateRegistry = templateRegistry;
         this.templateService = templateService;
         this.userPreferenceService = userPreferenceService;
         this.userDirectoryClient = userDirectoryClient;
-        this.senderProvider = senderProvider;
-        this.directSender = directSender;
+        this.providerSender = providerSender;
     }
 
     public boolean tryFallback(NotificationRequest failedRequest, NotificationLog failedLog) {
@@ -83,10 +58,6 @@ public class ChannelFallbackService {
         if (eventId == null || userId == null || currentChannel == null || templateId == null) {
             return false;
         }
-        RetryableNotificationSender sender = resolveSender();
-        if (sender == null) {
-            return false;
-        }
 
         UserPreferenceService.Preferences preferences;
         try {
@@ -104,7 +75,7 @@ public class ChannelFallbackService {
                 : "customer";
             effectiveVariables.put("userName", resolvedName);
         }
-        boolean promotional = isPromotionalEvent(eventType);
+        boolean promotional = TemplateRegistry.isPromotionalEvent(eventType);
 
         NotificationChannel fallbackChannel = nextChannel(currentChannel);
         while (fallbackChannel != null) {
@@ -126,9 +97,10 @@ public class ChannelFallbackService {
                 continue;
             }
 
+            String resolvedEventType = eventType != null ? eventType : "UNKNOWN";
             NotificationRequest fallbackRequest = new NotificationRequest(
                 eventId,
-                eventType != null ? eventType : "UNKNOWN",
+                resolvedEventType,
                 userId,
                 fallbackChannel,
                 templateId,
@@ -145,9 +117,15 @@ public class ChannelFallbackService {
             String subject = fallbackChannel == NotificationChannel.EMAIL
                 ? resolveSubject(eventType, failedLog)
                 : null;
+            fallbackLog.setEventType(resolvedEventType);
+            fallbackLog.setSubject(subject);
+            fallbackLog.setBody(body);
             logger.info("Triggering channel fallback {} -> {} for event {}", currentChannel, fallbackChannel, eventId);
-            sender.send(fallbackRequest, fallbackLog, subject, body);
-            return true;
+            DispatchStatus dispatchStatus = providerSender.dispatch(fallbackLog, recipient).status();
+            if (dispatchStatus != DispatchStatus.FALLBACK_REQUIRED) {
+                return true;
+            }
+            fallbackChannel = nextChannel(fallbackChannel);
         }
         return false;
     }
@@ -194,22 +172,5 @@ public class ChannelFallbackService {
             }
         }
         return "InstaCommerce Notification";
-    }
-
-    private boolean isPromotionalEvent(String eventType) {
-        if (eventType == null) {
-            return false;
-        }
-        return eventType.startsWith("Promotion")
-            || eventType.startsWith("Marketing")
-            || eventType.contains("Campaign")
-            || eventType.contains("Promo");
-    }
-
-    private RetryableNotificationSender resolveSender() {
-        if (directSender != null) {
-            return directSender;
-        }
-        return senderProvider != null ? senderProvider.getIfAvailable() : null;
     }
 }

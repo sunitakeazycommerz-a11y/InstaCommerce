@@ -187,6 +187,8 @@ public class RoutingProperties {
         private double etaLowMultiplier = 0.8;
         private double etaHighMultiplier = 1.3;
         private boolean recalcOnLocationUpdateEnabled = true;
+        private int apologyCreditCents = 5000;
+        private String apologyCreditCurrency = "INR";
 
         public int getSlaThresholdMinutes() {
             return slaThresholdMinutes;
@@ -234,6 +236,22 @@ public class RoutingProperties {
 
         public void setRecalcOnLocationUpdateEnabled(boolean recalcOnLocationUpdateEnabled) {
             this.recalcOnLocationUpdateEnabled = recalcOnLocationUpdateEnabled;
+        }
+
+        public int getApologyCreditCents() {
+            return apologyCreditCents;
+        }
+
+        public void setApologyCreditCents(int apologyCreditCents) {
+            this.apologyCreditCents = apologyCreditCents;
+        }
+
+        public String getApologyCreditCurrency() {
+            return apologyCreditCurrency;
+        }
+
+        public void setApologyCreditCurrency(String apologyCreditCurrency) {
+            this.apologyCreditCurrency = apologyCreditCurrency;
         }
     }
 }

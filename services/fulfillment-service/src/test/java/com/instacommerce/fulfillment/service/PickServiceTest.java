@@ -33,6 +33,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -63,6 +64,9 @@ class PickServiceTest {
 
     @Mock
     private AuditLogService auditLogService;
+
+    @Captor
+    private ArgumentCaptor<Map<String, Object>> outboxPayloadCaptor;
 
     private PickService pickService;
 
@@ -220,7 +224,6 @@ class PickServiceTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
     void createPickTaskPersistsDropoffCoordinatesAndPublishesInOrderPacked() {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
@@ -258,9 +261,8 @@ class PickServiceTest {
 
         pickService.markPacked(orderId, UUID.randomUUID(), "packed");
 
-        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(outboxService).publish(eq("Fulfillment"), eq(orderId.toString()), eq("OrderPacked"), payloadCaptor.capture());
-        assertThat(payloadCaptor.getValue())
+        verify(outboxService).publish(eq("Fulfillment"), eq(orderId.toString()), eq("OrderPacked"), outboxPayloadCaptor.capture());
+        assertThat(outboxPayloadCaptor.getValue())
             .containsEntry("pickupLat", new BigDecimal("12.9716"))
             .containsEntry("pickupLng", new BigDecimal("77.5946"))
             .containsEntry("dropoffLat", dropoffLat)

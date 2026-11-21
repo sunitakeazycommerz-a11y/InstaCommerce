@@ -2,6 +2,7 @@ package com.instacommerce.notification.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -19,10 +20,14 @@ import com.instacommerce.notification.domain.model.NotificationStatus;
 import com.instacommerce.notification.dto.NotificationRequest;
 import com.instacommerce.notification.infrastructure.metrics.NotificationMetrics;
 import com.instacommerce.notification.infrastructure.retry.NotificationDlqPublisher;
+import com.instacommerce.notification.infrastructure.retry.NotificationProviderSender;
+import com.instacommerce.notification.infrastructure.retry.NotificationRetryJob;
 import com.instacommerce.notification.infrastructure.retry.RetryableNotificationSender;
 import com.instacommerce.notification.provider.NotificationProvider;
 import com.instacommerce.notification.provider.NotificationProviderRegistry;
+import com.instacommerce.notification.provider.NotificationSendRequest;
 import com.instacommerce.notification.provider.ProviderPermanentException;
+import com.instacommerce.notification.provider.ProviderTemporaryException;
 import com.instacommerce.notification.repository.DeviceTokenRepository;
 import com.instacommerce.notification.repository.NotificationLogRepository;
 import com.instacommerce.notification.template.TemplateRegistry;
@@ -34,7 +39,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -43,7 +47,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.DefaultResourceLoader;
 
 @ExtendWith(MockitoExtension.class)
@@ -105,38 +108,17 @@ class NotificationFallbackQuietHoursAndDedupTest {
         NotificationProviderRegistry registry = new NotificationProviderRegistry(
             List.of(pushProvider, smsProvider, emailProvider));
 
-        AtomicReference<RetryableNotificationSender> senderRef = new AtomicReference<>();
+        NotificationProviderSender providerSender = new NotificationProviderSender(registry, logRepository, metrics);
         ChannelFallbackService fallbackService = new ChannelFallbackService(
             deduplicationService,
             templateRegistry,
             templateService,
             userPreferenceService,
             userDirectoryClient,
-            new ObjectProvider<RetryableNotificationSender>() {
-                @Override
-                public RetryableNotificationSender getObject(Object... args) {
-                    return senderRef.get();
-                }
-
-                @Override
-                public RetryableNotificationSender getIfAvailable() {
-                    return senderRef.get();
-                }
-
-                @Override
-                public RetryableNotificationSender getIfUnique() {
-                    return senderRef.get();
-                }
-
-                @Override
-                public RetryableNotificationSender getObject() {
-                    return senderRef.get();
-                }
-            }
+            providerSender
         );
         RetryableNotificationSender sender = new RetryableNotificationSender(
-            registry, logRepository, dlqPublisher, metrics, fallbackService);
-        senderRef.set(sender);
+            providerSender, dlqPublisher, fallbackService, objectMapper);
 
         UserPreferenceService.Preferences prefs = new UserPreferenceService.Preferences(
             userId, false, false, false, false);
@@ -195,10 +177,11 @@ class NotificationFallbackQuietHoursAndDedupTest {
             .thenAnswer(inv -> new NotificationLog());
 
         RetryableNotificationSender mockSender = mock(RetryableNotificationSender.class);
+        ChannelFallbackService mockFallback = mock(ChannelFallbackService.class);
         NotificationService service = new NotificationService(
             templateRegistry, templateService, deduplicationService, logRepository,
             mockSender, dlqPublisher, userPreferenceService, userDirectoryClient,
-            orderLookupClient, metrics, props, deviceTokenRepository);
+            orderLookupClient, metrics, props, deviceTokenRepository, mockFallback);
 
         EventEnvelope promoEnvelope = new EventEnvelope(
             UUID.randomUUID().toString(),
@@ -244,10 +227,11 @@ class NotificationFallbackQuietHoursAndDedupTest {
             .thenReturn(null);
 
         RetryableNotificationSender mockSender = mock(RetryableNotificationSender.class);
+        ChannelFallbackService mockFallback = mock(ChannelFallbackService.class);
         NotificationService service = new NotificationService(
             templateRegistry, templateService, deduplicationService, logRepository,
             mockSender, dlqPublisher, userPreferenceService, userDirectoryClient,
-            orderLookupClient, metrics, new NotificationProperties(), deviceTokenRepository);
+            orderLookupClient, metrics, new NotificationProperties(), deviceTokenRepository, mockFallback);
 
         EventEnvelope firstEnvelope = new EventEnvelope(
             UUID.randomUUID().toString(),
@@ -284,5 +268,80 @@ class NotificationFallbackQuietHoursAndDedupTest {
         assertThat(requests.get(0).eventId()).isEqualTo("status:" + orderId + ":OrderPacked");
         assertThat(requests.get(1).eventId()).isEqualTo(requests.get(0).eventId());
         verify(mockSender, times(1)).send(any(), eq(firstLog), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Retried fallback restores persisted template_context and renders SMS and Email without MustacheException")
+    void retriedFallbackRestoresTemplateContextWithoutMustacheException() {
+        UUID userId = UUID.randomUUID();
+        String eventId = "status:ord-retry-99:ETABreachRisk";
+
+        NotificationProvider pushProvider = mock(NotificationProvider.class);
+        when(pushProvider.supports(NotificationChannel.PUSH)).thenReturn(true);
+        when(pushProvider.send(any())).thenThrow(new ProviderTemporaryException("FCM 503"));
+
+        NotificationProvider smsProvider = mock(NotificationProvider.class);
+        when(smsProvider.supports(NotificationChannel.SMS)).thenReturn(true);
+        when(smsProvider.send(any())).thenThrow(new ProviderPermanentException("Carrier SMS rejected"));
+
+        NotificationProvider emailProvider = mock(NotificationProvider.class);
+        when(emailProvider.supports(NotificationChannel.EMAIL)).thenReturn(true);
+        when(emailProvider.send(any())).thenReturn("sg-email-ok");
+
+        NotificationProviderRegistry registry = new NotificationProviderRegistry(
+            List.of(pushProvider, smsProvider, emailProvider));
+        NotificationProviderSender providerSender = new NotificationProviderSender(registry, logRepository, metrics);
+        DeduplicationService realDedup = new DeduplicationService(logRepository, objectMapper);
+        when(logRepository.save(any(NotificationLog.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ChannelFallbackService fallbackService = new ChannelFallbackService(
+            realDedup, templateRegistry, templateService, userPreferenceService, userDirectoryClient, providerSender);
+        RetryableNotificationSender retrySender = new RetryableNotificationSender(
+            providerSender, dlqPublisher, fallbackService, objectMapper);
+
+        NotificationRequest pushReq = new NotificationRequest(
+            eventId,
+            "ETABreachRisk",
+            userId,
+            NotificationChannel.PUSH,
+            "eta_delayed",
+            "fcm-token-retry",
+            Map.of("orderId", "ord-retry-99", "eta", "18 mins", "userName", "Asha")
+        );
+        NotificationLog persistedPushLog = realDedup.createLog(pushReq, "fcm-***");
+        assertThat(persistedPushLog).isNotNull();
+        assertThat(persistedPushLog.getTemplateContext()).contains("ord-retry-99").contains("18 mins");
+
+        persistedPushLog.setRetryCount(2);
+        persistedPushLog.setNextRetryAt(Instant.now().minusSeconds(5));
+        persistedPushLog.setStatus(NotificationStatus.RETRY_PENDING);
+        persistedPushLog.setSubject("Delivery delayed");
+        persistedPushLog.setBody("Delayed");
+
+        UserPreferenceService.Preferences prefs = new UserPreferenceService.Preferences(
+            userId, false, false, false, false);
+        when(userPreferenceService.getPreferences(userId)).thenReturn(prefs);
+        when(userPreferenceService.allowNotification(prefs, NotificationChannel.SMS, false)).thenReturn(true);
+        when(userPreferenceService.allowNotification(prefs, NotificationChannel.EMAIL, false)).thenReturn(true);
+        when(userDirectoryClient.findUser(userId))
+            .thenReturn(Optional.of(new UserContact(userId, "asha@example.com", "+919876543210", "Asha", "en")));
+        when(logRepository.findPendingForRetry(any(Instant.class), anyInt())).thenReturn(List.of(persistedPushLog));
+
+        NotificationRetryJob retryJob = new NotificationRetryJob(logRepository, retrySender, new NotificationProperties());
+        retryJob.retryPendingNotifications();
+
+        ArgumentCaptor<NotificationSendRequest> smsCaptor = ArgumentCaptor.forClass(NotificationSendRequest.class);
+        verify(smsProvider).send(smsCaptor.capture());
+        assertThat(smsCaptor.getValue().body())
+            .contains("Asha")
+            .contains("ord-retry-99")
+            .contains("18 mins");
+
+        ArgumentCaptor<NotificationSendRequest> emailCaptor = ArgumentCaptor.forClass(NotificationSendRequest.class);
+        verify(emailProvider).send(emailCaptor.capture());
+        assertThat(emailCaptor.getValue().body())
+            .contains("ord-retry-99")
+            .contains("18 mins");
+        verify(dlqPublisher, never()).publish(any(), anyString());
     }
 }

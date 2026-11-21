@@ -3,6 +3,8 @@ package com.instacommerce.riderfleet.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -86,7 +88,7 @@ class RiderCapacityFatigueAndIdempotencyTest {
             new DispatchOptimizerClient.OptimizationResult(
                 List.of(new DispatchOptimizerClient.Assignment(motoRiderId.toString(), List.of(orderId.toString()), 5.0)),
                 List.of())));
-        when(availabilityRepository.findByRiderIdForUpdate(motoRiderId)).thenReturn(Optional.of(motoAvail));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(motoRiderId)).thenReturn(Optional.of(motoAvail));
         when(riderRepository.findById(motoRiderId)).thenReturn(Optional.of(motoRider));
 
         RiderAssignmentService service = new RiderAssignmentService(
@@ -117,10 +119,13 @@ class RiderCapacityFatigueAndIdempotencyTest {
         RiderAvailability bikeAvail = buildAvailability(bikeRiderId, storeId);
 
         when(assignmentRepository.existsByOrderId(orderId)).thenReturn(false);
-        when(availabilityRepository.findNearestAvailableWithCapacity(
-            new BigDecimal("12.97"), new BigDecimal("77.59"), 5.0, storeId, 12_000))
+        when(availabilityRepository.findEligibleNearestCandidates(
+            eq(new BigDecimal("12.97")), eq(new BigDecimal("77.59")), eq(5.0), eq(storeId), eq(12_000),
+            anyInt(), anyInt(), any(), eq(false), eq(NOW), anyInt()))
+            .thenReturn(List.of(bikeAvail));
+        when(riderRepository.findAllById(List.of(bikeRiderId))).thenReturn(List.of(bikeRider));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(bikeRiderId))
             .thenReturn(Optional.of(bikeAvail));
-        when(riderRepository.findById(bikeRiderId)).thenReturn(Optional.of(bikeRider));
 
         RiderAssignmentService service = new RiderAssignmentService(
             riderRepository, availabilityRepository, assignmentRepository, outboxService,
@@ -187,8 +192,11 @@ class RiderCapacityFatigueAndIdempotencyTest {
         rider.setConsecutiveDeliveries(3);
         rider.setLastDeliveryCompletedAt(NOW);
         when(assignmentRepository.existsByOrderId(nextOrderId)).thenReturn(false);
-        when(availabilityRepository.findNearestAvailable(any(), any(), eq(5.0), eq(storeId)))
-            .thenReturn(Optional.of(availability));
+        when(availabilityRepository.findEligibleNearestCandidates(
+            any(), any(), eq(5.0), eq(storeId), eq(0),
+            anyInt(), anyInt(), any(), anyBoolean(), any(), anyInt()))
+            .thenReturn(List.of(availability));
+        when(riderRepository.findAllById(List.of(riderId))).thenReturn(List.of(rider));
         assertThatThrownBy(() -> service.assignRider(
             nextOrderId, storeId, new BigDecimal("12.97"), new BigDecimal("77.59")))
             .isInstanceOf(NoAvailableRiderException.class);
@@ -209,9 +217,11 @@ class RiderCapacityFatigueAndIdempotencyTest {
         RiderShiftService shiftService = new RiderShiftService(shiftRepository);
 
         when(assignmentRepository.existsByOrderId(orderId)).thenReturn(false);
-        when(availabilityRepository.findNearestAvailable(any(), any(), eq(5.0), eq(storeId)))
-            .thenReturn(Optional.of(avail));
-        when(riderRepository.findById(riderId)).thenReturn(Optional.of(rider));
+        when(availabilityRepository.findEligibleNearestCandidates(
+            any(), any(), eq(5.0), eq(storeId), eq(0),
+            anyInt(), anyInt(), any(), eq(true), eq(NOW), anyInt()))
+            .thenReturn(List.of(avail));
+        when(riderRepository.findAllById(List.of(riderId))).thenReturn(List.of(rider));
         when(shiftRepository.findByRiderIdAndStatus(riderId, "ACTIVE")).thenReturn(List.of());
 
         RiderAssignmentService service = new RiderAssignmentService(
@@ -228,9 +238,55 @@ class RiderCapacityFatigueAndIdempotencyTest {
         activeShift.setShiftStart(NOW.minus(Duration.ofHours(1)));
         activeShift.setShiftEnd(NOW.plus(Duration.ofHours(3)));
         when(shiftRepository.findByRiderIdAndStatus(riderId, "ACTIVE")).thenReturn(List.of(activeShift));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(riderId))
+            .thenReturn(Optional.of(avail));
 
         assertThat(service.assignRider(orderId, storeId, new BigDecimal("12.97"), new BigDecimal("77.59")))
             .isEqualTo(riderId);
+    }
+
+    @Test
+    @DisplayName("Ineligible nearest candidate (off-shift or fatigued) does not starve eligible second-nearest rider")
+    void ineligibleNearestRiderDoesNotStarveEligibleCandidate() {
+        UUID orderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        UUID offShiftRiderId = UUID.randomUUID();
+        UUID eligibleRiderId = UUID.randomUUID();
+
+        RiderFleetProperties props = new RiderFleetProperties();
+        props.getAssignment().setEnforceShiftValidation(true);
+
+        Rider offShiftRider = buildRider(offShiftRiderId, storeId, VehicleType.MOTORCYCLE, RiderStatus.ACTIVE);
+        Rider eligibleRider = buildRider(eligibleRiderId, storeId, VehicleType.MOTORCYCLE, RiderStatus.ACTIVE);
+        RiderAvailability nearestAvail = buildAvailability(offShiftRiderId, storeId);
+        RiderAvailability secondAvail = buildAvailability(eligibleRiderId, storeId);
+
+        RiderShiftService shiftService = new RiderShiftService(shiftRepository);
+        RiderShift activeShift = new RiderShift();
+        activeShift.setRiderId(eligibleRiderId);
+        activeShift.setStatus("ACTIVE");
+        activeShift.setShiftStart(NOW.minus(Duration.ofHours(1)));
+        activeShift.setShiftEnd(NOW.plus(Duration.ofHours(3)));
+
+        when(assignmentRepository.existsByOrderId(orderId)).thenReturn(false);
+        when(availabilityRepository.findEligibleNearestCandidates(
+            any(), any(), eq(5.0), eq(storeId), eq(0),
+            anyInt(), anyInt(), any(), eq(true), eq(NOW), anyInt()))
+            .thenReturn(List.of(nearestAvail, secondAvail));
+        when(riderRepository.findAllById(List.of(offShiftRiderId, eligibleRiderId)))
+            .thenReturn(List.of(offShiftRider, eligibleRider));
+        when(shiftRepository.findByRiderIdAndStatus(offShiftRiderId, "ACTIVE")).thenReturn(List.of());
+        when(shiftRepository.findByRiderIdAndStatus(eligibleRiderId, "ACTIVE")).thenReturn(List.of(activeShift));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(eligibleRiderId))
+            .thenReturn(Optional.of(secondAvail));
+
+        RiderAssignmentService service = new RiderAssignmentService(
+            riderRepository, availabilityRepository, assignmentRepository, outboxService,
+            props, dispatchOptimizerClient, null, null, shiftService, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        UUID assigned = service.assignRider(orderId, storeId, new BigDecimal("12.97"), new BigDecimal("77.59"));
+        assertThat(assigned).isEqualTo(eligibleRiderId);
+        verify(availabilityRepository, never()).findAvailableByRiderIdForUpdateSkipLocked(offShiftRiderId);
     }
 
     @Test

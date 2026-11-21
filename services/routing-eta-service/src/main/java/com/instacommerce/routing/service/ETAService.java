@@ -1,5 +1,6 @@
 package com.instacommerce.routing.service;
 
+import com.instacommerce.platform.geo.GeoUtils;
 import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.domain.model.RoutingBarrier;
 import com.instacommerce.routing.domain.model.TrafficCongestionFeed;
@@ -19,15 +20,12 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 @Service
 public class ETAService {
 
-    private static final double EARTH_RADIUS_KM = 6371.0;
     private static final int CACHE_KEY_SCALE = 4;
     private static final Set<String> MONSOON_CONDITION_TYPES = Set.of(
         "RAIN", "LIGHT_RAIN", "MODERATE_RAIN", "HEAVY_RAIN", "MONSOON", "STORM", "CYCLONE"
@@ -38,32 +36,6 @@ public class ETAService {
     private final WeatherConditionRepository weatherRepository;
     private final TrafficCongestionFeedRepository trafficFeedRepository;
     private final Clock clock;
-
-    public ETAService(RoutingProperties routingProperties) {
-        this(routingProperties, (RoutingBarrierRepository) null, null, null, Clock.systemUTC());
-    }
-
-    @Autowired
-    public ETAService(RoutingProperties routingProperties,
-                      ObjectProvider<RoutingBarrierRepository> barrierRepositoryProvider,
-                      ObjectProvider<WeatherConditionRepository> weatherRepositoryProvider,
-                      ObjectProvider<TrafficCongestionFeedRepository> trafficFeedRepositoryProvider,
-                      ObjectProvider<Clock> clockProvider) {
-        this(
-            routingProperties,
-            barrierRepositoryProvider != null ? barrierRepositoryProvider.getIfAvailable() : null,
-            weatherRepositoryProvider != null ? weatherRepositoryProvider.getIfAvailable() : null,
-            trafficFeedRepositoryProvider != null ? trafficFeedRepositoryProvider.getIfAvailable() : null,
-            clockProvider != null ? clockProvider.getIfAvailable(Clock::systemUTC) : Clock.systemUTC()
-        );
-    }
-
-    public ETAService(RoutingProperties routingProperties,
-                      RoutingBarrierRepository barrierRepository,
-                      WeatherConditionRepository weatherRepository,
-                      TrafficCongestionFeedRepository trafficFeedRepository) {
-        this(routingProperties, barrierRepository, weatherRepository, trafficFeedRepository, Clock.systemUTC());
-    }
 
     public ETAService(RoutingProperties routingProperties,
                       RoutingBarrierRepository barrierRepository,
@@ -123,7 +95,7 @@ public class ETAService {
                                                   double inclinePercent, int batchStops,
                                                   Instant evaluationTime) {
         Instant calculatedAt = evaluationTime != null ? evaluationTime : Instant.now(clock);
-        double straightLineKm = haversineDistance(fromLat, fromLng, toLat, toLng);
+        double straightLineKm = GeoUtils.haversineKm(fromLat, fromLng, toLat, toLng);
         double roadDistanceKm = straightLineKm * routingProperties.getEta().getRoadDistanceMultiplier();
 
         BarrierImpact barrierImpact = evaluateBarriers(fromLat, fromLng, toLat, toLng, calculatedAt);
@@ -250,16 +222,6 @@ public class ETAService {
     private double computeBreachProbability(double totalMinutes, int slaThresholdMinutes) {
         double slaMinutes = Math.max(1.0, slaThresholdMinutes);
         return 1.0 / (1.0 + Math.exp(-5.0 * (totalMinutes - slaMinutes) / slaMinutes));
-    }
-
-    private double haversineDistance(double lat1, double lon1, double lat2, double lon2) {
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLon = Math.toRadians(lon2 - lon1);
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
-            + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
-            * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return EARTH_RADIUS_KM * c;
     }
 
     private double adjustedSpeedKmh(Instant instant) {
