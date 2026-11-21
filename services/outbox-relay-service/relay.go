@@ -12,14 +12,20 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
+type outboxDB interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Ping(ctx context.Context) error
+}
+
 type relayService struct {
 	cfg          Config
 	logger       *slog.Logger
-	db           *pgxpool.Pool
+	db           outboxDB
 	producer     sarama.SyncProducer
 	kafkaConfig  *sarama.Config
 	tracer       trace.Tracer
@@ -32,6 +38,19 @@ type relayService struct {
 }
 
 func newRelayService(cfg Config, logger *slog.Logger, db *pgxpool.Pool, producer sarama.SyncProducer, kafkaConfig *sarama.Config, tracer trace.Tracer, metrics relayMetrics) (*relayService, error) {
+	if db == nil {
+		return newRelayServiceWithDB(cfg, logger, nil, producer, kafkaConfig, tracer, metrics)
+	}
+	return newRelayServiceWithDB(cfg, logger, db, producer, kafkaConfig, tracer, metrics)
+}
+
+func newRelayServiceWithDB(cfg Config, logger *slog.Logger, db outboxDB, producer sarama.SyncProducer, kafkaConfig *sarama.Config, tracer trace.Tracer, metrics relayMetrics) (*relayService, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if tracer == nil {
+		tracer = otel.Tracer("outbox-relay")
+	}
 	table := pgx.Identifier{cfg.OutboxTable}.Sanitize()
 	selectSQL := fmt.Sprintf(`SELECT id::text, aggregate_type, aggregate_id, event_type, payload, created_at,
     COALESCE(source_service, '') AS source_service,
@@ -104,8 +123,20 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if s == nil || s.db == nil || s.producer == nil {
+		return errors.New("relay service dependencies not configured")
+	}
 
-	ctx, span := s.tracer.Start(ctx, "outbox.relay.batch",
+	tracer := s.tracer
+	if tracer == nil {
+		tracer = otel.Tracer("outbox-relay")
+	}
+	logger := s.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	ctx, span := tracer.Start(ctx, "outbox.relay.batch",
 		trace.WithAttributes(
 			attribute.Int("outbox.batch_size", s.cfg.BatchSize),
 			attribute.String("outbox.table", s.cfg.OutboxTable),
@@ -132,21 +163,23 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 		span.RecordError(err)
 		return s.fail(ctx, err)
 	}
-	defer rows.Close()
 
 	events := make([]outboxEvent, 0, s.cfg.BatchSize)
 	for rows.Next() {
 		var evt outboxEvent
 		if err := rows.Scan(&evt.ID, &evt.AggregateType, &evt.AggregateID, &evt.EventType, &evt.Payload, &evt.CreatedAt, &evt.SourceService, &evt.CorrelationID, &evt.SchemaVersion); err != nil {
+			rows.Close()
 			span.RecordError(err)
 			return s.fail(ctx, err)
 		}
 		events = append(events, evt)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		span.RecordError(err)
 		return s.fail(ctx, err)
 	}
+	rows.Close()
 
 	commitCtx, commitCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer commitCancel()
@@ -159,7 +192,7 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 		}
 
 		topic := resolveKafkaTopic(s.cfg.KafkaTopic, evt.AggregateType)
-		msgCtx, msgSpan := s.tracer.Start(ctx, "outbox.relay.publish",
+		msgCtx, msgSpan := tracer.Start(ctx, "outbox.relay.publish",
 			trace.WithAttributes(
 				attribute.String("event.id", evt.ID),
 				attribute.String("event.type", evt.EventType),
@@ -172,7 +205,7 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 		traceID := populateEventTrace(&evt, msgSpan)
 		partitionKey, schemaVersion, valErr := validateOutboxEvent(evt)
 		if valErr != nil {
-			s.metrics.failures.Add(msgCtx, 1)
+			s.metrics.addFailures(msgCtx, 1)
 			msgSpan.RecordError(valErr)
 			if dlqErr := s.quarantineEvent(msgCtx, evt, topic, traceID, partitionKey, schemaVersion, 1, valErr); dlqErr != nil {
 				msgSpan.End()
@@ -198,11 +231,11 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 		}
 
 		if _, _, err := s.producer.SendMessage(message); err != nil {
-			s.metrics.failures.Add(msgCtx, 1)
+			s.metrics.addFailures(msgCtx, 1)
 			msgSpan.RecordError(err)
 			attempts := s.recordRetryAttempt(evt.ID)
 			maxRetries := s.maxPublishRetries()
-			s.logger.Error("failed to publish message",
+			logger.Error("failed to publish message",
 				"error", err, "event_id", evt.ID, "topic", topic, "attempt", attempts, "max_retries", maxRetries,
 			)
 			if attempts < maxRetries {
@@ -226,15 +259,15 @@ func (s *relayService) relayBatch(ctx context.Context) error {
 
 		s.clearRetryAttempt(evt.ID)
 		lag := time.Since(evt.CreatedAt).Seconds()
-		s.metrics.relayed.Add(msgCtx, 1)
-		s.metrics.lag.Record(msgCtx, lag)
+		s.metrics.addRelayed(msgCtx, 1)
+		s.metrics.recordLag(msgCtx, lag)
 		msgSpan.End()
 
 		if _, err := tx.Exec(commitCtx, s.updateSQL, evt.ID); err != nil {
 			span.RecordError(err)
 			return s.fail(ctx, err)
 		}
-		s.logger.Debug("relayed outbox event", "event_id", evt.ID, "topic", topic, "lag_seconds", lag)
+		logger.Debug("relayed outbox event", "event_id", evt.ID, "topic", topic, "lag_seconds", lag)
 	}
 
 	if err := tx.Commit(commitCtx); err != nil {
@@ -279,18 +312,22 @@ func (s *relayService) quarantineEvent(
 		Headers: buildDLQHeaders(evt, topic, traceID, partitionKey, schemaVersion, attempts, cause, now),
 	}
 	if _, _, dlqErr := s.producer.SendMessage(dlqMessage); dlqErr != nil {
-		s.logger.Error("failed to publish to DLQ, pipeline stalled",
-			"error", dlqErr, "event_id", evt.ID, "dlq_topic", s.cfg.DLQTopic)
+		if s.logger != nil {
+			s.logger.Error("failed to publish to DLQ, pipeline stalled",
+				"error", dlqErr, "event_id", evt.ID, "dlq_topic", s.cfg.DLQTopic)
+		}
 		return dlqErr
 	}
-	s.metrics.dlq.Add(ctx, 1)
-	s.logger.Warn("event sent to DLQ", "event_id", evt.ID, "topic", topic, "dlq_topic", s.cfg.DLQTopic, "category", classifyRelayError(cause))
+	s.metrics.addDLQ(ctx, 1)
+	if s.logger != nil {
+		s.logger.Warn("event sent to DLQ", "event_id", evt.ID, "topic", topic, "dlq_topic", s.cfg.DLQTopic, "category", classifyRelayError(cause))
+	}
 	return nil
 }
 
 func (s *relayService) fail(ctx context.Context, err error) error {
 	if err != nil && !errors.Is(err, context.Canceled) {
-		s.metrics.failures.Add(ctx, 1)
+		s.metrics.addFailures(ctx, 1)
 	}
 	return err
 }

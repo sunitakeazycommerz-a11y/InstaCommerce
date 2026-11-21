@@ -249,7 +249,7 @@ func (p *KafkaPublisher) Publish(ctx context.Context, event ReconciliationEvent)
 }
 
 func (p *KafkaPublisher) Close() error {
-	if !p.enabled {
+	if p == nil || !p.enabled || p.writer == nil {
 		return nil
 	}
 	return p.writer.Close()

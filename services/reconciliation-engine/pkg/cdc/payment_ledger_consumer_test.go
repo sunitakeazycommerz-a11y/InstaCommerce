@@ -349,3 +349,27 @@ func TestConsumerMetrics_ShouldTrackProcessingStats(t *testing.T) {
 		t.Errorf("expected 0 failed events, got %d", metrics.eventsFailed)
 	}
 }
+
+func TestCDCConsumer_StopIsIdempotent(t *testing.T) {
+	consumer := &CDCConsumer{
+		config: CDCConsumerConfig{
+			BatchTimeout: 10 * time.Millisecond,
+		},
+		dailySnapshots: make(map[string]*DailySnapshot),
+		metrics:        &CDCMetrics{},
+		done:           make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := consumer.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if err := consumer.Stop(); err != nil {
+		t.Fatalf("first Stop failed: %v", err)
+	}
+	if err := consumer.Stop(); err != nil {
+		t.Fatalf("second Stop failed: %v", err)
+	}
+}

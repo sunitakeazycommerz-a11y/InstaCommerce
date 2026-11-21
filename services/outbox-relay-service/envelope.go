@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/IBM/sarama"
 	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
@@ -42,6 +43,8 @@ var (
 		"stock_batch": "inventory.events", "stockbatch": "inventory.events",
 		"inventory_safety_stock": "inventory.events", "inventorysafetystock": "inventory.events",
 		"fulfillment": "fulfillment.events", "picktask": "fulfillment.events", "pick_task": "fulfillment.events",
+		"pickbatch": "fulfillment.events", "pick_batch": "fulfillment.events",
+		"deliveryfailure": "fulfillment.events", "delivery_failure": "fulfillment.events",
 		"substitution": "fulfillment.events", "substitutions": "fulfillment.events",
 		"catalog": "catalog.events", "product": "catalog.events", "products": "catalog.events",
 		"category": "catalog.events", "categories": "catalog.events",
@@ -49,6 +52,7 @@ var (
 		"coupons": "pricing.events", "promotion": "pricing.events", "promotions": "pricing.events",
 		"identity": "identity.events", "user": "identity.events", "users": "identity.events",
 		"rider": "rider.events", "riders": "rider.events", "riderfleet": "rider.events", "rider_fleet": "rider.events",
+		"geofence": "rider.geofence.events", "rider_geofence": "rider.geofence.events", "ridergeofence": "rider.geofence.events",
 		"warehouse": "warehouse.events", "store": "warehouse.events", "stores": "warehouse.events",
 		"warehousebin": "warehouse.events", "warehouse_bin": "warehouse.events",
 		"storecapacity": "warehouse.events", "store_capacity": "warehouse.events",
@@ -199,7 +203,7 @@ func buildEventMessage(evt outboxEvent) []byte {
 		return evt.Payload
 	}
 
-	schemaVersion := evt.SchemaVersion
+	schemaVersion := strings.TrimSpace(evt.SchemaVersion)
 	if schemaVersion == "" {
 		schemaVersion = "v1"
 	}
@@ -247,6 +251,33 @@ func buildEventMessage(evt outboxEvent) []byte {
 	return bytes
 }
 
+func errMessage(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	return err.Error()
+}
+
+func resolveDLQSchemaVersion(evt outboxEvent, schemaVersion string) string {
+	if trimmed := strings.TrimSpace(schemaVersion); trimmed != "" {
+		return trimmed
+	}
+	if trimmed := strings.TrimSpace(evt.SchemaVersion); trimmed != "" {
+		return trimmed
+	}
+	return "unknown"
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	for maxBytes > 0 && !utf8.RuneStart(value[maxBytes]) {
+		maxBytes--
+	}
+	return value[:maxBytes]
+}
+
 func buildDLQMessage(evt outboxEvent, targetTopic string, produceErr error) []byte {
 	return buildEnrichedDLQMessage(evt, targetTopic, strings.TrimSpace(evt.AggregateID), 1, produceErr, time.Now().UTC())
 }
@@ -264,7 +295,7 @@ func buildEnrichedDLQMessage(evt outboxEvent, targetTopic, partitionKey string, 
 		"eventId":        evt.ID,
 		"originalTopic":  targetTopic,
 		"partitionKey":   partitionKey,
-		"error":          produceErr.Error(),
+		"error":          errMessage(produceErr),
 		"errorCategory":  classifyRelayError(produceErr),
 		"attempts":       attempts,
 		"timestamp":      quarantinedAt.UTC().Format(time.RFC3339Nano),
@@ -273,7 +304,7 @@ func buildEnrichedDLQMessage(evt outboxEvent, targetTopic, partitionKey string, 
 		"aggregateType":  evt.AggregateType,
 		"aggregateId":    evt.AggregateID,
 		"eventType":      evt.EventType,
-		"schemaVersion":  evt.SchemaVersion,
+		"schemaVersion":  resolveDLQSchemaVersion(evt, ""),
 		"sourceService":  evt.SourceService,
 		"correlationId":  evt.CorrelationID,
 		"payload":        payload,
@@ -287,11 +318,16 @@ func buildEnrichedDLQMessage(evt outboxEvent, targetTopic, partitionKey string, 
 }
 
 func buildDLQHeaders(evt outboxEvent, targetTopic, traceID, partitionKey, schemaVersion string, attempts int, err error, quarantinedAt time.Time) []sarama.RecordHeader {
+	if attempts < 1 {
+		attempts = 1
+	}
+	resolvedSchema := resolveDLQSchemaVersion(evt, schemaVersion)
+	reason := truncateUTF8(errMessage(err), 512)
 	return buildSaramaHeaders(evt, traceID,
-		sarama.RecordHeader{Key: []byte("schema_version"), Value: []byte(schemaVersion)},
+		sarama.RecordHeader{Key: []byte("schema_version"), Value: []byte(resolvedSchema)},
 		sarama.RecordHeader{Key: []byte("partition_key"), Value: []byte(partitionKey)},
 		sarama.RecordHeader{Key: []byte("original_topic"), Value: []byte(targetTopic)},
-		sarama.RecordHeader{Key: []byte("dlq_reason"), Value: []byte(err.Error())},
+		sarama.RecordHeader{Key: []byte("dlq_reason"), Value: []byte(reason)},
 		sarama.RecordHeader{Key: []byte("error_category"), Value: []byte(classifyRelayError(err))},
 		sarama.RecordHeader{Key: []byte("quarantine_attempts"), Value: []byte(strconv.Itoa(attempts))},
 		sarama.RecordHeader{Key: []byte("quarantined_at"), Value: []byte(quarantinedAt.UTC().Format(time.RFC3339Nano))},

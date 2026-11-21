@@ -138,7 +138,9 @@ func (h *SchemaEvolutionHandler) DetectAndEvolveSchema(ctx context.Context, fiel
 		return nil
 	}
 
-	evolvedSchema := append(md.Schema, filteredAdd...)
+	evolvedSchema := make(bigquery.Schema, 0, len(md.Schema)+len(filteredAdd))
+	evolvedSchema = append(evolvedSchema, md.Schema...)
+	evolvedSchema = append(evolvedSchema, filteredAdd...)
 	update := bigquery.TableMetadataToUpdate{
 		Schema: evolvedSchema,
 	}

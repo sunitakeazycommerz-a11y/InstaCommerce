@@ -228,6 +228,9 @@ func (h *ReconciliationHandler) HandleReviewMismatch(w http.ResponseWriter, r *h
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	defer r.Body.Close()
+
 	var req reconciliation.ReviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -266,6 +269,9 @@ func (h *ReconciliationHandler) HandleApplyFix(w http.ResponseWriter, r *http.Re
 		h.writeError(w, http.StatusBadRequest, "invalid mismatch ID")
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	defer r.Body.Close()
 
 	var req reconciliation.FixRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/api"
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/config"
@@ -69,4 +73,41 @@ func TestNewWorkerPoolFromConfig_UsesDefaultRetryPolicy(t *testing.T) {
 	defer pool.Close()
 
 	assert.Equal(t, subscription.DefaultRetryPolicy(), pool.EffectiveRetryPolicy())
+}
+
+func TestBuildHealthChecker_HonestDependencyReporting(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	closedAddr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	rdb := redis.NewClient(&redis.Options{Addr: closedAddr})
+	defer rdb.Close()
+
+	checker := buildHealthChecker(&config.Config{Version: "9.9.9"}, nil, rdb)
+
+	recReady := httptest.NewRecorder()
+	checker.Readiness(recReady, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, recReady.Code)
+
+	var readyResp health.HealthResponse
+	require.NoError(t, json.NewDecoder(recReady.Body).Decode(&readyResp))
+	assert.Equal(t, health.StatusDOWN, readyResp.Status)
+	assert.Equal(t, health.StatusUNCONFIGURED, readyResp.Checks["database"])
+	assert.Equal(t, health.StatusDOWN, readyResp.Checks["redis"])
+	assert.Equal(t, health.StatusUNCONFIGURED, readyResp.Checks["kafka"])
+	assert.Equal(t, health.StatusUNCONFIGURED, readyResp.Checks["temporal"])
+
+	recHealth := httptest.NewRecorder()
+	checker.Health(recHealth, httptest.NewRequest(http.MethodGet, "/health", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, recHealth.Code)
+
+	var healthResp health.HealthResponse
+	require.NoError(t, json.NewDecoder(recHealth.Body).Decode(&healthResp))
+	assert.Equal(t, "9.9.9", healthResp.Version)
+	assert.Equal(t, health.StatusDOWN, healthResp.Status)
+
+	recLive := httptest.NewRecorder()
+	checker.Liveness(recLive, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	assert.Equal(t, http.StatusOK, recLive.Code)
 }

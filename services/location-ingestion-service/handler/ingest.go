@@ -135,20 +135,35 @@ func (h *LocationHandler) Close() {
 }
 
 func (h *LocationHandler) geofenceWorker(ctx context.Context) {
+	publish := func(publishCtx context.Context, env GeofenceEventEnvelope) {
+		if err := h.geofencePublisher.PublishGeofenceEvent(publishCtx, env); err != nil {
+			h.logger.Error("failed to publish geofence event",
+				"rider_id", env.Payload.RiderID,
+				"event_type", env.Payload.EventType,
+				"error", err)
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			for {
+				select {
+				case env, ok := <-h.geofenceQueue:
+					if !ok {
+						return
+					}
+					publish(drainCtx, env)
+				default:
+					return
+				}
+			}
 		case env, ok := <-h.geofenceQueue:
 			if !ok {
 				return
 			}
-			if err := h.geofencePublisher.PublishGeofenceEvent(ctx, env); err != nil {
-				h.logger.Error("failed to publish geofence event",
-					"rider_id", env.Payload.RiderID,
-					"event_type", env.Payload.EventType,
-					"error", err)
-			}
+			publish(ctx, env)
 		}
 	}
 }

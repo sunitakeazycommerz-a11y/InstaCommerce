@@ -56,14 +56,18 @@ type GeofenceEventEnvelope struct {
 
 // ToEnvelope converts a GeofenceEvent and GPS coordinates to a canonical EventEnvelope.
 func (e GeofenceEvent) ToEnvelope(lat, lng float64) GeofenceEventEnvelope {
-	id := fmt.Sprintf("geo_%s_%d", e.RiderID, e.Timestamp.UnixNano())
+	ts := e.Timestamp.UTC()
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	id := fmt.Sprintf("geo_%s_%d", e.RiderID, ts.UnixNano())
 	return GeofenceEventEnvelope{
 		ID:            id,
 		EventID:       id,
 		EventType:     "RiderGeofenceTransition",
-		AggregateType: "Rider",
+		AggregateType: "RiderGeofence",
 		AggregateID:   e.RiderID,
-		EventTime:     e.Timestamp.UTC().Format(time.RFC3339Nano),
+		EventTime:     ts.Format(time.RFC3339Nano),
 		SchemaVersion: "v1",
 		SourceService: "location-ingestion-service",
 		Payload: GeofenceEventPayload{
@@ -71,7 +75,7 @@ func (e GeofenceEvent) ToEnvelope(lat, lng float64) GeofenceEventEnvelope {
 			ZoneID:    e.ZoneID,
 			EventType: e.EventType,
 			H3Index:   e.H3Index,
-			Timestamp: e.Timestamp.UTC(),
+			Timestamp: ts,
 			Lat:       lat,
 			Lng:       lng,
 		},
@@ -125,6 +129,14 @@ func (d *InMemoryGeofenceDeduplicator) TryAcquire(ctx context.Context, key strin
 	now := time.Now()
 	if exp, exists := d.entries[key]; exists && now.Before(exp) {
 		return false
+	}
+
+	if len(d.entries) > 1000 {
+		for k, exp := range d.entries {
+			if !now.Before(exp) {
+				delete(d.entries, k)
+			}
+		}
 	}
 
 	d.entries[key] = now.Add(ttl)

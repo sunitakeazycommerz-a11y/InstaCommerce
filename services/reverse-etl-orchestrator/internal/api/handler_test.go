@@ -246,3 +246,43 @@ func (c *conflictManager) Pause(ctx context.Context, id string) error {
 	}
 	return subscription.ValidateTransition(sub.State, subscription.StatePaused)
 }
+
+func TestAPIErrorAndValidationPaths(t *testing.T) {
+	mgr := newMockSubscriptionManager()
+	r := setupTestRouter(mgr)
+
+	// Malformed JSON -> 400
+	recBadJSON := httptest.NewRecorder()
+	r.ServeHTTP(recBadJSON, httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewBufferString("{bad")))
+	assert.Equal(t, http.StatusBadRequest, recBadJSON.Code)
+
+	// Missing required fields -> 400
+	recMissing := httptest.NewRecorder()
+	r.ServeHTTP(recMissing, httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewBufferString(`{"name":"only-name"}`)))
+	assert.Equal(t, http.StatusBadRequest, recMissing.Code)
+
+	// ErrInvalidSubscription from service -> 400
+	mgr.createErr = subscription.ErrInvalidSubscription
+	validBody, _ := json.Marshal(subscription.CreateRequest{Name: "n", SourceDomain: "orders", SinkType: "redis"})
+	recInvalid := httptest.NewRecorder()
+	r.ServeHTTP(recInvalid, httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewReader(validBody)))
+	assert.Equal(t, http.StatusBadRequest, recInvalid.Code)
+
+	// Internal error on Create -> 500
+	mgr.createErr = errors.New("db offline")
+	recCreateErr := httptest.NewRecorder()
+	r.ServeHTTP(recCreateErr, httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewReader(validBody)))
+	assert.Equal(t, http.StatusInternalServerError, recCreateErr.Code)
+
+	// Internal error on List -> 500
+	mgr.listErr = errors.New("db query failed")
+	recListErr := httptest.NewRecorder()
+	r.ServeHTTP(recListErr, httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions?source_domain=orders", nil))
+	assert.Equal(t, http.StatusInternalServerError, recListErr.Code)
+
+	// Internal error on Get -> 500
+	mgr.getErr = errors.New("db timeout")
+	recGetErr := httptest.NewRecorder()
+	r.ServeHTTP(recGetErr, httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions/sub-1", nil))
+	assert.Equal(t, http.StatusInternalServerError, recGetErr.Code)
+}

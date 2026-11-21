@@ -171,6 +171,7 @@ func DecodePostJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, logg
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	defer r.Body.Close()
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 

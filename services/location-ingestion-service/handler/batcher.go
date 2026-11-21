@@ -30,8 +30,9 @@ type KafkaProducer interface {
 
 // KafkaMessage is a key-value pair destined for Kafka.
 type KafkaMessage struct {
-	Key   []byte
-	Value []byte
+	Key     []byte
+	Value   []byte
+	Headers []kafka.Header
 }
 
 // KafkaWriterProducer adapts a *kafka.Writer to KafkaProducer.
@@ -64,10 +65,11 @@ func (p *KafkaWriterProducer) PublishBatch(ctx context.Context, topic string, me
 	now := time.Now().UTC()
 	for _, m := range messages {
 		kafkaMsgs = append(kafkaMsgs, kafka.Message{
-			Topic: msgTopic,
-			Key:   m.Key,
-			Value: m.Value,
-			Time:  now,
+			Topic:   msgTopic,
+			Key:     m.Key,
+			Value:   m.Value,
+			Headers: m.Headers,
+			Time:    now,
 		})
 	}
 	return p.writer.WriteMessages(ctx, kafkaMsgs...)

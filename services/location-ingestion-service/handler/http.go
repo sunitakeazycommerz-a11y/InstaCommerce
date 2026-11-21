@@ -74,6 +74,7 @@ func (h *LocationHandler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 		maxBytes = defaultMaxBodyBytes
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	defer r.Body.Close()
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
@@ -128,6 +129,7 @@ func (h *LocationHandler) HandleBatchIngest(w http.ResponseWriter, r *http.Reque
 		maxBytes = defaultMaxBodyBytes
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.recordDropped("http", "decode")

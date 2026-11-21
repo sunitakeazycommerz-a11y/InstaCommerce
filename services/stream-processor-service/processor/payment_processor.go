@@ -265,7 +265,12 @@ func (p *PaymentProcessor) recordWindowEntry(method string, success bool) {
 	for idx < len(entries) && entries[idx].timestamp.Before(cutoff) {
 		idx++
 	}
-	entries = entries[idx:]
+	if idx > 0 {
+		remaining := len(entries) - idx
+		copy(entries, entries[idx:])
+		clear(entries[remaining:])
+		entries = entries[:remaining]
+	}
 
 	// Append new entry
 	entries = append(entries, paymentWindowEntry{timestamp: now, success: success})

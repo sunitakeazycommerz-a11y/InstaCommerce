@@ -142,7 +142,7 @@ func NewServiceWithDB(db *sql.DB, cfg *config.Config) *Service {
 
 // Close closes the service resources.
 func (s *Service) Close() error {
-	if s.db == nil {
+	if s == nil || s.db == nil {
 		return nil
 	}
 	return s.db.Close()
@@ -150,7 +150,7 @@ func (s *Service) Close() error {
 
 // Ping checks database connectivity.
 func (s *Service) Ping(ctx context.Context) error {
-	if s.db == nil {
+	if s == nil || s.db == nil {
 		return errors.New("database not initialized")
 	}
 	return s.db.PingContext(ctx)
@@ -158,6 +158,9 @@ func (s *Service) Ping(ctx context.Context) error {
 
 // DB exposes the underlying SQL database handle for worker audit persistence.
 func (s *Service) DB() *sql.DB {
+	if s == nil {
+		return nil
+	}
 	return s.db
 }
 
@@ -166,7 +169,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, createdBy strin
 	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.SourceDomain) == "" || strings.TrimSpace(req.SinkType) == "" {
 		return nil, fmt.Errorf("%w: name, source_domain, and sink_type are required", ErrInvalidSubscription)
 	}
-	if s.db == nil {
+	if s == nil || s.db == nil {
 		return nil, errors.New("database not initialized")
 	}
 
@@ -209,7 +212,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, createdBy strin
 
 // Get retrieves a subscription by ID.
 func (s *Service) Get(ctx context.Context, id string) (*Subscription, error) {
-	if s.db == nil {
+	if s == nil || s.db == nil {
 		return nil, errors.New("database not initialized")
 	}
 
@@ -239,7 +242,7 @@ func (s *Service) Get(ctx context.Context, id string) (*Subscription, error) {
 
 // List retrieves all subscriptions with optional filters.
 func (s *Service) List(ctx context.Context, sourceDomain, sinkType string, state State) ([]*Subscription, error) {
-	if s.db == nil {
+	if s == nil || s.db == nil {
 		return nil, errors.New("database not initialized")
 	}
 
@@ -304,7 +307,7 @@ func (s *Service) transition(ctx context.Context, id string, newState State) err
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("%w: empty id", ErrSubscriptionNotFound)
 	}
-	if s.db == nil {
+	if s == nil || s.db == nil {
 		return errors.New("database not initialized")
 	}
 

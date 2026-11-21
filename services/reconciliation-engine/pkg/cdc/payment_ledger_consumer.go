@@ -25,6 +25,9 @@ type CDCConsumer struct {
 	dailySnapshots map[string]*DailySnapshot
 	metrics        *CDCMetrics
 	done           chan struct{}
+	stopOnce       sync.Once
+	stopErr        error
+	wg             sync.WaitGroup
 }
 
 func resolveTopics(config CDCConsumerConfig) []string {
@@ -114,31 +117,70 @@ func NewCDCConsumer(_ context.Context, config CDCConsumerConfig, logger *slog.Lo
 }
 
 func (c *CDCConsumer) Start(ctx context.Context) error {
-	go c.runConsumerLoop(ctx)
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	if c.done == nil {
+		c.done = make(chan struct{})
+	}
+	c.mu.Unlock()
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.runConsumerLoop(ctx)
+	}()
 	return nil
 }
 
 func (c *CDCConsumer) Stop() error {
-	close(c.done)
-	if c.kafkaReader != nil {
-		return c.kafkaReader.Close()
+	if c == nil {
+		return nil
 	}
-	return nil
+	c.stopOnce.Do(func() {
+		c.mu.Lock()
+		if c.done == nil {
+			c.done = make(chan struct{})
+		}
+		done := c.done
+		c.mu.Unlock()
+		close(done)
+		if c.kafkaReader != nil {
+			c.stopErr = c.kafkaReader.Close()
+		}
+	})
+	c.wg.Wait()
+	return c.stopErr
 }
 
 func (c *CDCConsumer) runConsumerLoop(ctx context.Context) {
-	ticker := time.NewTicker(c.config.BatchTimeout)
+	batchTimeout := c.config.BatchTimeout
+	if batchTimeout <= 0 {
+		batchTimeout = 5 * time.Second
+	}
+	ticker := time.NewTicker(batchTimeout)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("cdc consumer context cancelled")
+			if c.logger != nil {
+				c.logger.Info("cdc consumer context cancelled")
+			}
 			return
 		case <-c.done:
-			c.logger.Info("cdc consumer stopped")
+			if c.logger != nil {
+				c.logger.Info("cdc consumer stopped")
+			}
 			return
 		default:
+		}
+		if c.kafkaReader == nil {
+			select {
+			case <-ctx.Done():
+			case <-c.done:
+			}
+			return
 		}
 
 		readCtx, cancel := context.WithTimeout(ctx, c.config.MaxWait*2)

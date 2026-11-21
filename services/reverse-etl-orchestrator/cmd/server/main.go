@@ -55,6 +55,23 @@ func newWorkerPoolFromConfig(cfg *config.Config, subscriptionSvc *subscription.S
 	})
 }
 
+func buildHealthChecker(cfg *config.Config, subscriptionSvc *subscription.Service, rdb *redis.Client) *health.Checker {
+	var opts []health.Option
+	if cfg != nil && cfg.Version != "" {
+		opts = append(opts, health.WithVersion(cfg.Version))
+	}
+	if rdb != nil {
+		opts = append(opts, health.WithRedis(health.PingerFunc(func(ctx context.Context) error {
+			return rdb.Ping(ctx).Err()
+		})))
+	}
+	var dbPinger health.Pinger
+	if subscriptionSvc != nil {
+		dbPinger = subscriptionSvc
+	}
+	return health.NewChecker(dbPinger, opts...)
+}
+
 func main() {
 	// Initialize structured logging
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -97,7 +114,7 @@ func main() {
 	defer workerPool.Close()
 
 	// Initialize health checker and API handler
-	healthChecker := health.NewChecker(subscriptionSvc)
+	healthChecker := buildHealthChecker(cfg, subscriptionSvc, rdb)
 	apiHandler := api.NewHandler(subscriptionSvc)
 
 	healthRouter := mux.NewRouter()

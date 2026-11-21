@@ -12,6 +12,7 @@ import (
 
 	"cloud.google.com/go/bigquery"
 	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -56,6 +57,22 @@ func sendToDLQ(
 	reason error,
 	consumerGroup string,
 ) error {
+	w, topic := unwrapDLQWriter(writer)
+	return sendToDLQWithWriter(ctx, w, topic, timeout, metrics, logger, tracer, items, reason, consumerGroup)
+}
+
+func sendToDLQWithWriter(
+	ctx context.Context,
+	writer dlqMessageWriter,
+	destinationTopic string,
+	timeout time.Duration,
+	metrics Metrics,
+	logger *slog.Logger,
+	tracer trace.Tracer,
+	items []batchItem,
+	reason error,
+	consumerGroup string,
+) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -64,6 +81,9 @@ func sendToDLQ(
 	}
 	if reason == nil {
 		reason = errors.New("unknown failure")
+	}
+	if tracer == nil {
+		tracer = otel.Tracer("cdc-consumer")
 	}
 
 	dlqReason := truncate(reason.Error(), 512)
@@ -79,7 +99,7 @@ func sendToDLQ(
 	spanCtx, span := tracer.Start(ctx, "kafka.dlq.write",
 		trace.WithAttributes(
 			attribute.String("messaging.system", "kafka"),
-			attribute.String("messaging.destination", writer.Topic),
+			attribute.String("messaging.destination", destinationTopic),
 			attribute.Int("dlq.count", len(items)),
 			attribute.String("dlq.category", errorCategory),
 		),
@@ -121,14 +141,20 @@ func buildDLQKafkaMessages(
 	messages := make([]kafka.Message, 0, len(items))
 	now := time.Now()
 	for _, item := range items {
+		itemReason := dlqReason
+		itemCategory := errorCategory
+		if item.transformErr != nil {
+			itemReason = truncate(item.transformErr.Error(), 512)
+			itemCategory = classifyDLQCategory(item.transformErr)
+		}
 		headers := append([]kafka.Header{}, item.message.Headers...)
 		schemaVer := extractHeaderValue(item.message.Headers, "schema_version", "schemaVersion")
 		if schemaVer == "" {
 			schemaVer = "unknown"
 		}
 		metaHeaders := []kafka.Header{
-			{Key: "dlq_reason", Value: []byte(dlqReason)},
-			{Key: "error_category", Value: []byte(errorCategory)},
+			{Key: "dlq_reason", Value: []byte(itemReason)},
+			{Key: "error_category", Value: []byte(itemCategory)},
 			{Key: "quarantined_at", Value: []byte(quarantinedAt)},
 			{Key: "consumer_group", Value: []byte(consumerGroup)},
 			{Key: "schema_version", Value: []byte(schemaVer)},
@@ -171,7 +197,9 @@ func commitMessages(ctx context.Context, timeout time.Duration, logger *slog.Log
 		err := reader.CommitMessages(commitCtx, messages...)
 		cancel()
 		if err != nil {
-			logger.Error("kafka commit failed", "error", err)
+			if logger != nil {
+				logger.Error("kafka commit failed", "error", err)
+			}
 			return err
 		}
 	}

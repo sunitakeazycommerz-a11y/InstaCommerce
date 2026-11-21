@@ -262,7 +262,12 @@ func (p *InventoryProcessor) updateVelocity(storeID, skuID string, delta int, no
 	for idx < len(records) && records[idx].timestamp.Before(cutoff) {
 		idx++
 	}
-	records = records[idx:]
+	if idx > 0 {
+		remaining := len(records) - idx
+		copy(records, records[idx:])
+		clear(records[remaining:])
+		records = records[:remaining]
+	}
 
 	// Append new record
 	records = append(records, velocityRecord{timestamp: now, delta: delta})

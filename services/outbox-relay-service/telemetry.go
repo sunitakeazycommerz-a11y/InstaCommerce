@@ -24,6 +24,30 @@ type relayMetrics struct {
 	lag      metric.Float64Histogram
 }
 
+func (m relayMetrics) addRelayed(ctx context.Context, n int64) {
+	if m.relayed != nil {
+		m.relayed.Add(ctx, n)
+	}
+}
+
+func (m relayMetrics) addFailures(ctx context.Context, n int64) {
+	if m.failures != nil {
+		m.failures.Add(ctx, n)
+	}
+}
+
+func (m relayMetrics) addDLQ(ctx context.Context, n int64) {
+	if m.dlq != nil {
+		m.dlq.Add(ctx, n)
+	}
+}
+
+func (m relayMetrics) recordLag(ctx context.Context, seconds float64) {
+	if m.lag != nil {
+		m.lag.Record(ctx, seconds)
+	}
+}
+
 func setupTelemetry(ctx context.Context, cfg Config, logger *slog.Logger) (*telemetry, error) {
 	providers, err := observability.InitOTel(ctx, observability.OTelConfig{
 		ServiceName:      cfg.OTelServiceName,

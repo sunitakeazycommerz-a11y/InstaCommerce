@@ -21,6 +21,28 @@ import (
 	"google.golang.org/api/googleapi"
 )
 
+type bqInserter interface {
+	Put(ctx context.Context, src any) error
+}
+
+type dlqMessageWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+}
+
+func unwrapBQInserter(inserter *bigquery.Inserter) bqInserter {
+	if inserter == nil {
+		return nil
+	}
+	return inserter
+}
+
+func unwrapDLQWriter(writer *kafka.Writer) (dlqMessageWriter, string) {
+	if writer == nil {
+		return nil, ""
+	}
+	return writer, writer.Topic
+}
+
 func runConsumer(
 	ctx context.Context,
 	reader *kafka.Reader,
@@ -33,6 +55,9 @@ func runConsumer(
 	schemaHandler *SchemaEvolutionHandler,
 	reportErr func(error),
 ) {
+	if tracer == nil {
+		tracer = otel.Tracer("cdc-consumer")
+	}
 	for {
 		msg, err := reader.FetchMessage(ctx)
 		if err != nil {
@@ -43,7 +68,7 @@ func runConsumer(
 			return
 		}
 
-		if msg.HighWaterMark > 0 {
+		if msg.HighWaterMark > 0 && metrics.consumerLag != nil {
 			lag := msg.HighWaterMark - msg.Offset - 1
 			if lag < 0 {
 				lag = 0
@@ -98,19 +123,41 @@ func runBatcher(
 	logger *slog.Logger,
 	tracer trace.Tracer,
 ) error {
-	ticker := time.NewTicker(cfg.BatchTimeout)
+	w, topic := unwrapDLQWriter(dlqWriter)
+	return runBatcherWithDeps(batchCh, unwrapBQInserter(inserter), w, topic, cfg, metrics, logger, tracer)
+}
+
+func runBatcherWithDeps(
+	batchCh <-chan batchItem,
+	inserter bqInserter,
+	dlqWriter dlqMessageWriter,
+	dlqTopic string,
+	cfg Config,
+	metrics Metrics,
+	logger *slog.Logger,
+	tracer trace.Tracer,
+) error {
+	timeout := cfg.BatchTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	batchSize := cfg.BatchSize
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	ticker := time.NewTicker(timeout)
 	defer ticker.Stop()
 
-	items := make([]batchItem, 0, cfg.BatchSize)
+	items := make([]batchItem, 0, batchSize)
 	for {
 		select {
 		case item, ok := <-batchCh:
 			if !ok {
-				return flushBatch(items, inserter, dlqWriter, cfg, metrics, logger, tracer)
+				return flushBatchWithDeps(items, inserter, dlqWriter, dlqTopic, cfg, metrics, logger, tracer)
 			}
 			items = append(items, item)
-			if len(items) >= cfg.BatchSize {
-				if err := flushBatch(items, inserter, dlqWriter, cfg, metrics, logger, tracer); err != nil {
+			if len(items) >= batchSize {
+				if err := flushBatchWithDeps(items, inserter, dlqWriter, dlqTopic, cfg, metrics, logger, tracer); err != nil {
 					return err
 				}
 				items = items[:0]
@@ -119,7 +166,7 @@ func runBatcher(
 			if len(items) == 0 {
 				continue
 			}
-			if err := flushBatch(items, inserter, dlqWriter, cfg, metrics, logger, tracer); err != nil {
+			if err := flushBatchWithDeps(items, inserter, dlqWriter, dlqTopic, cfg, metrics, logger, tracer); err != nil {
 				return err
 			}
 			items = items[:0]
@@ -136,8 +183,25 @@ func flushBatch(
 	logger *slog.Logger,
 	tracer trace.Tracer,
 ) error {
+	w, topic := unwrapDLQWriter(dlqWriter)
+	return flushBatchWithDeps(items, unwrapBQInserter(inserter), w, topic, cfg, metrics, logger, tracer)
+}
+
+func flushBatchWithDeps(
+	items []batchItem,
+	inserter bqInserter,
+	dlqWriter dlqMessageWriter,
+	dlqTopic string,
+	cfg Config,
+	metrics Metrics,
+	logger *slog.Logger,
+	tracer trace.Tracer,
+) error {
 	if len(items) == 0 {
 		return nil
+	}
+	if tracer == nil {
+		tracer = otel.Tracer("cdc-consumer")
 	}
 
 	rows := make([]bigquery.ValueSaver, 0, len(items))
@@ -167,20 +231,22 @@ func flushBatch(
 	defer span.End()
 
 	if len(transformFailedItems) > 0 {
-		if dlqErr := sendToDLQ(ctx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, transformFailedItems, firstTransformErr, cfg.KafkaGroupID); dlqErr != nil {
+		if dlqErr := sendToDLQWithWriter(ctx, dlqWriter, dlqTopic, cfg.DLQWriteTimeout, metrics, logger, tracer, transformFailedItems, firstTransformErr, cfg.KafkaGroupID); dlqErr != nil {
 			return dlqErr
 		}
 	}
 
 	if len(rows) > 0 {
 		start := time.Now()
-		failedIndices, err := insertWithRetry(ctx, inserter, rows, cfg, logger)
-		metrics.batchLatency.Observe(time.Since(start).Seconds())
+		failedIndices, err := insertWithRetryDeps(ctx, inserter, rows, cfg, logger)
+		if metrics.batchLatency != nil {
+			metrics.batchLatency.Observe(time.Since(start).Seconds())
+		}
 
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "bigquery insert failed")
-			if dlqErr := sendToDLQ(ctx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, validItems, err, cfg.KafkaGroupID); dlqErr != nil {
+			if dlqErr := sendToDLQWithWriter(ctx, dlqWriter, dlqTopic, cfg.DLQWriteTimeout, metrics, logger, tracer, validItems, err, cfg.KafkaGroupID); dlqErr != nil {
 				return dlqErr
 			}
 			readyItems := markReadyForCommit(items)
@@ -194,7 +260,7 @@ func flushBatch(
 					failedItems = append(failedItems, validItems[idx])
 				}
 			}
-			if dlqErr := sendToDLQ(ctx, dlqWriter, cfg.DLQWriteTimeout, metrics, logger, tracer, failedItems, errors.New("bigquery row insert failed"), cfg.KafkaGroupID); dlqErr != nil {
+			if dlqErr := sendToDLQWithWriter(ctx, dlqWriter, dlqTopic, cfg.DLQWriteTimeout, metrics, logger, tracer, failedItems, errors.New("bigquery row insert failed"), cfg.KafkaGroupID); dlqErr != nil {
 				return dlqErr
 			}
 		}
@@ -205,6 +271,13 @@ func flushBatch(
 }
 
 func insertWithRetry(ctx context.Context, inserter *bigquery.Inserter, rows []bigquery.ValueSaver, cfg Config, logger *slog.Logger) ([]int, error) {
+	return insertWithRetryDeps(ctx, unwrapBQInserter(inserter), rows, cfg, logger)
+}
+
+func insertWithRetryDeps(ctx context.Context, inserter bqInserter, rows []bigquery.ValueSaver, cfg Config, logger *slog.Logger) ([]int, error) {
+	if inserter == nil {
+		return nil, errors.New("bigquery inserter must not be nil")
+	}
 	backoff := cfg.BQBaseBackoff
 	for attempt := 0; attempt <= cfg.BQMaxRetries; attempt++ {
 		insertCtx, cancel := context.WithTimeout(ctx, cfg.BQInsertTimeout)
@@ -220,7 +293,9 @@ func insertWithRetry(ctx context.Context, inserter *bigquery.Inserter, rows []bi
 			for _, rowErr := range multiErr {
 				rowIndexes = append(rowIndexes, rowErr.RowIndex)
 			}
-			logger.Warn("bigquery row errors", "count", len(rowIndexes))
+			if logger != nil {
+				logger.Warn("bigquery row errors", "count", len(rowIndexes))
+			}
 			return rowIndexes, nil
 		}
 
@@ -231,7 +306,9 @@ func insertWithRetry(ctx context.Context, inserter *bigquery.Inserter, rows []bi
 		if sleep > cfg.BQMaxBackoff {
 			sleep = cfg.BQMaxBackoff
 		}
-		logger.Warn("bigquery insert retrying", "attempt", attempt+1, "backoff", sleep, "error", err)
+		if logger != nil {
+			logger.Warn("bigquery insert retrying", "attempt", attempt+1, "backoff", sleep, "error", err)
+		}
 		select {
 		case <-time.After(sleep):
 		case <-ctx.Done():

@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/location-ingestion-service/model"
+	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -149,15 +151,43 @@ func NewKafkaGeofencePublisher(producer KafkaProducer, topic string, logger *slo
 
 // PublishGeofenceEvent serializes the envelope and publishes it to Kafka.
 func (p *KafkaGeofencePublisher) PublishGeofenceEvent(ctx context.Context, envelope GeofenceEventEnvelope) error {
+	if p == nil || p.producer == nil {
+		return ErrKafkaDisabled
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	envelope = normalizeGeofenceEnvelope(ctx, envelope)
+
 	data, err := json.Marshal(envelope)
 	if err != nil {
 		return fmt.Errorf("geofence: marshal envelope: %w", err)
 	}
-	msg := KafkaMessage{
-		Key:   []byte(envelope.AggregateID),
-		Value: data,
+	headers := []kafka.Header{
+		{Key: "event_id", Value: []byte(envelope.ID)},
+		{Key: "event_type", Value: []byte(envelope.EventType)},
+		{Key: "aggregate_type", Value: []byte(envelope.AggregateType)},
+		{Key: "aggregate_id", Value: []byte(envelope.AggregateID)},
+		{Key: "schema_version", Value: []byte(envelope.SchemaVersion)},
+		{Key: "source_service", Value: []byte(envelope.SourceService)},
 	}
-	if err := p.producer.PublishBatch(ctx, p.topic, []KafkaMessage{msg}); err != nil {
+	if envelope.CorrelationID != "" {
+		headers = append(headers, kafka.Header{Key: "correlation_id", Value: []byte(envelope.CorrelationID)})
+	}
+	msg := KafkaMessage{
+		Key:     []byte(envelope.AggregateID),
+		Value:   data,
+		Headers: headers,
+	}
+
+	publishCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		publishCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	if err := p.producer.PublishBatch(publishCtx, p.topic, []KafkaMessage{msg}); err != nil {
 		if p.logger != nil {
 			p.logger.ErrorContext(ctx, "geofence publish failed",
 				"topic", p.topic, "rider_id", envelope.AggregateID, "error", err)
@@ -165,6 +195,53 @@ func (p *KafkaGeofencePublisher) PublishGeofenceEvent(ctx context.Context, envel
 		return err
 	}
 	return nil
+}
+
+func normalizeGeofenceEnvelope(ctx context.Context, env GeofenceEventEnvelope) GeofenceEventEnvelope {
+	if env.AggregateID == "" {
+		env.AggregateID = env.Payload.RiderID
+	}
+	if env.Payload.RiderID == "" {
+		env.Payload.RiderID = env.AggregateID
+	}
+	if env.EventType == "" {
+		env.EventType = "RiderGeofenceTransition"
+	}
+	if env.AggregateType == "" {
+		env.AggregateType = "RiderGeofence"
+	}
+	if env.SchemaVersion == "" {
+		env.SchemaVersion = "v1"
+	}
+	if env.SourceService == "" {
+		env.SourceService = "location-ingestion-service"
+	}
+	if env.Payload.Timestamp.IsZero() {
+		if parsed, err := time.Parse(time.RFC3339Nano, env.EventTime); err == nil {
+			env.Payload.Timestamp = parsed.UTC()
+		} else {
+			env.Payload.Timestamp = time.Now().UTC()
+		}
+	} else {
+		env.Payload.Timestamp = env.Payload.Timestamp.UTC()
+	}
+	if env.EventTime == "" {
+		env.EventTime = env.Payload.Timestamp.Format(time.RFC3339Nano)
+	}
+	if env.ID == "" {
+		if env.EventID != "" {
+			env.ID = env.EventID
+		} else {
+			env.ID = fmt.Sprintf("geo_%s_%d", env.AggregateID, env.Payload.Timestamp.UnixNano())
+		}
+	}
+	if env.EventID == "" {
+		env.EventID = env.ID
+	}
+	if env.CorrelationID == "" && ctx != nil {
+		env.CorrelationID = correlation.FromContext(ctx)
+	}
+	return env
 }
 
 // IngestConfig holds runtime limits for HTTP, batch, and WebSocket ingestion.

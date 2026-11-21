@@ -202,7 +202,7 @@ func TestGeofenceEvent_ToEnvelope(t *testing.T) {
 
 	env := ev.ToEnvelope(12.9716, 77.5946)
 	assert.Equal(t, "RiderGeofenceTransition", env.EventType)
-	assert.Equal(t, "Rider", env.AggregateType)
+	assert.Equal(t, "RiderGeofence", env.AggregateType)
 	assert.Equal(t, "rider-001", env.AggregateID)
 	assert.Equal(t, "v1", env.SchemaVersion)
 	assert.Equal(t, "location-ingestion-service", env.SourceService)
@@ -254,7 +254,7 @@ func TestLocationHandler_GeofencePublishing_EnteredStore(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "RiderGeofenceTransition", envelope.EventType)
-	assert.Equal(t, "Rider", envelope.AggregateType)
+	assert.Equal(t, "RiderGeofence", envelope.AggregateType)
 	assert.Equal(t, "rider-999", envelope.AggregateID)
 	assert.Equal(t, "ENTERED_STORE", envelope.Payload.EventType)
 	assert.Equal(t, "store-blr-01", envelope.Payload.ZoneID)

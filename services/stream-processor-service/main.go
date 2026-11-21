@@ -189,6 +189,9 @@ func main() {
 		Addr:              ":" + cfg.HTTPPort,
 		Handler:           correlation.Middleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	wg.Add(1)

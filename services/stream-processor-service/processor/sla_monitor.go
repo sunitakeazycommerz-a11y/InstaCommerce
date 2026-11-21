@@ -188,7 +188,10 @@ func (m *SLAMonitor) evictOldRecords(w *SLAWindow, now time.Time) {
 		idx++
 	}
 	if idx > 0 {
-		w.records = w.records[idx:]
+		remaining := len(w.records) - idx
+		copy(w.records, w.records[idx:])
+		clear(w.records[remaining:])
+		w.records = w.records[:remaining]
 		w.WindowStart = cutoff
 	}
 }
