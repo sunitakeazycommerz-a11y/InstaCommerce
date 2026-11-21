@@ -13,20 +13,8 @@ terraform {
 
 locals {
   project_id   = var.project_id
-  region       = "us-west1"
+  region       = var.region
   cluster_name = var.cluster_name
-}
-
-# Monitoring Workspace (Google Managed Prometheus)
-resource "google_monitoring_monitored_resource" "dark_store_gke_cluster" {
-  type   = "k8s_cluster"
-  project = local.project_id
-
-  labels = {
-    project_id       = local.project_id
-    location         = local.region
-    cluster_name     = local.cluster_name
-  }
 }
 
 # Alert Policy: High error rate
@@ -336,16 +324,17 @@ resource "google_monitoring_uptime_check_config" "dark_store_health_check" {
   project      = local.project_id
 
   http_check {
-    path           = "/actuator/health"
-    port           = 8080
+    path           = var.dark_store_health_check_path
+    port           = var.dark_store_service_port
     request_method = "GET"
     use_ssl        = false
   }
 
   monitored_resource {
-    type = "uptime-url"
+    type = "uptime_url"
     labels = {
-      host = var.dark_store_endpoint
+      project_id = local.project_id
+      host       = var.dark_store_endpoint
     }
   }
 

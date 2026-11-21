@@ -69,6 +69,17 @@ class DomainPayloadContractTest {
                 "zone_id", "zone-1"));
         assertThat(JsonSchemaValidator.validate(geofenceSchema, missingH3))
                 .anyMatch(e -> e.contains("missing required field"));
+
+        JsonNode deliveryFailedSchema = JsonSchemaValidator.MAPPER.readTree(
+                root.resolve("fulfillment/DeliveryFailed.v1.json").toFile());
+        JsonNode missingRiderId = JsonSchemaValidator.MAPPER.valueToTree(Map.of(
+                "orderId", DomainPayloadFixtures.UUID_A,
+                "deliveryId", DomainPayloadFixtures.UUID_B,
+                "reason", "Customer unavailable",
+                "failedAt", "not-a-timestamp"));
+        assertThat(JsonSchemaValidator.validate(deliveryFailedSchema, missingRiderId))
+                .anyMatch(e -> e.contains("riderId"))
+                .anyMatch(e -> e.contains("failedAt"));
     }
 
     @Test

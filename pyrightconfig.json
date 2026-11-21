@@ -12,7 +12,8 @@
     "data-platform",
     "ml",
     "monitoring",
-    "scripts"
+    "scripts",
+    "tests/chaos"
   ],
   "exclude": [
     "**/node_modules",

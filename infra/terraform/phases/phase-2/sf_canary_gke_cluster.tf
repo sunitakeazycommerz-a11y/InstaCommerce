@@ -13,19 +13,18 @@ terraform {
 }
 
 locals {
-  project_id = var.project_id
-  region      = "us-west1"
-  cluster_name = "sf-canary-cluster"
-  environment  = "canary"
+  project_id   = var.project_id
+  region       = var.region
+  cluster_name = var.cluster_name
+  environment  = var.environment
 
-  labels = {
-    environment = local.environment
-    region      = local.region
-    phase       = "2"
-    deployment  = "dark-store"
-    managed_by  = "terraform"
-    created_by  = "wave-40-phase-2"
-  }
+  labels = merge(
+    var.common_labels,
+    {
+      environment = local.environment
+      region      = local.region
+    }
+  )
 }
 
 # GKE Cluster
@@ -35,11 +34,14 @@ resource "google_container_cluster" "sf_canary" {
   project  = local.project_id
 
   # Cluster configuration
-  min_master_version       = "1.28"
   initial_node_count       = 1
   remove_default_node_pool = true
   network                  = var.network_name
   subnetwork               = var.subnetwork_name
+
+  release_channel {
+    channel = "REGULAR"
+  }
 
   # Workload Identity
   workload_identity_config {
@@ -98,10 +100,6 @@ resource "google_container_cluster" "sf_canary" {
 
   # Resource labels
   resource_labels = local.labels
-
-  depends_on = [
-    var.network_dependency
-  ]
 }
 
 # Node Pool: Dark-Store Nodes (SSD-backed, high-performance)

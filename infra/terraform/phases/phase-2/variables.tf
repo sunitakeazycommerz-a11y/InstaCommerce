@@ -151,3 +151,25 @@ variable "environment" {
   type        = string
   default     = "canary"
 }
+
+variable "dark_store_service_port" {
+  description = "HTTP service and health check port for dark-store canary pods"
+  type        = number
+  default     = 8080
+  validation {
+    condition     = var.dark_store_service_port >= 1 && var.dark_store_service_port <= 65535
+    error_message = "dark_store_service_port must be a valid TCP port (1-65535)."
+  }
+}
+
+variable "dark_store_canary_service_ports" {
+  description = "TCP ports allowed for dark-store canary HTTP services and health checks"
+  type        = list(string)
+  default     = ["8080", "8086", "8092", "8093"]
+}
+
+variable "dark_store_health_check_path" {
+  description = "HTTP health check path for dark-store canary backend and uptime checks"
+  type        = string
+  default     = "/actuator/health"
+}

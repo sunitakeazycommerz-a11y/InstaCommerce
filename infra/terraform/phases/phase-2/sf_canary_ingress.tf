@@ -13,10 +13,17 @@ terraform {
 
 locals {
   project_id      = var.project_id
-  region          = "us-west1"
+  region          = var.region
   cluster_name    = var.cluster_name
   network_name    = var.network_name
   subnetwork_name = var.subnetwork_name
+  labels = merge(
+    var.common_labels,
+    {
+      environment = var.environment
+      region      = var.region
+    }
+  )
 }
 
 # Internal Load Balancer Address
@@ -31,11 +38,7 @@ resource "google_compute_address" "dark_store_ilb" {
   project       = local.project_id
   description   = "Internal Load Balancer address for SF dark-store canary"
 
-  labels = {
-    environment = "canary"
-    region      = local.region
-    deployment  = "dark-store"
-  }
+  labels = local.labels
 }
 
 # Health Check for backend
@@ -48,15 +51,13 @@ resource "google_compute_health_check" "dark_store_health_check" {
   unhealthy_threshold = 3
 
   http_health_check {
-    port               = 8080
-    request_path       = "/actuator/health"
+    port               = var.dark_store_service_port
+    request_path       = var.dark_store_health_check_path
     proxy_header       = "NONE"
     port_specification = "USE_FIXED_PORT"
   }
 
   description = "Health check for dark-store pods"
-
-  depends_on = []
 }
 
 # Backend Service for Internal LB
@@ -90,10 +91,7 @@ resource "google_compute_backend_service" "dark_store_backend" {
 
   description = "Backend service for SF dark-store canary"
 
-  labels = {
-    environment = "canary"
-    deployment  = "dark-store"
-  }
+  labels = local.labels
 
   depends_on = [google_compute_health_check.dark_store_health_check]
 }
@@ -101,41 +99,35 @@ resource "google_compute_backend_service" "dark_store_backend" {
 # Network Endpoint Group (NEG) for Kubernetes pods
 # This is automatically managed by GKE if using Ingress with BackendConfig
 resource "google_compute_network_endpoint_group" "dark_store_neg" {
-  name                = "dark-store-neg"
-  project             = local.project_id
-  region              = local.region
+  name                  = "dark-store-neg"
+  project               = local.project_id
+  region                = local.region
   network_endpoint_type = "GCE_VM_IP_PORT"
-  network             = local.network_name
-  default_port        = 8080
-  description         = "NEG for dark-store pods"
+  network               = local.network_name
+  default_port          = var.dark_store_service_port
+  description           = "NEG for dark-store pods"
 
-  labels = {
-    environment = "canary"
-    deployment  = "dark-store"
-  }
+  labels = local.labels
 }
 
 # Forwarding Rule for Internal LB
 resource "google_compute_forwarding_rule" "dark_store_ilb" {
-  name                = "dark-store-ilb-rule"
-  project             = local.project_id
-  region              = local.region
+  name                  = "dark-store-ilb-rule"
+  project               = local.project_id
+  region                = local.region
   load_balancing_scheme = "INTERNAL"
-  backend_service     = google_compute_backend_service.dark_store_backend.id
-  network             = local.network_name
-  subnetwork          = local.subnetwork_name
-  ip_address          = google_compute_address.dark_store_ilb.id
-  ip_protocol         = "TCP"
-  ports               = ["8080"]
-  allow_global_access = false
+  backend_service       = google_compute_backend_service.dark_store_backend.id
+  network               = local.network_name
+  subnetwork            = local.subnetwork_name
+  ip_address            = google_compute_address.dark_store_ilb.id
+  ip_protocol           = "TCP"
+  ports                 = [tostring(var.dark_store_service_port)]
+  allow_global_access   = false
 
-  service_label       = "dark-store"
-  description         = "Internal LB forwarding rule for dark-store canary (100% traffic)"
+  service_label = "dark-store"
+  description   = "Internal LB forwarding rule for dark-store canary (100% traffic)"
 
-  labels = {
-    environment = "canary"
-    deployment  = "dark-store"
-  }
+  labels = local.labels
 
   depends_on = [google_compute_backend_service.dark_store_backend]
 }
@@ -151,7 +143,7 @@ resource "google_compute_firewall" "dark_store_ilb_allow" {
 
   allow {
     protocol = "tcp"
-    ports    = ["8080", "8443"]
+    ports    = distinct([tostring(var.dark_store_service_port), "8443"])
   }
 
   source_ranges = [
@@ -172,7 +164,7 @@ resource "google_compute_firewall" "dark_store_health_check" {
 
   allow {
     protocol = "tcp"
-    ports    = ["8080"]
+    ports    = distinct(concat(["8443"], var.dark_store_canary_service_ports, [tostring(var.dark_store_service_port)]))
   }
 
   source_ranges = [

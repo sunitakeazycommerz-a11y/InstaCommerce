@@ -114,6 +114,16 @@ final class DomainPayloadFixtures {
                                 "lifecycleDays", 30,
                                 "format", "WEBP")),
                 Arguments.of(
+                        "fulfillment/DeliveryFailed.v1.json",
+                        Map.of(
+                                "orderId", UUID_A,
+                                "deliveryId", UUID_B,
+                                "riderId", UUID_C,
+                                "reason", "Customer unreachable after 3 delivery attempts",
+                                "failureCode", "CUSTOMER_UNREACHABLE",
+                                "notes", "Left SMS and voicemail notice",
+                                "failedAt", NOW_ISO)),
+                Arguments.of(
                         "inventory/StockAdjusted.v1.json",
                         Map.of(
                                 "productId", UUID_A,

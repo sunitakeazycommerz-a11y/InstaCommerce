@@ -255,6 +255,7 @@ check_contracts_and_argocd() {
     run_python_check "argocd-apps" "No duplicate ArgoCD Application metadata.name in argocd/" "Duplicate ArgoCD Application metadata.name found"
     run_python_check "argocd-ports" "ArgoCD Rollout containerPorts match canonical GLOSSARY.md ports" "ArgoCD Rollout containerPort drift detected"
     run_python_check "dockerfile-ports" "Service Dockerfiles match canonical GLOSSARY.md ports" "Dockerfile port drift detected"
+    run_python_check "k8s-compose-ports" "k8s manifests and docker-compose.yml ports and image tags align with GLOSSARY.md" "k8s/docker-compose drift detected"
 
     stale_hikari=$(grep -rnE 'hikaricp_(active_connections|max_connections|pending_threads|connection_timeout_total)' monitoring/ prometheus/ || true)
     assert_check "Monitoring rules and dashboards use canonical Micrometer hikaricp_connections_* metrics" \
@@ -296,6 +297,11 @@ check_agent_customizations() {
     assert_check "AGENTS.md present at repository root" "AGENTS.md missing from repository root" test -f "AGENTS.md"
 }
 
+check_data_platform() {
+    log_header "8. Data Platform & dbt Models"
+    run_python_check "dbt-refs" "dbt models reference valid sources/models and incremental models use is_incremental()" "dbt model reference or incremental guard drift detected"
+}
+
 echo -e "${BOLD}${PURPLE}================================================================${NC}"
 echo -e "${BOLD}${PURPLE}       InstaCommerce Monorepo Consistency & Drift Scanner       ${NC}"
 echo -e "${BOLD}${PURPLE}================================================================${NC}"
@@ -309,6 +315,7 @@ check_migrations
 check_service_artifacts_and_governance
 check_contracts_and_argocd
 check_agent_customizations
+check_data_platform
 
 echo -e "\n${BOLD}${PURPLE}================================================================${NC}"
 echo -e "${BOLD}Scan Summary:${NC}"

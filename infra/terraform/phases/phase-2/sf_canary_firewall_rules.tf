@@ -12,9 +12,9 @@ terraform {
 }
 
 locals {
-  project_id      = var.project_id
-  network_name    = var.network_name
-  region          = "us-west1"
+  project_id   = var.project_id
+  network_name = var.network_name
+  region       = var.region
 }
 
 # Allow internal traffic (VPC-internal)
@@ -73,7 +73,7 @@ resource "google_compute_firewall" "allow_http_to_k8s" {
 
   allow {
     protocol = "tcp"
-    ports    = ["80", "8080", "8443"]
+    ports    = distinct(concat(["80", "8443"], var.dark_store_canary_service_ports, [tostring(var.dark_store_service_port)]))
   }
 
   source_ranges = ["10.0.0.0/8"]
@@ -184,7 +184,7 @@ resource "google_compute_firewall" "allow_health_checks" {
 
   allow {
     protocol = "tcp"
-    ports    = ["8080", "8443"]
+    ports    = distinct(concat(["8443"], var.dark_store_canary_service_ports, [tostring(var.dark_store_service_port)]))
   }
 
   source_ranges = [

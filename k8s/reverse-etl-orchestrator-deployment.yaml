@@ -57,20 +57,28 @@ spec:
       serviceAccountName: reverse-etl-orchestrator
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
 
       containers:
       - name: reverse-etl-orchestrator
-        image: gcr.io/instacommerce/reverse-etl-orchestrator:1.0.0
+        image: asia-south1-docker.pkg.dev/instacommerce-prod/services/reverse-etl-orchestrator:1.0.0
         imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
 
         ports:
         - name: api
-          containerPort: 8080
+          containerPort: 8109
           protocol: TCP
         - name: health
-          containerPort: 8081
+          containerPort: 8110
           protocol: TCP
         - name: metrics
           containerPort: 9090
@@ -78,9 +86,9 @@ spec:
 
         env:
         - name: API_ADDR
-          value: ":8080"
+          value: ":8109"
         - name: HEALTH_ADDR
-          value: ":8081"
+          value: ":8110"
         - name: METRICS_ADDR
           value: ":9090"
         - name: SERVICE_VERSION
@@ -169,8 +177,8 @@ spec:
         # Analytics Configuration
         - name: ANALYTICS_HOSTS
           valueFrom:
-            secretKeyRef:
-              name: reverse-etl-analytics-credentials
+            configMapKeyRef:
+              name: reverse-etl-analytics-config
               key: hosts
         - name: ANALYTICS_INDEX_PREFIX
           valueFrom:
@@ -213,11 +221,15 @@ spec:
         volumeMounts:
         - name: checkpoint-cache
           mountPath: /var/cache/reverse-etl
+        - name: tmp
+          mountPath: /tmp
 
       volumes:
       - name: checkpoint-cache
         emptyDir:
           sizeLimit: 500Mi
+      - name: tmp
+        emptyDir: {}
 
       affinity:
         podAntiAffinity:
@@ -255,11 +267,11 @@ spec:
     app: reverse-etl-orchestrator
   ports:
   - name: api
-    port: 8080
+    port: 8109
     targetPort: api
     protocol: TCP
   - name: health
-    port: 8081
+    port: 8110
     targetPort: health
     protocol: TCP
   - name: metrics
