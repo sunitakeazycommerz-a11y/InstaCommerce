@@ -16,6 +16,7 @@ import com.instacommerce.order.consumer.FulfillmentOrderEvent;
 import com.instacommerce.order.domain.model.Order;
 import com.instacommerce.order.domain.model.OrderItem;
 import com.instacommerce.order.domain.model.OrderStatus;
+import com.instacommerce.order.domain.model.OrderStatusHistory;
 import com.instacommerce.order.exception.InvalidOrderStateException;
 import com.instacommerce.order.repository.OrderRepository;
 import com.instacommerce.order.repository.OrderStatusHistoryRepository;
@@ -26,6 +27,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -176,5 +178,31 @@ class OrderServiceFulfillmentLifecycleTest {
         assertThat(order.getItems().get(0).getLineTotalCents()).isEqualTo(500L);
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderModified"), any());
         verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderPartiallyRefunded"), any());
+    }
+
+    @Test
+    void recordFulfillmentAuditNoteRecordsStatusHistoryIdempotentlyWithoutChangingOrderStatus() {
+        order.setStatus(OrderStatus.DELIVERED);
+        String podNote = "pod-uploaded:https://cdn.instacommerce.dev/pod/abc.webp (WEBP)";
+        when(statusHistoryRepository.findByOrder_IdOrderByCreatedAtAsc(orderId))
+            .thenReturn(List.of());
+
+        orderService.recordFulfillmentAuditNote(orderId, "system:fulfillment-event", podNote);
+
+        ArgumentCaptor<OrderStatusHistory> historyCaptor = ArgumentCaptor.forClass(OrderStatusHistory.class);
+        verify(statusHistoryRepository).save(historyCaptor.capture());
+        OrderStatusHistory savedHistory = historyCaptor.getValue();
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERED);
+        assertThat(savedHistory.getFromStatus()).isEqualTo(OrderStatus.DELIVERED);
+        assertThat(savedHistory.getToStatus()).isEqualTo(OrderStatus.DELIVERED);
+        assertThat(savedHistory.getChangedBy()).isEqualTo("system:fulfillment-event");
+        assertThat(savedHistory.getNote()).isEqualTo(podNote);
+
+        when(statusHistoryRepository.findByOrder_IdOrderByCreatedAtAsc(orderId))
+            .thenReturn(List.of(savedHistory));
+
+        orderService.recordFulfillmentAuditNote(orderId, "system:fulfillment-event", podNote);
+        verify(statusHistoryRepository, times(1)).save(any(OrderStatusHistory.class));
+        verify(orderRepository, never()).save(any(Order.class));
     }
 }

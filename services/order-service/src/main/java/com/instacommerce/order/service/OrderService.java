@@ -67,6 +67,10 @@ public class OrderService {
         lifecycleService.advanceLifecycleFromFulfillment(orderId, targetStatus, changedBy, note);
     }
 
+    public void recordFulfillmentAuditNote(UUID orderId, String changedBy, String note) {
+        lifecycleService.recordFulfillmentAuditNote(orderId, changedBy, note);
+    }
+
     public void validateOrderAmendmentWindow(UUID orderId) {
         validateOrderAmendmentWindow(orderId, null, true);
     }

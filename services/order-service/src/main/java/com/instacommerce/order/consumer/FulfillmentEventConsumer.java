@@ -1,5 +1,6 @@
 package com.instacommerce.order.consumer;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.order.domain.model.OrderStatus;
@@ -63,6 +64,26 @@ public class FulfillmentEventConsumer {
                 }
                 yield null;
             }
+            case "ProofOfDeliveryUploaded" -> {
+                UUID orderId = resolveOrderId(envelope);
+                String photoUrl = extractPayloadText(envelope.payload(), "photoUrl", "podUrl");
+                String format = extractPayloadText(envelope.payload(), "format");
+                orderService.recordFulfillmentAuditNote(orderId, CHANGED_BY, buildPodAuditNote(photoUrl, format));
+                yield null;
+            }
+            case "ItemSubstituted" -> {
+                UUID orderId = resolveOrderId(envelope);
+                String originalProductId = extractPayloadText(envelope.payload(), "originalProductId");
+                String substituteProductId = extractPayloadText(envelope.payload(), "substituteProductId");
+                int quantity = (envelope.payload() != null && envelope.payload().hasNonNull("substitutedQuantity"))
+                    ? envelope.payload().get("substitutedQuantity").asInt(0)
+                    : 0;
+                orderService.recordFulfillmentAuditNote(
+                    orderId,
+                    CHANGED_BY,
+                    buildSubstitutionAuditNote(originalProductId, substituteProductId, quantity));
+                yield null;
+            }
             default -> {
                 logger.debug("Ignoring unsupported fulfillment event type={}", envelope.eventType());
                 yield null;
@@ -81,6 +102,39 @@ public class FulfillmentEventConsumer {
             default -> "fulfillment-event";
         };
         orderService.advanceLifecycleFromFulfillment(orderId, targetStatus, CHANGED_BY, note);
+    }
+
+    private static String extractPayloadText(JsonNode payload, String... fieldNames) {
+        if (payload == null || payload.isNull()) {
+            return null;
+        }
+        for (String fieldName : fieldNames) {
+            String value = payload.path(fieldName).asText(null);
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private static String buildPodAuditNote(String photoUrl, String format) {
+        if (photoUrl == null) {
+            return "pod-uploaded";
+        }
+        return format != null
+            ? "pod-uploaded:" + photoUrl + " (" + format + ")"
+            : "pod-uploaded:" + photoUrl;
+    }
+
+    private static String buildSubstitutionAuditNote(String originalProductId,
+                                                     String substituteProductId,
+                                                     int quantity) {
+        if (originalProductId != null && substituteProductId != null) {
+            return quantity > 0
+                ? "item-substituted:" + originalProductId + "->" + substituteProductId + ":qty=" + quantity
+                : "item-substituted:" + originalProductId + "->" + substituteProductId;
+        }
+        return "item-substituted";
     }
 
     private UUID resolveOrderId(EventEnvelope envelope) throws Exception {

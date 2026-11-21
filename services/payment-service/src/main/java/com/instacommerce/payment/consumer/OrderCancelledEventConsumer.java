@@ -145,7 +145,8 @@ public class OrderCancelledEventConsumer {
             try {
                 UUID orderUuid = UUID.fromString(orderIdStr);
                 payment = paymentRepository.findByOrderId(orderUuid).orElse(null);
-            } catch (IllegalArgumentException ignored) {
+            } catch (IllegalArgumentException ex) {
+                log.debug("Invalid orderId UUID '{}' on {} eventId={}", orderIdStr, eventType, eventId);
             }
         }
         if (payment == null) {

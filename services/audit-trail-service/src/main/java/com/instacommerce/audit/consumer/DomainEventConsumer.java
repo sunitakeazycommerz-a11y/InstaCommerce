@@ -58,7 +58,8 @@ public class DomainEventConsumer {
                     TopicNames.WALLET_EVENTS,
                     TopicNames.FRAUD_EVENTS,
                     TopicNames.CART_EVENTS,
-                    TopicNames.DELIVERY_EVENTS
+                    TopicNames.DELIVERY_EVENTS,
+                    TopicNames.RIDER_GEOFENCE_EVENTS
             },
             groupId = "${spring.kafka.consumer.group-id}",
             concurrency = "3"

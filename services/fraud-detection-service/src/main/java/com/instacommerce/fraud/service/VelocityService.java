@@ -67,7 +67,8 @@ public class VelocityService {
         long bucketSeconds = switch (counterType) {
             case "ORDERS_5M", "FAILED_PAYMENTS_5M" -> 60L;
             case "ORDERS_1H", "FAILED_PAYMENTS_1H" -> 300L;
-            case "ORDERS_24H", "AMOUNT_24H" -> 3600L;
+            case "ORDERS_24H", "AMOUNT_24H", "REFUND_FAILURES_24H" -> 3600L;
+            case "CHARGEBACKS_30D" -> 86400L;
             default -> 300L;
         };
         long epochSecond = now.getEpochSecond();
@@ -79,7 +80,8 @@ public class VelocityService {
         return switch (counterType) {
             case "ORDERS_5M", "FAILED_PAYMENTS_5M" -> Duration.ofMinutes(5);
             case "ORDERS_1H", "FAILED_PAYMENTS_1H" -> Duration.ofHours(1);
-            case "ORDERS_24H", "AMOUNT_24H" -> Duration.ofHours(24);
+            case "ORDERS_24H", "AMOUNT_24H", "REFUND_FAILURES_24H" -> Duration.ofHours(24);
+            case "CHARGEBACKS_30D" -> Duration.ofDays(30);
             default -> Duration.ofHours(1);
         };
     }

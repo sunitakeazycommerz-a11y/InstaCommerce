@@ -7,6 +7,8 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.audit.dto.AuditEventRequest;
 import com.instacommerce.audit.service.AuditIngestionService;
+import com.instacommerce.contracts.topics.TopicNames;
+import java.lang.reflect.Method;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +18,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.env.Environment;
+import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 
 @ExtendWith(MockitoExtension.class)
@@ -84,5 +87,14 @@ class DomainEventConsumerTest {
         AuditEventRequest request = captor.getValue();
         assertThat(request.actorId()).isNull();
         assertThat(request.details()).containsEntry("sku", "MILK-1L");
+    }
+
+    @Test
+    void kafkaListenerIncludesDeliveryAndRiderGeofenceTopics() throws Exception {
+        Method listenerMethod = DomainEventConsumer.class.getMethod("onDomainEvent", ConsumerRecord.class);
+        KafkaListener annotation = listenerMethod.getAnnotation(KafkaListener.class);
+        assertThat(annotation).isNotNull();
+        assertThat(annotation.topics())
+            .contains(TopicNames.DELIVERY_EVENTS, TopicNames.RIDER_GEOFENCE_EVENTS);
     }
 }

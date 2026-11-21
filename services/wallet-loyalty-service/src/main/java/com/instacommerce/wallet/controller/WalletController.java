@@ -8,6 +8,7 @@ import com.instacommerce.wallet.dto.request.TopUpRequest;
 import com.instacommerce.wallet.dto.response.WalletResponse;
 import com.instacommerce.wallet.dto.response.WalletTransactionResponse;
 import com.instacommerce.wallet.exception.ApiException;
+import com.instacommerce.wallet.security.AuthenticatedUserResolver;
 import com.instacommerce.wallet.service.WalletService;
 import jakarta.validation.Valid;
 import java.util.Locale;
@@ -24,6 +25,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -41,9 +43,15 @@ public class WalletController {
     }
 
     @GetMapping("/balance")
-    public ResponseEntity<WalletResponse> getBalance(Authentication auth) {
-        UUID userId = UUID.fromString(auth.getName());
+    public ResponseEntity<WalletResponse> getBalance(
+            Authentication auth,
+            @RequestHeader(value = AuthenticatedUserResolver.USER_ID_HEADER, required = false) String userIdHeader) {
+        UUID userId = AuthenticatedUserResolver.resolveUserId(auth, userIdHeader);
         return ResponseEntity.ok(walletService.getBalance(userId));
+    }
+
+    public ResponseEntity<WalletResponse> getBalance(Authentication auth) {
+        return getBalance(auth, null);
     }
 
     /**
@@ -53,9 +61,11 @@ public class WalletController {
      */
     @PostMapping("/topup")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<WalletTransactionResponse> topUp(Authentication auth,
-                                                            @Valid @RequestBody TopUpRequest request) {
-        UUID userId = UUID.fromString(auth.getName());
+    public ResponseEntity<WalletTransactionResponse> topUp(
+            Authentication auth,
+            @RequestHeader(value = AuthenticatedUserResolver.USER_ID_HEADER, required = false) String userIdHeader,
+            @Valid @RequestBody TopUpRequest request) {
+        UUID userId = AuthenticatedUserResolver.resolveUserId(auth, userIdHeader);
 
         // Verify payment with payment-service before crediting wallet
         PaymentClient.PaymentResponse payment;
@@ -95,17 +105,18 @@ public class WalletController {
         return ResponseEntity.ok(response);
     }
 
+    public ResponseEntity<WalletTransactionResponse> topUp(Authentication auth, TopUpRequest request) {
+        return topUp(auth, null, request);
+    }
+
     @PostMapping("/debit")
-    public ResponseEntity<WalletTransactionResponse> debit(Authentication auth,
-                                                            @Valid @RequestBody DebitRequest request) {
+    public ResponseEntity<WalletTransactionResponse> debit(
+            Authentication auth,
+            @RequestHeader(value = AuthenticatedUserResolver.USER_ID_HEADER, required = false) String userIdHeader,
+            @Valid @RequestBody DebitRequest request) {
         UUID userId = request.userId();
         if (userId == null) {
-            try {
-                userId = UUID.fromString(auth.getName());
-            } catch (IllegalArgumentException ex) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "MISSING_USER_ID",
-                    "userId is required for internal wallet debit");
-            }
+            userId = AuthenticatedUserResolver.resolveUserId(auth, userIdHeader);
         }
         ReferenceType refType;
         try {
@@ -127,6 +138,10 @@ public class WalletController {
         return ResponseEntity.ok(response);
     }
 
+    public ResponseEntity<WalletTransactionResponse> debit(Authentication auth, DebitRequest request) {
+        return debit(auth, null, request);
+    }
+
     @PostMapping("/credit")
     public ResponseEntity<WalletTransactionResponse> credit(@Valid @RequestBody CreditRequest request) {
         String description = (request.description() != null && !request.description().isBlank())
@@ -145,8 +160,13 @@ public class WalletController {
     @GetMapping("/transactions")
     public ResponseEntity<Page<WalletTransactionResponse>> getTransactions(
             Authentication auth,
+            @RequestHeader(value = AuthenticatedUserResolver.USER_ID_HEADER, required = false) String userIdHeader,
             @PageableDefault(size = 20) Pageable pageable) {
-        UUID userId = UUID.fromString(auth.getName());
+        UUID userId = AuthenticatedUserResolver.resolveUserId(auth, userIdHeader);
         return ResponseEntity.ok(walletService.getTransactions(userId, pageable));
+    }
+
+    public ResponseEntity<Page<WalletTransactionResponse>> getTransactions(Authentication auth, Pageable pageable) {
+        return getTransactions(auth, null, pageable);
     }
 }

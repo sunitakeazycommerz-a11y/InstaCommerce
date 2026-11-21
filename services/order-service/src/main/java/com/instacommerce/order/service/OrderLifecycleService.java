@@ -209,6 +209,25 @@ public class OrderLifecycleService {
         }
     }
 
+    @Retryable(
+        retryFor = {ObjectOptimisticLockingFailureException.class, OptimisticLockingFailureException.class},
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 50, maxDelay = 500, multiplier = 2.0))
+    @Transactional
+    public void recordFulfillmentAuditNote(UUID orderId, String changedBy, String note) {
+        if (note == null || note.isBlank()) {
+            return;
+        }
+        Order order = lockOrder(orderId);
+        List<OrderStatusHistory> existingHistory = statusHistoryRepository.findByOrder_IdOrderByCreatedAtAsc(orderId);
+        if (existingHistory != null && existingHistory.stream().anyMatch(entry -> note.equals(entry.getNote()))) {
+            logger.debug("Ignoring duplicate fulfillment audit note for order {} note={}", orderId, note);
+            return;
+        }
+        OrderStatus currentStatus = order.getStatus();
+        recordStatusChange(order, currentStatus, currentStatus, changedBy, note);
+    }
+
     @Transactional
     public int checkAndRecordSlaBreaches() {
         Instant now = Instant.now(clock);

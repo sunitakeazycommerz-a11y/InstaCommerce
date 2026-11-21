@@ -106,4 +106,50 @@ class FulfillmentEventConsumerTest {
         verify(orderService).applyOrderModification(new FulfillmentOrderEvent(
             orderId, productId, 1, 500L, 2L, -500L, null));
     }
+
+    @Test
+    void routesProofOfDeliveryUploadedToAuditNoteWithoutChangingStatus() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        FulfillmentEventConsumer consumer = new FulfillmentEventConsumer(objectMapper, orderService);
+
+        ConsumerRecord<String, String> record = new ConsumerRecord<>(
+            "fulfillment.events",
+            0,
+            0L,
+            orderId.toString(),
+            """
+                {"eventType":"ProofOfDeliveryUploaded","aggregateId":"%s","payload":{"orderId":"%s","photoUrl":"https://cdn.instacommerce.dev/pod/123.webp","lifecycleDays":30,"format":"WEBP"}}
+                """.formatted(orderId, orderId));
+
+        consumer.onFulfillmentEvent(record);
+
+        verify(orderService).recordFulfillmentAuditNote(
+            orderId,
+            "system:fulfillment-event",
+            "pod-uploaded:https://cdn.instacommerce.dev/pod/123.webp (WEBP)");
+    }
+
+    @Test
+    void routesItemSubstitutedToAuditNoteWithoutChangingStatus() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID originalProductId = UUID.randomUUID();
+        UUID substituteProductId = UUID.randomUUID();
+        FulfillmentEventConsumer consumer = new FulfillmentEventConsumer(objectMapper, orderService);
+
+        ConsumerRecord<String, String> record = new ConsumerRecord<>(
+            "fulfillment.events",
+            0,
+            0L,
+            orderId.toString(),
+            """
+                {"eventType":"ItemSubstituted","aggregateId":"%s","payload":{"orderId":"%s","storeId":"%s","originalProductId":"%s","substituteProductId":"%s","substitutedQuantity":2}}
+                """.formatted(orderId, orderId, UUID.randomUUID(), originalProductId, substituteProductId));
+
+        consumer.onFulfillmentEvent(record);
+
+        verify(orderService).recordFulfillmentAuditNote(
+            orderId,
+            "system:fulfillment-event",
+            "item-substituted:" + originalProductId + "->" + substituteProductId + ":qty=2");
+    }
 }
