@@ -3,6 +3,7 @@ package com.instacommerce.identity.controller;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -117,6 +118,17 @@ class AdminControllerSecurityTest {
 
         mockMvc.perform(get("/admin/users/{id}", userId)
                 .with(user("customer").roles("CUSTOMER")))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Internal service token cannot invoke admin mutation endpoints such as unlock")
+    void internalServiceCannotInvokeAdminMutations() throws Exception {
+        UUID userId = UUID.randomUUID();
+
+        mockMvc.perform(post("/admin/users/{id}/unlock", userId)
+                .header("X-Internal-Service", "mobile-bff-service")
+                .header("X-Internal-Token", "test-internal-secret"))
             .andExpect(status().isForbidden());
     }
 }

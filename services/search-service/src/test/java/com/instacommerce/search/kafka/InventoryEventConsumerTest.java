@@ -1,7 +1,11 @@
 package com.instacommerce.search.kafka;
 
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.search.service.SearchIndexService;
 import java.util.HashMap;
 import java.util.List;
@@ -12,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 
 @ExtendWith(MockitoExtension.class)
 class InventoryEventConsumerTest {
@@ -60,6 +66,72 @@ class InventoryEventConsumerTest {
         consumer.handleInventoryEvent(event);
 
         verify(searchIndexService).updateStockStatus(productId, false);
+    }
+
+    @Test
+    void outOfStock_immediatelyMarksOutOfStockAndEvictsCaches() {
+        CacheManager cacheManager = mock(CacheManager.class);
+        Cache searchCache = mock(Cache.class);
+        Cache autoCache = mock(Cache.class);
+        when(cacheManager.getCache("searchResults")).thenReturn(searchCache);
+        when(cacheManager.getCache("autocomplete")).thenReturn(autoCache);
+
+        InventoryEventConsumer cachedConsumer = new InventoryEventConsumer(
+                searchIndexService, cacheManager, new ObjectMapper());
+
+        UUID productId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        Map<String, Object> event = Map.of(
+                "eventType", "OutOfStock",
+                "payload", Map.of(
+                        "productId", productId.toString(),
+                        "storeId", storeId.toString(),
+                        "detectedAt", "2026-03-31T10:15:30Z"));
+
+        cachedConsumer.handleInventoryEvent(event);
+
+        verify(searchIndexService).updateStockStatus(productId, false);
+        verify(searchCache).clear();
+        verify(autoCache).clear();
+    }
+
+    @Test
+    void expiredStockWrittenOff_updatesStockStatusAndEvictsCaches() {
+        CacheManager cacheManager = mock(CacheManager.class);
+        Cache searchCache = mock(Cache.class);
+        Cache autoCache = mock(Cache.class);
+        when(cacheManager.getCache("searchResults")).thenReturn(searchCache);
+        when(cacheManager.getCache("autocomplete")).thenReturn(autoCache);
+
+        InventoryEventConsumer cachedConsumer = new InventoryEventConsumer(
+                searchIndexService, cacheManager, new ObjectMapper());
+
+        UUID productId = UUID.randomUUID();
+        Map<String, Object> writeOffDepletedEvent = Map.of(
+                "eventType", "ExpiredStockWrittenOff",
+                "payload", Map.of(
+                        "store_id", UUID.randomUUID().toString(),
+                        "product_id", productId.toString(),
+                        "batch_number", "BATCH-01",
+                        "written_off_quantity", 12));
+
+        cachedConsumer.handleInventoryEvent(writeOffDepletedEvent);
+
+        verify(searchIndexService).updateStockStatus(productId, false);
+        verify(searchCache).clear();
+        verify(autoCache).clear();
+
+        UUID remainingProduct = UUID.randomUUID();
+        Map<String, Object> writeOffWithRemainingEvent = Map.of(
+                "eventType", "ExpiredStockWrittenOff",
+                "payload", Map.of(
+                        "productId", remainingProduct.toString(),
+                        "writtenOffQuantity", 4,
+                        "remainingAvailable", 6));
+
+        cachedConsumer.handleInventoryEvent(writeOffWithRemainingEvent);
+
+        verify(searchIndexService).updateStockStatus(remainingProduct, true);
     }
 
     @Test

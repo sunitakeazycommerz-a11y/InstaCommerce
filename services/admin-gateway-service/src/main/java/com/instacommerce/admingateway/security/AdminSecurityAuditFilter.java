@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -19,11 +20,6 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/**
- * Audit filter recording all administrative mutation attempts (POST, PUT, DELETE, PATCH)
- * with structured metadata including authenticated principal, roles, target URI, HTTP status, and verified client IP.
- * Also publishes audit events to audit-trail-service.
- */
 @Component
 public class AdminSecurityAuditFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(AdminSecurityAuditFilter.class);
@@ -31,8 +27,8 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
 
     private static final Pattern IPV4_PATTERN =
             Pattern.compile("^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
-    private static final Pattern IPV6_PATTERN =
-            Pattern.compile("^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^([0-9a-fA-F]{1,4}:)*:[0-9a-fA-F]{1,4}$");
+    private static final Pattern IPV6_LITERAL_CHARS =
+            Pattern.compile("^[0-9a-fA-F:.]+$");
 
     private final AdminAuditClient auditClient;
 
@@ -45,19 +41,27 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String method = request.getMethod();
-        boolean isMutation = MUTATION_METHODS.contains(method.toUpperCase());
+        boolean isMutation = method != null && MUTATION_METHODS.contains(method.toUpperCase());
         long startTime = System.currentTimeMillis();
+        Authentication preChainAuth = SecurityContextHolder.getContext().getAuthentication();
 
         try {
             filterChain.doFilter(request, response);
         } finally {
             if (isMutation) {
                 long durationMs = System.currentTimeMillis() - startTime;
-                Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-                String principal = (auth != null && auth.isAuthenticated()) ? auth.getName() : "anonymous";
-                String authorities = (auth != null) ? auth.getAuthorities().toString() : "[]";
+                Authentication postChainAuth = SecurityContextHolder.getContext().getAuthentication();
+                Authentication auth = (postChainAuth != null && postChainAuth.isAuthenticated())
+                        ? postChainAuth
+                        : preChainAuth;
+                String principal = (auth != null && auth.isAuthenticated() && auth.getName() != null)
+                        ? auth.getName()
+                        : "anonymous";
+                String authorities = (auth != null && auth.getAuthorities() != null)
+                        ? auth.getAuthorities().toString()
+                        : "[]";
                 int status = response.getStatus();
-                String clientIp = getClientIp(request);
+                String clientIp = resolveClientIp(request);
                 String remoteAddr = request.getRemoteAddr();
                 String uri = request.getRequestURI();
                 String correlationId = request.getHeader("X-Correlation-ID");
@@ -74,7 +78,17 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
                 }
 
                 try {
-                    publishAuditEvent(principal, method, uri, status, durationMs, clientIp, remoteAddr, correlationId, request.getHeader("User-Agent"));
+                    publishAuditEvent(
+                            principal,
+                            authorities,
+                            method,
+                            uri,
+                            status,
+                            durationMs,
+                            clientIp,
+                            remoteAddr,
+                            correlationId,
+                            request.getHeader("User-Agent"));
                 } catch (Exception ex) {
                     log.warn("Failed to dispatch security audit event: {}", ex.getMessage());
                 }
@@ -82,7 +96,7 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
         }
     }
 
-    private void publishAuditEvent(String principal, String method, String uri, int status,
+    private void publishAuditEvent(String principal, String authorities, String method, String uri, int status,
                                    long durationMs, String clientIp, String remoteAddr,
                                    String correlationId, String userAgent) {
         if (auditClient == null) {
@@ -92,21 +106,24 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
         UUID actorId = null;
         try {
             actorId = UUID.fromString(principal);
-        } catch (Exception ignored) {
-            // principal may be username string e.g. "admin-user-1"
+        } catch (IllegalArgumentException ex) {
+            log.debug("Admin principal '{}' is not a UUID, recording actorId as null", principal);
         }
 
-        String[] uriParts = uri.split("/");
+        String safeUri = uri != null ? uri : "";
+        String[] uriParts = safeUri.split("/");
         String resourceType = uriParts.length > 3 ? uriParts[3] : "ADMIN_GATEWAY";
-        String resourceId = uriParts.length > 4 ? uriParts[4] : uri;
+        String resourceId = uriParts.length > 4 ? uriParts[4] : safeUri;
 
-        Map<String, Object> details = Map.of(
-            "uri", uri,
-            "status", status,
-            "durationMs", durationMs,
-            "clientIp", clientIp != null ? clientIp : "unknown",
-            "remoteAddr", remoteAddr != null ? remoteAddr : "unknown"
-        );
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("uri", safeUri);
+        details.put("principal", principal);
+        details.put("roles", authorities);
+        details.put("outcome", status >= 400 ? "REJECTED" : "SUCCESS");
+        details.put("status", status);
+        details.put("durationMs", durationMs);
+        details.put("clientIp", clientIp != null ? clientIp : "unknown");
+        details.put("remoteAddr", remoteAddr != null ? remoteAddr : "unknown");
 
         auditClient.publishAuditEvent(
             "ADMIN_MUTATION",
@@ -115,14 +132,14 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
             resourceType,
             resourceId,
             method,
-            details,
+            Map.copyOf(details),
             clientIp,
             userAgent,
             correlationId
         );
     }
 
-    private String getClientIp(HttpServletRequest request) {
+    static String resolveClientIp(HttpServletRequest request) {
         String remoteAddr = request.getRemoteAddr();
         String xf = request.getHeader("X-Forwarded-For");
         if (xf != null && !xf.isBlank() && isTrustedProxy(remoteAddr)) {
@@ -145,7 +162,7 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
         return remoteAddr;
     }
 
-    private boolean isTrustedProxy(String ip) {
+    static boolean isTrustedProxy(String ip) {
         if (!isValidIp(ip)) {
             return false;
         }
@@ -157,10 +174,21 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
         }
     }
 
-    private boolean isValidIp(String ip) {
+    static boolean isValidIp(String ip) {
         if (ip == null || ip.isBlank() || ip.length() > 45) {
             return false;
         }
-        return IPV4_PATTERN.matcher(ip).matches() || IPV6_PATTERN.matcher(ip).matches();
+        if (IPV4_PATTERN.matcher(ip).matches()) {
+            return true;
+        }
+        int firstColon = ip.indexOf(':');
+        if (firstColon < 0 || firstColon == ip.lastIndexOf(':') || !IPV6_LITERAL_CHARS.matcher(ip).matches()) {
+            return false;
+        }
+        try {
+            return InetAddress.getByName(ip).getAddress().length == 16;
+        } catch (Exception ex) {
+            return false;
+        }
     }
 }

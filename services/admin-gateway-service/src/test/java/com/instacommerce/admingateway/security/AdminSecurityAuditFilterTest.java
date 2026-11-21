@@ -1,5 +1,6 @@
 package com.instacommerce.admingateway.security;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -8,11 +9,13 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -129,5 +132,42 @@ class AdminSecurityAuditFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         verify(filterChain).doFilter(request, response);
+    }
+
+    @Test
+    @DisplayName("preserves authenticated principal in audit details even if downstream clears SecurityContext on 403 and supports compressed IPv6")
+    void preservesPrincipalWhenContextClearedAndHandlesCompressedIpv6() throws Exception {
+        SecurityContextHolder.getContext().setAuthentication(
+            new UsernamePasswordAuthenticationToken("admin-reader", null,
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN")))
+        );
+
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getRequestURI()).thenReturn("/admin/v1/flags/promo-flag/override");
+        when(request.getRemoteAddr()).thenReturn("::1");
+        when(request.getHeader("X-Forwarded-For")).thenReturn("2001:db8::1:2");
+        when(response.getStatus()).thenReturn(403);
+
+        FilterChain clearingChain = (req, res) -> SecurityContextHolder.clearContext();
+        filter.doFilterInternal(request, response, clearingChain);
+
+        ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.captor();
+        verify(auditClient).publishAuditEvent(
+            eq("ADMIN_MUTATION"),
+            isNull(),
+            eq("ADMIN"),
+            eq("flags"),
+            eq("promo-flag"),
+            eq("POST"),
+            detailsCaptor.capture(),
+            eq("2001:db8::1:2"),
+            any(),
+            any()
+        );
+
+        Map<String, Object> details = detailsCaptor.getValue();
+        assertThat(details).containsEntry("principal", "admin-reader");
+        assertThat(details).containsEntry("outcome", "REJECTED");
+        assertThat(details).containsEntry("status", 403);
     }
 }

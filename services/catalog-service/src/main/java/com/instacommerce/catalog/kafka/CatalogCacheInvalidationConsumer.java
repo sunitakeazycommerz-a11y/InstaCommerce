@@ -1,5 +1,6 @@
 package com.instacommerce.catalog.kafka;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.topics.TopicNames;
 import java.util.Map;
@@ -15,20 +16,20 @@ import org.springframework.stereotype.Component;
 public class CatalogCacheInvalidationConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogCacheInvalidationConsumer.class);
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final CacheManager cacheManager;
     private final ObjectMapper objectMapper;
 
     public CatalogCacheInvalidationConsumer(CacheManager cacheManager, ObjectMapper objectMapper) {
         this.cacheManager = cacheManager;
-        this.objectMapper = objectMapper;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
     @KafkaListener(
         topics = {TopicNames.CATALOG_EVENTS, TopicNames.PRICING_EVENTS, TopicNames.INVENTORY_EVENTS},
         groupId = "catalog-cache-invalidator"
     )
-    @SuppressWarnings("unchecked")
     public void onEvent(Map<String, Object> envelope) {
         try {
             String eventType = (String) envelope.get("eventType");
@@ -39,8 +40,8 @@ public class CatalogCacheInvalidationConsumer {
                 return;
             }
 
-            Map<String, Object> payload = envelope.containsKey("payload") && envelope.get("payload") instanceof Map
-                    ? (Map<String, Object>) envelope.get("payload")
+            Map<String, Object> payload = envelope.get("payload") instanceof Map<?, ?> nested
+                    ? objectMapper.convertValue(nested, MAP_TYPE)
                     : envelope;
 
             log.info("Catalog cache invalidator received event: type={}", eventType);
@@ -55,7 +56,8 @@ public class CatalogCacheInvalidationConsumer {
                     evictProductCaches(payload);
                     evictNamedCache("search");
                 }
-                case "LowStockAlert", "StockAdjusted", "StockConfirmed", "StockReleased" -> {
+                case "LowStockAlert", "StockAdjusted", "StockConfirmed", "StockReleased",
+                        "OutOfStock", "ExpiredStockWrittenOff" -> {
                     evictProductCaches(payload);
                 }
                 default -> log.debug("Unhandled event type for catalog cache invalidation: {}", eventType);
@@ -68,6 +70,9 @@ public class CatalogCacheInvalidationConsumer {
     private void evictProductCaches(Map<String, Object> payload) {
         Object idObj = payload.get("productId");
         if (idObj == null) {
+            idObj = payload.get("product_id");
+        }
+        if (idObj == null) {
             idObj = payload.get("id");
         }
         if (idObj != null) {
@@ -77,7 +82,9 @@ public class CatalogCacheInvalidationConsumer {
                 productsCache.evict(productIdStr);
                 try {
                     productsCache.evict(UUID.fromString(productIdStr));
-                } catch (IllegalArgumentException ignored) {}
+                } catch (IllegalArgumentException ex) {
+                    log.debug("Product cache key is not a valid UUID during cache eviction: productId={}", productIdStr);
+                }
                 log.info("Evicted product {} from catalog cache", productIdStr);
             }
         } else {

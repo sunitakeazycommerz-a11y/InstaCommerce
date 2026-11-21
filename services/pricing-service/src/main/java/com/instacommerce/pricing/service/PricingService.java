@@ -21,9 +21,11 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -40,6 +42,25 @@ public class PricingService {
     private final DiscountCalculator discountCalculator;
     private final TaxCalculationService taxCalculationService;
     private final SurgePricingService surgePricingService;
+    private final StoreSurgeStateStore storeSurgeStateStore;
+
+    public PricingService(PriceRuleRepository priceRuleRepository,
+                          PromotionService promotionService,
+                          CouponService couponService,
+                          QuoteTokenService quoteTokenService,
+                          DiscountCalculator discountCalculator,
+                          TaxCalculationService taxCalculationService,
+                          SurgePricingService surgePricingService) {
+        this(
+                priceRuleRepository,
+                promotionService,
+                couponService,
+                quoteTokenService,
+                discountCalculator,
+                taxCalculationService,
+                surgePricingService,
+                (StoreSurgeStateStore) null);
+    }
 
     @Autowired
     public PricingService(PriceRuleRepository priceRuleRepository,
@@ -48,7 +69,27 @@ public class PricingService {
                           QuoteTokenService quoteTokenService,
                           DiscountCalculator discountCalculator,
                           TaxCalculationService taxCalculationService,
-                          SurgePricingService surgePricingService) {
+                          SurgePricingService surgePricingService,
+                          ObjectProvider<StoreSurgeStateStore> storeSurgeStateStoreProvider) {
+        this(
+                priceRuleRepository,
+                promotionService,
+                couponService,
+                quoteTokenService,
+                discountCalculator,
+                taxCalculationService,
+                surgePricingService,
+                storeSurgeStateStoreProvider != null ? storeSurgeStateStoreProvider.getIfAvailable() : null);
+    }
+
+    public PricingService(PriceRuleRepository priceRuleRepository,
+                          PromotionService promotionService,
+                          CouponService couponService,
+                          QuoteTokenService quoteTokenService,
+                          DiscountCalculator discountCalculator,
+                          TaxCalculationService taxCalculationService,
+                          SurgePricingService surgePricingService,
+                          StoreSurgeStateStore storeSurgeStateStore) {
         this.priceRuleRepository = priceRuleRepository;
         this.promotionService = promotionService;
         this.couponService = couponService;
@@ -56,6 +97,7 @@ public class PricingService {
         this.discountCalculator = discountCalculator != null ? discountCalculator : new DiscountCalculator();
         this.taxCalculationService = taxCalculationService != null ? taxCalculationService : new TaxCalculationService();
         this.surgePricingService = surgePricingService;
+        this.storeSurgeStateStore = storeSurgeStateStore;
     }
 
     @Cacheable(value = "productPrices", key = "#productId")
@@ -65,6 +107,19 @@ public class PricingService {
         PriceRule rule = priceRuleRepository.findActiveRuleByProductId(productId, now)
                 .orElseThrow(() -> new PriceRuleNotFoundException(productId.toString()));
         return applyMultiplier(rule.getBasePriceCents(), rule.getMultiplier());
+    }
+
+    @Transactional(readOnly = true)
+    public long calculatePrice(UUID productId, UUID storeId) {
+        long baseCalculated = calculatePrice(productId);
+        if (storeId == null) {
+            return baseCalculated;
+        }
+        BigDecimal liveMultiplier = resolveLiveWarehouseSurgeMultiplier(storeId);
+        if (liveMultiplier.compareTo(BigDecimal.ONE) <= 0) {
+            return baseCalculated;
+        }
+        return applyMultiplier(baseCalculated, liveMultiplier);
     }
 
     @Transactional(readOnly = true)
@@ -169,13 +224,7 @@ public class PricingService {
                 null
         );
 
-        long deliveryFeeCents = 0L;
-        if (request.storeId() != null && surgePricingService != null) {
-            var surge = surgePricingService.evaluateSurge(request.storeId());
-            if (surge != null && surge.isSurgeActive()) {
-                deliveryFeeCents = surge.surgeDeliveryFeeCents();
-            }
-        }
+        long deliveryFeeCents = resolveDeliveryFeeCents(request.storeId());
 
         long totalDiscount = calcResult.totalDiscountCents();
         long couponDiscountCents = calcResult.couponDiscountCents();
@@ -259,6 +308,53 @@ public class PricingService {
                 result.totalTaxCents(),
                 result.totalGrossCents(),
                 result.fractionalRemainderCents());
+    }
+
+    public BigDecimal resolveEffectiveSurgeMultiplier(UUID storeId) {
+        if (storeId == null) {
+            return BigDecimal.ONE;
+        }
+        BigDecimal staticMultiplier = BigDecimal.ONE;
+        if (surgePricingService != null) {
+            SurgePricingService.SurgeAssessment surge = surgePricingService.evaluateSurge(storeId);
+            if (surge != null && surge.isSurgeActive() && surge.surgeMultiplier() != null) {
+                staticMultiplier = surge.surgeMultiplier();
+            }
+        }
+        BigDecimal liveMultiplier = resolveLiveWarehouseSurgeMultiplier(storeId);
+        BigDecimal effective = liveMultiplier.max(staticMultiplier);
+        if (effective.compareTo(SurgePricingService.MAX_SURGE_MULTIPLIER) > 0) {
+            return SurgePricingService.MAX_SURGE_MULTIPLIER;
+        }
+        return effective;
+    }
+
+    private BigDecimal resolveLiveWarehouseSurgeMultiplier(UUID storeId) {
+        if (storeSurgeStateStore == null || storeId == null) {
+            return BigDecimal.ONE;
+        }
+        Optional<StoreSurgeStateStore.StoreSurgeState> state = storeSurgeStateStore.getActiveState(storeId);
+        if (state.isPresent() && state.get().isSurgeActive() && state.get().surgeMultiplier() != null) {
+            return state.get().surgeMultiplier();
+        }
+        return BigDecimal.ONE;
+    }
+
+    private long resolveDeliveryFeeCents(UUID storeId) {
+        if (storeId == null) {
+            return 0L;
+        }
+        BigDecimal effectiveMultiplier = resolveEffectiveSurgeMultiplier(storeId);
+        if (effectiveMultiplier.compareTo(BigDecimal.ONE) > 0) {
+            return SurgePricingService.calculateDeliveryFee(effectiveMultiplier);
+        }
+        if (surgePricingService != null) {
+            SurgePricingService.SurgeAssessment surge = surgePricingService.evaluateSurge(storeId);
+            if (surge != null && surge.isSurgeActive()) {
+                return surge.surgeDeliveryFeeCents();
+            }
+        }
+        return 0L;
     }
 
     private long applyMultiplier(long basePriceCents, BigDecimal multiplier) {

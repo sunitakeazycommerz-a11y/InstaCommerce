@@ -74,8 +74,8 @@ public class AdminRateLimitFilter extends OncePerRequestFilter {
         if (authentication != null && authentication.isAuthenticated() && authentication.getName() != null) {
             return "user:" + authentication.getName();
         }
-        String remoteAddr = request.getRemoteAddr();
-        return "ip:" + (remoteAddr != null ? remoteAddr : "unknown");
+        String clientIp = AdminSecurityAuditFilter.resolveClientIp(request);
+        return "ip:" + (clientIp != null ? clientIp : "unknown");
     }
 
     private static final class WindowCounter {

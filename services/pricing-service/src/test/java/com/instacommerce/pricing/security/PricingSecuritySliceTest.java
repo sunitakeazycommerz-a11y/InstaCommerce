@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -15,6 +16,7 @@ import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
 import com.instacommerce.pricing.config.CacheConfig;
 import com.instacommerce.pricing.config.JacksonConfig;
 import com.instacommerce.pricing.config.SecurityConfig;
+import com.instacommerce.pricing.controller.PriceLookupController;
 import com.instacommerce.pricing.controller.PricingController;
 import com.instacommerce.pricing.exception.GlobalExceptionHandler;
 import com.instacommerce.pricing.exception.TraceIdProvider;
@@ -34,6 +36,7 @@ import org.springframework.context.support.PropertySourcesPlaceholderConfigurer;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.web.SpringJUnitWebConfig;
+import org.springframework.test.util.AopTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
@@ -59,7 +62,8 @@ class PricingSecuritySliceTest {
         RestAccessDeniedHandler.class,
         GlobalExceptionHandler.class,
         TraceIdProvider.class,
-        PricingController.class
+        PricingController.class,
+        PriceLookupController.class
     })
     static class SliceConfig {
         @Bean
@@ -104,6 +108,9 @@ class PricingSecuritySliceTest {
 
     @Autowired
     private PromotionService promotionService;
+
+    @Autowired
+    private PricingService pricingService;
 
     private MockMvc mockMvc;
 
@@ -225,5 +232,23 @@ class PricingSecuritySliceTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(quoteBody))
             .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("Public GET /api/v1/prices/{id} and GET /pricing/products/{id} are permitted without auth")
+    void publicProductPriceRoutesPermitted() throws Exception {
+        UUID productId = UUID.randomUUID();
+        PricingService targetPricingService = AopTestUtils.getTargetObject(pricingService);
+        when(targetPricingService.calculatePrice(productId)).thenReturn(990L);
+
+        mockMvc.perform(get("/api/v1/prices/{id}", productId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.productId").value(productId.toString()))
+            .andExpect(jsonPath("$.unitPriceCents").value(990));
+
+        mockMvc.perform(get("/pricing/products/{id}", productId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.productId").value(productId.toString()))
+            .andExpect(jsonPath("$.unitPriceCents").value(990));
     }
 }

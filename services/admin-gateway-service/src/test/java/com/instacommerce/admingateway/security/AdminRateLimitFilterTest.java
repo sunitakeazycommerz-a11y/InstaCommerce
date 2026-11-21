@@ -47,4 +47,25 @@ class AdminRateLimitFilterTest {
         assertThat(res3.getHeader("Retry-After")).isEqualTo("60");
         assertThat(res3.getContentAsString()).contains("RATE_LIMIT_EXCEEDED");
     }
+
+    @Test
+    void shouldIsolateUnauthenticatedRateLimitsByTrustedForwardedClientIp() throws Exception {
+        AdminRateLimitFilter filter = new AdminRateLimitFilter(new ObjectMapper(), 1);
+        FilterChain chain = mock(FilterChain.class);
+
+        MockHttpServletRequest clientOneReq = new MockHttpServletRequest("GET", "/admin/v1/dashboard");
+        clientOneReq.setRemoteAddr("10.0.0.5");
+        clientOneReq.addHeader("X-Forwarded-For", "198.51.100.10");
+        MockHttpServletResponse clientOneRes = new MockHttpServletResponse();
+        filter.doFilter(clientOneReq, clientOneRes, chain);
+
+        MockHttpServletRequest clientTwoReq = new MockHttpServletRequest("GET", "/admin/v1/dashboard");
+        clientTwoReq.setRemoteAddr("10.0.0.5");
+        clientTwoReq.addHeader("X-Forwarded-For", "198.51.100.11");
+        MockHttpServletResponse clientTwoRes = new MockHttpServletResponse();
+        filter.doFilter(clientTwoReq, clientTwoRes, chain);
+
+        verify(chain).doFilter(clientOneReq, clientOneRes);
+        verify(chain).doFilter(clientTwoReq, clientTwoRes);
+    }
 }

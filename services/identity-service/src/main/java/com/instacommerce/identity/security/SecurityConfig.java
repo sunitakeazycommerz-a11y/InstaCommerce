@@ -8,6 +8,7 @@ import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -43,6 +44,15 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/auth/login", "/api/v1/auth/register", "/api/v1/auth/refresh").permitAll()
                         .requestMatchers("/.well-known/**", "/actuator/**", "/error").permitAll()
                         .requestMatchers("/auth/revoke", "/auth/logout", "/api/v1/auth/revoke", "/api/v1/auth/logout").authenticated()
+                        .requestMatchers("/users/me", "/users/me/**", "/api/v1/users/me", "/api/v1/users/me/**").authenticated()
+                        .requestMatchers(HttpMethod.GET,
+                                "/users/*/notification-preferences",
+                                "/api/v1/users/*/notification-preferences",
+                                "/admin/users/*/notification-preferences",
+                                "/users/*",
+                                "/api/v1/users/*",
+                                "/admin/users/*").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
+                        .requestMatchers("/admin/**", "/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                     .authenticationEntryPoint(authenticationEntryPoint)

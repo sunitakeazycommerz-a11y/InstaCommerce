@@ -394,6 +394,8 @@ class HomeAggregatorTest {
         AtomicReference<String> seenIdentityUserId = new AtomicReference<>();
         AtomicReference<String> seenIdentityAuthHeader = new AtomicReference<>();
         AtomicReference<String> seenWalletAuthHeader = new AtomicReference<>();
+        AtomicReference<String> seenWalletUserId = new AtomicReference<>();
+        AtomicReference<String> seenLoyaltyUserId = new AtomicReference<>();
 
         WebClient.Builder routingBuilder = WebClient.builder()
             .exchangeFunction(req -> {
@@ -410,6 +412,10 @@ class HomeAggregatorTest {
                 }
                 if (path.contains("/wallet/")) {
                     seenWalletAuthHeader.set(req.headers().getFirst(HttpHeaders.AUTHORIZATION));
+                    seenWalletUserId.set(req.headers().getFirst("X-User-Id"));
+                }
+                if (path.contains("/loyalty/")) {
+                    seenLoyaltyUserId.set(req.headers().getFirst("X-User-Id"));
                 }
                 return Mono.error(new RuntimeException("Connection refused"));
             });
@@ -434,6 +440,104 @@ class HomeAggregatorTest {
         assertThat(seenIdentityUserId.get()).isEqualTo("usr_prof_1");
         assertThat(seenIdentityAuthHeader.get()).isNull();
         assertThat(seenWalletAuthHeader.get()).isEqualTo("Bearer jwt-abc");
+        assertThat(seenWalletUserId.get()).isEqualTo("usr_prof_1");
+        assertThat(seenLoyaltyUserId.get()).isEqualTo("usr_prof_1");
+    }
+
+    @Test
+    @DisplayName("Should consistently forward X-User-Id and internal auth headers on /flags, /wallet/balance, and /loyalty/points")
+    void testFullProfileAndFlagsHeaderPropagation() {
+        AtomicReference<String> seenFlagsUserId = new AtomicReference<>();
+        AtomicReference<String> seenFlagsInternalService = new AtomicReference<>();
+        AtomicReference<String> seenFlagsInternalToken = new AtomicReference<>();
+        AtomicReference<String> seenWalletUserId = new AtomicReference<>();
+        AtomicReference<String> seenWalletInternalToken = new AtomicReference<>();
+        AtomicReference<String> seenLoyaltyUserId = new AtomicReference<>();
+        AtomicReference<String> seenLoyaltyInternalToken = new AtomicReference<>();
+
+        WebClient.Builder routingBuilder = WebClient.builder()
+            .exchangeFunction(req -> {
+                String path = req.url().getPath();
+                if (path.endsWith("/categories")) {
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("[{\"id\":\"cat-1\"}]")
+                        .build());
+                }
+                if (path.endsWith("/search/trending")) {
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("[\"milk\"]")
+                        .build());
+                }
+                if (path.endsWith("/flags")) {
+                    seenFlagsUserId.set(req.headers().getFirst("X-User-Id"));
+                    seenFlagsInternalService.set(req.headers().getFirst("X-Internal-Service"));
+                    seenFlagsInternalToken.set(req.headers().getFirst("X-Internal-Token"));
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"fast_checkout\":true}")
+                        .build());
+                }
+                if (path.contains("/users/")) {
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"id\":\"usr_42\",\"email\":\"asha@example.com\"}")
+                        .build());
+                }
+                if (path.endsWith("/wallet/balance")) {
+                    seenWalletUserId.set(req.headers().getFirst("X-User-Id"));
+                    seenWalletInternalToken.set(req.headers().getFirst("X-Internal-Token"));
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"balanceCents\":5000}")
+                        .build());
+                }
+                if (path.endsWith("/loyalty/points")) {
+                    seenLoyaltyUserId.set(req.headers().getFirst("X-User-Id"));
+                    seenLoyaltyInternalToken.set(req.headers().getFirst("X-Internal-Token"));
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .body("{\"points\":120}")
+                        .build());
+                }
+                return Mono.error(new RuntimeException("Unexpected path " + path));
+            });
+
+        UpstreamClientFactory factory = new UpstreamClientFactory(
+                routingBuilder, properties, "mobile-bff-service", "internal-secret-xyz");
+        HomeAggregator aggregator = new HomeAggregator(factory, properties);
+
+        StepVerifier.create(aggregator.aggregate("usr_42", "store_1"))
+            .assertNext(home -> {
+                assertThat(home.status()).isEqualTo("ok");
+                assertThat(home.flags()).containsEntry("fast_checkout", true);
+            })
+            .verifyComplete();
+
+        StepVerifier.create(aggregator.aggregateProfile("usr_42", "jwt-token-42"))
+            .assertNext(profile -> {
+                assertThat(profile).containsEntry("userId", "usr_42");
+                assertThat(profile).containsEntry("status", "authenticated");
+                assertThat(profile.get("profile")).isEqualTo(Map.of("id", "usr_42", "email", "asha@example.com"));
+                assertThat(profile.get("wallet")).isEqualTo(Map.of("balanceCents", 5000));
+                assertThat(profile.get("loyalty")).isEqualTo(Map.of("points", 120));
+            })
+            .verifyComplete();
+
+        assertThat(seenFlagsUserId.get()).isEqualTo("usr_42");
+        assertThat(seenFlagsInternalService.get()).isEqualTo("mobile-bff-service");
+        assertThat(seenFlagsInternalToken.get()).isEqualTo("internal-secret-xyz");
+        assertThat(seenWalletUserId.get()).isEqualTo("usr_42");
+        assertThat(seenWalletInternalToken.get()).isEqualTo("internal-secret-xyz");
+        assertThat(seenLoyaltyUserId.get()).isEqualTo("usr_42");
+        assertThat(seenLoyaltyInternalToken.get()).isEqualTo("internal-secret-xyz");
+
+        seenFlagsUserId.set("sentinel");
+        StepVerifier.create(aggregator.aggregate("anonymous", "store_1"))
+            .assertNext(home -> assertThat(home.metadata()).doesNotContainKey("userId"))
+            .verifyComplete();
+        assertThat(seenFlagsUserId.get()).isNull();
     }
 
     @Test

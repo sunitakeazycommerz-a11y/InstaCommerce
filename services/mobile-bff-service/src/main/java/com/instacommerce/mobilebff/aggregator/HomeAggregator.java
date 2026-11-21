@@ -83,7 +83,8 @@ public class HomeAggregator {
 
     public Mono<HomeResponse> aggregate(String userId, String storeId) {
         return Mono.deferContextual(ctx -> {
-            boolean hasUserId = userId != null && !userId.isBlank();
+            String normalizedUserId = normalizeUserId(userId);
+            boolean hasUserId = normalizedUserId != null;
             String correlationId = ctx.<String>getOrEmpty(CorrelationIdWebFilter.CONTEXT_KEY).orElse(null);
             Set<String> degradedServices = ConcurrentHashMap.newKeySet();
 
@@ -93,7 +94,7 @@ public class HomeAggregator {
                 clientFactory.catalogClient()
                     .get()
                     .uri("/categories")
-                    .headers(headers -> applyRequestHeaders(headers, userId, hasUserId, correlationId))
+                    .headers(headers -> applyRequestHeaders(headers, normalizedUserId, hasUserId, correlationId))
                     .retrieve()
                     .bodyToMono(LIST_MAP_TYPE),
                 List.of(),
@@ -105,7 +106,7 @@ public class HomeAggregator {
                 clientFactory.searchClient()
                     .get()
                     .uri("/search/trending")
-                    .headers(headers -> applyRequestHeaders(headers, userId, hasUserId, correlationId))
+                    .headers(headers -> applyRequestHeaders(headers, normalizedUserId, hasUserId, correlationId))
                     .retrieve()
                     .bodyToMono(LIST_STRING_TYPE),
                 List.of(),
@@ -116,8 +117,8 @@ public class HomeAggregator {
                 featureFlagCircuitBreaker,
                 clientFactory.featureFlagClient()
                     .get()
-                    .uri(uriBuilder -> buildFeatureFlagUri(uriBuilder, userId, hasUserId))
-                    .headers(headers -> applyRequestHeaders(headers, userId, hasUserId, correlationId))
+                    .uri(uriBuilder -> buildFeatureFlagUri(uriBuilder, normalizedUserId, hasUserId))
+                    .headers(headers -> applyRequestHeaders(headers, normalizedUserId, hasUserId, correlationId))
                     .retrieve()
                     .bodyToMono(MAP_TYPE),
                 Map.of(),
@@ -131,7 +132,7 @@ public class HomeAggregator {
                         metadata.put("storeId", storeId);
                     }
                     if (hasUserId) {
-                        metadata.put("userId", userId);
+                        metadata.put("userId", normalizedUserId);
                     }
                     if (!degradedServices.isEmpty()) {
                         metadata.put("degraded", true);
@@ -152,8 +153,9 @@ public class HomeAggregator {
 
     public Mono<Map<String, Object>> aggregateProfile(String userId, String bearerToken) {
         return Mono.deferContextual(ctx -> {
-            boolean hasUserId = userId != null && !userId.isBlank() && !"anonymous".equals(userId);
-            String resolvedUserId = hasUserId ? userId : "anonymous";
+            String normalizedUserId = normalizeUserId(userId);
+            boolean hasUserId = normalizedUserId != null;
+            String resolvedUserId = hasUserId ? normalizedUserId : "anonymous";
             if (!hasUserId) {
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("userId", resolvedUserId);
@@ -172,8 +174,8 @@ public class HomeAggregator {
                 identityCircuitBreaker,
                 clientFactory.identityClient()
                     .get()
-                    .uri("/users/{id}", userId)
-                    .headers(headers -> applyRequestHeaders(headers, userId, true, correlationId))
+                    .uri("/users/{id}", resolvedUserId)
+                    .headers(headers -> applyRequestHeaders(headers, resolvedUserId, true, correlationId))
                     .retrieve()
                     .bodyToMono(MAP_TYPE),
                 Map.of(),
@@ -185,7 +187,7 @@ public class HomeAggregator {
                 clientFactory.walletLoyaltyClient()
                     .get()
                     .uri("/wallet/balance")
-                    .headers(headers -> applyProfileHeaders(headers, userId, bearerToken, correlationId))
+                    .headers(headers -> applyProfileHeaders(headers, resolvedUserId, bearerToken, correlationId))
                     .retrieve()
                     .bodyToMono(MAP_TYPE),
                 Map.of(),
@@ -197,7 +199,7 @@ public class HomeAggregator {
                 clientFactory.walletLoyaltyClient()
                     .get()
                     .uri("/loyalty/points")
-                    .headers(headers -> applyProfileHeaders(headers, userId, bearerToken, correlationId))
+                    .headers(headers -> applyProfileHeaders(headers, resolvedUserId, bearerToken, correlationId))
                     .retrieve()
                     .bodyToMono(MAP_TYPE),
                 Map.of(),
@@ -242,6 +244,19 @@ public class HomeAggregator {
                 .toUri();
         }
         return builder.build().toUri();
+    }
+
+    private static String normalizeUserId(String userId) {
+        if (userId == null) {
+            return null;
+        }
+        String trimmed = userId.trim();
+        if (trimmed.isEmpty()
+                || "anonymous".equalsIgnoreCase(trimmed)
+                || "anonymousUser".equalsIgnoreCase(trimmed)) {
+            return null;
+        }
+        return trimmed;
     }
 
     private void applyRequestHeaders(HttpHeaders headers, String userId, boolean hasUserId, String correlationId) {

@@ -2,6 +2,7 @@ package com.instacommerce.pricing.controller;
 
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,7 +45,36 @@ class PricingControllerTest {
     void setUp() {
         PricingController controller = new PricingController(
                 pricingService, couponService, quoteTokenService, promotionService);
-        mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+        PriceLookupController priceLookupController = new PriceLookupController(pricingService);
+        mockMvc = MockMvcBuilders.standaloneSetup(controller, priceLookupController).build();
+    }
+
+    @Test
+    @DisplayName("GET /pricing/products/{id} aliases and GET /api/v1/prices/{id} return 200 while double-prefixed routes return 404")
+    void productPriceRoutesAndNoDoublePrefixMapping() throws Exception {
+        UUID productId = UUID.randomUUID();
+        when(pricingService.calculatePrice(productId)).thenReturn(1450L);
+
+        for (String validPath : List.of(
+                "/pricing/products/" + productId,
+                "/api/pricing/products/" + productId,
+                "/api/v1/pricing/products/" + productId,
+                "/api/v1/prices/" + productId)) {
+            mockMvc.perform(get(validPath))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.productId").value(productId.toString()))
+                    .andExpect(jsonPath("$.unitPriceCents").value(1450))
+                    .andExpect(jsonPath("$.lineTotalCents").value(1450))
+                    .andExpect(jsonPath("$.currency").value("INR"));
+        }
+
+        for (String bogusPath : List.of(
+                "/pricing/api/v1/prices/" + productId,
+                "/api/pricing/api/v1/prices/" + productId,
+                "/api/v1/pricing/api/v1/prices/" + productId)) {
+            mockMvc.perform(get(bogusPath))
+                    .andExpect(status().isNotFound());
+        }
     }
 
     @Test

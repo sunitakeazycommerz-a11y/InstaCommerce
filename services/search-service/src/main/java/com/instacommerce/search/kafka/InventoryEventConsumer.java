@@ -1,5 +1,7 @@
 package com.instacommerce.search.kafka;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.search.service.SearchIndexService;
 import java.util.List;
@@ -17,34 +19,61 @@ import org.springframework.stereotype.Component;
 public class InventoryEventConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(InventoryEventConsumer.class);
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final SearchIndexService searchIndexService;
     private final CacheManager cacheManager;
+    private final ObjectMapper objectMapper;
 
     @Autowired
     public InventoryEventConsumer(
             SearchIndexService searchIndexService,
+            ObjectProvider<CacheManager> cacheManagerProvider,
+            ObjectProvider<ObjectMapper> objectMapperProvider) {
+        this(
+                searchIndexService,
+                cacheManagerProvider != null ? cacheManagerProvider.getIfAvailable() : null,
+                objectMapperProvider != null ? objectMapperProvider.getIfAvailable(ObjectMapper::new) : new ObjectMapper());
+    }
+
+    public InventoryEventConsumer(
+            SearchIndexService searchIndexService,
             ObjectProvider<CacheManager> cacheManagerProvider) {
+        this(
+                searchIndexService,
+                cacheManagerProvider != null ? cacheManagerProvider.getIfAvailable() : null,
+                new ObjectMapper());
+    }
+
+    public InventoryEventConsumer(
+            SearchIndexService searchIndexService,
+            CacheManager cacheManager,
+            ObjectMapper objectMapper) {
         this.searchIndexService = searchIndexService;
-        this.cacheManager = cacheManagerProvider != null ? cacheManagerProvider.getIfAvailable() : null;
+        this.cacheManager = cacheManager;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
     public InventoryEventConsumer(SearchIndexService searchIndexService) {
-        this(searchIndexService, null);
+        this(searchIndexService, (CacheManager) null, new ObjectMapper());
     }
 
     @KafkaListener(topics = TopicNames.INVENTORY_EVENTS, groupId = "search-service")
-    @SuppressWarnings("unchecked")
     public void handleInventoryEvent(Map<String, Object> envelope) {
-        String eventType = (String) envelope.get("eventType");
+        if (envelope == null || envelope.isEmpty()) {
+            return;
+        }
+        String eventType = asString(envelope.get("eventType"));
+        if (eventType == null) {
+            eventType = asString(envelope.get("event_type"));
+        }
         if (eventType == null) {
             log.warn("Received inventory event with no eventType, skipping");
             return;
         }
 
-        // Support both envelope format (nested payload) and flat format
-        Map<String, Object> payload = envelope.containsKey("payload")
-                ? (Map<String, Object>) envelope.get("payload")
+        Map<String, Object> payload = envelope.get("payload") instanceof Map<?, ?> nested
+                ? objectMapper.convertValue(nested, MAP_TYPE)
                 : envelope;
 
         switch (eventType) {
@@ -64,6 +93,14 @@ public class InventoryEventConsumer {
                 handleStockReleased(payload);
                 evictSearchCaches();
             }
+            case "OutOfStock" -> {
+                handleOutOfStock(payload);
+                evictSearchCaches();
+            }
+            case "ExpiredStockWrittenOff" -> {
+                handleExpiredStockWrittenOff(payload);
+                evictSearchCaches();
+            }
             default -> log.debug("Ignoring unhandled inventory event type={}", eventType);
         }
     }
@@ -71,16 +108,24 @@ public class InventoryEventConsumer {
     private void evictSearchCaches() {
         if (cacheManager != null) {
             var searchCache = cacheManager.getCache("searchResults");
-            if (searchCache != null) searchCache.clear();
+            if (searchCache != null) {
+                searchCache.clear();
+            }
             var autoCache = cacheManager.getCache("autocomplete");
-            if (autoCache != null) autoCache.clear();
+            if (autoCache != null) {
+                autoCache.clear();
+            }
             log.info("Evicted searchResults and autocomplete caches following inventory change");
         }
     }
 
     private void handleStockAdjusted(Map<String, Object> payload) {
-        UUID productId = UUID.fromString((String) payload.get("productId"));
-        Number newOnHand = (Number) payload.get("newOnHand");
+        UUID productId = extractProductId(payload);
+        if (productId == null) {
+            log.warn("StockAdjusted event missing productId");
+            return;
+        }
+        Number newOnHand = firstNumber(payload, "newOnHand", "new_on_hand");
         if (newOnHand == null) {
             log.warn("StockAdjusted event for productId={} missing newOnHand", productId);
             return;
@@ -90,8 +135,12 @@ public class InventoryEventConsumer {
     }
 
     private void handleLowStockAlert(Map<String, Object> payload) {
-        UUID productId = UUID.fromString((String) payload.get("productId"));
-        Number currentQuantity = (Number) payload.get("currentQuantity");
+        UUID productId = extractProductId(payload);
+        if (productId == null) {
+            log.warn("LowStockAlert event missing productId");
+            return;
+        }
+        Number currentQuantity = firstNumber(payload, "currentQuantity", "current_quantity");
         if (currentQuantity == null) {
             log.warn("LowStockAlert event for productId={} missing currentQuantity", productId);
             return;
@@ -100,37 +149,69 @@ public class InventoryEventConsumer {
         searchIndexService.updateStockStatus(productId, inStock);
     }
 
-    @SuppressWarnings("unchecked")
+    private void handleOutOfStock(Map<String, Object> payload) {
+        UUID productId = extractProductId(payload);
+        if (productId == null) {
+            log.warn("OutOfStock event missing productId");
+            return;
+        }
+        searchIndexService.updateStockStatus(productId, false);
+    }
+
+    private void handleExpiredStockWrittenOff(Map<String, Object> payload) {
+        UUID productId = extractProductId(payload);
+        if (productId == null) {
+            log.warn("ExpiredStockWrittenOff event missing productId");
+            return;
+        }
+        Boolean explicitInStock = firstBoolean(payload, "inStock", "in_stock");
+        if (explicitInStock != null) {
+            searchIndexService.updateStockStatus(productId, explicitInStock);
+            return;
+        }
+        Number remaining = firstNumber(
+                payload,
+                "remainingAvailable",
+                "remaining_available",
+                "remainingOnHand",
+                "remaining_on_hand",
+                "newOnHand",
+                "new_on_hand",
+                "currentQuantity",
+                "current_quantity");
+        boolean inStock = remaining != null && remaining.intValue() > 0;
+        searchIndexService.updateStockStatus(productId, inStock);
+    }
+
     private void handleStockConfirmed(Map<String, Object> payload) {
         Object itemsObj = payload.get("items");
         if (itemsObj instanceof List<?> itemsList) {
             for (Object obj : itemsList) {
                 if (obj instanceof Map<?, ?> itemMap) {
-                    processConfirmedItem((Map<String, Object>) itemMap);
+                    processConfirmedItem(objectMapper.convertValue(itemMap, MAP_TYPE));
                 }
             }
-        } else if (payload.containsKey("productId")) {
+        } else if (extractProductId(payload) != null) {
             processConfirmedItem(payload);
         }
     }
 
     private void processConfirmedItem(Map<String, Object> item) {
-        Object pidObj = item.get("productId");
-        if (pidObj == null) {
+        UUID productId = extractProductId(item);
+        if (productId == null) {
             return;
         }
-        UUID productId = UUID.fromString(pidObj.toString());
-        Boolean inStock = (Boolean) item.get("inStock");
+        Boolean inStock = firstBoolean(item, "inStock", "in_stock");
         if (inStock != null) {
             searchIndexService.updateStockStatus(productId, inStock);
             return;
         }
-        Number remainingAvailable = (Number) item.get("remainingAvailable");
+        Number remainingAvailable = firstNumber(item, "remainingAvailable", "remaining_available");
         if (remainingAvailable != null) {
             searchIndexService.updateStockStatus(productId, remainingAvailable.intValue() > 0);
             return;
         }
-        Number remainingOnHand = (Number) item.get("remainingOnHand");
+        Number remainingOnHand = firstNumber(item, "remainingOnHand", "remaining_on_hand");
         if (remainingOnHand != null) {
             searchIndexService.updateStockStatus(productId, remainingOnHand.intValue() > 0);
         }
@@ -141,16 +222,56 @@ public class InventoryEventConsumer {
         if (itemsObj instanceof List<?> itemsList) {
             for (Object obj : itemsList) {
                 if (obj instanceof Map<?, ?> itemMap) {
-                    Object pidObj = ((Map<?, ?>) itemMap).get("productId");
-                    if (pidObj != null) {
-                        UUID productId = UUID.fromString(pidObj.toString());
+                    UUID productId = extractProductId(objectMapper.convertValue(itemMap, MAP_TYPE));
+                    if (productId != null) {
                         searchIndexService.updateStockStatus(productId, true);
                     }
                 }
             }
-        } else if (payload.containsKey("productId")) {
-            UUID productId = UUID.fromString(payload.get("productId").toString());
-            searchIndexService.updateStockStatus(productId, true);
+        } else {
+            UUID productId = extractProductId(payload);
+            if (productId != null) {
+                searchIndexService.updateStockStatus(productId, true);
+            }
         }
+    }
+
+    private static UUID extractProductId(Map<String, Object> payload) {
+        String raw = asString(payload.get("productId"));
+        if (raw == null) {
+            raw = asString(payload.get("product_id"));
+        }
+        if (raw == null) {
+            return null;
+        }
+        return UUID.fromString(raw);
+    }
+
+    private static String asString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private static Number firstNumber(Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            Object val = payload.get(key);
+            if (val instanceof Number number) {
+                return number;
+            }
+        }
+        return null;
+    }
+
+    private static Boolean firstBoolean(Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            Object val = payload.get(key);
+            if (val instanceof Boolean bool) {
+                return bool;
+            }
+        }
+        return null;
     }
 }
