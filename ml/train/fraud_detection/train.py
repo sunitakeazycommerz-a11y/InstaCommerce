@@ -13,11 +13,18 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
-import mlflow  # type: ignore
-import mlflow.xgboost  # type: ignore
+try:
+    import mlflow as _mlflow
+    mlflow: Any = _mlflow
+except (ImportError, OSError):
+    mlflow = None
 import numpy as np
 import pandas as pd
-import xgboost as xgb
+try:
+    import xgboost as _xgb
+    xgb: Any = _xgb
+except Exception:
+    xgb = None
 import yaml
 from google.cloud import bigquery  # type: ignore
 from sklearn.calibration import CalibratedClassifierCV
@@ -150,12 +157,16 @@ class FraudDetectionTrainer:
 
     def _compute_scale_pos_weight(self, y: pd.Series) -> float:
         """Compute scale_pos_weight for class imbalance."""
-        neg_count = (y == 0).sum()
-        pos_count = (y == 1).sum()
-        return neg_count / pos_count
+        neg_count = int((y == 0).sum())
+        pos_count = int((y == 1).sum())
+        if pos_count <= 0 or neg_count <= 0:
+            return 1.0
+        return float(neg_count / pos_count)
 
-    def train(self, df: pd.DataFrame) -> xgb.XGBClassifier:
+    def train(self, df: pd.DataFrame) -> Any:
         """Train XGBoost with class weighting and stratified CV."""
+        if xgb is None:
+            raise ImportError("xgboost is required for FraudDetectionTrainer.train")
         logger.info("Starting XGBoost fraud detection training")
         hp = self.config["hyperparameters"]
         label_col = self.config["training"]["label_column"]
@@ -209,6 +220,8 @@ class FraudDetectionTrainer:
                 best_auc = fold_auc
                 best_model = model
 
+        if best_model is None:
+            raise RuntimeError("Training failed to produce a valid fraud detection model")
         self.model = best_model
         logger.info("Best AUC across folds: %.4f, Mean AUC: %.4f", best_auc, np.mean(fold_aucs))
         return best_model
@@ -304,17 +317,29 @@ class FraudDetectionTrainer:
         return {k: float(v) for k, v in sorted(importance.items(), key=lambda x: -x[1])}
 
 
+def _as_finite_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        num = float(value)
+        if np.isfinite(num):
+            return num
+    return None
+
+
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
     passed = True
-    if metrics["auc_roc"] < gates.get("min_auc_roc", 0.0):
-        logger.warning("AUC-ROC %.4f below gate %.4f", metrics["auc_roc"], gates["min_auc_roc"])
+    auc_roc = _as_finite_float(metrics.get("auc_roc"))
+    min_auc = float(gates.get("min_auc_roc", 0.0))
+    if auc_roc is None or auc_roc < min_auc:
+        logger.warning("AUC-ROC %r below gate %.4f", metrics.get("auc_roc"), min_auc)
         passed = False
-    if metrics["precision_at_95_recall"] < gates.get("min_precision_at_95_recall", 0.0):
+    prec_95 = _as_finite_float(metrics.get("precision_at_95_recall"))
+    min_prec_95 = float(gates.get("min_precision_at_95_recall", 0.0))
+    if prec_95 is None or prec_95 < min_prec_95:
         logger.warning(
-            "Precision@95%%Recall %.4f below gate %.4f",
-            metrics["precision_at_95_recall"],
-            gates["min_precision_at_95_recall"],
+            "Precision@95%%Recall %r below gate %.4f",
+            metrics.get("precision_at_95_recall"),
+            min_prec_95,
         )
         passed = False
     return passed

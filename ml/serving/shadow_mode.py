@@ -10,6 +10,8 @@ agreement monitoring, and CI promotion gate verification.
 import datetime
 import json
 import logging
+import math
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import asdict, dataclass
@@ -101,6 +103,7 @@ class ShadowRunner:
         self._kafka_producer = kafka_producer
         self._kafka_topic = kafka_topic
         self._log_buffer: List[ShadowPredictionLog] = []
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -128,7 +131,8 @@ class ShadowRunner:
             shadow_result = future.result(timeout=self._timeout_s)
             comparison = self._compare(production_result, shadow_result)
             log_record = self._build_log_record(production_result, shadow_result, comparison, features)
-            self._log_buffer.append(log_record)
+            with self._lock:
+                self._log_buffer.append(log_record)
             self._stream_log(log_record)
             self._log_comparison(production_result, shadow_result, comparison)
             return comparison
@@ -239,10 +243,14 @@ class ShadowRunner:
             and isinstance(sv, (int, float))
             and not isinstance(sv, bool)
         ):
-            delta = abs(float(sv) - float(pv))
+            pv_f = float(pv)
+            sv_f = float(sv)
+            if not (math.isfinite(pv_f) and math.isfinite(sv_f)):
+                return False, score_delta
+            delta = abs(sv_f - pv_f)
             next_delta = delta if score_delta is None else score_delta
             # Agreement if within 10 % relative tolerance (guard pv == 0)
-            relative_diff = delta / max(abs(float(pv)), 1e-9)
+            relative_diff = delta / max(abs(pv_f), 1e-9)
             return relative_diff <= 0.10, next_delta
         return pv == sv, score_delta
 
@@ -252,8 +260,6 @@ class ShadowRunner:
         shadow: PredictionResult,
     ) -> Dict[str, Any]:
         """Compute comparison metrics between production and shadow results."""
-        self._comparison_count += 1
-
         prod_output = production.output
         shadow_output = shadow.output
 
@@ -279,8 +285,10 @@ class ShadowRunner:
             if not pair_agrees:
                 agrees = False
 
-        if agrees:
-            self._agreement_count += 1
+        with self._lock:
+            self._comparison_count += 1
+            if agrees:
+                self._agreement_count += 1
 
         return {
             "agrees": agrees,

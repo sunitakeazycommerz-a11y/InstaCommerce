@@ -8,18 +8,26 @@ promotion effects, and cannibalization adjustments.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 import pickle
 from pathlib import Path
 from typing import Any, cast
 
-import mlflow  # type: ignore
+try:
+    import mlflow as _mlflow
+    mlflow: Any = _mlflow
+except (ImportError, OSError):
+    mlflow = None
 import numpy as np
 import pandas as pd
 import yaml
 from google.cloud import bigquery  # type: ignore
-from prophet import Prophet  # type: ignore
+try:
+    Prophet: Any = getattr(importlib.import_module("prophet"), "Prophet", None)
+except (ImportError, OSError):
+    Prophet = None
 from sklearn.metrics import mean_absolute_error
 
 logger = logging.getLogger(__name__)
@@ -62,7 +70,7 @@ class DemandForecastTrainer:
 
     def __init__(self, config: dict):
         self.config = config
-        self.models: dict[str, Prophet] = {}
+        self.models: dict[str, Any] = {}
         self.regressors = config.get("regressors", REGRESSORS)
 
     def load_data(self, query: str) -> pd.DataFrame:
@@ -79,8 +87,10 @@ class DemandForecastTrainer:
         logger.info("Loaded %d rows, %d store×SKU combinations", len(df), n_combos)
         return df
 
-    def _build_prophet_model(self) -> Prophet:
+    def _build_prophet_model(self) -> Any:
         """Build a Prophet model with Indian holidays and regressors."""
+        if Prophet is None:
+            raise ImportError("prophet is required to build a DemandForecastTrainer model")
         hp = self.config.get("hyperparameters", {})
         model = Prophet(
             changepoint_prior_scale=hp.get("changepoint_prior_scale", 0.05),
@@ -102,7 +112,7 @@ class DemandForecastTrainer:
 
         return model
 
-    def train(self, df: pd.DataFrame) -> dict[str, Prophet]:
+    def train(self, df: pd.DataFrame) -> dict[str, Any]:
         """Train per store×SKU Prophet models."""
         logger.info("Starting demand forecast training")
         groups = df.groupby(["store_id", "sku_id"])
@@ -162,17 +172,23 @@ class DemandForecastTrainer:
                 model_mape = np.mean(np.abs(y_true[mask] - y_pred[mask]) / y_true[mask])
                 per_model_mape.append(model_mape)
 
-        all_actuals = np.array(all_actuals)
-        all_predictions = np.array(all_predictions)
+        all_actuals_arr = np.array(all_actuals, dtype=float)
+        all_predictions_arr = np.array(all_predictions, dtype=float)
+        mae_val = (
+            float(mean_absolute_error(all_actuals_arr, all_predictions_arr))
+            if len(all_actuals_arr) > 0
+            else float("inf")
+        )
+        mean_mape = float(np.mean(per_model_mape)) if per_model_mape else 1.0
 
         metrics = {
-            "mae": float(mean_absolute_error(all_actuals, all_predictions)),
-            "mape": float(np.mean(per_model_mape)) if per_model_mape else 0.0,
-            "accuracy_pct": float(1.0 - np.mean(per_model_mape)) * 100 if per_model_mape else 0.0,
-            "median_model_mape": float(np.median(per_model_mape)) if per_model_mape else 0.0,
-            "p90_model_mape": float(np.percentile(per_model_mape, 90)) if per_model_mape else 0.0,
+            "mae": mae_val,
+            "mape": mean_mape,
+            "accuracy_pct": max(0.0, float(1.0 - mean_mape) * 100.0) if per_model_mape else 0.0,
+            "median_model_mape": float(np.median(per_model_mape)) if per_model_mape else 1.0,
+            "p90_model_mape": float(np.percentile(per_model_mape, 90)) if per_model_mape else 1.0,
             "models_evaluated": len(per_model_mape),
-            "total_predictions": len(all_actuals),
+            "total_predictions": len(all_actuals_arr),
         }
         logger.info("Evaluation metrics: %s", json.dumps(metrics, indent=2))
         return metrics
@@ -199,16 +215,26 @@ class DemandForecastTrainer:
         logger.info("Exported %d models to %s", len(self.models), export_dir)
 
 
+def _as_finite_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        num = float(value)
+        if np.isfinite(num):
+            return num
+    return None
+
+
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
     passed = True
-    max_mape = gates.get("max_mape", 1.0)
-    if metrics["mape"] > max_mape:
-        logger.warning("MAPE %.4f above gate %.4f", metrics["mape"], max_mape)
+    mape = _as_finite_float(metrics.get("mape"))
+    max_mape = float(gates.get("max_mape", 1.0))
+    if mape is None or mape > max_mape:
+        logger.warning("MAPE %r above gate %.4f", metrics.get("mape"), max_mape)
         passed = False
-    min_accuracy = gates.get("min_accuracy_pct", 0.0)
-    if metrics["accuracy_pct"] < min_accuracy:
-        logger.warning("Accuracy %.2f%% below gate %.2f%%", metrics["accuracy_pct"], min_accuracy)
+    accuracy = _as_finite_float(metrics.get("accuracy_pct"))
+    min_accuracy = float(gates.get("min_accuracy_pct", 0.0))
+    if accuracy is None or accuracy < min_accuracy:
+        logger.warning("Accuracy %r%% below gate %.2f%%", metrics.get("accuracy_pct"), min_accuracy)
         passed = False
     return passed
 

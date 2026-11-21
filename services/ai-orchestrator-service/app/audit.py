@@ -3,130 +3,56 @@
 Publishes structured audit events to the ``ai-orchestrator.events`` Kafka
 topic so that the centralised audit-trail-service can ingest them into the
 tamper-evident compliance chain.
-
-The envelope format mirrors the convention used by all other InstaCommerce
-domain services (see DomainEventConsumer in audit-trail-service):
-
-    {
-        "eventId": "<uuid>",
-        "eventType": "AI_INTENT_CLASSIFIED",
-        "schemaVersion": "1.0",
-        "userId": "<uuid | null>",
-        "actorType": "SYSTEM",
-        "aggregateType": "ai_session",
-        "aggregateId": "<request_id>",
-        "correlationId": "<correlation_id | null>",
-        "action": "AI_INTENT_CLASSIFIED",
-        "payload": { ... }
-    }
-
-Design principles
------------------
-* **Fire-and-forget** -- publishing failures are logged but never propagate
-  to the caller.  AI orchestrator latency must not be affected by audit
-  infrastructure issues.
-* **Async-native** -- uses ``aiokafka`` so the producer never blocks the
-  FastAPI event loop.
-* **Graceful lifecycle** -- ``start()`` / ``stop()`` are called from the
-  FastAPI lifespan context manager.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from app.audit_envelope import (
+    AI_AGENT_INVOKED,
+    AI_ESCALATION_TRIGGERED,
+    AI_INTENT_CLASSIFIED,
+    AI_RESPONSE_GENERATED,
+    AI_TOOL_EXECUTED,
+    TOPIC,
+    agent_invoked_envelope,
+    build_envelope,
+    escalation_triggered_envelope,
+    intent_classified_envelope,
+    response_generated_envelope,
+    tool_executed_envelope,
+)
+
 try:
-    from aiokafka import AIOKafkaProducer  # type: ignore[import-untyped]
+    from aiokafka import AIOKafkaProducer as _AIOKafkaProducer
+    AIOKafkaProducer: Any = _AIOKafkaProducer
 except ImportError:
-    AIOKafkaProducer = None  # type: ignore[assignment,misc]
+    AIOKafkaProducer = None
 
 logger = logging.getLogger("ai_orchestrator.audit")
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+_build_envelope = build_envelope
 
-TOPIC = "ai-orchestrator.events"
+__all__ = [
+    "AI_AGENT_INVOKED",
+    "AI_ESCALATION_TRIGGERED",
+    "AI_INTENT_CLASSIFIED",
+    "AI_RESPONSE_GENERATED",
+    "AI_TOOL_EXECUTED",
+    "AuditEventPublisher",
+    "NoOpAuditPublisher",
+    "TOPIC",
+    "_build_envelope",
+    "build_envelope",
+]
 
-# Audit event types emitted by the AI orchestrator
-AI_INTENT_CLASSIFIED = "AI_INTENT_CLASSIFIED"
-AI_TOOL_EXECUTED = "AI_TOOL_EXECUTED"
-AI_ESCALATION_TRIGGERED = "AI_ESCALATION_TRIGGERED"
-AI_RESPONSE_GENERATED = "AI_RESPONSE_GENERATED"
-AI_AGENT_INVOKED = "AI_AGENT_INVOKED"
-
-
-# ---------------------------------------------------------------------------
-# Envelope builder
-# ---------------------------------------------------------------------------
-
-def _build_envelope(
-    event_type: str,
-    *,
-    user_id: Optional[str] = None,
-    aggregate_id: Optional[str] = None,
-    correlation_id: Optional[str] = None,
-    payload: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Build a Kafka event envelope matching the audit-trail-service schema.
-
-    The ``DomainEventConsumer`` in audit-trail-service expects at minimum:
-    ``eventType``, and optionally ``userId``, ``actorType``,
-    ``aggregateType``, ``aggregateId``, ``correlationId``, ``action``,
-    and ``payload``.
-    """
-    now_iso = datetime.now(timezone.utc).isoformat()
-    event_id = str(uuid4())
-    return {
-        "id": event_id,
-        "eventId": event_id,
-        "event_id": event_id,
-        "eventType": event_type,
-        "event_type": event_type,
-        "schemaVersion": "v1",
-        "schema_version": "v1",
-        "sourceService": "ai-orchestrator-service",
-        "source_service": "ai-orchestrator-service",
-        "userId": user_id,
-        "actorType": "SYSTEM",
-        "actor_type": "SYSTEM",
-        "aggregateType": "ai_session",
-        "aggregate_type": "ai_session",
-        "aggregateId": aggregate_id,
-        "aggregate_id": aggregate_id,
-        "correlationId": correlation_id,
-        "correlation_id": correlation_id,
-        "action": event_type,
-        "eventTime": now_iso,
-        "event_time": now_iso,
-        "timestamp": now_iso,
-        "payload": payload or {},
-    }
-
-
-# ---------------------------------------------------------------------------
-# Publisher
-# ---------------------------------------------------------------------------
 
 class AuditEventPublisher:
-    """Async Kafka producer that publishes AI decision audit events.
-
-    Usage::
-
-        publisher = AuditEventPublisher(bootstrap_servers="kafka:9092")
-        await publisher.start()
-        ...
-        await publisher.publish_intent_classified(...)
-        ...
-        await publisher.stop()
-
-    If the publisher fails to connect or send, all errors are caught and
-    logged -- callers are never impacted.
-    """
+    """Async Kafka producer that publishes AI decision audit events."""
 
     def __init__(
         self,
@@ -137,21 +63,15 @@ class AuditEventPublisher:
         self._bootstrap_servers = bootstrap_servers
         self._topic = topic
         self._client_id = client_id
-        self._producer: Any = None  # aiokafka.AIOKafkaProducer
+        self._producer: Any = None
         self._started = False
 
     async def start(self) -> None:
-        """Initialise and start the Kafka producer.
-
-        Fails gracefully -- if ``aiokafka`` is not installed or the broker
-        is unreachable, the publisher degrades to a no-op logger.
-        """
+        """Initialise and start the Kafka producer."""
         if AIOKafkaProducer is None:
             logger.warning(
                 "audit.publisher.aiokafka_not_installed",
-                extra={
-                    "message": "aiokafka is not installed; audit events will only be logged",
-                },
+                extra={"message": "aiokafka is not installed; audit events will only be logged"},
             )
             return
 
@@ -159,13 +79,9 @@ class AuditEventPublisher:
             self._producer = AIOKafkaProducer(
                 bootstrap_servers=self._bootstrap_servers,
                 client_id=self._client_id,
-                # Use JSON-safe string serialisation
                 value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
                 key_serializer=lambda k: k.encode("utf-8") if k else None,
-                # Durability: wait for leader ack (acks=1 balances latency
-                # vs. reliability for audit events that are also logged locally)
                 acks=1,
-                # Retry transient broker errors
                 retry_backoff_ms=100,
                 request_timeout_ms=5000,
             )
@@ -181,16 +97,12 @@ class AuditEventPublisher:
         except ImportError:
             logger.warning(
                 "audit.publisher.aiokafka_not_installed",
-                extra={
-                    "message": "aiokafka is not installed; audit events will only be logged",
-                },
+                extra={"message": "aiokafka is not installed; audit events will only be logged"},
             )
         except Exception:
             logger.exception(
                 "audit.publisher.start_failed",
-                extra={
-                    "bootstrap_servers": self._bootstrap_servers,
-                },
+                extra={"bootstrap_servers": self._bootstrap_servers},
             )
 
     async def stop(self) -> None:
@@ -205,14 +117,8 @@ class AuditEventPublisher:
                 self._started = False
                 self._producer = None
 
-    # ------------------------------------------------------------------
-    # Internal send helper
-    # ------------------------------------------------------------------
-
     async def _send(self, envelope: Dict[str, Any]) -> None:
         """Publish an envelope to Kafka, falling back to structured log."""
-        # Always emit a structured log so events are captured even when
-        # the broker is unavailable.
         logger.info(
             "audit.event",
             extra={
@@ -241,10 +147,6 @@ class AuditEventPublisher:
                 },
             )
 
-    # ------------------------------------------------------------------
-    # High-level publish methods
-    # ------------------------------------------------------------------
-
     async def publish_intent_classified(
         self,
         *,
@@ -259,19 +161,16 @@ class AuditEventPublisher:
         query_length: int = 0,
     ) -> None:
         """Emit an ``AI_INTENT_CLASSIFIED`` audit event."""
-        envelope = _build_envelope(
-            AI_INTENT_CLASSIFIED,
+        envelope = intent_classified_envelope(
+            request_id=request_id,
             user_id=user_id,
-            aggregate_id=request_id,
+            session_id=session_id,
             correlation_id=correlation_id,
-            payload={
-                "session_id": session_id,
-                "intent": intent,
-                "confidence": round(confidence, 4),
-                "risk_level": risk_level,
-                "mode": mode,
-                "query_length": query_length,
-            },
+            intent=intent,
+            confidence=confidence,
+            risk_level=risk_level,
+            mode=mode,
+            query_length=query_length,
         )
         await self._send(envelope)
 
@@ -289,19 +188,16 @@ class AuditEventPublisher:
         status_code: Optional[int] = None,
     ) -> None:
         """Emit an ``AI_TOOL_EXECUTED`` audit event."""
-        envelope = _build_envelope(
-            AI_TOOL_EXECUTED,
+        envelope = tool_executed_envelope(
+            request_id=request_id,
             user_id=user_id,
-            aggregate_id=request_id,
+            session_id=session_id,
             correlation_id=correlation_id,
-            payload={
-                "session_id": session_id,
-                "tool_name": tool_name,
-                "success": success,
-                "error": error,
-                "duration_ms": duration_ms,
-                "status_code": status_code,
-            },
+            tool_name=tool_name,
+            success=success,
+            error=error,
+            duration_ms=duration_ms,
+            status_code=status_code,
         )
         await self._send(envelope)
 
@@ -317,17 +213,14 @@ class AuditEventPublisher:
         risk_level: str = "high",
     ) -> None:
         """Emit an ``AI_ESCALATION_TRIGGERED`` audit event."""
-        envelope = _build_envelope(
-            AI_ESCALATION_TRIGGERED,
+        envelope = escalation_triggered_envelope(
+            request_id=request_id,
             user_id=user_id,
-            aggregate_id=request_id,
+            session_id=session_id,
             correlation_id=correlation_id,
-            payload={
-                "session_id": session_id,
-                "reason": reason,
-                "intent": intent,
-                "risk_level": risk_level,
-            },
+            reason=reason,
+            intent=intent,
+            risk_level=risk_level,
         )
         await self._send(envelope)
 
@@ -346,20 +239,17 @@ class AuditEventPublisher:
         response_length: int = 0,
     ) -> None:
         """Emit an ``AI_RESPONSE_GENERATED`` audit event."""
-        envelope = _build_envelope(
-            AI_RESPONSE_GENERATED,
+        envelope = response_generated_envelope(
+            request_id=request_id,
             user_id=user_id,
-            aggregate_id=request_id,
+            session_id=session_id,
             correlation_id=correlation_id,
-            payload={
-                "session_id": session_id,
-                "intent": intent,
-                "mode": mode,
-                "tool_calls_count": tool_calls_count,
-                "tool_results_count": tool_results_count,
-                "escalated": escalated,
-                "response_length": response_length,
-            },
+            intent=intent,
+            mode=mode,
+            tool_calls_count=tool_calls_count,
+            tool_results_count=tool_results_count,
+            escalated=escalated,
+            response_length=response_length,
         )
         await self._send(envelope)
 
@@ -381,30 +271,23 @@ class AuditEventPublisher:
         errors: Optional[List[str]] = None,
     ) -> None:
         """Emit an ``AI_AGENT_INVOKED`` audit event (v2 endpoint summary)."""
-        envelope = _build_envelope(
-            AI_AGENT_INVOKED,
+        envelope = agent_invoked_envelope(
+            request_id=request_id,
             user_id=user_id,
-            aggregate_id=request_id,
+            session_id=session_id,
             correlation_id=correlation_id,
-            payload={
-                "session_id": session_id,
-                "intent": intent,
-                "intent_confidence": round(intent_confidence, 4),
-                "risk_level": risk_level,
-                "escalated": escalated,
-                "escalation_reason": escalation_reason,
-                "tool_results_count": tool_results_count,
-                "total_cost_usd": round(total_cost_usd, 6),
-                "elapsed_ms": round(elapsed_ms, 1),
-                "error_count": len(errors) if errors else 0,
-            },
+            intent=intent,
+            intent_confidence=intent_confidence,
+            risk_level=risk_level,
+            escalated=escalated,
+            escalation_reason=escalation_reason,
+            tool_results_count=tool_results_count,
+            total_cost_usd=total_cost_usd,
+            elapsed_ms=elapsed_ms,
+            errors=errors,
         )
         await self._send(envelope)
 
-
-# ---------------------------------------------------------------------------
-# No-op fallback
-# ---------------------------------------------------------------------------
 
 class NoOpAuditPublisher(AuditEventPublisher):
     """Publisher that only logs -- used when Kafka is explicitly disabled."""

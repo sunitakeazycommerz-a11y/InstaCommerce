@@ -9,10 +9,20 @@ import argparse
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
-import lightgbm as lgb
-import mlflow  # type: ignore
-import mlflow.lightgbm  # type: ignore
+try:
+    import lightgbm as _lgb
+    lgb: Any = _lgb
+except (ImportError, OSError):
+    lgb = None
+
+try:
+    import mlflow as _mlflow
+    import mlflow.lightgbm
+    mlflow: Any = _mlflow
+except (ImportError, OSError):
+    mlflow = None
 import numpy as np
 import pandas as pd
 import yaml
@@ -87,7 +97,7 @@ class ETAPredictionTrainer:
 
     def __init__(self, config: dict):
         self.config = config
-        self.models: dict[str, lgb.LGBMRegressor] = {}
+        self.models: dict[str, Any] = {}
         self.stage = config.get("stage", "pre_order")
 
     def load_data(self, query: str) -> pd.DataFrame:
@@ -105,8 +115,10 @@ class ETAPredictionTrainer:
         """Get feature columns for the specified stage."""
         return self.config.get("features", {}).get(stage, STAGE_FEATURES.get(stage, []))
 
-    def train(self, df: pd.DataFrame) -> lgb.LGBMRegressor:
+    def train(self, df: pd.DataFrame) -> Any:
         """Train LightGBM regression model for the configured stage."""
+        if lgb is None:
+            raise ImportError("lightgbm is required for ETAPredictionTrainer.train")
         logger.info("Training ETA model for stage: %s", self.stage)
         hp = self.config["hyperparameters"]
         label_col = self.config["training"]["label_column"]
@@ -166,7 +178,7 @@ class ETAPredictionTrainer:
         logger.info("Best MAE across folds: %.4f min, Mean MAE: %.4f min", best_mae, np.mean(fold_maes))
         return best_model
 
-    def evaluate(self, df: pd.DataFrame) -> dict[str, float]:
+    def evaluate(self, df: pd.DataFrame) -> dict[str, Any]:
         """Evaluate model. Return MAE, RMSE, R², percentile accuracies."""
         model = self.models.get(self.stage)
         if model is None:
@@ -180,7 +192,7 @@ class ETAPredictionTrainer:
 
         errors = np.abs(y_true - y_pred)
 
-        metrics = {
+        metrics: dict[str, Any] = {
             "mae_min": float(mean_absolute_error(y_true, y_pred)),
             "rmse_min": float(np.sqrt(mean_squared_error(y_true, y_pred))),
             "r2_score": float(r2_score(y_true, y_pred)),
@@ -214,16 +226,26 @@ class ETAPredictionTrainer:
         return dict(zip(features, model.feature_importances_.tolist()))
 
 
+def _as_finite_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        num = float(value)
+        if np.isfinite(num):
+            return num
+    return None
+
+
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
     passed = True
-    max_mae = gates.get("max_mae_min", float("inf"))
-    if metrics["mae_min"] > max_mae:
-        logger.warning("MAE %.4f above gate %.4f", metrics["mae_min"], max_mae)
+    mae_min = _as_finite_float(metrics.get("mae_min"))
+    max_mae = float(gates.get("max_mae_min", float("inf")))
+    if mae_min is None or mae_min > max_mae:
+        logger.warning("MAE %r above gate %.4f", metrics.get("mae_min"), max_mae)
         passed = False
-    min_within_2min = gates.get("min_within_2min_pct", 0.0)
-    if metrics["within_2min_pct"] < min_within_2min:
-        logger.warning("Within-2min %.4f below gate %.4f", metrics["within_2min_pct"], min_within_2min)
+    within_2min = _as_finite_float(metrics.get("within_2min_pct"))
+    min_within_2min = float(gates.get("min_within_2min_pct", 0.0))
+    if within_2min is None or within_2min < min_within_2min:
+        logger.warning("Within-2min %r below gate %.4f", metrics.get("within_2min_pct"), min_within_2min)
         passed = False
     return passed
 

@@ -82,3 +82,19 @@ def test_parse_checksums_ignores_comments():
         checksums_path.write_text("# comment\nabc123  model.onnx\n\n")
         result = parse_checksums_file(checksums_path)
         assert result == {"model.onnx": "abc123"}
+
+
+def test_verify_rejects_path_traversal_and_empty_strict_manifest():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        outside = base / "secret.bin"
+        outside.write_bytes(b"secret")
+        model_dir = base / "model"
+        model_dir.mkdir()
+        digest = compute_sha256(outside)
+        (model_dir / CHECKSUM_FILENAME).write_text(f"{digest}  ../secret.bin\n")
+        assert verify_model_integrity(model_dir, "test-model") is False
+
+        (model_dir / CHECKSUM_FILENAME).write_text("# comment only\n")
+        assert verify_model_integrity(model_dir, "test-model", strict=True) is False
+        assert verify_model_integrity(model_dir, "test-model", strict=False) is True

@@ -7,6 +7,7 @@ Stage 3 (in-transit):  remaining distance / speed model.
 
 import json
 import logging
+import math
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -157,9 +158,12 @@ class ETAPredictor(BasePredictor):
     def rule_based_fallback(self, features: Dict[str, Any]) -> PredictionResult:
         """Deterministic ETA: distance_km * 3 + item_count * 0.5 + traffic * 2."""
         start = time.monotonic()
-        distance_km: float = float(features.get("distance_km", 3.0))
-        item_count: int = int(features.get("item_count", 1))
-        traffic_level: int = int(features.get("traffic_level", 0))
+        raw_dist = features.get("distance_km")
+        distance_km: float = float(raw_dist if raw_dist is not None else 3.0)
+        raw_items = features.get("item_count")
+        item_count: int = int(raw_items if raw_items is not None else 1)
+        raw_traffic = features.get("traffic_level")
+        traffic_level: int = int(raw_traffic if raw_traffic is not None else 0)
 
         eta = distance_km * 3.0 + item_count * 0.5 + traffic_level * 2.0
         eta = self._clamp(eta)
@@ -168,7 +172,7 @@ class ETAPredictor(BasePredictor):
         return PredictionResult(
             output={
                 "eta_minutes": round(eta, 1),
-                "stage": features.get("stage", "pre_order"),
+                "stage": features.get("stage") or "pre_order",
                 "confidence": 0.5,
                 "lower_bound_minutes": round(max(_ETA_MIN, eta * 0.7), 1),
                 "upper_bound_minutes": round(min(_ETA_MAX, eta * 1.4), 1),
@@ -193,9 +197,10 @@ class ETAPredictor(BasePredictor):
 
     def _stage1_pre_order(self, features: Dict[str, Any]) -> float:
         """Zone-level average with time-of-day adjustment."""
-        zone_id = features.get("zone_id", "default")
+        zone_id = str(features.get("zone_id") or "default")
         base_eta = self._zone_averages.get(zone_id, _DEFAULT_ZONE_ETA)
-        hour = int(features.get("hour_of_day", 12))
+        raw_hour = features.get("hour_of_day")
+        hour = int(raw_hour if raw_hour is not None else 12) % 24
         # Peak-hour uplift: 12-14 and 19-21
         if hour in range(12, 15) or hour in range(19, 22):
             base_eta *= 1.15
@@ -203,16 +208,21 @@ class ETAPredictor(BasePredictor):
 
     def _stage2_post_assign(self, features: Dict[str, Any]) -> float:
         """Rider-specific with live traffic."""
-        distance_km = float(features.get("distance_km", 3.0))
-        rider_speed = float(features.get("rider_avg_speed_kmh", 15.0))
-        traffic = int(features.get("traffic_level", 0))
+        raw_dist = features.get("distance_km")
+        distance_km = float(raw_dist if raw_dist is not None else 3.0)
+        raw_speed = features.get("rider_avg_speed_kmh")
+        rider_speed = float(raw_speed if raw_speed is not None else 15.0)
+        raw_traffic = features.get("traffic_level")
+        traffic = int(raw_traffic if raw_traffic is not None else 0)
         multiplier = _TRAFFIC_MULTIPLIERS.get(traffic, 1.0)
         return (distance_km / max(rider_speed, 1.0)) * 60.0 * multiplier
 
     def _stage3_in_transit(self, features: Dict[str, Any]) -> float:
         """Remaining distance / current speed."""
-        remaining_km = float(features.get("remaining_distance_km", 1.0))
-        current_speed = float(features.get("current_speed_kmh", 12.0))
+        raw_rem = features.get("remaining_distance_km")
+        remaining_km = float(raw_rem if raw_rem is not None else 1.0)
+        raw_speed = features.get("current_speed_kmh")
+        current_speed = float(raw_speed if raw_speed is not None else 12.0)
         return (remaining_km / max(current_speed, 1.0)) * 60.0
 
     @staticmethod
@@ -225,6 +235,8 @@ class ETAPredictor(BasePredictor):
 
     @staticmethod
     def _clamp(eta: float) -> float:
+        if not math.isfinite(eta):
+            return _DEFAULT_ZONE_ETA
         return max(_ETA_MIN, min(_ETA_MAX, eta))
 
     def _resolve_latest_version(self) -> str:

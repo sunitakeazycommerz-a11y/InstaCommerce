@@ -24,6 +24,13 @@ def run_staging_etl(context: JobContext) -> None:
         WHERE DATE(placed_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
         """,
         f"""
+        CREATE OR REPLACE TABLE `{project_id}.{staging_ds}.stg_order_items` AS
+        SELECT oi.*
+        FROM `{project_id}.{raw_ds}.order_items` oi
+        INNER JOIN `{project_id}.{staging_ds}.stg_orders` o
+            ON oi.order_id = o.order_id
+        """,
+        f"""
         CREATE OR REPLACE TABLE `{project_id}.{staging_ds}.stg_payments` AS
         SELECT *
         FROM `{project_id}.{raw_ds}.payments`

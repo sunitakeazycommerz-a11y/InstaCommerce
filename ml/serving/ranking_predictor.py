@@ -106,7 +106,7 @@ class RankingPredictor(BasePredictor):
 
         start = time.monotonic()
         try:
-            candidates: List[Dict[str, Any]] = features.get("candidates", [])
+            candidates: List[Dict[str, Any]] = list(features.get("candidates") or [])
             if not candidates:
                 return self._empty_result(start)
 
@@ -141,18 +141,25 @@ class RankingPredictor(BasePredictor):
         Items out of stock are pushed to the bottom.
         """
         start = time.monotonic()
-        candidates: List[Dict[str, Any]] = features.get("candidates", [])
+        candidates: List[Dict[str, Any]] = list(features.get("candidates") or [])
         if not candidates:
             return self._empty_result(start)
 
-        max_orders = max(int(c.get("order_count_7d", 0)) for c in candidates) or 1
+        max_orders = max(
+            max((int(c.get("order_count_7d") or 0) for c in candidates), default=0),
+            1,
+        )
 
         scored: List[Dict[str, Any]] = []
         for c in candidates:
-            order_count = int(c.get("order_count_7d", 0))
-            hours_since = float(c.get("hours_since_last_sold", 168))
-            avg_rating = float(c.get("avg_rating", 3.0))
-            in_stock = bool(c.get("in_stock", True))
+            raw_oc = c.get("order_count_7d")
+            order_count = int(raw_oc if raw_oc is not None else 0)
+            raw_hs = c.get("hours_since_last_sold")
+            hours_since = float(raw_hs if raw_hs is not None else 168.0)
+            raw_ar = c.get("avg_rating")
+            avg_rating = float(raw_ar if raw_ar is not None else 3.0)
+            raw_stock = c.get("in_stock")
+            in_stock = True if raw_stock is None else bool(raw_stock)
 
             pop_score = order_count / max_orders
             recency_score = max(0.0, 1.0 - hours_since / 168.0)
@@ -162,7 +169,7 @@ class RankingPredictor(BasePredictor):
             if not in_stock:
                 score *= 0.01  # penalise out-of-stock heavily
 
-            scored.append({"item_id": c.get("item_id", "unknown"), "score": score})
+            scored.append({"item_id": c.get("item_id") or "unknown", "score": score})
 
         ranked = sorted(scored, key=lambda x: x["score"], reverse=True)
         latency_ms = (time.monotonic() - start) * 1_000
@@ -190,15 +197,16 @@ class RankingPredictor(BasePredictor):
         results: List[Dict[str, Any]] = []
         for c in candidates:
             vec = np.array(
-                [[float(c.get(f, 0)) for f in self._feature_names]],
+                [[float(v if (v := c.get(f)) is not None else 0.0) for f in self._feature_names]],
                 dtype=np.float32,
             )
             if hasattr(self._model, "run"):
                 input_name = self._model.get_inputs()[0].name
-                score = float(self._model.run(None, {input_name: vec})[0][0])
+                res = self._model.run(None, {input_name: vec})
+                score = float(np.asarray(res[0]).reshape(-1)[0])
             else:
-                score = float(self._model.predict(vec)[0])
-            results.append({"item_id": c.get("item_id", "unknown"), "score": score})
+                score = float(np.asarray(self._model.predict(vec)).reshape(-1)[0])
+            results.append({"item_id": c.get("item_id") or "unknown", "score": score})
         return results
 
     def _empty_result(self, start: float) -> PredictionResult:

@@ -47,45 +47,64 @@ aggregated_metrics AS (
 control_benchmark AS (
     SELECT
         experiment_key,
+        converted_users AS control_converted_users,
         conversion_rate AS control_conversion_rate,
         total_users AS control_users
     FROM aggregated_metrics
     WHERE variant_name = 'control'
+),
+
+pooled_comparison AS (
+    SELECT
+        m.experiment_id,
+        m.experiment_key,
+        m.variant_name,
+        m.total_users,
+        m.converted_users,
+        m.total_orders,
+        m.total_gmv_usd,
+        m.conversion_rate,
+        m.revenue_per_user_usd,
+        cb.control_converted_users,
+        cb.control_conversion_rate,
+        cb.control_users,
+        SAFE_DIVIDE(
+            m.converted_users + cb.control_converted_users,
+            m.total_users + cb.control_users
+        ) AS p_pool
+    FROM aggregated_metrics m
+    LEFT JOIN control_benchmark cb USING (experiment_key)
 )
 
 SELECT
-    m.experiment_id,
-    m.experiment_key,
-    m.variant_name,
-    m.total_users,
-    m.converted_users,
-    m.total_orders,
-    m.total_gmv_usd,
-    m.conversion_rate,
-    m.revenue_per_user_usd,
-    cb.control_conversion_rate,
-    m.conversion_rate - cb.control_conversion_rate AS conversion_rate_delta,
-    SAFE_DIVIDE(m.conversion_rate - cb.control_conversion_rate, cb.control_conversion_rate) * 100.0 AS lift_pct,
+    p.experiment_id,
+    p.experiment_key,
+    p.variant_name,
+    p.total_users,
+    p.converted_users,
+    p.total_orders,
+    p.total_gmv_usd,
+    p.conversion_rate,
+    p.revenue_per_user_usd,
+    p.control_conversion_rate,
+    p.conversion_rate - p.control_conversion_rate AS conversion_rate_delta,
+    SAFE_DIVIDE(p.conversion_rate - p.control_conversion_rate, p.control_conversion_rate) * 100.0 AS lift_pct,
     -- Two-proportion pooled z-score test
     CASE
-        WHEN cb.control_conversion_rate IS NOT NULL AND m.variant_name != 'control' AND m.total_users > 30 AND cb.control_users > 30 THEN
+        WHEN p.control_conversion_rate IS NOT NULL
+            AND p.variant_name != 'control'
+            AND p.total_users > 30
+            AND p.control_users > 30 THEN
             SAFE_DIVIDE(
-                m.conversion_rate - cb.control_conversion_rate,
+                p.conversion_rate - p.control_conversion_rate,
                 SQRT(
-                    SAFE_DIVIDE(
-                        (m.converted_users + (cb.control_conversion_rate * cb.control_users)) *
-                        (1 - SAFE_DIVIDE(m.converted_users + (cb.control_conversion_rate * cb.control_users), m.total_users + cb.control_users)),
-                        m.total_users
-                    ) +
-                    SAFE_DIVIDE(
-                        (m.converted_users + (cb.control_conversion_rate * cb.control_users)) *
-                        (1 - SAFE_DIVIDE(m.converted_users + (cb.control_conversion_rate * cb.control_users), m.total_users + cb.control_users)),
-                        cb.control_users
+                    p.p_pool * (1 - p.p_pool) * (
+                        SAFE_DIVIDE(1.0, p.total_users) +
+                        SAFE_DIVIDE(1.0, p.control_users)
                     )
                 )
             )
         ELSE NULL
     END AS z_score,
     CURRENT_TIMESTAMP() AS updated_at
-FROM aggregated_metrics m
-LEFT JOIN control_benchmark cb USING (experiment_key)
+FROM pooled_comparison p

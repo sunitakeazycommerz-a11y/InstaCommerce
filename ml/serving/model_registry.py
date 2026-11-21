@@ -132,6 +132,8 @@ class ModelRegistry:
         if not version_dir.exists():
             raise FileNotFoundError(f"Model version directory not found: {version_dir}")
         candidate = copy.copy(base_predictor)
+        if not candidate._verify_integrity(version_dir):
+            raise RuntimeError(f"Model integrity check failed for version '{target_version}'")
         candidate._model = None
         candidate._load_model(target_version)
         candidate._version = target_version
@@ -145,20 +147,7 @@ class ModelRegistry:
         version: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> BasePredictor:
-        """Retrieve a registered predictor.
-
-        If a kill switch is active for the model the predictor's status
-        is forced to ``DEGRADED`` so that ``predict()`` delegates to the
-        rule-based fallback.
-
-        When A/B routing is configured and no explicit ``version`` is
-        requested, a version is sampled according to the configured
-        traffic weights.
-
-        Raises:
-            KeyError: if ``model_name`` is not registered.
-            FileNotFoundError: if the requested version directory does not exist.
-        """
+        """Retrieve a registered predictor with kill-switch and A/B routing support."""
         with self._lock:
             if model_name not in self._models:
                 raise KeyError(f"Model '{model_name}' is not registered in the registry")
@@ -217,9 +206,16 @@ class ModelRegistry:
             resolved = target_version or self._previous_versions.get(model_name)
             if not resolved:
                 raise ValueError(f"No previous version recorded for '{model_name}'")
-            self._ab_routing.pop(model_name, None)
-            self._kill_switches.pop(model_name, None)
-            predictor = self.get(model_name, version=resolved)
+            prev_ab = self._ab_routing.pop(model_name, None)
+            prev_kill = self._kill_switches.pop(model_name, None)
+            try:
+                predictor = self.get(model_name, version=resolved)
+            except Exception:
+                if prev_ab is not None:
+                    self._ab_routing[model_name] = prev_ab
+                if prev_kill is not None:
+                    self._kill_switches[model_name] = prev_kill
+                raise
         logger.warning(
             "Model rolled back",
             extra={"model": model_name, "version": resolved},
@@ -236,17 +232,7 @@ class ModelRegistry:
     # ------------------------------------------------------------------
 
     def set_ab_routing(self, model_name: str, routing: Dict[str, float]) -> None:
-        """Configure weighted traffic routing between model versions.
-
-        Args:
-            model_name: Name of the model.
-            routing: Mapping of ``{version: weight}``.  Weights are
-                normalised so they need not sum to 1.0.
-
-        Raises:
-            KeyError: if ``model_name`` is not registered.
-            ValueError: if any weight is negative.
-        """
+        """Configure weighted traffic routing between model versions."""
         with self._lock:
             if model_name not in self._models:
                 raise KeyError(f"Model '{model_name}' is not registered")

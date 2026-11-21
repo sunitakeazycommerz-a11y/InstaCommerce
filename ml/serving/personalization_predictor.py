@@ -118,8 +118,9 @@ class PersonalizationPredictor(BasePredictor):
 
         start = time.monotonic()
         try:
-            candidates: List[Dict[str, Any]] = features.get("candidates", [])
-            limit: int = min(int(features.get("limit", 20)), _MAX_RECOMMENDATIONS)
+            candidates: List[Dict[str, Any]] = list(features.get("candidates") or [])
+            raw_limit = features.get("limit")
+            limit: int = max(0, min(int(raw_limit if raw_limit is not None else 20), _MAX_RECOMMENDATIONS))
 
             if not candidates:
                 return self.rule_based_fallback(features)
@@ -155,40 +156,52 @@ class PersonalizationPredictor(BasePredictor):
         Score = popularity_norm + 0.3 × category_match + 0.1 × rating_norm
         """
         start = time.monotonic()
-        candidates: List[Dict[str, Any]] = list(features.get("candidates", []))
-        limit: int = min(int(features.get("limit", 20)), _MAX_RECOMMENDATIONS)
+        candidates: List[Dict[str, Any]] = list(features.get("candidates") or [])
+        raw_limit = features.get("limit")
+        limit: int = max(0, min(int(raw_limit if raw_limit is not None else 20), _MAX_RECOMMENDATIONS))
+        raw_user_features = features.get("user_features")
+        user_features: Dict[str, Any] = raw_user_features if isinstance(raw_user_features, dict) else {}
+        preferred_cats: List[str] = list(
+            user_features.get("preferred_categories")
+            or user_features.get("browse_history_categories")
+            or []
+        )
 
         if not candidates:
             # Fallback to dark store / global popular items for cold-start customers
             popular_source = features.get("store_popular_items") or self._popular_items
             if not popular_source:
                 popular_source = [f"sku_popular_{i}" for i in range(1, 21)]
+            top_pref_cat = preferred_cats[0] if preferred_cats else "grocery"
             candidates = [
                 {
                     "item_id": iid,
                     "order_count_7d": max(1, len(popular_source) - idx),
-                    "category": features.get("user_features", {}).get("preferred_categories", ["grocery"])[0] if idx < 3 and features.get("user_features", {}).get("preferred_categories") else "grocery",
+                    "category": top_pref_cat if idx < 3 and preferred_cats else "grocery",
                     "avg_rating": 4.5,
                 }
                 for idx, iid in enumerate(popular_source)
             ]
 
-        user_features = features.get("user_features", {})
-        preferred_cats: List[str] = user_features.get("preferred_categories", []) or user_features.get("browse_history_categories", [])
-        max_orders = max(int(c.get("order_count_7d", 0)) for c in candidates) or 1
+        max_orders = max(
+            max((int(c.get("order_count_7d") or 0) for c in candidates), default=0),
+            1,
+        )
 
         scored: List[Dict[str, Any]] = []
         for c in candidates:
-            order_count = int(c.get("order_count_7d", 0))
-            avg_rating = float(c.get("avg_rating", 3.0))
-            category = str(c.get("category", ""))
+            raw_oc = c.get("order_count_7d")
+            order_count = int(raw_oc if raw_oc is not None else 0)
+            raw_rating = c.get("avg_rating")
+            avg_rating = float(raw_rating if raw_rating is not None else 3.0)
+            category = str(c.get("category") or "")
 
             pop_score = order_count / max_orders
             cat_match = 1.0 if category in preferred_cats else 0.0
             rating_score = avg_rating / 5.0
 
             score = pop_score + 0.3 * cat_match + 0.1 * rating_score
-            scored.append({"item_id": c.get("item_id", "unknown"), "score": score})
+            scored.append({"item_id": c.get("item_id") or "unknown", "score": score})
 
         ranked = sorted(scored, key=lambda x: x["score"], reverse=True)[:limit]
         latency_ms = (time.monotonic() - start) * 1_000
@@ -218,18 +231,20 @@ class PersonalizationPredictor(BasePredictor):
         features: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         """Run ML model on each candidate."""
+        del features
         results: List[Dict[str, Any]] = []
         for c in candidates:
             vec = np.array(
-                [[float(c.get(f, 0)) for f in self._feature_names]],
+                [[float(v if (v := c.get(f)) is not None else 0.0) for f in self._feature_names]],
                 dtype=np.float32,
             )
             if hasattr(self._model, "run"):
                 input_name = self._model.get_inputs()[0].name
-                score = float(self._model.run(None, {input_name: vec})[0][0])
+                res = self._model.run(None, {input_name: vec})
+                score = float(np.asarray(res[0]).reshape(-1)[0])
             else:
-                score = float(self._model.predict(vec)[0])
-            results.append({"item_id": c.get("item_id", "unknown"), "score": score})
+                score = float(np.asarray(self._model.predict(vec)).reshape(-1)[0])
+            results.append({"item_id": c.get("item_id") or "unknown", "score": score})
         return results
 
     def _empty_result(self, start: float) -> PredictionResult:

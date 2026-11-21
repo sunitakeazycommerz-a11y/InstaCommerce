@@ -52,3 +52,14 @@ sources:
         freshness:
           warn_after: {count: 1, period: hour}
           error_after: {count: 6, period: hour}
+
+  - name: analytics
+    database: "{{ var('project_id', 'instacommerce') }}"
+    schema: analytics
+    tables:
+      - name: fact_experiment_exposures
+        description: "Experiment exposure events emitted by config-feature-flag-service"
+        loaded_at_field: exposed_at
+        freshness:
+          warn_after: {count: 1, period: hour}
+          error_after: {count: 6, period: hour}

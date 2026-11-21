@@ -108,17 +108,24 @@ class CLVPredictor(BasePredictor):
 
         start = time.monotonic()
         try:
-            horizon = int(features.get("horizon_months", _DEFAULT_HORIZON_MONTHS))
+            raw_horizon = features.get("horizon_months")
+            horizon = max(1, int(raw_horizon if raw_horizon is not None else _DEFAULT_HORIZON_MONTHS))
             vec = np.array(
-                [[float(features.get(f, 0)) for f in self._feature_names]],
+                [
+                    [
+                        float(v if (v := features.get(f)) is not None else 0.0)
+                        for f in self._feature_names
+                    ]
+                ],
                 dtype=np.float32,
             )
 
             if hasattr(self._model, "run"):
                 input_name = self._model.get_inputs()[0].name
-                raw_clv = float(self._model.run(None, {input_name: vec})[0][0])
+                res = self._model.run(None, {input_name: vec})
+                raw_clv = float(np.asarray(res[0]).reshape(-1)[0])
             else:
-                raw_clv = float(self._model.predict(vec)[0])
+                raw_clv = float(np.asarray(self._model.predict(vec)).reshape(-1)[0])
 
             # Scale to requested horizon (model trained on 12-month window)
             clv = max(0.0, raw_clv * (horizon / 12.0))
@@ -152,10 +159,14 @@ class CLVPredictor(BasePredictor):
         ``total_orders / account_age_months`` as fallback).
         """
         start = time.monotonic()
-        avg_order_value = float(features.get("avg_order_value", 0))
-        total_orders = int(features.get("total_orders", 0))
-        account_age_days = max(int(features.get("account_age_days", 1)), 1)
-        horizon = int(features.get("horizon_months", _DEFAULT_HORIZON_MONTHS))
+        raw_aov = features.get("avg_order_value")
+        avg_order_value = float(raw_aov if raw_aov is not None else 0.0)
+        raw_total = features.get("total_orders")
+        total_orders = int(raw_total if raw_total is not None else 0)
+        raw_age = features.get("account_age_days")
+        account_age_days = max(int(raw_age if raw_age is not None else 1), 1)
+        raw_horizon = features.get("horizon_months")
+        horizon = max(1, int(raw_horizon if raw_horizon is not None else _DEFAULT_HORIZON_MONTHS))
         orders_last_30d = features.get("orders_last_30d")
 
         if orders_last_30d is not None:
@@ -200,7 +211,8 @@ class CLVPredictor(BasePredictor):
     @staticmethod
     def _churn_risk(features: Dict[str, Any]) -> str:
         """Simple rule-based churn risk indicator."""
-        days_since = int(features.get("days_since_last_order", 0))
+        raw_days = features.get("days_since_last_order")
+        days_since = int(raw_days if raw_days is not None else 0)
         if days_since > 60:
             return "high"
         if days_since > 30:

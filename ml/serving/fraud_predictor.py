@@ -148,25 +148,31 @@ class FraudPredictor(BasePredictor):
         start = time.monotonic()
         score: float = 0.0
 
-        orders_last_hour = int(features.get("orders_last_hour", 0))
+        raw_olh = features.get("orders_last_hour")
+        orders_last_hour = int(raw_olh if raw_olh is not None else 0)
         if orders_last_hour > 3:
             score += 25.0
 
-        unique_devices = int(features.get("unique_devices_30d", 1))
+        raw_dev = features.get("unique_devices_30d")
+        unique_devices = int(raw_dev if raw_dev is not None else 1)
         if unique_devices > 2:
             score += 20.0
 
-        order_total = float(features.get("order_total", 0))
-        account_age = int(features.get("account_age_days", 365))
+        raw_total = features.get("order_total")
+        order_total = float(raw_total if raw_total is not None else 0.0)
+        raw_age = features.get("account_age_days")
+        account_age = int(raw_age if raw_age is not None else 365)
         if order_total > 5000 and account_age < 7:
             score += 15.0
 
-        distance_deviation = float(features.get("distance_to_avg_location_km", 0))
+        raw_dist = features.get("distance_to_avg_location_km")
+        distance_deviation = float(raw_dist if raw_dist is not None else 0.0)
         if distance_deviation > 10.0:
             score += 15.0
 
-        user_order_count = int(features.get("user_order_count", 1))
-        payment_method = str(features.get("payment_method", "cod"))
+        raw_uoc = features.get("user_order_count")
+        user_order_count = int(raw_uoc if raw_uoc is not None else 1)
+        payment_method = str(features.get("payment_method") or "cod")
         if user_order_count == 0 and payment_method == "card":
             score += 10.0
 
@@ -202,20 +208,34 @@ class FraudPredictor(BasePredictor):
     def _run_model(self, features: Dict[str, Any]) -> float:
         """Execute ONNX or native model and return raw probability × 100."""
         input_array = np.array(
-            [[float(features.get(f, 0)) for f in self._feature_names]],
+            [
+                [
+                    float(v if (v := features.get(f)) is not None else 0.0)
+                    for f in self._feature_names
+                ]
+            ],
             dtype=np.float32,
         )
         if hasattr(self._model, "run"):
             # ONNX runtime
             input_name = self._model.get_inputs()[0].name
             results = self._model.run(None, {input_name: input_array})
-            proba = float(results[1][0][1])  # probability of fraud class
+            if len(results) > 1:
+                row_probs = results[1][0]
+                if isinstance(row_probs, dict):
+                    proba = float(row_probs.get(1, row_probs.get("1", 0.0)))
+                else:
+                    arr = np.asarray(row_probs, dtype=float).reshape(-1)
+                    proba = float(arr[1] if len(arr) > 1 else arr[0])
+            else:
+                arr = np.asarray(results[0], dtype=float).reshape(-1)
+                proba = float(arr[1] if len(arr) > 1 else arr[0])
         else:
             # Native XGBoost Booster
             if xgb is None:
                 raise ImportError("xgboost is not installed")
             dmat = xgb.DMatrix(input_array, feature_names=self._feature_names)
-            proba = float(self._model.predict(dmat)[0])
+            proba = float(np.asarray(self._model.predict(dmat)).reshape(-1)[0])
 
         return proba * 100.0
 

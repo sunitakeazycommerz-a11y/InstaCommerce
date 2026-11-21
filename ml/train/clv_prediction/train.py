@@ -231,7 +231,15 @@ class CLVPredictionTrainer:
         p, q, v = self.ggf_params["p"], self.ggf_params["q"], self.ggf_params["v"]
         x = rfm["frequency"]
         m_x = rfm["monetary_value"]
-        expected_monetary = ((p * m_x * x) + (q - 1) * v) / (p * x + q - 1)
+        raw_denom = p * x + q - 1
+        expected_monetary = pd.Series(
+            np.where(
+                np.abs(raw_denom) > 1e-9,
+                ((p * m_x * x) + (q - 1) * v) / np.where(np.abs(raw_denom) > 1e-9, raw_denom, 1.0),
+                m_x,
+            ),
+            index=rfm.index,
+        )
         # Fallback for edge cases
         expected_monetary = expected_monetary.clip(lower=0)
 
@@ -247,12 +255,14 @@ class CLVPredictionTrainer:
 
     def _assign_segment(self, clv: float) -> str:
         """Assign customer to CLV segment."""
+        if not np.isfinite(clv) or clv < 0:
+            return "bronze"
         for segment, bounds in self.segments.items():
             if bounds["min"] <= clv < bounds.get("max", float("inf")):
                 return segment
         return "bronze"
 
-    def evaluate(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict[str, float]:
+    def evaluate(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict[str, Any]:
         """Evaluate CLV predictions against actual future spend."""
         if not self.bgf_params or not self.ggf_params:
             raise RuntimeError("Models not trained yet")
@@ -260,7 +270,7 @@ class CLVPredictionTrainer:
         observation_end = cast(pd.Timestamp, pd.Timestamp(str(train_df["order_date"].max())))
         rfm = self._build_rfm(train_df, observation_end)
 
-        horizon_days = (test_df["order_date"].max() - observation_end).days
+        horizon_days = (test_df["order_date"].max() - observation_end).days if len(test_df) > 0 else 1
         predictions = self.predict_clv(rfm, horizon_days=max(horizon_days, 1))
 
         # Actual spend in test period
@@ -270,14 +280,24 @@ class CLVPredictionTrainer:
         ).to_frame("actual_clv").reset_index()
 
         eval_df = predictions.merge(actual_spend, on="customer_id", how="inner")
+        if eval_df.empty:
+            return {
+                "mae": float("inf"),
+                "median_abs_error": float("inf"),
+                "correlation": 0.0,
+                "customers_evaluated": 0,
+                "segment_distribution": {},
+            }
 
         actual_series = cast(pd.Series, eval_df["actual_clv"])
         pred_series = cast(pd.Series, eval_df["predicted_clv"])
+        raw_corr = float(actual_series.corr(pred_series)) if len(eval_df) >= 2 else 0.0
+        corr = raw_corr if np.isfinite(raw_corr) else 0.0
 
-        metrics = {
+        metrics: dict[str, Any] = {
             "mae": float(mean_absolute_error(actual_series, pred_series)),
             "median_abs_error": float(np.median(np.abs(actual_series - pred_series))),
-            "correlation": float(actual_series.corr(pred_series)),
+            "correlation": corr,
             "customers_evaluated": len(eval_df),
         }
 
@@ -318,16 +338,26 @@ class CLVPredictionTrainer:
         logger.info("Model exported to %s", export_dir)
 
 
+def _as_finite_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        num = float(value)
+        if np.isfinite(num):
+            return num
+    return None
+
+
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
     passed = True
-    max_mae = gates.get("max_mae", float("inf"))
-    if metrics["mae"] > max_mae:
-        logger.warning("MAE %.2f above gate %.2f", metrics["mae"], max_mae)
+    mae = _as_finite_float(metrics.get("mae"))
+    max_mae = float(gates.get("max_mae", float("inf")))
+    if mae is None or mae > max_mae:
+        logger.warning("MAE %r above gate %.2f", metrics.get("mae"), max_mae)
         passed = False
-    min_correlation = gates.get("min_correlation", 0.0)
-    if metrics["correlation"] < min_correlation:
-        logger.warning("Correlation %.4f below gate %.4f", metrics["correlation"], min_correlation)
+    corr = _as_finite_float(metrics.get("correlation"))
+    min_correlation = float(gates.get("min_correlation", 0.0))
+    if corr is None or corr < min_correlation:
+        logger.warning("Correlation %r below gate %.4f", metrics.get("correlation"), min_correlation)
         passed = False
     return passed
 
@@ -343,61 +373,51 @@ def main():
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    mlflow.set_experiment(args.experiment)
+    if mlflow is not None:
+        mlflow.set_experiment(args.experiment)
 
-    with mlflow.start_run(run_name=args.run_name):
-        mlflow.log_param("model_name", config["model_name"])
-        mlflow.log_param("version", config["version"])
+    trainer = CLVPredictionTrainer(config)
+    query = config["training"]["query"]
+    df = trainer.load_data(query)
 
-        trainer = CLVPredictionTrainer(config)
+    holdout_days = config["training"].get("holdout_days", 90)
+    cutoff = df["order_date"].max() - pd.Timedelta(days=holdout_days)
+    train_df = cast(pd.DataFrame, df[df["order_date"] <= cutoff])
+    test_df = cast(pd.DataFrame, df[df["order_date"] > cutoff])
+    logger.info("Train: %d transactions, Test: %d transactions", len(train_df), len(test_df))
 
-        # Load data
-        query = config["training"]["query"]
-        df = trainer.load_data(query)
+    trainer.train(train_df)
+    metrics = trainer.evaluate(train_df, test_df)
+    gates = config.get("promotion_gates", {})
+    gate_passed = _check_promotion_gates(metrics, gates)
 
-        # Time-based split: train on older data, evaluate on recent
-        holdout_days = config["training"].get("holdout_days", 90)
-        cutoff = df["order_date"].max() - pd.Timedelta(days=holdout_days)
-        train_df = cast(pd.DataFrame, df[df["order_date"] <= cutoff])
-        test_df = cast(pd.DataFrame, df[df["order_date"] > cutoff])
-        logger.info("Train: %d transactions, Test: %d transactions", len(train_df), len(test_df))
+    observation_end = cast(pd.Timestamp, pd.Timestamp(str(df["order_date"].max())))
+    rfm = trainer._build_rfm(df, observation_end)
+    clv_predictions = trainer.predict_clv(rfm, horizon_days=365)
+    logger.info("Segment distribution:\n%s", clv_predictions["segment"].value_counts())
 
-        # Train
-        trainer.train(train_df)
+    output_dir = Path(args.output_dir) / config["version"]
+    trainer.export(str(output_dir))
+    clv_predictions.to_parquet(output_dir / "clv_predictions.parquet", index=False)
 
-        # Log model parameters
-        mlflow.log_params({f"bgnbd_{k}": v for k, v in trainer.bgf_params.items()})
-        mlflow.log_params({f"gg_{k}": v for k, v in trainer.ggf_params.items()})
+    if mlflow is not None:
+        with mlflow.start_run(run_name=args.run_name):
+            mlflow.log_param("model_name", config["model_name"])
+            mlflow.log_param("version", config["version"])
+            mlflow.log_params({f"bgnbd_{k}": v for k, v in trainer.bgf_params.items()})
+            mlflow.log_params({f"gg_{k}": v for k, v in trainer.ggf_params.items()})
+            loggable = {k: v for k, v in metrics.items() if _as_finite_float(v) is not None}
+            mlflow.log_metrics(loggable)
+            mlflow.log_metric("promotion_gate_passed", int(gate_passed))
+            mlflow.log_artifacts(str(output_dir))
+            mlflow.log_artifact(args.config)
 
-        # Evaluate
-        metrics = trainer.evaluate(train_df, test_df)
-        loggable = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
-        mlflow.log_metrics(loggable)
-
-        # Promotion gates
-        gates = config.get("promotion_gates", {})
-        gate_passed = _check_promotion_gates(metrics, gates)
-        mlflow.log_metric("promotion_gate_passed", int(gate_passed))
-
-        # Generate full CLV predictions
-        observation_end = cast(pd.Timestamp, pd.Timestamp(str(train_df["order_date"].max())))
-        rfm = trainer._build_rfm(df, observation_end)
-        clv_predictions = trainer.predict_clv(rfm, horizon_days=365)
-        logger.info("Segment distribution:\n%s", clv_predictions["segment"].value_counts())
-
-        # Export model
-        output_dir = Path(args.output_dir) / config["version"]
-        trainer.export(str(output_dir))
-        clv_predictions.to_parquet(output_dir / "clv_predictions.parquet", index=False)
-        mlflow.log_artifacts(str(output_dir))
-        mlflow.log_artifact(args.config)
-
-        logger.info(
-            "Training complete. Gate passed: %s. MAE: %.2f, Correlation: %.4f",
-            gate_passed,
-            metrics["mae"],
-            metrics["correlation"],
-        )
+    logger.info(
+        "Training complete. Gate passed: %s. MAE: %.2f, Correlation: %.4f",
+        gate_passed,
+        metrics["mae"],
+        metrics["correlation"],
+    )
 
 
 if __name__ == "__main__":

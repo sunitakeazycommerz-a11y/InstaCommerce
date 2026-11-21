@@ -84,3 +84,14 @@ def test_shadow_runner_promotion_gate_threshold():
 
     assert runner.verify_promotion_gate(threshold=0.92, raise_on_failure=False) is False
     assert runner.verify_promotion_gate(threshold=0.85, raise_on_failure=False) is True
+
+
+def test_shadow_runner_rejects_nan_and_inf_without_polluting_score_delta():
+    runner = ShadowRunner()
+    champion = DummyPredictor("eta", "v1", lambda _f: {"eta_minutes": 15.0})
+    shadow_nan = DummyPredictor("eta", "v2", lambda _f: {"eta_minutes": float("nan")})
+
+    comp = runner.run_shadow(champion.predict({}), shadow_nan, {})
+    assert comp is not None
+    assert comp["agrees"] is False
+    assert comp["score_delta"] is None

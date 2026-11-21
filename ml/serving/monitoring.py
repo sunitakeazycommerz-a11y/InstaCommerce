@@ -222,10 +222,21 @@ class ModelMonitor:
         Compares recent feature distribution against training baseline.
         Alerts when p-value < alpha (default 0.01) indicating significant covariate shift.
         """
-        r_clean = np.asarray(recent_features, dtype=float)
-        b_clean = np.asarray(baseline_features, dtype=float)
-        r_clean = r_clean[~np.isnan(r_clean)]
-        b_clean = b_clean[~np.isnan(b_clean)]
+        r_clean = np.asarray(recent_features, dtype=float).reshape(-1)
+        b_clean = np.asarray(baseline_features, dtype=float).reshape(-1)
+        r_clean = r_clean[np.isfinite(r_clean)]
+        b_clean = b_clean[np.isfinite(b_clean)]
+
+        if len(r_clean) == 0 or len(b_clean) == 0:
+            return KSDriftResult(
+                feature_name=feature_name,
+                statistic=0.0,
+                p_value=1.0,
+                is_drifted=False,
+                sample_size_recent=len(r_clean),
+                sample_size_baseline=len(b_clean),
+                alpha=alpha,
+            )
 
         res: Any = stats.ks_2samp(r_clean, b_clean)
         d_stat = float(getattr(res, "statistic", 0.0))
@@ -273,15 +284,22 @@ class ModelMonitor:
         n_bins: int = 10,
     ) -> float:
         """Calculate Population Stability Index (PSI)."""
-        eps = 1e-6
-        breakpoints = np.linspace(
-            min(baseline_features.min(), recent_features.min()),
-            max(baseline_features.max(), recent_features.max()),
-            n_bins + 1,
-        )
+        r_clean = np.asarray(recent_features, dtype=float).reshape(-1)
+        b_clean = np.asarray(baseline_features, dtype=float).reshape(-1)
+        r_clean = r_clean[np.isfinite(r_clean)]
+        b_clean = b_clean[np.isfinite(b_clean)]
+        if len(r_clean) == 0 or len(b_clean) == 0 or n_bins <= 0:
+            return 0.0
 
-        baseline_counts = np.histogram(baseline_features, bins=breakpoints)[0].astype(float)
-        recent_counts = np.histogram(recent_features, bins=breakpoints)[0].astype(float)
+        eps = 1e-6
+        low = min(float(b_clean.min()), float(r_clean.min()))
+        high = max(float(b_clean.max()), float(r_clean.max()))
+        if low == high:
+            high = low + 1.0
+        breakpoints = np.linspace(low, high, n_bins + 1)
+
+        baseline_counts = np.histogram(b_clean, bins=breakpoints)[0].astype(float)
+        recent_counts = np.histogram(r_clean, bins=breakpoints)[0].astype(float)
 
         baseline_pct = baseline_counts / (baseline_counts.sum() + eps) + eps
         recent_pct = recent_counts / (recent_counts.sum() + eps) + eps

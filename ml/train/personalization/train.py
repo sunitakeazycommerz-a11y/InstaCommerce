@@ -240,14 +240,16 @@ class PersonalizationTrainer:
                 epoch_loss += error ** 2
 
                 # SGD update
+                u_prev = user_factors[u_idx].copy()
+                i_prev = item_factors[i_idx].copy()
                 user_factors[u_idx] += learning_rate * (
-                    error * item_factors[i_idx] - reg * user_factors[u_idx]
+                    error * i_prev - reg * u_prev
                 )
                 item_factors[i_idx] += learning_rate * (
-                    error * user_factors[u_idx] - reg * item_factors[i_idx]
+                    error * u_prev - reg * i_prev
                 )
 
-            if (epoch + 1) % 5 == 0:
+            if (epoch + 1) % 5 == 0 and len(interaction_df) > 0:
                 rmse = np.sqrt(epoch_loss / len(interaction_df))
                 logger.info("Epoch %d/%d, RMSE: %.4f", epoch + 1, n_epochs, rmse)
 
@@ -277,6 +279,8 @@ class PersonalizationTrainer:
 
         Guarantees cold-start users never receive an empty recommendation list.
         """
+        if top_k <= 0:
+            return []
         all_items = list(self.item_embeddings.keys()) or self.popular_items
         default_popular = store_popular_items or self.popular_items or all_items[:top_k]
 
@@ -285,8 +289,10 @@ class PersonalizationTrainer:
             user_vec = self.user_embeddings[user_id]
             candidate_list = candidates or all_items
             scored_candidates = []
+            seen_candidates = set()
             for item in candidate_list:
-                if item in self.item_embeddings:
+                if item in self.item_embeddings and item not in seen_candidates:
+                    seen_candidates.add(item)
                     score = float(np.dot(user_vec, self.item_embeddings[item]))
                     scored_candidates.append((item, score))
             scored_candidates.sort(key=lambda x: x[1], reverse=True)
@@ -302,15 +308,24 @@ class PersonalizationTrainer:
                 iid for iid, cat in self.item_categories.items()
                 if cat in viewed_categories
             ]
-            recs = list(matching[:top_k])
+            recs: List[str] = []
+            for item in matching:
+                if item not in recs and len(recs) < top_k:
+                    recs.append(item)
             for p in default_popular:
                 if p not in recs and len(recs) < top_k:
                     recs.append(p)
-            if len(recs) >= top_k:
+            for item in all_items:
+                if item not in recs and len(recs) < top_k:
+                    recs.append(item)
+            if recs:
                 return recs[:top_k]
 
         # Case 3: Absolute cold-start user (0 orders, 0 views) -> dark store popularity tier
-        recs = list(default_popular[:top_k])
+        recs = []
+        for p in default_popular:
+            if p not in recs and len(recs) < top_k:
+                recs.append(p)
         if len(recs) < top_k:
             for item in all_items:
                 if item not in recs and len(recs) < top_k:
@@ -326,8 +341,8 @@ class PersonalizationTrainer:
         k_values = self.config.get("eval_k_values", [5, 10, 20])
         interaction_df = self._build_interaction_matrix(df)
 
-        hits = {k: [] for k in k_values}
-        ndcg_scores_per_k = {k: [] for k in k_values}
+        hits: dict[int, List[float]] = {k: [] for k in k_values}
+        ndcg_scores_per_k: dict[int, List[float]] = {k: [] for k in k_values}
 
         user_interactions = interaction_df.groupby("user_id")
         all_items = list(self.item_embeddings.keys())
@@ -342,6 +357,8 @@ class PersonalizationTrainer:
             scores = item_matrix @ user_vec
             ranked_items = [all_items[i] for i in np.argsort(-scores)]
             true_items = set(user_df["sku_id"].values)
+            if not true_items:
+                continue
 
             for k in k_values:
                 top_k = ranked_items[:k]
@@ -349,18 +366,17 @@ class PersonalizationTrainer:
                 hits[k].append(float(hit))
 
                 relevance = [1.0 if item in true_items else 0.0 for item in top_k]
-                if sum(relevance) > 0:
-                    ideal = sorted(relevance, reverse=True)
-                    dcg = sum(r / np.log2(i + 2) for i, r in enumerate(relevance))
-                    idcg = sum(r / np.log2(i + 2) for i, r in enumerate(ideal))
-                    ndcg_scores_per_k[k].append(dcg / idcg if idcg > 0 else 0.0)
+                dcg = sum(r / np.log2(i + 2) for i, r in enumerate(relevance))
+                ideal_count = min(len(true_items), k)
+                idcg = sum(1.0 / np.log2(i + 2) for i in range(ideal_count))
+                ndcg_scores_per_k[k].append(float(dcg / idcg) if idcg > 0 else 0.0)
 
         metrics = {}
         for k in k_values:
             metrics[f"hit_at_{k}"] = float(np.mean(hits[k])) if hits[k] else 0.0
             metrics[f"ndcg_at_{k}"] = float(np.mean(ndcg_scores_per_k[k])) if ndcg_scores_per_k[k] else 0.0
 
-        metrics["users_evaluated"] = len(hits[k_values[0]])
+        metrics["users_evaluated"] = len(hits[k_values[0]]) if k_values else 0
         logger.info("Evaluation metrics: %s", json.dumps(metrics, indent=2))
         return metrics
 
@@ -404,16 +420,26 @@ class PersonalizationTrainer:
         logger.info("Model exported to %s", export_dir)
 
 
+def _as_finite_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        num = float(value)
+        if np.isfinite(num):
+            return num
+    return None
+
+
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
     passed = True
-    min_hit_10 = gates.get("min_hit_at_10", 0.0)
-    if metrics.get("hit_at_10", 0.0) < min_hit_10:
-        logger.warning("Hit@10 %.4f below gate %.4f", metrics.get("hit_at_10", 0), min_hit_10)
+    hit_10 = _as_finite_float(metrics.get("hit_at_10"))
+    min_hit_10 = float(gates.get("min_hit_at_10", 0.0))
+    if hit_10 is None or hit_10 < min_hit_10:
+        logger.warning("Hit@10 %r below gate %.4f", metrics.get("hit_at_10"), min_hit_10)
         passed = False
-    min_ndcg_10 = gates.get("min_ndcg_at_10", 0.0)
-    if metrics.get("ndcg_at_10", 0.0) < min_ndcg_10:
-        logger.warning("NDCG@10 %.4f below gate %.4f", metrics.get("ndcg_at_10", 0), min_ndcg_10)
+    ndcg_10 = _as_finite_float(metrics.get("ndcg_at_10"))
+    min_ndcg_10 = float(gates.get("min_ndcg_at_10", 0.0))
+    if ndcg_10 is None or ndcg_10 < min_ndcg_10:
+        logger.warning("NDCG@10 %r below gate %.4f", metrics.get("ndcg_at_10"), min_ndcg_10)
         passed = False
     return passed
 

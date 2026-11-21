@@ -118,8 +118,10 @@ class DemandPredictor(BasePredictor):
 
         start = time.monotonic()
         try:
-            horizon = int(features.get("horizon_hours", _DEFAULT_HORIZON_HOURS))
-            hour_of_day = int(features.get("hour_of_day", 12))
+            raw_horizon = features.get("horizon_hours")
+            horizon = max(1, int(raw_horizon if raw_horizon is not None else _DEFAULT_HORIZON_HOURS))
+            raw_hour = features.get("hour_of_day")
+            hour_of_day = int(raw_hour if raw_hour is not None else 12) % 24
             hour_multiplier = self.HOURLY_FACTORS.get(hour_of_day, 1.0)
             future = self._model.make_future_dataframe(periods=horizon, freq="h")
             forecast = self._model.predict(future)
@@ -148,7 +150,7 @@ class DemandPredictor(BasePredictor):
                     "horizon_hours": horizon,
                     "predicted_demand": predicted_demand,
                     "forecast": hourly_forecast,
-                    "peak_demand": max(h["yhat"] for h in hourly_forecast),
+                    "peak_demand": max((h["yhat"] for h in hourly_forecast), default=0.0),
                 },
                 model_version=self._version,
                 model_name=self.model_name,
@@ -169,11 +171,14 @@ class DemandPredictor(BasePredictor):
         data is available for the given zone × category.
         """
         start = time.monotonic()
-        zone_id: str = str(features.get("zone_id", "default"))
-        category: str = str(features.get("category", "default"))
-        day_of_week: int = int(features.get("day_of_week", 0))
-        hour_of_day: int = int(features.get("hour_of_day", 12))
-        horizon: int = int(features.get("horizon_hours", _DEFAULT_HORIZON_HOURS))
+        zone_id: str = str(features.get("zone_id") or "default")
+        category: str = str(features.get("category") or "default")
+        raw_dow = features.get("day_of_week")
+        day_of_week: int = int(raw_dow if raw_dow is not None else 0)
+        raw_hour = features.get("hour_of_day")
+        hour_of_day: int = int(raw_hour if raw_hour is not None else 12) % 24
+        raw_horizon = features.get("horizon_hours")
+        horizon: int = max(0, int(raw_horizon if raw_horizon is not None else _DEFAULT_HORIZON_HOURS))
 
         key = f"{zone_id}_{category}"
         baseline = self._weekly_baselines.get(key, {})

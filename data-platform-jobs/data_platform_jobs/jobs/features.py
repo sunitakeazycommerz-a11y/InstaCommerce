@@ -30,12 +30,14 @@ def run_feature_refresh(context: JobContext) -> None:
         f"""
         CREATE OR REPLACE TABLE `{project_id}.{features_ds}.product_features` AS
         SELECT
-            product_id,
-            COUNT(DISTINCT order_id) AS sales_30d,
-            AVG(quantity) AS avg_units_per_order
-        FROM `{project_id}.{staging_ds}.stg_orders`
-        WHERE DATE(placed_at) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
-        GROUP BY product_id
+            oi.product_id,
+            COUNT(DISTINCT oi.order_id) AS sales_30d,
+            AVG(oi.quantity) AS avg_units_per_order
+        FROM `{project_id}.{staging_ds}.stg_order_items` oi
+        INNER JOIN `{project_id}.{staging_ds}.stg_orders` o
+            ON oi.order_id = o.order_id
+        WHERE DATE(o.placed_at) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+        GROUP BY oi.product_id
         """,
     ]
     run_queries(client, queries, logger, context.dry_run)

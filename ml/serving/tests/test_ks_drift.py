@@ -55,3 +55,15 @@ def test_feature_vector_sampling_and_bigquery_export():
 
     monitor.clear_sampled_features()
     assert len(monitor.export_sampled_features_to_bigquery_rows()) == 0
+
+
+def test_ks_and_psi_drift_handle_empty_nan_and_constant_inputs():
+    monitor = ModelMonitor(model_name="eta")
+    empty_ks = monitor.check_ks_drift(np.array([np.nan]), np.array([1.0, 2.0]), feature_name="distance_km")
+    assert empty_ks.is_drifted is False
+    assert empty_ks.sample_size_recent == 0
+
+    assert monitor.check_drift(np.array([np.nan]), np.array([1.0, 2.0])) == 0.0
+    constant_psi = monitor.check_drift(np.array([5.0, 5.0, 5.0]), np.array([5.0, 5.0, 5.0]))
+    assert np.isfinite(constant_psi)
+    assert constant_psi == 0.0

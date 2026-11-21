@@ -100,3 +100,19 @@ def test_personalization_predictor_cold_start_returns_recommendations():
     recs = result.output.get("recommendations", [])
     assert len(recs) == 10
     assert recs[0]["item_id"] == "sku_store_1"
+
+
+def test_cold_start_viewed_categories_retained_when_popular_list_shorter_than_top_k():
+    trainer = PersonalizationTrainer({"hyperparameters": {"embedding_dim": 8, "n_epochs": 1}})
+    trainer.popular_items = ["sku_pop_1", "sku_pop_2"]
+    trainer.item_categories = {"sku_cat_1": "dairy", "sku_pop_1": "snacks"}
+    trainer.item_embeddings = {
+        "sku_cat_1": pd.Series([1.0]).to_numpy(),
+        "sku_pop_1": pd.Series([1.0]).to_numpy(),
+        "sku_pop_2": pd.Series([1.0]).to_numpy(),
+        "sku_extra": pd.Series([1.0]).to_numpy(),
+    }
+
+    recs = trainer.recommend("cold_user", viewed_categories=["dairy"], top_k=10)
+    assert recs[0] == "sku_cat_1"
+    assert "sku_extra" in recs

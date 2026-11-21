@@ -96,14 +96,27 @@ def verify_model_integrity(
 
     expected = parse_checksums_file(checksums_path)
     if not expected:
+        if strict:
+            logger.error("integrity.empty_checksums model=%s strict=true", model_name)
+            _INTEGRITY_FAIL.labels(model=model_name).inc()
+            return False
         logger.warning("integrity.empty_checksums model=%s", model_name)
         _INTEGRITY_SKIP.labels(model=model_name).inc()
         return True
 
+    resolved_base = model_dir.resolve()
     all_valid = True
     for filename, expected_hash in expected.items():
-        artifact_path = model_dir / filename
-        if not artifact_path.exists():
+        artifact_path = (model_dir / filename).resolve()
+        if not artifact_path.is_relative_to(resolved_base):
+            logger.error(
+                "integrity.path_traversal model=%s file=%s",
+                model_name, filename,
+            )
+            _INTEGRITY_FAIL.labels(model=model_name).inc()
+            all_valid = False
+            continue
+        if not artifact_path.exists() or not artifact_path.is_file():
             logger.error(
                 "integrity.missing_artifact model=%s file=%s",
                 model_name, filename,
