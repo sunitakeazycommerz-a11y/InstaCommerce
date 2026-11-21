@@ -10,6 +10,29 @@ import (
 	"time"
 )
 
+const (
+	writeTempHashLua = `
+redis.call('DEL', KEYS[1])
+for i = 2, #ARGV, 1000 do
+	redis.call('HSET', KEYS[1], unpack(ARGV, i, math.min(i + 999, #ARGV)))
+end
+redis.call('PEXPIRE', KEYS[1], ARGV[1])
+return 1
+`
+	atomicSwapTTLLua = `
+if redis.call('EXISTS', KEYS[1]) == 1 then
+	redis.call('RENAME', KEYS[1], KEYS[2])
+	redis.call('PEXPIRE', KEYS[2], ARGV[1])
+	return 1
+end
+if redis.call('EXISTS', KEYS[2]) == 1 then
+	redis.call('PEXPIRE', KEYS[2], ARGV[1])
+	return 2
+end
+return redis.error_reply('ERR no such key')
+`
+)
+
 // WorkerPool manages parallel reverse ETL sync pipelines with worker pools and rate limiting.
 type WorkerPool struct {
 	concurrency int
@@ -72,9 +95,64 @@ func (wp *WorkerPool) observeStoreDuration(storeID string, seconds float64) {
 	}
 }
 
+// EffectiveRetryPolicy returns the normalized RetryPolicy configured on the WorkerPool.
+func (wp *WorkerPool) EffectiveRetryPolicy() RetryPolicy {
+	return wp.retryPolicy
+}
+
 func (wp *WorkerPool) runRedisOp(ctx context.Context, syncType string, op func(context.Context) error) error {
-	_, err := ExecuteWithRetry(ctx, syncType, wp.metrics, wp.retryPolicy, op)
+	attempt := 0
+	_, err := ExecuteWithRetry(ctx, syncType, wp.metrics, wp.retryPolicy, func(c context.Context) error {
+		if attempt > 0 {
+			if err := wp.rateLimiter.Acquire(c); err != nil {
+				return err
+			}
+		}
+		attempt++
+		return op(c)
+	})
 	return err
+}
+
+func ttlMillis(ttl time.Duration) int64 {
+	ms := ttl.Milliseconds()
+	if ms < 1 {
+		return 1
+	}
+	return ms
+}
+
+func (wp *WorkerPool) swapTempKeyWithTTL(ctx context.Context, syncType, tempKey, targetKey string, ttl time.Duration, entityDesc string) error {
+	ms := ttlMillis(ttl)
+	if err := wp.runRedisOp(ctx, syncType, func(c context.Context) error {
+		return wp.redisClient.Eval(c, atomicSwapTTLLua, []string{tempKey, targetKey}, ms).Err()
+	}); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = wp.redisClient.Del(cleanupCtx, tempKey)
+		cancel()
+		wp.recordErrorMetric(syncType, "redis_rename")
+		return fmt.Errorf("failed to atomically rename and set TTL on %s: %w", entityDesc, err)
+	}
+	return nil
+}
+
+func (wp *WorkerPool) syncHashWithTempSwap(
+	ctx context.Context,
+	syncType, tempKey, targetKey string,
+	ttl time.Duration,
+	entityDesc string,
+	kvPairs ...any,
+) error {
+	args := make([]any, 0, 1+len(kvPairs))
+	args = append(args, ttlMillis(ttl))
+	args = append(args, kvPairs...)
+	if err := wp.runRedisOp(ctx, syncType, func(c context.Context) error {
+		return wp.redisClient.Eval(c, writeTempHashLua, []string{tempKey}, args...).Err()
+	}); err != nil {
+		wp.recordErrorMetric(syncType, "redis_hset")
+		return fmt.Errorf("failed to write temp %s: %w", entityDesc, err)
+	}
+	return wp.swapTempKeyWithTTL(ctx, syncType, tempKey, targetKey, ttl, entityDesc)
 }
 
 // SyncUserFeatures syncs customer lifetime value (CLV) and category affinity scores
@@ -126,43 +204,25 @@ func (wp *WorkerPool) SyncUserFeatures(ctx context.Context, jobID, subscriptionI
 			wp.recordAudit(ctx, jobID, subscriptionID, "user_features", syncedCount, "FAILED", time.Since(start), res.Error.Error())
 			return res, res.Error
 		}
-		if err := wp.runRedisOp(ctx, "user_features", func(c context.Context) error {
-			return wp.redisClient.HSet(c, tempKey,
-				"clv", fmt.Sprintf("%.2f", rec.CLV),
-				"category_affinity", string(affinityJSON),
-				"last_purchase_days", rec.LastPurchaseDays,
-				"order_count_30d", rec.OrderCount30d,
-				"conversion_rate_30d", fmt.Sprintf("%.6f", rec.ConversionRate30d),
-				"avg_basket_cents", fmt.Sprintf("%.2f", rec.AvgBasketCents),
-				"segment", rec.Segment,
-				"updated_at", rec.UpdatedAt.Format(time.RFC3339),
-				"job_id", jobID,
-			).Err()
-		}); err != nil {
-			wp.recordErrorMetric("user_features", "redis_hset")
+		if err := wp.syncHashWithTempSwap(
+			ctx,
+			"user_features",
+			tempKey,
+			targetKey,
+			userFeaturesTTL,
+			"user features for user "+rec.UserID,
+			"clv", fmt.Sprintf("%.2f", rec.CLV),
+			"category_affinity", string(affinityJSON),
+			"last_purchase_days", rec.LastPurchaseDays,
+			"order_count_30d", rec.OrderCount30d,
+			"conversion_rate_30d", fmt.Sprintf("%.6f", rec.ConversionRate30d),
+			"avg_basket_cents", fmt.Sprintf("%.2f", rec.AvgBasketCents),
+			"segment", rec.Segment,
+			"updated_at", rec.UpdatedAt.Format(time.RFC3339),
+			"job_id", jobID,
+		); err != nil {
 			res.Status = "FAILED"
-			res.Error = fmt.Errorf("failed to write temp user features for user %s: %w", rec.UserID, err)
-			wp.recordAudit(ctx, jobID, subscriptionID, "user_features", syncedCount, "FAILED", time.Since(start), res.Error.Error())
-			return res, res.Error
-		}
-
-		if err := wp.runRedisOp(ctx, "user_features", func(c context.Context) error {
-			return wp.redisClient.Rename(c, tempKey, targetKey).Err()
-		}); err != nil {
-			_ = wp.redisClient.Del(ctx, tempKey)
-			wp.recordErrorMetric("user_features", "redis_rename")
-			res.Status = "FAILED"
-			res.Error = fmt.Errorf("failed to atomically rename user features for user %s: %w", rec.UserID, err)
-			wp.recordAudit(ctx, jobID, subscriptionID, "user_features", syncedCount, "FAILED", time.Since(start), res.Error.Error())
-			return res, res.Error
-		}
-
-		if err := wp.runRedisOp(ctx, "user_features", func(c context.Context) error {
-			return wp.redisClient.Expire(c, targetKey, userFeaturesTTL).Err()
-		}); err != nil {
-			wp.recordErrorMetric("user_features", "redis_expire")
-			res.Status = "FAILED"
-			res.Error = fmt.Errorf("failed to set TTL on user features for user %s: %w", rec.UserID, err)
+			res.Error = err
 			wp.recordAudit(ctx, jobID, subscriptionID, "user_features", syncedCount, "FAILED", time.Since(start), res.Error.Error())
 			return res, res.Error
 		}
@@ -244,23 +304,16 @@ func (wp *WorkerPool) SyncCustomerFraudScores(ctx context.Context, jobID, subscr
 			return res, res.Error
 		}
 
-		if err := wp.runRedisOp(ctx, "fraud_risk_scores", func(c context.Context) error {
-			return wp.redisClient.Rename(c, tempKey, targetKey).Err()
-		}); err != nil {
-			_ = wp.redisClient.Del(ctx, tempKey)
-			wp.recordErrorMetric("fraud_risk_scores", "redis_rename")
+		if err := wp.swapTempKeyWithTTL(
+			ctx,
+			"fraud_risk_scores",
+			tempKey,
+			targetKey,
+			fraudScoreTTL,
+			"fraud score key for user "+sc.UserID,
+		); err != nil {
 			res.Status = "FAILED"
-			res.Error = fmt.Errorf("failed to rename fraud score key for user %s: %w", sc.UserID, err)
-			wp.recordAudit(ctx, jobID, subscriptionID, "fraud_risk_scores", syncedCount, "FAILED", time.Since(start), res.Error.Error())
-			return res, res.Error
-		}
-
-		if err := wp.runRedisOp(ctx, "fraud_risk_scores", func(c context.Context) error {
-			return wp.redisClient.Expire(c, targetKey, fraudScoreTTL).Err()
-		}); err != nil {
-			wp.recordErrorMetric("fraud_risk_scores", "redis_expire")
-			res.Status = "FAILED"
-			res.Error = fmt.Errorf("failed to set TTL on fraud score for user %s: %w", sc.UserID, err)
+			res.Error = err
 			wp.recordAudit(ctx, jobID, subscriptionID, "fraud_risk_scores", syncedCount, "FAILED", time.Since(start), res.Error.Error())
 			return res, res.Error
 		}

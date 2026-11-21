@@ -161,7 +161,7 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 		h.writeError(w, http.StatusUnauthorized, "invalid signature")
 		return
 	}
-	if err := h.enforceReplayWindow(r, psp, payload); err != nil {
+	if err := h.enforceReplayWindow(r, psp, sigHeader, verifier, payload); err != nil {
 		h.metrics.VerifyLatency.WithLabelValues(string(psp)).Observe(time.Since(verifyStart).Seconds())
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "replay_window").Inc()
 		h.loggerWithTrace(ctx).WarnContext(ctx, "webhook timestamp outside replay window", "psp", psp, "error", err)
@@ -170,7 +170,7 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 	}
 	h.metrics.VerifyLatency.WithLabelValues(string(psp)).Observe(time.Since(verifyStart).Seconds())
 
-	event, err := h.parseEvent(psp, payload)
+	event, err := ParseEvent(psp, payload)
 	if err != nil {
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "parse").Inc()
 		h.loggerWithTrace(ctx).WarnContext(ctx, "event parse failed", "psp", psp, "error", err)
@@ -234,24 +234,44 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 	})
 }
 
-func (h *WebhookHandler) enforceReplayWindow(r *http.Request, psp PSPType, payload []byte) error {
+func (h *WebhookHandler) enforceReplayWindow(r *http.Request, psp PSPType, sigHeader string, verifier SignatureVerifier, payload []byte) error {
 	if h.replayTolerance <= 0 {
 		return nil
 	}
-	rawTS := strings.TrimSpace(r.Header.Get("X-Webhook-Timestamp"))
-	if rawTS == "" && psp == Razorpay {
-		rawTS = strings.TrimSpace(r.Header.Get("X-Razorpay-Timestamp"))
+	if psp == Stripe {
+		if sv, ok := verifier.(*StripeVerifier); ok && sv.Tolerance() > 0 && h.replayTolerance >= sv.Tolerance() {
+			return nil
+		}
+		rawTS, _ := parseStripeHeader(r.Header.Get(sigHeader))
+		if rawTS == "" {
+			return fmt.Errorf("verify: missing webhook timestamp for %s", psp)
+		}
+		nowFn := h.nowFunc
+		if nowFn == nil {
+			nowFn = time.Now
+		}
+		return validateUnixReplayWindow(rawTS, h.replayTolerance, nowFn())
 	}
-	if rawTS == "" && psp == Razorpay {
+
+	var rawTS string
+	if psp == Razorpay {
 		var envelope struct {
 			CreatedAt *int64 `json:"created_at"`
 		}
-		if json.Unmarshal(payload, &envelope) == nil && envelope.CreatedAt != nil && *envelope.CreatedAt > 0 {
+		if json.Unmarshal(payload, &envelope) == nil && envelope.CreatedAt != nil {
 			rawTS = strconv.FormatInt(*envelope.CreatedAt, 10)
 		}
+		if rawTS == "" {
+			rawTS = strings.TrimSpace(r.Header.Get("X-Webhook-Timestamp"))
+		}
+		if rawTS == "" {
+			rawTS = strings.TrimSpace(r.Header.Get("X-Razorpay-Timestamp"))
+		}
+	} else {
+		rawTS = strings.TrimSpace(r.Header.Get("X-Webhook-Timestamp"))
 	}
 	if rawTS == "" {
-		return nil
+		return fmt.Errorf("verify: missing webhook timestamp for %s", psp)
 	}
 	nowFn := h.nowFunc
 	if nowFn == nil {

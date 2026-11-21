@@ -30,20 +30,7 @@ type positionStoreAdapter struct {
 }
 
 func (a positionStoreAdapter) Update(ctx context.Context, u handler.LocationUpdate) error {
-	err := a.store.Update(ctx, store.LocationUpdate{
-		RiderID:     u.RiderID,
-		Lat:         u.Lat,
-		Lng:         u.Lng,
-		Accuracy:    u.Accuracy,
-		Speed:       u.Speed,
-		Heading:     u.Heading,
-		Timestamp:   u.Timestamp,
-		BatteryPct:  u.BatteryPct,
-		H3Index:     u.H3Index,
-		HasSpeed:    u.HasSpeed,
-		HasHeading:  u.HasHeading,
-		HasAccuracy: u.HasAccuracy,
-	})
+	err := a.store.Update(ctx, u)
 	if errors.Is(err, store.ErrOutOfOrderPing) {
 		return fmt.Errorf("%w: %w", handler.ErrOutOfOrderPing, err)
 	}

@@ -77,7 +77,10 @@ func (c *DNSCache) evictLocked(now time.Time) {
 	if len(c.entries) < maxDNSCacheEntries {
 		return
 	}
-	// Evict earliest-expiring entry when all entries are still fresh.
+	c.evictEarliestExpiringLocked()
+}
+
+func (c *DNSCache) evictEarliestExpiringLocked() {
 	var oldestKey string
 	var oldestExp time.Time
 	first := true

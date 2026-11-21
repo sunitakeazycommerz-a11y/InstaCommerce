@@ -8,15 +8,9 @@ import (
 	"time"
 
 	"github.com/instacommerce/go-shared/pkg/config"
+	"github.com/instacommerce/go-shared/pkg/observability"
 	"github.com/instacommerce/payment-webhook-service/handler"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
-	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -65,9 +59,7 @@ func loadConfig() Config {
 	razorpayRotated := parseSecretList(os.Getenv("RAZORPAY_WEBHOOK_SECRETS"), razorpaySecret)
 	phonepeRotated := parsePhonePeSaltKeys(os.Getenv("PHONEPE_SALT_KEYS"), phonepeKey, phonepeIdx)
 
-	brokers := strings.FieldsFunc(os.Getenv("KAFKA_BROKERS"), func(r rune) bool {
-		return r == ',' || r == ' ' || r == ';'
-	})
+	brokers := config.SplitCSV(os.Getenv("KAFKA_BROKERS"))
 	return Config{
 		Port:               port,
 		WebhookSecret:      secret,
@@ -173,34 +165,15 @@ func hasAnyVerifierSecret(cfg Config) bool {
 }
 
 func initTracing(cfg Config, logger *slog.Logger) (func(context.Context) error, error) {
-	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
-	if endpoint == "" {
-		endpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-	}
-	if endpoint == "" {
-		otel.SetTracerProvider(trace.NewNoopTracerProvider())
-		return func(context.Context) error { return nil }, nil
-	}
-	var opts []otlptracehttp.Option
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		opts = append(opts, otlptracehttp.WithEndpointURL(endpoint))
-	} else {
-		opts = append(opts, otlptracehttp.WithEndpoint(endpoint), otlptracehttp.WithInsecure())
-	}
-	exporter, err := otlptracehttp.New(context.Background(), opts...)
+	providers, err := observability.InitOTel(context.Background(), observability.OTelConfig{
+		ServiceName:      "payment-webhook-service",
+		Protocol:         observability.OTelProtocolHTTP,
+		ResolveEnv:       true,
+		NoopIfNoEndpoint: true,
+		Attributes:       []attribute.KeyValue{attribute.String("service.port", cfg.Port)},
+	}, logger)
 	if err != nil {
 		return func(context.Context) error { return nil }, err
 	}
-	res, err := resource.New(context.Background(), resource.WithAttributes(
-		semconv.ServiceName("payment-webhook-service"),
-		attribute.String("service.port", cfg.Port),
-	))
-	if err != nil {
-		return func(context.Context) error { return nil }, err
-	}
-	tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithBatcher(exporter))
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
-	logger.Info("otel tracing enabled")
-	return tp.Shutdown, nil
+	return providers.Shutdown, nil
 }

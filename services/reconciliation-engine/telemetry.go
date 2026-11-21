@@ -5,18 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/observability"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -68,46 +62,16 @@ func parseLogLevel(level string) slog.Level {
 }
 
 func initTracer(ctx context.Context, serviceName string, logger *slog.Logger) (func(context.Context) error, error) {
-	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(serviceName)))
+	providers, err := observability.InitOTel(ctx, observability.OTelConfig{
+		ServiceName:    serviceName,
+		Protocol:       observability.OTelProtocolGRPC,
+		ResolveEnv:     true,
+		StdoutFallback: true,
+	}, logger)
 	if err != nil {
 		return nil, err
 	}
-	exporter, err := buildTraceExporter(ctx, logger)
-	if err != nil {
-		return nil, err
-	}
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(res),
-	)
-	otel.SetTracerProvider(tp)
-	return tp.Shutdown, nil
-}
-
-func buildTraceExporter(ctx context.Context, logger *slog.Logger) (sdktrace.SpanExporter, error) {
-	endpoint := getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	if endpoint == "" {
-		endpoint = getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
-	}
-	if endpoint == "" {
-		logger.Info("OTLP endpoint not set; using stdout exporter")
-		return stdouttrace.New(stdouttrace.WithPrettyPrint())
-	}
-
-	secure := false
-	if parsed, err := url.Parse(endpoint); err == nil && parsed.Host != "" {
-		endpoint = parsed.Host
-		secure = strings.EqualFold(parsed.Scheme, "https")
-	} else if strings.HasPrefix(endpoint, "https://") {
-		secure = true
-	}
-
-	endpoint = strings.TrimPrefix(strings.TrimPrefix(endpoint, "http://"), "https://")
-	options := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}
-	if !secure {
-		options = append(options, otlptracegrpc.WithInsecure())
-	}
-	return otlptracegrpc.New(ctx, options...)
+	return providers.Shutdown, nil
 }
 
 func initDatabase(ctx context.Context, cfg Config, logger *slog.Logger) (*sql.DB, error) {

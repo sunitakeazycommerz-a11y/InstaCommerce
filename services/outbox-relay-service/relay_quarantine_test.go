@@ -131,12 +131,20 @@ func TestBuildEnrichedDLQMetadataAndHeaders(t *testing.T) {
 
 	headers := buildDLQHeaders(evt, "orders.events", "trace-1", "ord-100", "v2", 3, cause, now)
 	hm := make(map[string]string, len(headers))
+	counts := make(map[string]int, len(headers))
 	for _, h := range headers {
-		hm[string(h.Key)] = string(h.Value)
+		k := string(h.Key)
+		hm[k] = string(h.Value)
+		counts[k]++
 	}
 	for _, k := range []string{"partition_key", "error_category", "quarantine_attempts", "quarantined_at", "original_topic"} {
 		if hm[k] == "" {
 			t.Fatalf("expected header %q to be populated", k)
+		}
+	}
+	for _, k := range []string{"partition_key", "schema_version"} {
+		if counts[k] != 1 {
+			t.Fatalf("expected header %q once, got %d", k, counts[k])
 		}
 	}
 }

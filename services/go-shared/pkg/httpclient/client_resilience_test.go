@@ -209,3 +209,50 @@ func TestDNSCacheCapsActiveEntriesAtMax(t *testing.T) {
 		t.Fatalf("expected cache size <= %d, got %d", maxDNSCacheEntries, len(cache.entries))
 	}
 }
+
+func TestClientDeadlineExceededWithRetriesOpensCircuitBreaker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(250 * time.Millisecond):
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(
+		WithMaxRetries(2),
+		WithBaseDelay(10*time.Millisecond),
+		WithCircuitBreakerThreshold(1),
+		WithCircuitBreakerResetTimeout(20*time.Millisecond),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := client.Get(ctx, server.URL)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+	if client.circuitBreaker.failures != 1 {
+		t.Fatalf("expected failures=1, got %d", client.circuitBreaker.failures)
+	}
+	if client.circuitBreaker.state != Open {
+		t.Fatalf("expected circuit breaker state Open, got %v", client.circuitBreaker.state)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer probeCancel()
+	_, err = client.Get(probeCtx, server.URL)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected probe context.DeadlineExceeded, got %v", err)
+	}
+	if client.circuitBreaker.failures != 2 {
+		t.Fatalf("expected failures=2 after half-open probe timeout, got %d", client.circuitBreaker.failures)
+	}
+	if client.circuitBreaker.state != Open {
+		t.Fatalf("expected circuit breaker state Open after failed half-open probe, got %v", client.circuitBreaker.state)
+	}
+}

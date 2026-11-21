@@ -140,13 +140,18 @@ func (r *DBReconciler) ApplyFix(ctx context.Context, mismatchID int64, fixAction
 	err = tx.QueryRowContext(ctx,
 		`SELECT run_id, transaction_id, COALESCE(psp_amount::text, '0.00')
 		FROM reconciliation_mismatches
-		WHERE mismatch_id = $1 AND fix_applied_at IS NULL`,
+		WHERE mismatch_id = $1 AND fix_applied_at IS NULL
+		FOR UPDATE`,
 		mismatchID).Scan(&runID, &txnID, &pspAmountStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			var existing int
 			if fixCheckErr := tx.QueryRowContext(ctx, `SELECT 1 FROM reconciliation_fixes WHERE mismatch_id = $1 LIMIT 1`, mismatchID).Scan(&existing); fixCheckErr == nil && existing == 1 {
 				logger.Info("fix already applied, returning idempotently", "mismatch_id", mismatchID)
+				return nil
+			}
+			if fixedCheckErr := tx.QueryRowContext(ctx, `SELECT 1 FROM reconciliation_mismatches WHERE mismatch_id = $1 AND fix_applied_at IS NOT NULL LIMIT 1`, mismatchID).Scan(&existing); fixedCheckErr == nil && existing == 1 {
+				logger.Info("mismatch already marked fixed, returning idempotently", "mismatch_id", mismatchID)
 				return nil
 			}
 		}
@@ -173,13 +178,19 @@ func (r *DBReconciler) ApplyFix(ctx context.Context, mismatchID int64, fixAction
 		return fmt.Errorf("failed to write ledger adjustment: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`UPDATE reconciliation_mismatches
 		SET auto_fixed = true, manual_review_required = false, fix_applied_at = NOW()
-		WHERE mismatch_id = $1`,
-		mismatchID); err != nil {
+		WHERE mismatch_id = $1 AND fix_applied_at IS NULL`,
+		mismatchID)
+	if err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update mismatch: %w", err)
+	}
+	if rowsAffected, rowsErr := res.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
+		err := fmt.Errorf("failed to update mismatch %d: no unfixed row matched", mismatchID)
+		span.RecordError(err)
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {

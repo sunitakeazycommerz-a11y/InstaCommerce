@@ -284,3 +284,98 @@ func TestWorkerPoolNilGuards(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "FAILED", res.Status)
 }
+
+func TestWorkerPool_DefaultsUnsetRetryPolicyAndSetsTempTTL(t *testing.T) {
+	client := newMockRedisClient()
+	pool := NewWorkerPool(WorkerPoolConfig{
+		Concurrency:     2,
+		RateLimitPerSec: 5000,
+		RedisClient:     client,
+	})
+	defer pool.Close()
+
+	assert.Equal(t, DefaultRetryPolicy(), pool.EffectiveRetryPolicy())
+
+	records := []UserFeatureRecord{{UserID: "user-ttl-temp", CLV: 42.0, UpdatedAt: time.Now()}}
+	_, err := pool.SyncUserFeatures(context.Background(), "job-temp-ttl", "sub-1", records)
+	require.NoError(t, err)
+
+	client.mu.RLock()
+	tempTTL, ok := client.tempKeyTTLs["user:features:temp:job-temp-ttl:user-ttl-temp"]
+	targetTTL, hasTargetTTL := client.ttls["user:features:user-ttl-temp"]
+	client.mu.RUnlock()
+	require.True(t, ok)
+	assert.Equal(t, 36*time.Hour, tempTTL)
+	require.True(t, hasTargetTTL)
+	assert.Equal(t, 36*time.Hour, targetTTL)
+}
+
+func TestWorkerPool_AmbiguousRenameTimeoutRetryIsIdempotentAndRateLimited(t *testing.T) {
+	client := newMockRedisClient()
+	client.evalSwapHook = func(attempt int, _, _ string) error {
+		if attempt == 1 {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+
+	pool := NewWorkerPool(WorkerPoolConfig{
+		Concurrency:     1,
+		RateLimitPerSec: 1000,
+		RedisClient:     client,
+		RetryPolicy: RetryPolicy{
+			MaxAttempts: 3,
+			BaseDelay:   time.Millisecond,
+			MaxDelay:    2 * time.Millisecond,
+		},
+	})
+	defer pool.Close()
+
+	for len(pool.rateLimiter.tokens) > 2 {
+		<-pool.rateLimiter.tokens
+	}
+
+	records := []UserFeatureRecord{{UserID: "user-ambig", CLV: 19.5, UpdatedAt: time.Now()}}
+	res, err := pool.SyncUserFeatures(context.Background(), "job-ambig", "sub-1", records)
+	require.NoError(t, err)
+	assert.Equal(t, "COMPLETED", res.Status)
+
+	client.mu.RLock()
+	_, exists := client.hashes["user:features:user-ambig"]
+	ttl, hasTTL := client.ttls["user:features:user-ambig"]
+	evalCalls := client.swapEvalCalls
+	client.mu.RUnlock()
+
+	assert.True(t, exists)
+	assert.True(t, hasTTL)
+	assert.Equal(t, 36*time.Hour, ttl)
+	assert.Equal(t, 2, evalCalls)
+
+	rateClient := newMockRedisClient()
+	rateClient.evalSwapHook = func(attempt int, _, _ string) error {
+		if attempt == 1 {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	slowPool := NewWorkerPool(WorkerPoolConfig{
+		Concurrency:     1,
+		RateLimitPerSec: 1,
+		RedisClient:     rateClient,
+		RetryPolicy: RetryPolicy{
+			MaxAttempts: 3,
+			BaseDelay:   time.Millisecond,
+			MaxDelay:    time.Millisecond,
+		},
+	})
+	defer slowPool.Close()
+
+	tightCtx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	_, slowErr := slowPool.SyncUserFeatures(tightCtx, "job-rl", "sub-1", []UserFeatureRecord{{UserID: "user-rl", UpdatedAt: time.Now()}})
+	require.Error(t, slowErr)
+	rateClient.mu.RLock()
+	slowCalls := rateClient.swapEvalCalls
+	rateClient.mu.RUnlock()
+	assert.Equal(t, 1, slowCalls, "retry must wait on rateLimiter.Acquire instead of bypassing rate limits")
+}

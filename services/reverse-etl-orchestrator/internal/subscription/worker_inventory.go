@@ -144,26 +144,16 @@ func (wp *WorkerPool) syncSingleStoreInventory(
 			kvPairs = append(kvPairs, item.SKU, fmt.Sprintf("%d:%d", item.Available, item.Reserved))
 		}
 
-		if err := wp.runRedisOp(ctx, "dark_store_inventory", func(c context.Context) error {
-			return wp.redisClient.HSet(c, tempKey, kvPairs...).Err()
-		}); err != nil {
-			wp.recordErrorMetric("dark_store_inventory", "redis_hset")
-			return 0, fmt.Errorf("failed to write inventory for store %s: %w", storeID, err)
-		}
-
-		if err := wp.runRedisOp(ctx, "dark_store_inventory", func(c context.Context) error {
-			return wp.redisClient.Rename(c, tempKey, targetKey).Err()
-		}); err != nil {
-			_ = wp.redisClient.Del(ctx, tempKey)
-			wp.recordErrorMetric("dark_store_inventory", "redis_rename")
-			return 0, fmt.Errorf("failed to rename inventory for store %s: %w", storeID, err)
-		}
-
-		if err := wp.runRedisOp(ctx, "dark_store_inventory", func(c context.Context) error {
-			return wp.redisClient.Expire(c, targetKey, 24*time.Hour).Err()
-		}); err != nil {
-			wp.recordErrorMetric("dark_store_inventory", "redis_expire")
-			return 0, fmt.Errorf("failed to set TTL on inventory for store %s: %w", storeID, err)
+		if err := wp.syncHashWithTempSwap(
+			ctx,
+			"dark_store_inventory",
+			tempKey,
+			targetKey,
+			24*time.Hour,
+			"inventory for store "+storeID,
+			kvPairs...,
+		); err != nil {
+			return 0, err
 		}
 	}
 

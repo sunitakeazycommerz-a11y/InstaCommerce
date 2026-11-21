@@ -2,7 +2,7 @@ package reconciliation
 
 import (
 	"fmt"
-	"math/big"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,64 +26,148 @@ const (
 	AgeBucketAged72HPlus = "AGED_72H_PLUS"
 )
 
-// WithinRoundingTolerance returns true when ledger and PSP amounts are both valid
-// and differ by at most toleranceCents (e.g. minor-unit fee/tax rounding).
+// WithinRoundingTolerance returns true when ledger and PSP amounts are both valid,
+// share the same sign, and differ by at most toleranceCents minor units.
 func WithinRoundingTolerance(ledgerStr, pspStr string, toleranceCents int64) bool {
 	if toleranceCents < 0 {
 		return false
 	}
-	ledgerAmount, okL := parseRational(ledgerStr)
-	pspAmount, okP := parseRational(pspStr)
-	if !okL || !okP {
+	ledgerCents, okL := parseAmountCentsStrict(ledgerStr)
+	pspCents, okP := parseAmountCentsStrict(pspStr)
+	if !okL || !okP || !sameSignOrBothZero(ledgerCents, pspCents) {
 		return false
 	}
-	if ledgerAmount.Sign() == 0 && pspAmount.Sign() != 0 || pspAmount.Sign() == 0 && ledgerAmount.Sign() != 0 {
-		return false
-	}
-	diff := new(big.Rat).Sub(ledgerAmount, pspAmount)
-	diff.Abs(diff)
-	return diff.Cmp(big.NewRat(toleranceCents, 1)) <= 0
+	return absDiffUint64(ledgerCents, pspCents) <= uint64(toleranceCents)
 }
 
 // ShouldAutoFix permits automatic adjustment only when the discrepancy is both
 // within 5% of the base amount and at most MaxAutoFixDiffCents (100 cents).
 func ShouldAutoFix(ledgerAmountStr, pspAmountStr string) bool {
-	ledgerAmount, ok := parseRational(ledgerAmountStr)
-	if !ok {
+	ledgerCents, okL := parseAmountCentsStrict(ledgerAmountStr)
+	pspCents, okP := parseAmountCentsStrict(pspAmountStr)
+	if !okL || !okP || !sameSignOrBothZero(ledgerCents, pspCents) {
 		return false
 	}
-	pspAmount, ok := parseRational(pspAmountStr)
-	if !ok {
-		return false
-	}
-
-	diff := new(big.Rat).Sub(ledgerAmount, pspAmount)
-	diff.Abs(diff)
-	if diff.Sign() == 0 {
+	diff := absDiffUint64(ledgerCents, pspCents)
+	if diff == 0 {
 		return true
 	}
-	if diff.Cmp(big.NewRat(MaxAutoFixDiffCents, 1)) > 0 {
+	if diff > uint64(MaxAutoFixDiffCents) {
 		return false
 	}
-
-	base := new(big.Rat).Abs(ledgerAmount)
-	if base.Sign() == 0 {
-		base = new(big.Rat).Abs(pspAmount)
-	}
-	if base.Sign() == 0 {
+	base := absDiffUint64(ledgerCents, 0)
+	if base == 0 {
 		return false
 	}
-
-	threshold := new(big.Rat).Mul(base, big.NewRat(5, 100))
-	return diff.Cmp(threshold) <= 0
+	if base >= 2000 {
+		return true
+	}
+	return diff*100 <= base*5
 }
 
-func parseRational(raw string) (*big.Rat, bool) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil, false
+func sameSignOrBothZero(a, b int64) bool {
+	if (a == 0) != (b == 0) {
+		return false
 	}
-	return new(big.Rat).SetString(trimmed)
+	return (a < 0) == (b < 0)
+}
+
+func absDiffUint64(a, b int64) uint64 {
+	if a >= b {
+		return uint64(a) - uint64(b)
+	}
+	return uint64(b) - uint64(a)
+}
+
+func parseAmountCentsStrict(raw string) (int64, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, false
+	}
+	neg := false
+	switch s[0] {
+	case '-':
+		neg = true
+		s = s[1:]
+	case '+':
+		s = s[1:]
+	}
+	if s == "" {
+		return 0, false
+	}
+
+	var total uint64
+	dotIdx := strings.IndexByte(s, '.')
+	if dotIdx < 0 {
+		for i := 0; i < len(s); i++ {
+			if s[i] < '0' || s[i] > '9' {
+				return 0, false
+			}
+		}
+		v, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		total = v
+	} else {
+		wholeStr := s[:dotIdx]
+		fracStr := s[dotIdx+1:]
+		if strings.IndexByte(fracStr, '.') >= 0 || (wholeStr == "" && fracStr == "") {
+			return 0, false
+		}
+		for i := 0; i < len(wholeStr); i++ {
+			if wholeStr[i] < '0' || wholeStr[i] > '9' {
+				return 0, false
+			}
+		}
+		for i := 0; i < len(fracStr); i++ {
+			if fracStr[i] < '0' || fracStr[i] > '9' {
+				return 0, false
+			}
+		}
+		fracTrimmed := strings.TrimRight(fracStr, "0")
+		if len(fracTrimmed) > 2 {
+			return 0, false
+		}
+		var whole uint64
+		if wholeStr != "" {
+			var err error
+			whole, err = strconv.ParseUint(wholeStr, 10, 64)
+			if err != nil || whole > (math.MaxInt64/100) {
+				return 0, false
+			}
+		}
+		var centsPart uint64
+		if len(fracTrimmed) > 0 {
+			padded := fracTrimmed
+			if len(padded) == 1 {
+				padded += "0"
+			}
+			v, err := strconv.ParseUint(padded, 10, 64)
+			if err != nil {
+				return 0, false
+			}
+			centsPart = v
+		}
+		if whole*100 > math.MaxUint64-centsPart {
+			return 0, false
+		}
+		total = whole*100 + centsPart
+	}
+
+	if neg {
+		if total > uint64(math.MaxInt64)+1 {
+			return 0, false
+		}
+		if total == uint64(math.MaxInt64)+1 {
+			return math.MinInt64, true
+		}
+		return -int64(total), true
+	}
+	if total > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(total), true
 }
 
 func ClassifyAgeBucket(age time.Duration) string {
@@ -160,26 +244,11 @@ func SortReconciliationMismatches(mismatches []ReconciliationMismatch) {
 }
 
 func parseAmountCents(raw string) int64 {
-	s := strings.TrimSpace(raw)
-	if s == "" || s == "0.00" || s == "0" {
+	cents, ok := parseAmountCentsStrict(raw)
+	if !ok {
 		return 0
 	}
-	if !strings.Contains(s, ".") {
-		if val, err := strconv.ParseInt(s, 10, 64); err == nil {
-			return val
-		}
-	}
-	if rat, ok := new(big.Rat).SetString(s); ok {
-		scaled := new(big.Rat).Mul(rat, big.NewRat(100, 1))
-		if scaled.IsInt() {
-			if num := scaled.Num(); num.IsInt64() {
-				return num.Int64()
-			}
-		}
-		f, _ := scaled.Float64()
-		return int64(f)
-	}
-	return 0
+	return cents
 }
 
 func formatCentsAsDecimal(raw string) string {
@@ -187,17 +256,8 @@ func formatCentsAsDecimal(raw string) string {
 	if trimmed == "" {
 		return "0.00"
 	}
-	if strings.Contains(trimmed, ".") {
-		if rat, ok := new(big.Rat).SetString(trimmed); ok {
-			return rat.FloatString(2)
-		}
-		return trimmed
-	}
-	cents, err := strconv.ParseInt(trimmed, 10, 64)
-	if err != nil {
-		if rat, ok := new(big.Rat).SetString(trimmed); ok {
-			return new(big.Rat).Quo(rat, big.NewRat(100, 1)).FloatString(2)
-		}
+	cents, ok := parseAmountCentsStrict(trimmed)
+	if !ok {
 		return trimmed
 	}
 	sign := ""

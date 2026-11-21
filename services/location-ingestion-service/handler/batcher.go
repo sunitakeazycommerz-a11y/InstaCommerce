@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,17 +45,26 @@ func NewKafkaWriterProducer(writer *kafka.Writer) *KafkaWriterProducer {
 }
 
 // PublishBatch writes keyed messages using the underlying *kafka.Writer.
-func (p *KafkaWriterProducer) PublishBatch(ctx context.Context, _ string, messages []KafkaMessage) error {
+func (p *KafkaWriterProducer) PublishBatch(ctx context.Context, topic string, messages []KafkaMessage) error {
 	if p == nil || p.writer == nil {
 		return ErrKafkaDisabled
 	}
+	topic = strings.TrimSpace(topic)
+	if p.writer.Topic != "" && topic != "" && p.writer.Topic != topic {
+		return fmt.Errorf("kafka writer topic %q does not match target topic %q", p.writer.Topic, topic)
+	}
 	if len(messages) == 0 {
 		return nil
+	}
+	msgTopic := ""
+	if p.writer.Topic == "" {
+		msgTopic = topic
 	}
 	kafkaMsgs := make([]kafka.Message, 0, len(messages))
 	now := time.Now().UTC()
 	for _, m := range messages {
 		kafkaMsgs = append(kafkaMsgs, kafka.Message{
+			Topic: msgTopic,
 			Key:   m.Key,
 			Value: m.Value,
 			Time:  now,

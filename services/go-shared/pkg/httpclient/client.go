@@ -203,6 +203,7 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 
 	var lastErr error
 	var nextDelay time.Duration
+	attempts := 0
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := nextDelay
@@ -216,10 +217,17 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 				slog.Duration("delay", delay),
 			)
 			if err := waitWithContext(ctx, delay); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					if lastErr == nil {
+						lastErr = err
+					}
+					break
+				}
 				return nil, fmt.Errorf("httpclient: context cancelled during retry: %w", err)
 			}
 		}
 
+		attempts = attempt + 1
 		if body != nil {
 			outReq.Body = io.NopCloser(bytes.NewReader(body))
 			outReq.ContentLength = int64(len(body))
@@ -241,6 +249,9 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 				slog.Int("attempt", attempt),
 				slog.String("error", err.Error()),
 			)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				break
+			}
 			continue
 		}
 
@@ -255,6 +266,9 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("httpclient: server returned %d", resp.StatusCode)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				break
+			}
 			continue
 		}
 
@@ -266,7 +280,7 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	c.circuitBreaker.recordFailure()
 	probeSettled = true
 	return nil, fmt.Errorf("httpclient: %s %s failed after %d attempts: %w",
-		outReq.Method, outReq.URL, c.maxRetries+1, lastErr)
+		outReq.Method, outReq.URL, attempts, lastErr)
 }
 
 func (c *Client) injectHeaders(ctx context.Context, req *http.Request) {

@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
+	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -29,9 +29,8 @@ type outboxEvent struct {
 }
 
 var (
-	schemaVersionPattern    = regexp.MustCompile(`^(v[1-9][0-9]*|[0-9]+\.[0-9]+\.[0-9]+)$`)
 	errMissingPartitionKey  = errors.New("aggregate partition key missing")
-	errInvalidSchemaVersion = errors.New("invalid schema version")
+	errInvalidSchemaVersion = sharedkafka.ErrInvalidSchemaVersion
 	errInvalidOutboxPayload = errors.New("invalid outbox payload JSON")
 	topicMappings           = map[string]string{
 		"order": "orders.events", "orders": "orders.events",
@@ -73,14 +72,7 @@ func resolvePartitionKey(evt outboxEvent) (string, error) {
 }
 
 func validateSchemaVersion(raw string) (string, error) {
-	v := strings.TrimSpace(raw)
-	if v == "" {
-		return "v1", nil
-	}
-	if !schemaVersionPattern.MatchString(v) {
-		return "", fmt.Errorf("%w: %q", errInvalidSchemaVersion, v)
-	}
-	return v, nil
+	return sharedkafka.ValidateSchemaVersion(raw)
 }
 
 func validateOutboxEvent(evt outboxEvent) (partitionKey, schemaVersion string, err error) {
@@ -122,6 +114,17 @@ func isValidTraceparent(tp string) (trace.SpanContext, bool) {
 	return sc, sc.IsValid()
 }
 
+func upsertSaramaHeader(headers []sarama.RecordHeader, h sarama.RecordHeader) []sarama.RecordHeader {
+	key := string(h.Key)
+	for i := range headers {
+		if string(headers[i].Key) == key {
+			headers[i].Value = h.Value
+			return headers
+		}
+	}
+	return append(headers, h)
+}
+
 func buildSaramaHeaders(evt outboxEvent, traceID string, extra ...sarama.RecordHeader) []sarama.RecordHeader {
 	headers := []sarama.RecordHeader{
 		{Key: []byte("event_id"), Value: []byte(evt.ID)},
@@ -134,28 +137,21 @@ func buildSaramaHeaders(evt outboxEvent, traceID string, extra ...sarama.RecordH
 		{Key: []byte("X-Correlation-Id"), Value: []byte(evt.CorrelationID)},
 		{Key: []byte("X-Source-Service"), Value: []byte(evt.SourceService)},
 	}
-	hasSchemaVersion := false
-	for _, h := range extra {
-		if string(h.Key) == "schema_version" {
-			hasSchemaVersion = true
-			break
-		}
-	}
-	if !hasSchemaVersion && evt.SchemaVersion != "" {
+	if evt.SchemaVersion != "" {
 		headers = append(headers, sarama.RecordHeader{Key: []byte("schema_version"), Value: []byte(evt.SchemaVersion)})
 	}
-	headers = append(headers, extra...)
+	for _, h := range extra {
+		headers = upsertSaramaHeader(headers, h)
+	}
 	if sc, ok := isValidTraceparent(evt.Traceparent); ok {
-		headers = append(headers, sarama.RecordHeader{Key: []byte("traceparent"), Value: []byte(strings.TrimSpace(evt.Traceparent))})
+		headers = upsertSaramaHeader(headers, sarama.RecordHeader{Key: []byte("traceparent"), Value: []byte(strings.TrimSpace(evt.Traceparent))})
 		if traceID == "" {
 			traceID = sc.TraceID().String()
 		}
 	}
 	if traceID != "" {
-		headers = append(headers,
-			sarama.RecordHeader{Key: []byte("X-Trace-Id"), Value: []byte(traceID)},
-			sarama.RecordHeader{Key: []byte("X-B3-TraceId"), Value: []byte(traceID)},
-		)
+		headers = upsertSaramaHeader(headers, sarama.RecordHeader{Key: []byte("X-Trace-Id"), Value: []byte(traceID)})
+		headers = upsertSaramaHeader(headers, sarama.RecordHeader{Key: []byte("X-B3-TraceId"), Value: []byte(traceID)})
 	}
 	return headers
 }

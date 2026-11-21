@@ -3,7 +3,10 @@ package subscription
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,18 +14,22 @@ import (
 )
 
 type mockRedisClient struct {
-	mu        sync.RWMutex
-	hashes    map[string]map[string]any
-	values    map[string]string
-	ttls      map[string]time.Duration
-	expireErr error
+	mu            sync.RWMutex
+	hashes        map[string]map[string]any
+	values        map[string]string
+	ttls          map[string]time.Duration
+	tempKeyTTLs   map[string]time.Duration
+	expireErr     error
+	evalSwapHook  func(attempt int, tempKey, targetKey string) error
+	swapEvalCalls int
 }
 
 func newMockRedisClient() *mockRedisClient {
 	return &mockRedisClient{
-		hashes: make(map[string]map[string]any),
-		values: make(map[string]string),
-		ttls:   make(map[string]time.Duration),
+		hashes:      make(map[string]map[string]any),
+		values:      make(map[string]string),
+		ttls:        make(map[string]time.Duration),
+		tempKeyTTLs: make(map[string]time.Duration),
 	}
 }
 
@@ -55,6 +62,10 @@ func (m *mockRedisClient) Rename(ctx context.Context, key, newKey string) *redis
 	if hash, ok := m.hashes[key]; ok {
 		m.hashes[newKey] = hash
 		delete(m.hashes, key)
+		if ttl, hasTTL := m.ttls[key]; hasTTL {
+			m.ttls[newKey] = ttl
+			delete(m.ttls, key)
+		}
 		cmd.SetVal("OK")
 		return cmd
 	}
@@ -140,6 +151,99 @@ func (m *mockRedisClient) Del(ctx context.Context, keys ...string) *redis.IntCmd
 	}
 	cmd := redis.NewIntCmd(ctx)
 	cmd.SetVal(deleted)
+	return cmd
+}
+
+func parseEvalTTL(raw any) time.Duration {
+	switch v := raw.(type) {
+	case int64:
+		return time.Duration(v) * time.Millisecond
+	case int:
+		return time.Duration(v) * time.Millisecond
+	case string:
+		ms, _ := strconv.ParseInt(v, 10, 64)
+		return time.Duration(ms) * time.Millisecond
+	default:
+		return 0
+	}
+}
+
+func (m *mockRedisClient) Eval(ctx context.Context, script string, keys []string, args ...any) *redis.Cmd {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cmd := redis.NewCmd(ctx)
+	if strings.Contains(script, "HSET") && len(keys) >= 1 && len(args) >= 1 {
+		key := keys[0]
+		ttl := parseEvalTTL(args[0])
+		delete(m.hashes, key)
+		m.hashes[key] = make(map[string]any)
+		for i := 1; i+1 < len(args); i += 2 {
+			field := fmt.Sprintf("%v", args[i])
+			m.hashes[key][field] = args[i+1]
+		}
+		m.ttls[key] = ttl
+		m.tempKeyTTLs[key] = ttl
+		cmd.SetVal(int64(1))
+		return cmd
+	}
+
+	if strings.Contains(script, "RENAME") && len(keys) >= 2 && len(args) >= 1 {
+		m.swapEvalCalls++
+		attempt := m.swapEvalCalls
+		tempKey, targetKey := keys[0], keys[1]
+		ttl := parseEvalTTL(args[0])
+		if m.expireErr != nil {
+			cmd.SetErr(m.expireErr)
+			return cmd
+		}
+		var hookErr error
+		if m.evalSwapHook != nil {
+			hookErr = m.evalSwapHook(attempt, tempKey, targetKey)
+		}
+		if hookErr != nil && !errors.Is(hookErr, context.DeadlineExceeded) {
+			cmd.SetErr(hookErr)
+			return cmd
+		}
+		if hash, ok := m.hashes[tempKey]; ok {
+			m.hashes[targetKey] = hash
+			delete(m.hashes, tempKey)
+			delete(m.ttls, tempKey)
+			m.ttls[targetKey] = ttl
+			if hookErr != nil {
+				cmd.SetErr(hookErr)
+				return cmd
+			}
+			cmd.SetVal(int64(1))
+			return cmd
+		}
+		if val, ok := m.values[tempKey]; ok {
+			m.values[targetKey] = val
+			delete(m.values, tempKey)
+			delete(m.ttls, tempKey)
+			m.ttls[targetKey] = ttl
+			if hookErr != nil {
+				cmd.SetErr(hookErr)
+				return cmd
+			}
+			cmd.SetVal(int64(1))
+			return cmd
+		}
+		if _, ok := m.hashes[targetKey]; ok {
+			m.ttls[targetKey] = ttl
+			cmd.SetVal(int64(2))
+			return cmd
+		}
+		if _, ok := m.values[targetKey]; ok {
+			m.ttls[targetKey] = ttl
+			cmd.SetVal(int64(2))
+			return cmd
+		}
+		cmd.SetErr(errors.New("ERR no such key"))
+		return cmd
+	}
+
+	cmd.SetErr(errors.New("unsupported mock lua script"))
 	return cmd
 }
 

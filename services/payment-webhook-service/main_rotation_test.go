@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -93,7 +94,7 @@ func TestConfigKeyRotationAndHealthReadiness(t *testing.T) {
 	}
 
 	verifiers := buildVerifiers(cfg)
-	rzpPayload := []byte(`{"event":"payment.captured","payload":{"payment":{"entity":{"id":"pay_rot_1","order_id":"ord_1","amount":100,"currency":"INR","status":"captured"}}}}`)
+	rzpPayload := fmt.Appendf(nil, `{"event":"payment.captured","created_at":%d,"payload":{"payment":{"entity":{"id":"pay_rot_1","order_id":"ord_1","amount":100,"currency":"INR","status":"captured"}}}}`, time.Now().Unix())
 	mac := hmac.New(sha256.New, []byte("rzp_old"))
 	mac.Write(rzpPayload)
 	sig := hex.EncodeToString(mac.Sum(nil))

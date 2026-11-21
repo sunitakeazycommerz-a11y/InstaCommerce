@@ -93,20 +93,23 @@ func abs64(v int64) int64 {
 
 func (m Mismatch) FixID() string { return fmt.Sprintf("%s:%s", m.Type, m.TransactionID) }
 
-func newMismatchEvent(runID string, m Mismatch) ReconciliationEvent {
-	return ReconciliationEvent{EventID: newID("event"), RunID: runID, EventType: "mismatch", OccurredAt: time.Now().UTC(), TransactionID: m.TransactionID, MismatchType: m.Type, Reason: m.Reason, Severity: m.Severity, AgeBucket: m.AgeBucket}
-}
-
-func newFixEvent(runID string, m Mismatch) ReconciliationEvent {
-	return ReconciliationEvent{EventID: newID("event"), RunID: runID, EventType: "fixed", OccurredAt: time.Now().UTC(), TransactionID: m.TransactionID, MismatchType: m.Type, Reason: m.Reason, Severity: m.Severity, AgeBucket: m.AgeBucket, FixApplied: true}
-}
-
-func newManualReviewEvent(runID string, m Mismatch) ReconciliationEvent {
-	return ReconciliationEvent{EventID: newID("event"), RunID: runID, EventType: "manual_review", OccurredAt: time.Now().UTC(), TransactionID: m.TransactionID, MismatchType: m.Type, Reason: m.Reason, Severity: m.Severity, AgeBucket: m.AgeBucket}
-}
-
-func newSummaryEvent(runID string, counts ReconciliationCounts) ReconciliationEvent {
-	return ReconciliationEvent{EventID: newID("event"), RunID: runID, EventType: "summary", OccurredAt: time.Now().UTC(), Counts: &counts}
+func newReconciliationEvent(runID, eventType string, m *Mismatch, fixApplied bool, counts *ReconciliationCounts) ReconciliationEvent {
+	evt := ReconciliationEvent{
+		EventID:    newID("event"),
+		RunID:      runID,
+		EventType:  eventType,
+		OccurredAt: time.Now().UTC(),
+		FixApplied: fixApplied,
+		Counts:     counts,
+	}
+	if m != nil {
+		evt.TransactionID = m.TransactionID
+		evt.MismatchType = m.Type
+		evt.Reason = m.Reason
+		evt.Severity = m.Severity
+		evt.AgeBucket = m.AgeBucket
+	}
+	return evt
 }
 
 func StartScheduler(ctx context.Context, schedule string, runOnStart bool, _ *slog.Logger, run func(context.Context)) (*Scheduler, error) {

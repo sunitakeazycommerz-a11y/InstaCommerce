@@ -221,7 +221,6 @@ func TestLatestPositionStore_GetNearbyScanExtractsRiderID(t *testing.T) {
 			Timestamp: time.Now().UTC(),
 		}))
 
-		// radiusKm > 3.0 triggers SCAN fallback instead of H3 1-ring query.
 		nearby, err := posStore.GetNearby(context.Background(), 12.9720, 77.5950, 5.0)
 		require.NoError(t, err)
 		require.Len(t, nearby, 1)

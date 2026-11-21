@@ -66,10 +66,6 @@ func ParseEvent(psp PSPType, payload []byte) (WebhookEvent, error) {
 	return event, nil
 }
 
-func (h *WebhookHandler) parseEvent(psp PSPType, payload []byte) (WebhookEvent, error) {
-	return ParseEvent(psp, payload)
-}
-
 func jsonString(m map[string]interface{}, keys ...string) (string, bool) {
 	current := m
 	for i, key := range keys {

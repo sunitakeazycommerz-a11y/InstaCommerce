@@ -41,11 +41,10 @@ func (s *Solver) buildCostMatrix(riders []RiderState, orders []OrderRequest) ([]
 		for j, order := range orders {
 			dist := HaversineDistance(rider.Position, order.Position)
 			etaMin := EstimateETAMinutes(dist, speed, DefaultTrafficFactor)
-			// Busy riders carry a proportional delay weight; idle riders pay 0.
-			idlePenalty := float64(rider.ActiveOrders) * etaMin * 0.5
+			activeOrderDelayPenalty := float64(rider.ActiveOrders) * etaMin * 0.5
 			slaRisk := s.computeSLARisk(order, etaMin, now)
 			baseCost := s.cfg.WeightDeliveryTime*etaMin +
-				s.cfg.WeightIdleTime*idlePenalty +
+				s.cfg.WeightIdleTime*activeOrderDelayPenalty +
 				s.cfg.WeightSLABreach*slaRisk*100
 			costMatrix[i][j] = baseCost
 			priorityCost[i][j] = baseCost - s.orderUrgencyBoost(order, slaRisk)

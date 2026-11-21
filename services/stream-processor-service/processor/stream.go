@@ -21,6 +21,7 @@ type StreamConfig struct {
 	WorkerCount     int
 	PauseCheckWait  time.Duration
 	AllowedLateness time.Duration
+	MaxFutureSkew   time.Duration
 	DropLateEvents  bool
 	DLQHandler      func(context.Context, kafka.Message, error) error
 }
@@ -34,6 +35,7 @@ func DefaultStreamConfig() StreamConfig {
 		WorkerCount:     10,
 		PauseCheckWait:  10 * time.Millisecond,
 		AllowedLateness: DefaultAllowedLateness,
+		MaxFutureSkew:   DefaultMaxFutureSkew,
 	}
 }
 
@@ -89,6 +91,9 @@ func NewStreamDispatcher(
 	if cfg.AllowedLateness <= 0 {
 		cfg.AllowedLateness = DefaultAllowedLateness
 	}
+	if cfg.MaxFutureSkew <= 0 {
+		cfg.MaxFutureSkew = DefaultMaxFutureSkew
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -100,7 +105,7 @@ func NewStreamDispatcher(
 		handler:    handler,
 		committer:  committer,
 		tracker:    newOffsetTracker(),
-		watermarks: NewWatermarkTracker(cfg.AllowedLateness),
+		watermarks: NewWatermarkTrackerWithSkew(cfg.AllowedLateness, cfg.MaxFutureSkew),
 	}
 }
 
@@ -163,7 +168,15 @@ func (sd *StreamDispatcher) runHandlerSafely(ctx context.Context, msg kafka.Mess
 
 	if evTime := ExtractMessageEventTime(msg); !evTime.IsZero() && sd.watermarks != nil {
 		decision := sd.watermarks.ObserveWithAction(streamPartitionKey(msg), evTime, sd.cfg.DropLateEvents)
-		if decision.Late {
+		if decision.FutureSkewed {
+			sd.logger.Warn("ignored future-skewed event timestamp for watermark",
+				slog.String("topic", msg.Topic),
+				slog.Int("partition", msg.Partition),
+				slog.Int64("offset", msg.Offset),
+				slog.Time("event_time", decision.EventTime),
+				slog.Time("watermark", decision.Watermark),
+			)
+		} else if decision.Late {
 			sd.lateCount.Add(1)
 			sd.logger.Warn("late event observed behind stream watermark",
 				slog.String("topic", msg.Topic),

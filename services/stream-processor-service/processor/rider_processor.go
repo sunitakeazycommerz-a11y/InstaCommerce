@@ -5,6 +5,7 @@ package processor
 // average delivery time per rider, earnings tracker
 
 import (
+	"container/list"
 	"context"
 	"fmt"
 	"log/slog"
@@ -144,16 +145,31 @@ var newRiderMetrics = sync.OnceValue(func() *riderMetrics {
 	}
 })
 
+const (
+	defaultLocationStateTTL  = 24 * time.Hour
+	defaultLocationMaxStates = 50000
+)
+
+type riderLocationEntry struct {
+	eventTime time.Time
+	seenAt    time.Time
+	elem      *list.Element
+}
+
 type RiderProcessor struct {
-	redis          *redis.Client
-	logger         *slog.Logger
-	metrics        *riderMetrics
-	states         map[string]*riderState
-	lastLocationAt map[string]time.Time
-	mu             sync.RWMutex
-	riderGuard     *labelCardinalityGuard
-	zoneGuard      *labelCardinalityGuard
-	watermarks     *WatermarkTracker
+	redis             *redis.Client
+	logger            *slog.Logger
+	metrics           *riderMetrics
+	states            map[string]*riderState
+	lastLocationAt    map[string]*riderLocationEntry
+	lastLocationLRU   *list.List
+	locationStateTTL  time.Duration
+	maxLocationStates int
+	nowFn             func() time.Time
+	mu                sync.RWMutex
+	riderGuard        *labelCardinalityGuard
+	zoneGuard         *labelCardinalityGuard
+	watermarks        *WatermarkTracker
 }
 
 func NewRiderProcessor(rdb *redis.Client, logger *slog.Logger) *RiderProcessor {
@@ -161,14 +177,18 @@ func NewRiderProcessor(rdb *redis.Client, logger *slog.Logger) *RiderProcessor {
 		logger = slog.Default()
 	}
 	return &RiderProcessor{
-		redis:          rdb,
-		logger:         logger.With("processor", "rider"),
-		metrics:        newRiderMetrics(),
-		states:         make(map[string]*riderState),
-		lastLocationAt: make(map[string]time.Time),
-		riderGuard:     newLabelCardinalityGuard(maxBoundedLabelValues),
-		zoneGuard:      newLabelCardinalityGuard(maxBoundedLabelValues),
-		watermarks:     NewWatermarkTracker(DefaultAllowedLateness),
+		redis:             rdb,
+		logger:            logger.With("processor", "rider"),
+		metrics:           newRiderMetrics(),
+		states:            make(map[string]*riderState),
+		lastLocationAt:    make(map[string]*riderLocationEntry),
+		lastLocationLRU:   list.New(),
+		locationStateTTL:  defaultLocationStateTTL,
+		maxLocationStates: defaultLocationMaxStates,
+		nowFn:             func() time.Time { return time.Now().UTC() },
+		riderGuard:        newLabelCardinalityGuard(maxBoundedLabelValues),
+		zoneGuard:         newLabelCardinalityGuard(maxBoundedLabelValues),
+		watermarks:        NewWatermarkTracker(DefaultAllowedLateness),
 	}
 }
 
@@ -276,14 +296,10 @@ func (p *RiderProcessor) ProcessLocationUpdate(ctx context.Context, update Locat
 	p.watermarks.Observe("rider.location.updates", update.Timestamp)
 
 	p.mu.Lock()
-	if p.lastLocationAt == nil {
-		p.lastLocationAt = make(map[string]time.Time)
-	}
-	if lastTS, ok := p.lastLocationAt[update.RiderID]; ok && update.Timestamp.Before(lastTS) {
+	if !p.recordLocationTimestampLocked(update.RiderID, update.Timestamp) {
 		p.mu.Unlock()
 		return nil
 	}
-	p.lastLocationAt[update.RiderID] = update.Timestamp
 	p.mu.Unlock()
 
 	p.metrics.locationUpdates.Inc()

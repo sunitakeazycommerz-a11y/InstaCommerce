@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"syscall"
 	"time"
 )
 
@@ -143,6 +144,11 @@ func ClassifyError(err error) FailureKind {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return FailureTransient
 	}
+	if errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE) {
+		return FailureTransient
+	}
 	return FailurePermanent
 }
 
@@ -163,14 +169,18 @@ func DefaultRetryPolicy() RetryPolicy {
 }
 
 func (p RetryPolicy) normalized() RetryPolicy {
+	defaults := DefaultRetryPolicy()
+	if p == (RetryPolicy{}) {
+		return defaults
+	}
 	if p.MaxAttempts <= 0 {
-		p.MaxAttempts = 1
+		p.MaxAttempts = defaults.MaxAttempts
 	}
 	if p.BaseDelay < 0 {
 		p.BaseDelay = 0
 	}
 	if p.MaxDelay <= 0 {
-		p.MaxDelay = 2 * time.Second
+		p.MaxDelay = defaults.MaxDelay
 	}
 	return p
 }

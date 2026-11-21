@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/instacommerce/go-shared/pkg/correlation"
+	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -24,17 +25,7 @@ type kafkaMessageWriter interface {
 	Close() error
 }
 
-type EventEnvelope struct {
-	EventID       string    `json:"eventId"`
-	EventType     string    `json:"eventType"`
-	AggregateID   string    `json:"aggregateId"`
-	AggregateType string    `json:"aggregateType"`
-	SchemaVersion string    `json:"schemaVersion"`
-	SourceService string    `json:"sourceService"`
-	CorrelationID string    `json:"correlationId"`
-	Timestamp     time.Time `json:"timestamp"`
-	Payload       any       `json:"payload"`
-}
+type EventEnvelope = sharedkafka.EventEnvelope
 
 type EventPublisher struct {
 	writer kafkaMessageWriter

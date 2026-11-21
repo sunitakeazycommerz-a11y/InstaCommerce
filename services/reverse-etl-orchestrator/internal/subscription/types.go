@@ -17,6 +17,7 @@ type RedisClient interface {
 	Get(ctx context.Context, key string) *redis.StringCmd
 	Expire(ctx context.Context, key string, expiration time.Duration) *redis.BoolCmd
 	Del(ctx context.Context, keys ...string) *redis.IntCmd
+	Eval(ctx context.Context, script string, keys []string, args ...any) *redis.Cmd
 	Ping(ctx context.Context) *redis.StatusCmd
 }
 

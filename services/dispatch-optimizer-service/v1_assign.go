@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -13,15 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/instacommerce/dispatch-optimizer-service/handler"
 	"github.com/instacommerce/dispatch-optimizer-service/optimizer"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
 
-type Position struct {
-	Lat float64 `json:"lat"`
-	Lng float64 `json:"lng"`
-}
+type Position = optimizer.Position
 
 type Rider struct {
 	ID       string   `json:"id"`
@@ -50,10 +46,6 @@ type Assignment struct {
 type AssignResponse struct {
 	Assignments      []Assignment `json:"assignments"`
 	UnassignedOrders []string     `json:"unassigned_orders"`
-}
-
-type errorResponse struct {
-	Error string `json:"error"`
 }
 
 type Constraint interface {
@@ -113,30 +105,13 @@ var constraintFactories = map[string]constraintFactory{
 }
 
 func handleAssign(w http.ResponseWriter, r *http.Request, logger *slog.Logger, metrics *serviceMetrics) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-
 	var req AssignRequest
-	if err := decoder.Decode(&req); err != nil {
-		logger.Warn("invalid request body", "error", err)
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		logger.Warn("invalid request body", "error", err)
-		writeError(w, http.StatusBadRequest, "request body must contain a single JSON object")
+	if !handler.DecodePostJSON(w, r, maxBodyBytes, logger, &req) {
 		return
 	}
 	if err := validateRequest(req); err != nil {
 		logger.Warn("invalid request", "error", err)
-		writeError(w, http.StatusBadRequest, err.Error())
+		handler.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -166,7 +141,7 @@ func handleAssign(w http.ResponseWriter, r *http.Request, logger *slog.Logger, m
 		attribute.Float64("total_distance_km", totalDistance),
 	)
 	span.End()
-	writeJSON(w, http.StatusOK, AssignResponse{
+	handler.WriteJSON(w, http.StatusOK, AssignResponse{
 		Assignments:      assignments,
 		UnassignedOrders: unassigned,
 	})
@@ -208,13 +183,7 @@ func validateRequest(req AssignRequest) error {
 }
 
 func validatePosition(p Position) error {
-	if math.IsNaN(p.Lat) || math.IsInf(p.Lat, 0) || p.Lat < -90 || p.Lat > 90 {
-		return errors.New("lat must be a finite number between -90 and 90")
-	}
-	if math.IsNaN(p.Lng) || math.IsInf(p.Lng, 0) || p.Lng < -180 || p.Lng > 180 {
-		return errors.New("lng must be a finite number between -180 and 180")
-	}
-	return nil
+	return optimizer.ValidatePosition(p)
 }
 
 func buildConstraints(req AssignRequest, logger *slog.Logger) ConstraintSet {
@@ -299,20 +268,5 @@ func optimizeAssignments(riders []Rider, orders []Order, constraints ConstraintS
 }
 
 func distance(a, b Position) float64 {
-	return optimizer.HaversineDistance(
-		optimizer.Position{Lat: a.Lat, Lng: a.Lng},
-		optimizer.Position{Lat: b.Lat, Lng: b.Lng},
-	)
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	encoder := json.NewEncoder(w)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(payload)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, errorResponse{Error: message})
+	return optimizer.HaversineDistance(a, b)
 }

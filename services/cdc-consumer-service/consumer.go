@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
+	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
 	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -50,7 +51,7 @@ func runConsumer(
 			metrics.consumerLag.WithLabelValues(msg.Topic, strconv.Itoa(msg.Partition)).Set(float64(lag))
 		}
 
-		parentCtx := otel.GetTextMapPropagator().Extract(ctx, kafkaHeaderCarrier(msg.Headers))
+		parentCtx := otel.GetTextMapPropagator().Extract(ctx, sharedkafka.NewHeaderCarrier(&msg.Headers))
 		msgCtx, span := tracer.Start(parentCtx, "kafka.consume",
 			trace.WithAttributes(
 				attribute.String("messaging.system", "kafka"),

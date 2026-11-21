@@ -136,7 +136,7 @@ func TestLocationHandler_GeofencePublishing_NearDeliveryAndExit(t *testing.T) {
 		Speed:      12.0,
 		Heading:    0.0,
 		BatteryPct: 89.0,
-		Timestamp:  time.Now().UTC(),
+		Timestamp:  updateNear.Timestamp.Add(30 * time.Second),
 	}
 
 	err = h.processUpdate(context.Background(), updateExit, "test")

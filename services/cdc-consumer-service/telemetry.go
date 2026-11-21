@@ -5,21 +5,16 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
+	"github.com/instacommerce/go-shared/pkg/observability"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -27,27 +22,6 @@ type Metrics struct {
 	consumerLag  *prometheus.GaugeVec
 	batchLatency prometheus.Histogram
 	dlqCount     prometheus.Counter
-}
-
-type kafkaHeaderCarrier []kafka.Header
-
-func (c kafkaHeaderCarrier) Get(key string) string {
-	for _, header := range c {
-		if strings.EqualFold(header.Key, key) {
-			return string(header.Value)
-		}
-	}
-	return ""
-}
-
-func (c kafkaHeaderCarrier) Set(string, string) {}
-
-func (c kafkaHeaderCarrier) Keys() []string {
-	keys := make([]string, 0, len(c))
-	for _, header := range c {
-		keys = append(keys, header.Key)
-	}
-	return keys
 }
 
 func initMetrics() Metrics {
@@ -83,48 +57,17 @@ func setupLogger(level slog.Level) *slog.Logger {
 }
 
 func setupTracing(ctx context.Context, logger *slog.Logger) (*sdktrace.TracerProvider, trace.Tracer) {
-	var opts []otlptracegrpc.Option
-	if endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")); endpoint != "" {
-		parsed, err := url.Parse(endpoint)
-		if err != nil {
-			logger.Warn("invalid otlp endpoint", "endpoint", endpoint, "error", err)
-		} else {
-			target := parsed.Host
-			if target == "" {
-				target = parsed.Path
-			}
-			if target != "" {
-				opts = append(opts, otlptracegrpc.WithEndpoint(target))
-				if parsed.Scheme == "" || parsed.Scheme == "http" {
-					opts = append(opts, otlptracegrpc.WithInsecure())
-				}
-			}
-		}
-	} else {
-		opts = append(opts, otlptracegrpc.WithInsecure())
-	}
-
-	exporter, err := otlptracegrpc.New(ctx, opts...)
+	providers, err := observability.InitOTel(ctx, observability.OTelConfig{
+		ServiceName:  serviceName,
+		Protocol:     observability.OTelProtocolGRPC,
+		ResolveEnv:   true,
+		FallbackNoop: true,
+	}, logger)
 	if err != nil {
-		logger.Warn("failed to initialize otlp exporter", "error", err)
-		tracerProvider := sdktrace.NewTracerProvider(
-			sdktrace.WithResource(resource.NewWithAttributes(semconv.SchemaURL, semconv.ServiceName(serviceName))),
-		)
-		otel.SetTracerProvider(tracerProvider)
-		return tracerProvider, otel.Tracer(serviceName)
+		logger.Warn("failed to initialize tracing", "error", err)
+		return nil, otel.Tracer(serviceName)
 	}
-
-	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(serviceName)))
-	if err != nil {
-		logger.Warn("failed to create otel resource", "error", err)
-	}
-
-	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(res),
-	)
-	otel.SetTracerProvider(tracerProvider)
-	return tracerProvider, otel.Tracer(serviceName)
+	return providers.TracerProvider, otel.Tracer(serviceName)
 }
 
 func startHTTPServer(port string, healthHandler *health.Handler, logger *slog.Logger) *http.Server {

@@ -11,9 +11,9 @@ import (
 
 func TestBatchCompatibleWithDetour_StoreColocationAndDetourCap(t *testing.T) {
 	base := Position{Lat: 12.9716, Lng: 77.5946}
-	near1 := Position{Lat: 12.9746, Lng: 77.5946}  // ~0.33 km north
-	near2 := Position{Lat: 12.9776, Lng: 77.5946}  // ~0.67 km from base
-	zigzag := Position{Lat: 12.9746, Lng: 77.6020} // ~0.8 km east of near1
+	near1 := Position{Lat: 12.9746, Lng: 77.5946}
+	near2 := Position{Lat: 12.9776, Lng: 77.5946}
+	zigzag := Position{Lat: 12.9746, Lng: 77.6020}
 
 	tests := []struct {
 		name        string

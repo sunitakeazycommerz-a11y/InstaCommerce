@@ -104,6 +104,33 @@ type RiderResponseRequest struct {
 	AvailableRiders   []optimizer.RiderState `json:"available_riders"`
 }
 
+func (r RiderResponseRequest) toDispatchAssignRequest() DispatchAssignRequest {
+	excluded := make([]string, len(r.ExcludedRiderIDs), len(r.ExcludedRiderIDs)+1)
+	copy(excluded, r.ExcludedRiderIDs)
+	excluded = append(excluded, r.RiderID)
+
+	return DispatchAssignRequest{
+		OrderID:                  r.OrderID,
+		StoreID:                  r.StoreID,
+		UserID:                   r.UserID,
+		DeliveryAddress:          r.DeliveryAddress,
+		StorePosition:            r.StorePosition,
+		OrderPosition:            r.OrderPosition,
+		ItemCount:                r.ItemCount,
+		Weight:                   r.Weight,
+		VolumeLiters:             r.VolumeLiters,
+		IsExpressOrder:           r.IsExpressOrder,
+		RequiresColdChain:        r.RequiresColdChain,
+		ColdChainTier:            r.ColdChainTier,
+		SLADeadline:              r.SLADeadline,
+		CreatedAt:                r.CreatedAt,
+		AvailableRiders:          r.AvailableRiders,
+		AttemptCount:             r.AttemptCount,
+		ExcludedRiderIDs:         excluded,
+		AcceptanceTimeoutSeconds: DefaultRiderAcceptanceTimeoutSeconds,
+	}
+}
+
 // EventPublisher emits canonical Kafka events.
 type EventPublisher interface {
 	Publish(ctx context.Context, topic string, key string, payload any) error

@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -30,24 +28,8 @@ func HandleDispatchAssignWithLocker(matcher *optimizer.BipartiteMatcher, publish
 		logger = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", "POST")
-			writeV2Error(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
-
 		var req DispatchAssignRequest
-		if err := decoder.Decode(&req); err != nil {
-			logger.Warn("dispatch: invalid request body", "error", err)
-			writeV2Error(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			writeV2Error(w, http.StatusBadRequest, "request body must contain a single JSON object")
+		if !DecodePostJSON(w, r, maxBodyBytes, logger, &req) {
 			return
 		}
 
@@ -66,16 +48,16 @@ func dispatchAndRespond(
 ) {
 	if err := validateDispatchRequest(req); err != nil {
 		logger.Warn("dispatch: validation failed", "error", err)
-		writeV2Error(w, http.StatusBadRequest, err.Error())
+		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	resp, status, errMsg := executeDispatchAssign(ctx, req, matcher, publisher, locker, logger)
 	if errMsg != "" {
-		writeV2Error(w, status, errMsg)
+		WriteError(w, status, errMsg)
 		return
 	}
-	writeV2JSON(w, status, resp)
+	WriteJSON(w, status, resp)
 }
 
 func executeDispatchAssign(
@@ -281,31 +263,16 @@ func HandleRiderResponse(matcher *optimizer.BipartiteMatcher, publisher EventPub
 		logger = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", "POST")
-			writeV2Error(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
-
 		var req RiderResponseRequest
-		if err := decoder.Decode(&req); err != nil {
-			writeV2Error(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			writeV2Error(w, http.StatusBadRequest, "request body must contain a single JSON object")
+		if !DecodePostJSON(w, r, maxBodyBytes, logger, &req) {
 			return
 		}
 		if req.OrderID == "" || req.RiderID == "" {
-			writeV2Error(w, http.StatusBadRequest, "order_id and rider_id are required")
+			WriteError(w, http.StatusBadRequest, "order_id and rider_id are required")
 			return
 		}
 		if req.Accepted {
-			writeV2JSON(w, http.StatusOK, map[string]any{
+			WriteJSON(w, http.StatusOK, map[string]any{
 				"status":   "CONFIRMED",
 				"order_id": req.OrderID,
 				"rider_id": req.RiderID,
@@ -313,31 +280,7 @@ func HandleRiderResponse(matcher *optimizer.BipartiteMatcher, publisher EventPub
 			return
 		}
 
-		excluded := make([]string, len(req.ExcludedRiderIDs), len(req.ExcludedRiderIDs)+1)
-		copy(excluded, req.ExcludedRiderIDs)
-		excluded = append(excluded, req.RiderID)
-
-		assignReq := DispatchAssignRequest{
-			OrderID:                  req.OrderID,
-			StoreID:                  req.StoreID,
-			UserID:                   req.UserID,
-			DeliveryAddress:          req.DeliveryAddress,
-			StorePosition:            req.StorePosition,
-			OrderPosition:            req.OrderPosition,
-			ItemCount:                req.ItemCount,
-			Weight:                   req.Weight,
-			VolumeLiters:             req.VolumeLiters,
-			IsExpressOrder:           req.IsExpressOrder,
-			RequiresColdChain:        req.RequiresColdChain,
-			ColdChainTier:            req.ColdChainTier,
-			SLADeadline:              req.SLADeadline,
-			CreatedAt:                req.CreatedAt,
-			AvailableRiders:          req.AvailableRiders,
-			AttemptCount:             req.AttemptCount,
-			ExcludedRiderIDs:         excluded,
-			AcceptanceTimeoutSeconds: DefaultRiderAcceptanceTimeoutSeconds,
-		}
-		dispatchAndRespond(r.Context(), w, assignReq, matcher, publisher, locker, logger)
+		dispatchAndRespond(r.Context(), w, req.toDispatchAssignRequest(), matcher, publisher, locker, logger)
 	}
 }
 
@@ -366,11 +309,11 @@ func validateDispatchRequest(req DispatchAssignRequest) error {
 	if req.StoreID == "" {
 		return errors.New("store_id is required")
 	}
-	if err := validatePos(req.OrderPosition); err != nil {
+	if err := optimizer.ValidatePosition(req.OrderPosition); err != nil {
 		return fmt.Errorf("order_position: %w", err)
 	}
 	if req.StorePosition != nil {
-		if err := validatePos(*req.StorePosition); err != nil {
+		if err := optimizer.ValidatePosition(*req.StorePosition); err != nil {
 			return fmt.Errorf("store_position: %w", err)
 		}
 	}
@@ -382,7 +325,7 @@ func validateDispatchRequest(req DispatchAssignRequest) error {
 	}
 	for _, rider := range req.AvailableRiders {
 		if rider.ID != "" {
-			if err := validatePos(rider.Position); err != nil {
+			if err := optimizer.ValidatePosition(rider.Position); err != nil {
 				return fmt.Errorf("rider %s: %w", rider.ID, err)
 			}
 		}

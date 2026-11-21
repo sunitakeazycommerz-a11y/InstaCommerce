@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -102,6 +103,17 @@ func sendToDLQ(
 	return nil
 }
 
+func upsertKafkaHeader(headers []kafka.Header, key string, value []byte) []kafka.Header {
+	for i := range headers {
+		if strings.EqualFold(headers[i].Key, key) {
+			headers[i].Key = key
+			headers[i].Value = value
+			return headers
+		}
+	}
+	return append(headers, kafka.Header{Key: key, Value: value})
+}
+
 func buildDLQKafkaMessages(
 	items []batchItem,
 	dlqReason, errorCategory, consumerGroup, quarantinedAt, traceID, traceparent string,
@@ -114,21 +126,24 @@ func buildDLQKafkaMessages(
 		if schemaVer == "" {
 			schemaVer = "unknown"
 		}
-		headers = append(headers,
-			kafka.Header{Key: "dlq_reason", Value: []byte(dlqReason)},
-			kafka.Header{Key: "error_category", Value: []byte(errorCategory)},
-			kafka.Header{Key: "quarantined_at", Value: []byte(quarantinedAt)},
-			kafka.Header{Key: "consumer_group", Value: []byte(consumerGroup)},
-			kafka.Header{Key: "schema_version", Value: []byte(schemaVer)},
-			kafka.Header{Key: "original_topic", Value: []byte(item.message.Topic)},
-			kafka.Header{Key: "original_partition", Value: []byte(strconv.Itoa(item.message.Partition))},
-			kafka.Header{Key: "original_offset", Value: []byte(strconv.FormatInt(item.message.Offset, 10))},
-		)
+		metaHeaders := []kafka.Header{
+			{Key: "dlq_reason", Value: []byte(dlqReason)},
+			{Key: "error_category", Value: []byte(errorCategory)},
+			{Key: "quarantined_at", Value: []byte(quarantinedAt)},
+			{Key: "consumer_group", Value: []byte(consumerGroup)},
+			{Key: "schema_version", Value: []byte(schemaVer)},
+			{Key: "original_topic", Value: []byte(item.message.Topic)},
+			{Key: "original_partition", Value: []byte(strconv.Itoa(item.message.Partition))},
+			{Key: "original_offset", Value: []byte(strconv.FormatInt(item.message.Offset, 10))},
+		}
 		if traceID != "" {
-			headers = append(headers,
+			metaHeaders = append(metaHeaders,
 				kafka.Header{Key: "trace_id", Value: []byte(traceID)},
 				kafka.Header{Key: "traceparent", Value: []byte(traceparent)},
 			)
+		}
+		for _, mh := range metaHeaders {
+			headers = upsertKafkaHeader(headers, mh.Key, mh.Value)
 		}
 		messages = append(messages, kafka.Message{
 			Key:     item.message.Key,

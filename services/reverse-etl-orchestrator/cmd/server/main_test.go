@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/api"
+	"github.com/instacommerce/reverse-etl-orchestrator/internal/config"
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/health"
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/subscription"
 )
@@ -57,4 +58,15 @@ func TestBuildAPIRouter_RequiresInternalAuthOnAPIv1(t *testing.T) {
 	recHealth := httptest.NewRecorder()
 	router.ServeHTTP(recHealth, reqHealth)
 	assert.Equal(t, http.StatusOK, recHealth.Code)
+}
+
+func TestNewWorkerPoolFromConfig_UsesDefaultRetryPolicy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pool := newWorkerPoolFromConfig(&config.Config{
+		WorkerPoolConcurrency: 4,
+		RateLimitPerSec:       200,
+	}, nil, nil, logger)
+	defer pool.Close()
+
+	assert.Equal(t, subscription.DefaultRetryPolicy(), pool.EffectiveRetryPolicy())
 }

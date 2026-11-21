@@ -6,20 +6,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"cloud.google.com/go/bigquery"
+	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
 	"github.com/segmentio/kafka-go"
 )
 
 var (
-	cdcSchemaVersionPattern = regexp.MustCompile(`^(v[1-9][0-9]*|[0-9]+\.[0-9]+\.[0-9]+)$`)
 	errMissingPartitionKey  = errors.New("cdc: aggregate partition key missing")
-	errInvalidSchemaVersion = errors.New("cdc: invalid schema version")
+	errInvalidSchemaVersion = sharedkafka.ErrInvalidSchemaVersion
 )
 
 type bqRow struct {
@@ -37,14 +36,7 @@ func isTombstonePayload(val []byte) bool {
 }
 
 func validateSchemaVersion(raw string) (string, error) {
-	v := strings.TrimSpace(raw)
-	if v == "" {
-		return "v1", nil
-	}
-	if !cdcSchemaVersionPattern.MatchString(v) {
-		return "", fmt.Errorf("%w: %q", errInvalidSchemaVersion, v)
-	}
-	return v, nil
+	return sharedkafka.ValidateSchemaVersion(raw)
 }
 
 func extractHeaderValue(headers []kafka.Header, keys ...string) string {

@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/segmentio/kafka-go"
 )
 
 // TestKafkaEnvelopeContainsRawPSPPayload verifies that json.Marshal of a
@@ -148,11 +152,7 @@ func TestRawPSPPayloadOmittedWhenNil(t *testing.T) {
 	}
 }
 
-// TestParseEventSetsRawPSPPayload verifies that parseEvent populates the
-// RawPSPPayload field for each supported PSP.
 func TestParseEventSetsRawPSPPayload(t *testing.T) {
-	h := &WebhookHandler{} // parseEvent only needs the receiver, no deps.
-
 	tests := []struct {
 		name    string
 		psp     PSPType
@@ -177,9 +177,9 @@ func TestParseEventSetsRawPSPPayload(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			event, err := h.parseEvent(tc.psp, []byte(tc.payload))
+			event, err := ParseEvent(tc.psp, []byte(tc.payload))
 			if err != nil {
-				t.Fatalf("parseEvent(%s) error: %v", tc.psp, err)
+				t.Fatalf("ParseEvent(%s) error: %v", tc.psp, err)
 			}
 
 			if event.RawPSPPayload == nil {
@@ -275,5 +275,33 @@ func TestIdempotencyStore_RemoveOnPublishFailure(t *testing.T) {
 	// Now retry can acquire again
 	if isDup := store.CheckAndMark(eventID); isDup {
 		t.Fatalf("expected retry after removal to acquire, got duplicate")
+	}
+}
+
+type captureMessageWriter struct {
+	msgs []kafka.Message
+}
+
+func (c *captureMessageWriter) WriteMessages(_ context.Context, msgs ...kafka.Message) error {
+	c.msgs = append(c.msgs, msgs...)
+	return nil
+}
+
+func (c *captureMessageWriter) Close() error { return nil }
+
+func TestKafkaWriterProducer_HonorsTopic(t *testing.T) {
+	writer := &captureMessageWriter{}
+	p := NewKafkaWriterProducer(writer)
+	if err := p.Publish(context.Background(), "payment.webhooks", []byte("k"), []byte("v")); err != nil {
+		t.Fatalf("unexpected Publish error: %v", err)
+	}
+	if len(writer.msgs) != 1 || writer.msgs[0].Topic != "payment.webhooks" {
+		t.Fatalf("expected msg topic payment.webhooks, got %+v", writer.msgs)
+	}
+
+	mismatched := NewKafkaWriterProducer(&kafka.Writer{Topic: "configured.topic"})
+	err := mismatched.Publish(context.Background(), "other.topic", []byte("k"), []byte("v"))
+	if err == nil || !strings.Contains(err.Error(), "does not match message topic") {
+		t.Fatalf("expected topic mismatch error, got %v", err)
 	}
 }

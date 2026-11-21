@@ -176,8 +176,10 @@ func (h *LocationHandler) processUpdate(ctx context.Context, update LocationUpda
 func (h *LocationHandler) ingestNormalized(ctx context.Context, update LocationUpdate, source string, start time.Time) error {
 	update.Source = source
 
+	var candidateState RiderKalmanState
+	var hasCandidate bool
 	if h.telemetrySmoother != nil {
-		smoothed, err := h.telemetrySmoother.Filter(update)
+		smoothed, candidate, err := h.telemetrySmoother.Preview(update)
 		if err != nil {
 			switch {
 			case errors.Is(err, ErrOutOfOrderPing):
@@ -192,6 +194,8 @@ func (h *LocationHandler) ingestNormalized(ctx context.Context, update LocationU
 			return fmt.Errorf("handler: %w", err)
 		}
 		update = smoothed
+		candidateState = candidate
+		hasCandidate = true
 	}
 
 	h.recordFlags(update.TelemetryFlags)
@@ -246,6 +250,10 @@ func (h *LocationHandler) ingestNormalized(ctx context.Context, update LocationU
 			h.logger.ErrorContext(processCtx, "kafka enqueue failed", "rider_id", update.RiderID, "error", err)
 			return fmt.Errorf("kafka enqueue failed: %w", err)
 		}
+	}
+
+	if hasCandidate && h.telemetrySmoother != nil {
+		h.telemetrySmoother.Commit(update.RiderID, candidateState)
 	}
 
 	h.recordLatency(source, time.Since(start))

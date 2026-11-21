@@ -107,7 +107,6 @@ func TestRiderTelemetrySmoother_TeleportationAndStationaryDrift(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Jitter of ~5m at ~0.9 km/h over 20s must be anchored to suppress multipath drift.
 	drift, err := smoother.Filter(LocationUpdate{
 		RiderID:   "rider-telemetry",
 		Lat:       12.97164,
@@ -125,7 +124,6 @@ func TestRiderTelemetrySmoother_TeleportationAndStationaryDrift(t *testing.T) {
 	assert.Equal(t, first.Lng, drift.Lng)
 	assert.Equal(t, 0.0, drift.Speed)
 
-	// Impossible jump (~0.22 km in 3s = ~264 km/h > 150 km/h) triggers teleport anomaly + 422 over HTTP.
 	_, err = smoother.Filter(LocationUpdate{
 		RiderID:   "rider-telemetry",
 		Lat:       12.97360,
@@ -183,7 +181,7 @@ func TestLocationHandler_TelemetryFlaggingAndTeleportHTTPStatus(t *testing.T) {
 	ts2 := now.UnixMilli()
 	bodyTeleport, _ := json.Marshal(LocationInput{
 		RiderID:   "rider-flags",
-		Lat:       13.0500, // ~8.7 km in 10s -> >3000 km/h
+		Lat:       13.0500,
 		Lng:       77.5946,
 		Timestamp: &ts2,
 	})

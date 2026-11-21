@@ -9,13 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/observability"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -111,32 +106,18 @@ func initLogger() *slog.Logger {
 }
 
 func initTracerProvider(ctx context.Context, logger *slog.Logger) func(context.Context) error {
-	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(serviceName)))
+	providers, err := observability.InitOTel(ctx, observability.OTelConfig{
+		ServiceName:      serviceName,
+		Protocol:         observability.OTelProtocolGRPC,
+		ResolveEnv:       true,
+		NoopIfNoEndpoint: true,
+		FallbackNoop:     true,
+	}, logger)
 	if err != nil {
-		logger.Error("failed to create otel resource", "error", err)
-		res = resource.Default()
+		logger.Error("failed to initialize tracer provider", "error", err)
+		return func(context.Context) error { return nil }
 	}
-	exporter, err := otlptracegrpc.New(ctx)
-	if err != nil {
-		logger.Error("failed to create otlp exporter", "error", err)
-		tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res))
-		otel.SetTracerProvider(tp)
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{},
-			propagation.Baggage{},
-		))
-		return tp.Shutdown
-	}
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(res),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
-	return tp.Shutdown
+	return providers.Shutdown
 }
 
 func instrumentHandler(route string, logger *slog.Logger, metrics *serviceMetrics, next http.Handler) http.Handler {

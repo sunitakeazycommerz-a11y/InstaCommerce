@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -73,30 +72,7 @@ func main() {
 
 	reconciliationHandler := api.NewReconciliationHandler(dbReconciler, logger)
 	healthHandler := health.NewHandler()
-	mux := http.NewServeMux()
-	healthHandler.RegisterRoutes(mux)
-	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/reconciliation/runs", reconciliationHandler.HandleListRuns)
-	mux.HandleFunc("/reconciliation/pending", reconciliationHandler.HandleGetPendingMismatches)
-	mux.HandleFunc("/pending", reconciliationHandler.HandleGetPendingMismatches)
-	mux.HandleFunc("/reconciliation/runs/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/mismatches") {
-			reconciliationHandler.HandleGetRunMismatches(w, r)
-		} else {
-			http.NotFound(w, r)
-		}
-	})
-	mux.HandleFunc("/reconciliation/mismatches/", func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/review"):
-			reconciliationHandler.HandleReviewMismatch(w, r)
-		case strings.Contains(r.URL.Path, "/fix"):
-			reconciliationHandler.HandleApplyFix(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
+	mux := newHTTPMux(healthHandler, reconciliationHandler)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -157,4 +133,22 @@ func main() {
 		}
 	}
 	logger.Info("shutdown complete")
+}
+
+func newHTTPMux(healthHandler *health.Handler, reconciliationHandler *api.ReconciliationHandler) *http.ServeMux {
+	mux := http.NewServeMux()
+	if healthHandler != nil {
+		healthHandler.RegisterRoutes(mux)
+		mux.HandleFunc("/ready", healthHandler.ReadyHandler())
+	}
+	mux.Handle("/metrics", promhttp.Handler())
+	if reconciliationHandler != nil {
+		mux.HandleFunc("/reconciliation/runs", reconciliationHandler.HandleListRuns)
+		mux.HandleFunc("/reconciliation/pending", reconciliationHandler.HandleGetPendingMismatches)
+		mux.HandleFunc("/pending", reconciliationHandler.HandleGetPendingMismatches)
+		mux.HandleFunc("/reconciliation/runs/{runID}/mismatches", reconciliationHandler.HandleGetRunMismatches)
+		mux.HandleFunc("/reconciliation/mismatches/{mismatchID}/review", reconciliationHandler.HandleReviewMismatch)
+		mux.HandleFunc("/reconciliation/mismatches/{mismatchID}/fix", reconciliationHandler.HandleApplyFix)
+	}
+	return mux
 }

@@ -1,6 +1,9 @@
 package optimizer
 
-import "math"
+import (
+	"errors"
+	"math"
+)
 
 const earthRadiusKm = 6371.0
 
@@ -8,6 +11,17 @@ const earthRadiusKm = 6371.0
 type Position struct {
 	Lat float64 `json:"lat"`
 	Lng float64 `json:"lng"`
+}
+
+// ValidatePosition verifies that a geographic coordinate is finite and within WGS-84 bounds.
+func ValidatePosition(p Position) error {
+	if math.IsNaN(p.Lat) || math.IsInf(p.Lat, 0) || p.Lat < -90 || p.Lat > 90 {
+		return errors.New("lat must be a finite number between -90 and 90")
+	}
+	if math.IsNaN(p.Lng) || math.IsInf(p.Lng, 0) || p.Lng < -180 || p.Lng > 180 {
+		return errors.New("lng must be a finite number between -180 and 180")
+	}
+	return nil
 }
 
 func clamp(val, min, max float64) float64 {

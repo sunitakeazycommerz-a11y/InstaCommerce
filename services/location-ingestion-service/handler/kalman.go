@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"math"
@@ -18,33 +19,56 @@ var (
 )
 
 const (
-	MaxPlausibleSpeedKmh    = 80.0
-	MaxTeleportSpeedKmh     = 150.0
-	MinTimeDeltaSec         = 0.5
-	StationaryDriftRadiusKm = 0.015
-	StationaryMaxSpeedKmh   = 1.5
+	MaxPlausibleSpeedKmh     = 80.0
+	MaxTeleportSpeedKmh      = 150.0
+	MinTimeDeltaSec          = 0.5
+	StationaryDriftRadiusKm  = 0.015
+	StationaryMaxSpeedKmh    = 1.5
+	DefaultSmootherStateTTL  = 1 * time.Hour
+	DefaultSmootherMaxStates = 50000
 )
 
 // RiderKalmanState holds the filtered coordinate and velocity state for a single rider.
 type RiderKalmanState struct {
-	Lat       float64
-	Lng       float64
-	SpeedKmh  float64
-	Heading   float64
-	Timestamp time.Time
+	Lat        float64
+	Lng        float64
+	SpeedKmh   float64
+	Heading    float64
+	Timestamp  time.Time
+	LastSeenAt time.Time
+	elem       *list.Element
 }
 
 // RiderTelemetrySmoother tracks and smooths GPS telemetry for active riders,
 // rejecting velocity/teleportation outliers and suppressing stationary multipath drift.
 type RiderTelemetrySmoother struct {
-	mu     sync.RWMutex
-	states map[string]*RiderKalmanState
+	mu        sync.RWMutex
+	states    map[string]*RiderKalmanState
+	lru       *list.List
+	stateTTL  time.Duration
+	maxStates int
+	nowFn     func() time.Time
 }
 
-// NewRiderTelemetrySmoother creates a new telemetry smoother.
+// NewRiderTelemetrySmoother creates a new telemetry smoother with default TTL and capacity bounds.
 func NewRiderTelemetrySmoother() *RiderTelemetrySmoother {
+	return NewRiderTelemetrySmootherWithLimits(DefaultSmootherStateTTL, DefaultSmootherMaxStates)
+}
+
+// NewRiderTelemetrySmootherWithLimits creates a bounded telemetry smoother.
+func NewRiderTelemetrySmootherWithLimits(ttl time.Duration, maxStates int) *RiderTelemetrySmoother {
+	if ttl <= 0 {
+		ttl = DefaultSmootherStateTTL
+	}
+	if maxStates <= 0 {
+		maxStates = DefaultSmootherMaxStates
+	}
 	return &RiderTelemetrySmoother{
-		states: make(map[string]*RiderKalmanState),
+		states:    make(map[string]*RiderKalmanState),
+		lru:       list.New(),
+		stateTTL:  ttl,
+		maxStates: maxStates,
+		nowFn:     func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -54,41 +78,167 @@ func (s *RiderTelemetrySmoother) Filter(update LocationUpdate) (LocationUpdate, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := s.nowFn()
+	s.evictExpiredLocked(now)
+
 	state, exists := s.states[update.RiderID]
+	smoothed, nextState, err := s.previewAgainstState(state, exists, update)
+	if err != nil {
+		return update, err
+	}
+	s.commitLocked(update.RiderID, nextState, now)
+	return smoothed, nil
+}
+
+// Preview computes smoothed telemetry without mutating per-rider state.
+func (s *RiderTelemetrySmoother) Preview(update LocationUpdate) (LocationUpdate, RiderKalmanState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	state, exists := s.activeStateLocked(update.RiderID, s.nowFn())
+	return s.previewAgainstState(state, exists, update)
+}
+
+// Commit stores a previously previewed state transition without regressing newer timestamps.
+func (s *RiderTelemetrySmoother) Commit(riderID string, nextState RiderKalmanState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.nowFn()
+	s.evictExpiredLocked(now)
+	s.commitLocked(riderID, nextState, now)
+}
+
+// Len returns the number of active rider states currently tracked.
+func (s *RiderTelemetrySmoother) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.states)
+}
+
+func (s *RiderTelemetrySmoother) activeStateLocked(riderID string, now time.Time) (*RiderKalmanState, bool) {
+	state, exists := s.states[riderID]
 	if !exists {
-		s.states[update.RiderID] = &RiderKalmanState{
+		return nil, false
+	}
+	if s.stateTTL > 0 && now.Sub(state.LastSeenAt) > s.stateTTL {
+		return nil, false
+	}
+	return state, true
+}
+
+func (s *RiderTelemetrySmoother) evictExpiredLocked(now time.Time) {
+	if s.stateTTL <= 0 || s.lru == nil {
+		return
+	}
+	for back := s.lru.Back(); back != nil; {
+		prev := back.Prev()
+		riderID := back.Value.(string)
+		st := s.states[riderID]
+		if st == nil || now.Sub(st.LastSeenAt) > s.stateTTL {
+			s.lru.Remove(back)
+			delete(s.states, riderID)
+			back = prev
+			continue
+		}
+		break
+	}
+}
+
+func (s *RiderTelemetrySmoother) evictOldestLocked() {
+	if s.lru == nil {
+		return
+	}
+	back := s.lru.Back()
+	if back == nil {
+		return
+	}
+	riderID := back.Value.(string)
+	s.lru.Remove(back)
+	delete(s.states, riderID)
+}
+
+func (s *RiderTelemetrySmoother) commitLocked(riderID string, candidate RiderKalmanState, now time.Time) {
+	if existing, exists := s.states[riderID]; exists {
+		if candidate.Timestamp.Before(existing.Timestamp) {
+			return
+		}
+		existing.Lat = candidate.Lat
+		existing.Lng = candidate.Lng
+		existing.SpeedKmh = candidate.SpeedKmh
+		existing.Heading = candidate.Heading
+		existing.Timestamp = candidate.Timestamp
+		existing.LastSeenAt = now
+		if existing.elem != nil {
+			s.lru.MoveToFront(existing.elem)
+		} else if s.lru != nil {
+			existing.elem = s.lru.PushFront(riderID)
+		}
+		return
+	}
+	for s.maxStates > 0 && len(s.states) >= s.maxStates {
+		s.evictOldestLocked()
+	}
+	st := &RiderKalmanState{
+		Lat:        candidate.Lat,
+		Lng:        candidate.Lng,
+		SpeedKmh:   candidate.SpeedKmh,
+		Heading:    candidate.Heading,
+		Timestamp:  candidate.Timestamp,
+		LastSeenAt: now,
+	}
+	if s.lru != nil {
+		st.elem = s.lru.PushFront(riderID)
+	}
+	s.states[riderID] = st
+}
+
+func (s *RiderTelemetrySmoother) previewAgainstState(state *RiderKalmanState, exists bool, update LocationUpdate) (LocationUpdate, RiderKalmanState, error) {
+	if !exists {
+		return update, RiderKalmanState{
 			Lat:       update.Lat,
 			Lng:       update.Lng,
 			SpeedKmh:  update.Speed,
 			Heading:   update.Heading,
 			Timestamp: update.Timestamp,
-		}
-		return update, nil
+		}, nil
 	}
 
 	if update.Timestamp.Before(state.Timestamp) {
-		return update, fmt.Errorf("%w: incoming %s < last %s",
+		return update, RiderKalmanState{}, fmt.Errorf("%w: incoming %s < last %s",
 			ErrOutOfOrderPing, update.Timestamp.Format(time.RFC3339Nano), state.Timestamp.Format(time.RFC3339Nano))
 	}
 
 	dtSec := update.Timestamp.Sub(state.Timestamp).Seconds()
 	distKm := haversineKm(state.Lat, state.Lng, update.Lat, update.Lng)
+	if distKm > 0.05 && dtSec <= 0 {
+		return update, RiderKalmanState{}, fmt.Errorf("%w (%w): jump %.2f km with non-positive delta %.3fs",
+			ErrVelocityOutlier, ErrTeleportAnomaly, distKm, dtSec)
+	}
 	var computedSpeedKmh float64
-	if dtSec >= MinTimeDeltaSec {
+	if dtSec > 0 {
 		computedSpeedKmh = (distKm / dtSec) * 3600.0
-		if computedSpeedKmh > MaxTeleportSpeedKmh && distKm > 0.05 {
-			return update, fmt.Errorf("%w (%w): computed speed %.1f km/h exceeds %.1f km/h limit (dist: %.2f km in %.1fs)",
-				ErrVelocityOutlier, ErrTeleportAnomaly, computedSpeedKmh, MaxTeleportSpeedKmh, distKm, dtSec)
-		}
-		if computedSpeedKmh > MaxPlausibleSpeedKmh && distKm > 0.05 {
-			return update, fmt.Errorf("%w: computed speed %.1f km/h exceeds %.1f km/h threshold (dist: %.2f km in %.1fs)",
-				ErrVelocityOutlier, computedSpeedKmh, MaxPlausibleSpeedKmh, distKm, dtSec)
+		if distKm > 0.05 {
+			if computedSpeedKmh > MaxTeleportSpeedKmh {
+				return update, RiderKalmanState{}, fmt.Errorf("%w (%w): computed speed %.1f km/h exceeds %.1f km/h limit (dist: %.2f km in %.1fs)",
+					ErrVelocityOutlier, ErrTeleportAnomaly, computedSpeedKmh, MaxTeleportSpeedKmh, distKm, dtSec)
+			}
+			if computedSpeedKmh > MaxPlausibleSpeedKmh {
+				return update, RiderKalmanState{}, fmt.Errorf("%w: computed speed %.1f km/h exceeds %.1f km/h threshold (dist: %.2f km in %.1fs)",
+					ErrVelocityOutlier, computedSpeedKmh, MaxPlausibleSpeedKmh, distKm, dtSec)
+			}
 		}
 	}
 
-	if dtSec >= MinTimeDeltaSec && distKm <= StationaryDriftRadiusKm && computedSpeedKmh <= StationaryMaxSpeedKmh && (!update.HasSpeed || update.Speed <= StationaryMaxSpeedKmh) {
-		state.Timestamp = update.Timestamp
-		state.SpeedKmh = 0
+	stationarySpeedOK := dtSec < MinTimeDeltaSec || computedSpeedKmh <= StationaryMaxSpeedKmh
+	if distKm <= StationaryDriftRadiusKm && stationarySpeedOK && (!update.HasSpeed || update.Speed <= StationaryMaxSpeedKmh) {
+		next := RiderKalmanState{
+			Lat:       state.Lat,
+			Lng:       state.Lng,
+			SpeedKmh:  0,
+			Heading:   state.Heading,
+			Timestamp: update.Timestamp,
+		}
 		suppressed := update
 		suppressed.Lat = state.Lat
 		suppressed.Lng = state.Lng
@@ -96,7 +246,7 @@ func (s *RiderTelemetrySmoother) Filter(update LocationUpdate) (LocationUpdate, 
 		suppressed.Heading = state.Heading
 		suppressed.StationaryDrift = true
 		suppressed.TelemetryFlags = appendUniqueFlag(suppressed.TelemetryFlags, "stationary_drift")
-		return suppressed, nil
+		return suppressed, next, nil
 	}
 
 	accuracy := update.Accuracy
@@ -113,18 +263,20 @@ func (s *RiderTelemetrySmoother) Filter(update LocationUpdate) (LocationUpdate, 
 	smoothedSpeed := state.SpeedKmh + 0.7*(update.Speed-state.SpeedKmh)
 	smoothedHeading := smoothAngle(state.Heading, update.Heading, 0.8)
 
-	state.Lat = smoothedLat
-	state.Lng = smoothedLng
-	state.SpeedKmh = smoothedSpeed
-	state.Heading = smoothedHeading
-	state.Timestamp = update.Timestamp
+	next := RiderKalmanState{
+		Lat:       smoothedLat,
+		Lng:       smoothedLng,
+		SpeedKmh:  smoothedSpeed,
+		Heading:   smoothedHeading,
+		Timestamp: update.Timestamp,
+	}
 
 	smoothedUpdate := update
 	smoothedUpdate.Lat = smoothedLat
 	smoothedUpdate.Lng = smoothedLng
 	smoothedUpdate.Speed = smoothedSpeed
 	smoothedUpdate.Heading = smoothedHeading
-	return smoothedUpdate, nil
+	return smoothedUpdate, next, nil
 }
 
 func smoothAngle(prev, curr, gain float64) float64 {

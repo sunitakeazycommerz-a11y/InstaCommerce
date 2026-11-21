@@ -14,6 +14,10 @@ import (
 // DefaultAllowedLateness is the default bounded out-of-order window before an event is flagged late.
 const DefaultAllowedLateness = 5 * time.Minute
 
+// DefaultMaxFutureSkew caps how far ahead of wall-clock time an event timestamp may be
+// before being rejected from advancing the stream watermark.
+const DefaultMaxFutureSkew = 5 * time.Minute
+
 // WatermarkDecision reports event-time watermark progression and lateness evaluation.
 type WatermarkDecision struct {
 	EventTime    time.Time
@@ -22,6 +26,7 @@ type WatermarkDecision struct {
 	Lateness     time.Duration
 	OutOfOrder   bool
 	Late         bool
+	FutureSkewed bool
 }
 
 type watermarkMetrics struct {
@@ -62,6 +67,8 @@ type streamWatermarkState struct {
 type WatermarkTracker struct {
 	mu              sync.RWMutex
 	allowedLateness time.Duration
+	maxFutureSkew   time.Duration
+	nowFn           func() time.Time
 	streams         map[string]*streamWatermarkState
 	streamGuard     *labelCardinalityGuard
 	metrics         *watermarkMetrics
@@ -70,11 +77,21 @@ type WatermarkTracker struct {
 
 // NewWatermarkTracker creates a WatermarkTracker with the given allowed lateness window.
 func NewWatermarkTracker(allowedLateness time.Duration) *WatermarkTracker {
+	return NewWatermarkTrackerWithSkew(allowedLateness, DefaultMaxFutureSkew)
+}
+
+// NewWatermarkTrackerWithSkew creates a WatermarkTracker with custom allowed lateness and max future skew.
+func NewWatermarkTrackerWithSkew(allowedLateness, maxFutureSkew time.Duration) *WatermarkTracker {
 	if allowedLateness < 0 {
 		allowedLateness = DefaultAllowedLateness
 	}
+	if maxFutureSkew < 0 {
+		maxFutureSkew = DefaultMaxFutureSkew
+	}
 	return &WatermarkTracker{
 		allowedLateness: allowedLateness,
+		maxFutureSkew:   maxFutureSkew,
+		nowFn:           func() time.Time { return time.Now().UTC() },
 		streams:         make(map[string]*streamWatermarkState),
 		streamGuard:     newLabelCardinalityGuard(maxBoundedLabelValues),
 		metrics:         newWatermarkMetrics(),
@@ -98,7 +115,28 @@ func (wt *WatermarkTracker) ObserveWithAction(stream string, eventTime time.Time
 	streamLabel := wt.streamGuard.normalize(stream, "default")
 
 	wt.mu.Lock()
+	defer wt.mu.Unlock()
+
+	now := time.Now().UTC()
+	if wt.nowFn != nil {
+		now = wt.nowFn()
+	}
+
 	st, ok := wt.streams[stream]
+	if wt.maxFutureSkew > 0 && eventTime.After(now.Add(wt.maxFutureSkew)) {
+		var maxObserved, watermark time.Time
+		if ok && !st.maxEventTime.IsZero() {
+			maxObserved = st.maxEventTime
+			watermark = maxObserved.Add(-wt.allowedLateness)
+		}
+		return WatermarkDecision{
+			EventTime:    eventTime,
+			MaxEventTime: maxObserved,
+			Watermark:    watermark,
+			FutureSkewed: true,
+		}
+	}
+
 	if !ok {
 		st = &streamWatermarkState{maxEventTime: eventTime}
 		wt.streams[stream] = st
@@ -121,7 +159,6 @@ func (wt *WatermarkTracker) ObserveWithAction(stream string, eventTime time.Time
 		st.lateCount++
 		wt.totalLate.Add(1)
 	}
-	wt.mu.Unlock()
 
 	if wt.metrics != nil {
 		wt.metrics.watermarkTimestampSec.WithLabelValues(streamLabel).Set(float64(watermark.Unix()))

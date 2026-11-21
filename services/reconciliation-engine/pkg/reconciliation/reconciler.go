@@ -113,9 +113,15 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 
 	autoFixedCount := 0
 	manualReviewCount := 0
+	failedCount := 0
+	var firstProcessErr error
 	for _, mismatch := range mismatches {
 		if err := r.processMismatch(ctx, tx, runID, mismatch); err != nil {
-			logger.Warn("failed to process mismatch", "error", err, "transaction_id", mismatch.TransactionID)
+			failedCount++
+			if firstProcessErr == nil {
+				firstProcessErr = err
+			}
+			logger.Error("failed to process mismatch", "error", err, "run_id", runID, "transaction_id", mismatch.TransactionID)
 			continue
 		}
 		if mismatch.AutoFixed {
@@ -129,18 +135,25 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 				logger.WarnContext(ctx, "failed to publish mismatch event", "error", err, "run_id", runID)
 			}
 			if mismatch.DiscrepancyCents > 0 {
-				_ = r.pubsub.PublishDiscrepancyAlert(ctx, runID, mismatch, mismatch.DiscrepancyCents)
+				if err := r.pubsub.PublishDiscrepancyAlert(ctx, runID, mismatch, mismatch.DiscrepancyCents); err != nil {
+					logger.WarnContext(ctx, "failed to publish discrepancy alert", "error", err, "run_id", runID, "transaction_id", mismatch.TransactionID)
+				}
 			}
 		}
+	}
+
+	runStatus := "COMPLETED"
+	if failedCount > 0 {
+		runStatus = "PARTIAL_FAILED"
 	}
 
 	if err := r.updateRunCounts(ctx, tx, runID, len(mismatches), autoFixedCount, manualReviewCount); err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to update run counts: %w", err)
 	}
-	if err := r.updateRunStatus(ctx, tx, runID, "COMPLETED"); err != nil {
+	if err := r.updateRunStatus(ctx, tx, runID, runStatus); err != nil {
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to update run status to COMPLETED: %w", err)
+		return nil, fmt.Errorf("failed to update run status to %s: %w", runStatus, err)
 	}
 	if err := tx.Commit(); err != nil {
 		span.RecordError(err)
@@ -152,6 +165,7 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 		attribute.Int("reconciliation.mismatches", len(mismatches)),
 		attribute.Int("reconciliation.auto_fixed", autoFixedCount),
 		attribute.Int("reconciliation.manual_review", manualReviewCount),
+		attribute.Int("reconciliation.failed", failedCount),
 		attribute.Float64("reconciliation.duration_seconds", duration.Seconds()),
 	)
 
@@ -161,13 +175,19 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 		}
 	}
 
-	return &ReconciliationResult{
+	res := &ReconciliationResult{
 		RunID:             runID,
 		MismatchCount:     len(mismatches),
 		AutoFixedCount:    autoFixedCount,
 		ManualReviewCount: manualReviewCount,
 		Duration:          duration,
-	}, nil
+	}
+	if failedCount > 0 {
+		err := fmt.Errorf("failed to process %d mismatch(es): %w", failedCount, firstProcessErr)
+		span.RecordError(err)
+		return res, err
+	}
+	return res, nil
 }
 
 func (r *DBReconciler) getOrCreateRun(ctx context.Context, tx *sql.Tx, runDate time.Time) (int64, bool, error) {

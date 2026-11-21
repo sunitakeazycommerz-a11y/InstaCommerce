@@ -56,3 +56,38 @@ func TestHTTPMetrics_UnwrapAndContentLength(t *testing.T) {
 		t.Fatalf("expected 0 RequestSize observations when ContentLength <= 0, got %d", count)
 	}
 }
+
+func TestInitOTel_HTTPAndGRPCNoopFallback(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	httpProv, err := InitOTel(context.Background(), OTelConfig{
+		ServiceName:      "test-http",
+		Protocol:         OTelProtocolHTTP,
+		NoopIfNoEndpoint: true,
+		EnableMetrics:    true,
+	}, logger)
+	if err != nil {
+		t.Fatalf("InitOTel HTTP noop failed: %v", err)
+	}
+	if httpProv.TracerProvider == nil || httpProv.MeterProvider == nil {
+		t.Fatal("expected non-nil TracerProvider and MeterProvider")
+	}
+	if err := httpProv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+
+	grpcProv, err := InitOTel(context.Background(), OTelConfig{
+		ServiceName:    "test-grpc",
+		Protocol:       OTelProtocolGRPC,
+		StdoutFallback: true,
+	}, logger)
+	if err != nil {
+		t.Fatalf("InitOTel gRPC stdout fallback failed: %v", err)
+	}
+	if grpcProv.TracerProvider == nil {
+		t.Fatal("expected non-nil TracerProvider")
+	}
+	if err := grpcProv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+}

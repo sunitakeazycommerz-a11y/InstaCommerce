@@ -123,7 +123,14 @@ func TestDLQMetadataEnrichmentAndUTF8Truncate(t *testing.T) {
 	assert.Equal(t, "2026-11-19T12:00:00Z", hm["quarantined_at"])
 	assert.Equal(t, "orders.cdc", hm["original_topic"])
 
-	// Nil writer returns explicit error without panicking.
+	schemaVerHeaders := 0
+	for _, h := range msgs[0].Headers {
+		if h.Key == "schema_version" {
+			schemaVerHeaders++
+		}
+	}
+	assert.Equal(t, 1, schemaVerHeaders)
+
 	err := sendToDLQ(
 		context.Background(),
 		nil,
@@ -137,7 +144,6 @@ func TestDLQMetadataEnrichmentAndUTF8Truncate(t *testing.T) {
 	)
 	require.Error(t, err)
 
-	// Truncate never splits multi-byte UTF-8 rune.
 	s := "hello-🚀-world"
 	truncated := truncate(s, 8)
 	assert.True(t, utf8.ValidString(truncated))

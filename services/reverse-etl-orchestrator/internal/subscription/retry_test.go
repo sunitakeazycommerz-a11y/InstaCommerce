@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -57,6 +60,8 @@ func TestClassifyError_Table(t *testing.T) {
 		{name: "network timeout", err: timeoutNetErr{}, want: FailureTransient},
 		{name: "unexpected EOF", err: io.ErrUnexpectedEOF, want: FailureTransient},
 		{name: "context deadline", err: context.DeadlineExceeded, want: FailureTransient},
+		{name: "net op econnreset", err: &net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("read", syscall.ECONNRESET)}, want: FailureTransient},
+		{name: "net op econnrefused", err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, want: FailureTransient},
 		{name: "context canceled", err: context.Canceled, want: FailurePermanent},
 		{name: "permanent sentinel", err: ErrPermanentFailure, want: FailurePermanent},
 	}
@@ -113,4 +118,10 @@ func TestExecuteWithRetry_TransientRetriesAndPermanentStopsImmediately(t *testin
 		assert.Equal(t, 1, calls)
 		assert.Equal(t, 1, attempts)
 	})
+}
+
+func TestRetryPolicy_NormalizedDefaultsUnsetPolicyToThreeAttempts(t *testing.T) {
+	assert.Equal(t, DefaultRetryPolicy(), (RetryPolicy{}).normalized())
+	assert.Equal(t, 3, (RetryPolicy{}).normalized().MaxAttempts)
+	assert.Equal(t, 1, (RetryPolicy{MaxAttempts: 1}).normalized().MaxAttempts)
 }

@@ -13,8 +13,6 @@ import (
 	"cloud.google.com/go/bigquery"
 	"github.com/instacommerce/go-shared/pkg/health"
 	"github.com/segmentio/kafka-go"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 )
 
 const serviceName = "cdc-consumer-service"
@@ -42,8 +40,6 @@ func main() {
 			}
 		}()
 	}
-
-	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	bqClient, err := bigquery.NewClient(ctx, cfg.BQProject)
 	if err != nil {

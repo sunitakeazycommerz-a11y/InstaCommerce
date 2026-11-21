@@ -9,28 +9,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/instacommerce/location-ingestion-service/model"
 	"github.com/redis/go-redis/v9"
 )
 
 // ErrOutOfOrderPing indicates the incoming update has a timestamp <= the current position.
 var ErrOutOfOrderPing = errors.New("store: incoming position is older than latest known location")
 
-// LocationUpdate mirrors handler.LocationUpdate for the persistence package.
-type LocationUpdate struct {
-	RiderID       string    `json:"rider_id"`
-	Lat           float64   `json:"lat"`
-	Lng           float64   `json:"lng"`
-	Accuracy      float64   `json:"accuracy_meters"`
-	Speed         float64   `json:"speed_kmh"`
-	Heading       float64   `json:"heading_degrees"`
-	Timestamp     time.Time `json:"timestamp"`
-	BatteryPct    float64   `json:"battery_pct"`
-	H3Index       string    `json:"h3_index,omitempty"`
-	HasSpeed      bool      `json:"-"`
-	HasHeading    bool      `json:"-"`
-	HasAccuracy   bool      `json:"-"`
-	HasBatteryPct bool      `json:"-"`
-}
+// LocationUpdate mirrors model.LocationUpdate for the persistence package.
+type LocationUpdate = model.LocationUpdate
 
 const (
 	DefaultRiderHeartbeatTTL   = 60 * time.Second

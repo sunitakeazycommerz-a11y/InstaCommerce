@@ -2,9 +2,10 @@ package handler
 
 import (
 	"context"
-	"strings"
+	"fmt"
 	"time"
 
+	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
 	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -45,9 +46,16 @@ func (p *KafkaWriterProducer) Publish(ctx context.Context, topic string, key []b
 	})
 }
 
-func (p *KafkaWriterProducer) PublishMessage(ctx context.Context, _ string, msg kafka.Message) error {
+func (p *KafkaWriterProducer) PublishMessage(ctx context.Context, topic string, msg kafka.Message) error {
 	if p == nil || p.writer == nil {
 		return ErrProducerNotConfigured
+	}
+	if kw, ok := p.writer.(*kafka.Writer); ok && kw.Topic != "" {
+		if topic != "" && kw.Topic != topic {
+			return fmt.Errorf("handler: writer topic %q does not match message topic %q", kw.Topic, topic)
+		}
+	} else if msg.Topic == "" && topic != "" {
+		msg.Topic = topic
 	}
 	return p.writer.WriteMessages(ctx, msg)
 }
@@ -89,7 +97,7 @@ func (h *WebhookHandler) publishEvent(ctx context.Context, event WebhookEvent, e
 			{Key: "event_id", Value: []byte(event.ID)},
 			{Key: "event_type", Value: []byte(event.EventType)},
 		}
-		otel.GetTextMapPropagator().Inject(publishCtx, kafkaHeaderCarrier{headers: &headers})
+		otel.GetTextMapPropagator().Inject(publishCtx, sharedkafka.NewHeaderCarrier(&headers))
 		return headerProd.PublishMessage(publishCtx, h.topic, kafka.Message{
 			Key:     []byte(kafkaKey),
 			Value:   encoded,
@@ -99,29 +107,4 @@ func (h *WebhookHandler) publishEvent(ctx context.Context, event WebhookEvent, e
 	}
 
 	return h.producer.Publish(publishCtx, h.topic, []byte(kafkaKey), encoded)
-}
-
-type kafkaHeaderCarrier struct {
-	headers *[]kafka.Header
-}
-
-func (c kafkaHeaderCarrier) Get(key string) string {
-	for _, header := range *c.headers {
-		if strings.EqualFold(header.Key, key) {
-			return string(header.Value)
-		}
-	}
-	return ""
-}
-
-func (c kafkaHeaderCarrier) Set(key, value string) {
-	*c.headers = append(*c.headers, kafka.Header{Key: key, Value: []byte(value)})
-}
-
-func (c kafkaHeaderCarrier) Keys() []string {
-	keys := make([]string, 0, len(*c.headers))
-	for _, header := range *c.headers {
-		keys = append(keys, header.Key)
-	}
-	return keys
 }

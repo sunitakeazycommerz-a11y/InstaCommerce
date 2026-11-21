@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -40,12 +41,17 @@ func buildAPIRouter(apiHandler *api.Handler, healthChecker *health.Checker, logg
 }
 
 func newWorkerPoolFromConfig(cfg *config.Config, subscriptionSvc *subscription.Service, rdb *redis.Client, logger *slog.Logger) *subscription.WorkerPool {
+	var db *sql.DB
+	if subscriptionSvc != nil {
+		db = subscriptionSvc.DB()
+	}
 	return subscription.NewWorkerPool(subscription.WorkerPoolConfig{
 		Concurrency:     cfg.WorkerPoolConcurrency,
 		RateLimitPerSec: cfg.RateLimitPerSec,
 		RedisClient:     rdb,
-		DB:              subscriptionSvc.DB(),
+		DB:              db,
 		Logger:          logger,
+		RetryPolicy:     subscription.DefaultRetryPolicy(),
 	})
 }
 

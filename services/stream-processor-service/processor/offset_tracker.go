@@ -118,29 +118,33 @@ func (ot *offsetTracker) resolve(
 		return nil
 	}
 	pt := ot.partition(msg)
-	pt.mu.Lock()
-	if entry.discarded {
-		pt.mu.Unlock()
+	shouldFlush := pt.prepareFlush(commitFn != nil, func() bool {
+		if entry.discarded {
+			return false
+		}
+		if !succeeded {
+			entry.status = offsetFailed
+			pt.failedSeen = true
+			pt.failedOffset = msg.Offset
+			for i, item := range pt.queue {
+				if item == entry {
+					for j := i + 1; j < len(pt.queue); j++ {
+						pt.queue[j].discarded = true
+						pt.queue[j] = nil
+					}
+					pt.queue = pt.queue[:i+1]
+					break
+				}
+			}
+			return true
+		}
+		entry.status = offsetCompleted
+		return true
+	})
+	if !shouldFlush {
 		return nil
 	}
-	if !succeeded {
-		entry.status = offsetFailed
-		pt.failedSeen = true
-		pt.failedOffset = msg.Offset
-		for i, item := range pt.queue {
-			if item == entry {
-				for j := i + 1; j < len(pt.queue); j++ {
-					pt.queue[j].discarded = true
-					pt.queue[j] = nil
-				}
-				pt.queue = pt.queue[:i+1]
-				break
-			}
-		}
-		return pt.commitReady(ctx, commitFn)
-	}
-	entry.status = offsetCompleted
-	return pt.commitReady(ctx, commitFn)
+	return pt.flushCommits(ctx, commitFn)
 }
 
 func (ot *offsetTracker) ackFailed(
@@ -149,26 +153,31 @@ func (ot *offsetTracker) ackFailed(
 	commitFn func(context.Context, kafka.Message) error,
 ) error {
 	pt := ot.partition(msg)
-	pt.mu.Lock()
-	for _, item := range pt.queue {
-		if item != nil && item.msg.Offset == msg.Offset && item.status == offsetFailed {
-			item.status = offsetCompleted
-			break
+	shouldFlush := pt.prepareFlush(commitFn != nil, func() bool {
+		for _, item := range pt.queue {
+			if item != nil && item.msg.Offset == msg.Offset && item.status == offsetFailed {
+				item.status = offsetCompleted
+				break
+			}
 		}
-	}
-	hasFailed := false
-	for _, item := range pt.queue {
-		if item != nil && item.status == offsetFailed {
-			hasFailed = true
-			pt.failedOffset = item.msg.Offset
-			break
+		hasFailed := false
+		for _, item := range pt.queue {
+			if item != nil && item.status == offsetFailed {
+				hasFailed = true
+				pt.failedOffset = item.msg.Offset
+				break
+			}
 		}
+		pt.failedSeen = hasFailed
+		if !hasFailed {
+			pt.failedOffset = 0
+		}
+		return true
+	})
+	if !shouldFlush {
+		return nil
 	}
-	pt.failedSeen = hasFailed
-	if !hasFailed {
-		pt.failedOffset = 0
-	}
-	return pt.commitReady(ctx, commitFn)
+	return pt.flushCommits(ctx, commitFn)
 }
 
 func (ot *offsetTracker) skip(
@@ -177,32 +186,34 @@ func (ot *offsetTracker) skip(
 	commitFn func(context.Context, kafka.Message) error,
 ) error {
 	pt := ot.partition(msg)
-	pt.mu.Lock()
-	if pt.failedSeen {
-		if msg.Offset <= pt.failedOffset {
-			pt.resetFailedLocked()
-		} else {
-			pt.mu.Unlock()
-			return nil
+	shouldFlush := pt.prepareFlush(commitFn != nil, func() bool {
+		if pt.failedSeen {
+			if msg.Offset <= pt.failedOffset {
+				pt.resetFailedLocked()
+			} else {
+				return false
+			}
 		}
-	}
-	entry := &trackedOffset{msg: msg, status: offsetCompleted}
-	pt.queue = append(pt.queue, entry)
-	return pt.commitReady(ctx, commitFn)
-}
-
-func (pt *partitionTracker) commitReady(
-	ctx context.Context,
-	commitFn func(context.Context, kafka.Message) error,
-) error {
-	if !pt.advanceAndCheckFlush(commitFn != nil) {
+		entry := &trackedOffset{msg: msg, status: offsetCompleted}
+		pt.queue = append(pt.queue, entry)
+		return true
+	})
+	if !shouldFlush {
 		return nil
 	}
 	return pt.flushCommits(ctx, commitFn)
 }
 
-func (pt *partitionTracker) advanceAndCheckFlush(hasCommitter bool) bool {
+func (pt *partitionTracker) prepareFlush(hasCommitter bool, mutate func() bool) bool {
+	pt.mu.Lock()
 	defer pt.mu.Unlock()
+	if !mutate() {
+		return false
+	}
+	return pt.advanceAndCheckFlushLocked(hasCommitter)
+}
+
+func (pt *partitionTracker) advanceAndCheckFlushLocked(hasCommitter bool) bool {
 	pt.advanceLocked()
 	if !hasCommitter {
 		pt.readyToCommit = nil
