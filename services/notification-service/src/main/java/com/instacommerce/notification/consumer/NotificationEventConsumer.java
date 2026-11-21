@@ -47,6 +47,11 @@ public class NotificationEventConsumer {
         handle(record, "rider");
     }
 
+    @KafkaListener(topics = TopicNames.WALLET_EVENTS, groupId = "notification-service", concurrency = "3")
+    public void onWalletEvent(ConsumerRecord<String, String> record) {
+        handle(record, "wallet");
+    }
+
     private void handle(ConsumerRecord<String, String> record, String domain) {
         try {
             EventEnvelope envelope = objectMapper.readValue(record.value(), EventEnvelope.class);

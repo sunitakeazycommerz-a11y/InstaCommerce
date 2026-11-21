@@ -56,7 +56,9 @@ public class FulfillmentEventConsumer {
                 riderAssignmentService.completeDelivery(orderId);
                 logger.info("Rider delivery completed for order={}", orderId);
             }
-        } else if ("OrderCancelled".equals(envelope.eventType()) || "DeliveryFailed".equals(envelope.eventType())) {
+        } else if ("OrderCancelled".equals(envelope.eventType())
+                || "DeliveryFailed".equals(envelope.eventType())
+                || "PickTaskCancelled".equals(envelope.eventType())) {
             UUID orderId = resolveOrderId(envelope);
             if (orderId != null) {
                 riderAssignmentService.cancelAssignment(orderId, envelope.eventType());
@@ -67,15 +69,18 @@ public class FulfillmentEventConsumer {
 
     private UUID resolveOrderId(EventEnvelope envelope) {
         if (envelope.payload() != null && !envelope.payload().isNull() && envelope.payload().has("orderId")) {
+            String rawOrderId = envelope.payload().get("orderId").asText();
             try {
-                return UUID.fromString(envelope.payload().get("orderId").asText());
-            } catch (IllegalArgumentException ignored) {
+                return UUID.fromString(rawOrderId);
+            } catch (IllegalArgumentException ex) {
+                logger.warn("Invalid orderId '{}' in payload for eventType={}", rawOrderId, envelope.eventType());
             }
         }
         if (envelope.aggregateId() != null && !envelope.aggregateId().isBlank()) {
             try {
                 return UUID.fromString(envelope.aggregateId());
-            } catch (IllegalArgumentException ignored) {
+            } catch (IllegalArgumentException ex) {
+                logger.warn("Invalid aggregateId '{}' for eventType={}", envelope.aggregateId(), envelope.eventType());
             }
         }
         return null;

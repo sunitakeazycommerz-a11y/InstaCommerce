@@ -1,13 +1,19 @@
 package com.instacommerce.routing.service;
 
+import com.instacommerce.platform.geo.GeoUtils;
 import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.domain.model.Delivery;
+import com.instacommerce.routing.domain.model.DeliveryStatus;
 import com.instacommerce.routing.dto.response.DeliveryResponse;
 import com.instacommerce.routing.dto.response.ETAEstimate;
+import com.instacommerce.routing.exception.InvalidDeliveryStateException;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 final class DeliveryPayloadSupport {
     private DeliveryPayloadSupport() {
@@ -92,5 +98,110 @@ final class DeliveryPayloadSupport {
             d.getCreatedAt(), d.getUpdatedAt(),
             d.isBreachRisk(), d.isCompensationTriggered(), d.getCompensationAmountCents(),
             d.getVehicleType(), d.isWeatherDelayActive());
+    }
+
+    static int countPrecedingStops(List<Delivery> active,
+                                   UUID targetDeliveryId,
+                                   Instant targetCreatedAt,
+                                   BigDecimal targetDropoffLat,
+                                   BigDecimal targetDropoffLng,
+                                   double fromLat,
+                                   double fromLng) {
+        if (active == null || active.size() <= 1) {
+            return 0;
+        }
+        double targetDistanceKm = (targetDropoffLat != null && targetDropoffLng != null)
+            ? GeoUtils.haversineKm(fromLat, fromLng, targetDropoffLat.doubleValue(), targetDropoffLng.doubleValue())
+            : Double.MAX_VALUE;
+        int preceding = 0;
+        for (Delivery other : active) {
+            if (other.getId().equals(targetDeliveryId)) {
+                continue;
+            }
+            if (other.getDropoffLat() != null && other.getDropoffLng() != null) {
+                double otherDistanceKm = GeoUtils.haversineKm(
+                    fromLat, fromLng, other.getDropoffLat().doubleValue(), other.getDropoffLng().doubleValue());
+                if (otherDistanceKm < targetDistanceKm - 1e-6) {
+                    preceding++;
+                    continue;
+                }
+                if (Math.abs(otherDistanceKm - targetDistanceKm) <= 1e-6
+                    && other.getCreatedAt() != null && targetCreatedAt != null
+                    && other.getCreatedAt().isBefore(targetCreatedAt)) {
+                    preceding++;
+                }
+            }
+        }
+        return preceding;
+    }
+
+    static void validateTransition(DeliveryStatus current, DeliveryStatus target) {
+        boolean valid = switch (current) {
+            case PENDING -> target == DeliveryStatus.RIDER_ASSIGNED
+                || target == DeliveryStatus.ASSIGNED
+                || target == DeliveryStatus.FAILED;
+            case RIDER_ASSIGNED, ASSIGNED -> target == DeliveryStatus.PICKED_UP
+                || target == DeliveryStatus.FAILED;
+            case PICKED_UP -> target == DeliveryStatus.EN_ROUTE
+                || target == DeliveryStatus.IN_TRANSIT
+                || target == DeliveryStatus.FAILED;
+            case EN_ROUTE, IN_TRANSIT -> target == DeliveryStatus.NEAR_DESTINATION
+                || target == DeliveryStatus.DELIVERED
+                || target == DeliveryStatus.FAILED;
+            case NEAR_DESTINATION -> target == DeliveryStatus.DELIVERED
+                || target == DeliveryStatus.FAILED;
+            case DELIVERED, FAILED -> false;
+        };
+        if (!valid) {
+            throw new InvalidDeliveryStateException(current, target);
+        }
+    }
+
+    static Delivery buildNewDelivery(UUID orderId,
+                                     UUID riderId,
+                                     UUID storeId,
+                                     BigDecimal pickupLat,
+                                     BigDecimal pickupLng,
+                                     BigDecimal dropoffLat,
+                                     BigDecimal dropoffLng,
+                                     String effectiveVehicle,
+                                     ETAEstimate eta) {
+        Delivery delivery = new Delivery();
+        delivery.setOrderId(orderId);
+        delivery.setRiderId(riderId);
+        delivery.setStoreId(storeId);
+        delivery.setPickupLat(pickupLat);
+        delivery.setPickupLng(pickupLng);
+        delivery.setDropoffLat(dropoffLat);
+        delivery.setDropoffLng(dropoffLng);
+        delivery.setVehicleType(effectiveVehicle);
+        delivery.setEstimatedMinutes(eta.etaMinutes());
+        delivery.setEtaLowMinutes(eta.etaLowMinutes());
+        delivery.setEtaHighMinutes(eta.etaHighMinutes());
+        delivery.setLastEtaUpdatedAt(eta.calculatedAt());
+        delivery.setDistanceKm(eta.distanceKm());
+        if (eta.monsoonDelayActive()) {
+            delivery.setWeatherDelayActive(true);
+        }
+        if (riderId != null) {
+            delivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+            delivery.setStartedAt(Instant.now());
+        }
+        return delivery;
+    }
+
+    static List<Delivery> selectGeofenceTargets(List<Delivery> candidates, UUID zoneId) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        if (zoneId != null) {
+            List<Delivery> matchedByZone = candidates.stream()
+                .filter(d -> zoneId.equals(d.getStoreId()) || zoneId.equals(d.getId()) || zoneId.equals(d.getOrderId()))
+                .toList();
+            if (!matchedByZone.isEmpty()) {
+                return matchedByZone;
+            }
+        }
+        return candidates;
     }
 }

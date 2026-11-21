@@ -51,6 +51,8 @@ public class SecurityConfig {
                     .hasAnyRole("RIDER", "ADMIN", "INTERNAL_SERVICE")
                 .requestMatchers(HttpMethod.POST, "/fulfillment/orders/*/delivered")
                     .hasAnyRole("RIDER", "ADMIN", "INTERNAL_SERVICE")
+                .requestMatchers(HttpMethod.POST, "/fulfillment/orders/*/failed")
+                    .hasAnyRole("RIDER", "ADMIN", "INTERNAL_SERVICE")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)

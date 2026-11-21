@@ -15,8 +15,6 @@ import com.instacommerce.inventory.dto.response.PartialReleaseResponse;
 import com.instacommerce.inventory.dto.response.ReserveResponse;
 import com.instacommerce.inventory.dto.response.ReservedItemResponse;
 import com.instacommerce.inventory.exception.InsufficientStockException;
-import com.instacommerce.inventory.exception.InvalidStockAdjustmentException;
-import com.instacommerce.inventory.exception.ProductNotFoundException;
 import com.instacommerce.inventory.exception.ReservationExpiredException;
 import com.instacommerce.inventory.exception.ReservationNotFoundException;
 import com.instacommerce.inventory.exception.ReservationStateException;
@@ -26,20 +24,14 @@ import com.instacommerce.inventory.repository.ReservationReleaseLogRepository;
 import com.instacommerce.inventory.repository.ReservationRepository;
 import com.instacommerce.inventory.repository.StockItemRepository;
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.LockModeType;
-import jakarta.persistence.NoResultException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,7 +46,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class ReservationService {
     private static final Logger log = LoggerFactory.getLogger(ReservationService.class);
-    private static final String LOCK_TIMEOUT_HINT = "jakarta.persistence.lock.timeout";
     private final ReservationRepository reservationRepository;
     private final StockItemRepository stockItemRepository;
     private final ReservationProperties reservationProperties;
@@ -188,49 +179,20 @@ public class ReservationService {
             }
             lockedStock.put(item.productId(), stock);
         }
-        Reservation reservation = new Reservation();
-        reservation.setIdempotencyKey(request.idempotencyKey());
-        reservation.setStoreId(request.storeId());
-        reservation.setStatus(ReservationStatus.PENDING);
         Instant expiresAt = Instant.now().plus(Duration.ofMinutes(reservationProperties.getTtlMinutes()));
-        reservation.setExpiresAt(expiresAt);
-
-        List<ReservationLineItem> lineItems = new ArrayList<>();
+        Reservation reservation = ReservationSupport.createPendingReservation(
+            request.idempotencyKey(), request.storeId(), expiresAt, sortedItems, lockedStock);
         for (InventoryItemRequest item : sortedItems) {
-            StockItem stock = lockedStock.get(item.productId());
-            stock.reserve(item.quantity());
-            stockItemRepository.save(stock);
-
-            ReservationLineItem lineItem = new ReservationLineItem();
-            lineItem.setReservation(reservation);
-            lineItem.setProductId(item.productId());
-            lineItem.setQuantity(item.quantity());
-            lineItems.add(lineItem);
+            stockItemRepository.save(lockedStock.get(item.productId()));
         }
-        reservation.setLineItems(lineItems);
         reservationRepository.save(reservation);
 
-        Instant now = Instant.now();
-        List<Map<String, Object>> itemsList = sortedItems.stream()
-            .map(item -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("productId", item.productId().toString());
-                m.put("quantity", item.quantity());
-                return m;
-            })
-            .toList();
-        Map<String, Object> eventPayload = new LinkedHashMap<>();
-        eventPayload.put("reservationId", reservation.getId().toString());
-        eventPayload.put("orderId", request.idempotencyKey());
-        eventPayload.put("items", itemsList);
-        eventPayload.put("reservedAt", now.toString());
-        eventPayload.put("expiresAt", expiresAt.toString());
         outboxService.publish("Reservation", reservation.getId().toString(),
-            "StockReserved", eventPayload);
+            "StockReserved", ReservationSupport.buildStockReservedPayload(
+                reservation, request.idempotencyKey(), sortedItems, Instant.now(), expiresAt));
 
         for (InventoryItemRequest item : sortedItems) {
-            StockItem stock = lockedStock.get(item.productId());
-            checkLowStock(stock, request.storeId());
+            checkLowStock(lockedStock.get(item.productId()), request.storeId());
         }
 
         return InventoryMapper.toReserveResponse(reservation);
@@ -251,9 +213,7 @@ public class ReservationService {
             expireReservation(reservation);
             throw new ReservationExpiredException(reservationId);
         }
-        List<ReservationLineItem> items = reservation.getLineItems().stream()
-            .sorted(Comparator.comparing(ReservationLineItem::getProductId))
-            .toList();
+        List<ReservationLineItem> items = ReservationSupport.sortedLineItems(reservation);
         List<Map<String, Object>> itemsList = new ArrayList<>();
         for (ReservationLineItem item : items) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
@@ -264,54 +224,18 @@ public class ReservationService {
             stock.confirm(item.getQuantity());
             stockItemRepository.save(stock);
             checkLowStock(stock, reservation.getStoreId());
-
-            int available = stock.getOnHand() - stock.getReserved();
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("productId", item.getProductId().toString());
-            m.put("quantity", item.getQuantity());
-            m.put("remainingOnHand", stock.getOnHand());
-            m.put("remainingAvailable", available);
-            m.put("inStock", available > 0);
-            if (!allocations.isEmpty()) {
-                m.put("batches", allocations.stream()
-                    .map(a -> Map.of(
-                        "batchNumber", a.batchNumber(),
-                        "quantity", a.quantity(),
-                        "expiryDate", a.expiryDate().toString()))
-                    .toList());
-            }
-            itemsList.add(m);
+            itemsList.add(ReservationSupport.buildConfirmedItemPayload(item, stock, allocations));
         }
         reservation.setStatus(ReservationStatus.CONFIRMED);
         reservationRepository.save(reservation);
 
-        Map<String, Object> eventPayload = new LinkedHashMap<>();
-        eventPayload.put("reservationId", reservationId.toString());
-        eventPayload.put("orderId", reservation.getIdempotencyKey());
-        eventPayload.put("storeId", reservation.getStoreId().toString());
-        eventPayload.put("items", itemsList);
-        eventPayload.put("confirmedAt", Instant.now().toString());
         outboxService.publish("Reservation", reservationId.toString(),
-            "StockConfirmed", eventPayload);
+            "StockConfirmed", ReservationSupport.buildStockConfirmedPayload(reservationId, reservation, itemsList));
     }
 
     @Transactional(noRollbackFor = ReservationExpiredException.class)
     public PartialReleaseResponse releasePartial(UUID reservationId, List<InventoryItemRequest> items, String releaseKey) {
-        if (items == null || items.isEmpty()) {
-            throw new InvalidStockAdjustmentException("Partial release requires at least one item");
-        }
-        Set<UUID> seenProducts = new HashSet<>();
-        for (InventoryItemRequest item : items) {
-            if (item == null || item.productId() == null) {
-                throw new InvalidStockAdjustmentException("ProductId is required for partial release");
-            }
-            if (item.quantity() <= 0) {
-                throw new InvalidStockAdjustmentException("Release quantity must be strictly positive");
-            }
-            if (!seenProducts.add(item.productId())) {
-                throw new InvalidStockAdjustmentException("Duplicate productId in partial release: " + item.productId());
-            }
-        }
+        ReservationSupport.validatePartialReleaseRequest(items);
 
         Reservation reservation = reservationRepository.findByIdForUpdate(reservationId)
             .orElseThrow(() -> new ReservationNotFoundException(reservationId));
@@ -319,10 +243,9 @@ public class ReservationService {
         String normalizedKey = (releaseKey != null && !releaseKey.isBlank()) ? releaseKey.trim() : null;
         if (normalizedKey != null && releaseLogRepository != null
             && releaseLogRepository.existsByReservationIdAndReleaseKey(reservationId, normalizedKey)) {
-            List<ReservedItemResponse> remaining = reservation.getLineItems().stream()
-                .map(li -> new ReservedItemResponse(li.getProductId(), li.getQuantity()))
-                .toList();
-            return new PartialReleaseResponse(reservation.getId(), reservation.getStatus(), List.of(), remaining);
+            return new PartialReleaseResponse(
+                reservation.getId(), reservation.getStatus(), List.of(),
+                ReservationSupport.toReservedItemResponses(reservation));
         }
 
         if (reservation.getStatus() == ReservationStatus.PENDING
@@ -334,27 +257,11 @@ public class ReservationService {
             throw new ReservationStateException(reservationId, reservation.getStatus(), "partial-release");
         }
 
-        Map<UUID, ReservationLineItem> lineByProduct = new HashMap<>();
-        for (ReservationLineItem li : reservation.getLineItems()) {
-            lineByProduct.put(li.getProductId(), li);
-        }
-
+        Map<UUID, ReservationLineItem> lineByProduct = ReservationSupport.indexLinesByProduct(reservation);
         List<InventoryItemRequest> sortedItems = items.stream()
             .sorted(Comparator.comparing(InventoryItemRequest::productId))
             .toList();
-
-        for (InventoryItemRequest reqItem : sortedItems) {
-            ReservationLineItem line = lineByProduct.get(reqItem.productId());
-            if (line == null) {
-                throw new InvalidStockAdjustmentException(
-                    "Product " + reqItem.productId() + " is not part of reservation " + reservationId);
-            }
-            if (reqItem.quantity() > line.getQuantity()) {
-                throw new InvalidStockAdjustmentException(
-                    "Requested release quantity " + reqItem.quantity() + " exceeds reserved quantity "
-                        + line.getQuantity() + " for product " + reqItem.productId());
-            }
-        }
+        ReservationSupport.validatePartialReleaseAgainstLines(reservationId, sortedItems, lineByProduct);
 
         List<ReservedItemResponse> releasedItems = new ArrayList<>();
         for (InventoryItemRequest reqItem : sortedItems) {
@@ -363,19 +270,11 @@ public class ReservationService {
             stockItemRepository.save(stock);
 
             ReservationLineItem line = lineByProduct.get(reqItem.productId());
-            int remainingQty = line.getQuantity() - reqItem.quantity();
-            line.setQuantity(remainingQty);
+            line.setQuantity(line.getQuantity() - reqItem.quantity());
             releasedItems.add(new ReservedItemResponse(reqItem.productId(), reqItem.quantity()));
         }
 
-        Iterator<ReservationLineItem> iterator = reservation.getLineItems().iterator();
-        while (iterator.hasNext()) {
-            if (iterator.next().getQuantity() <= 0) {
-                iterator.remove();
-            }
-        }
-
-        boolean fullyCancelled = reservation.getLineItems().isEmpty();
+        boolean fullyCancelled = ReservationSupport.pruneZeroQuantityLines(reservation);
         if (fullyCancelled) {
             reservation.setStatus(ReservationStatus.CANCELLED);
         }
@@ -388,30 +287,12 @@ public class ReservationService {
             releaseLogRepository.save(releaseLog);
         }
 
-        List<Map<String, Object>> eventItems = releasedItems.stream()
-            .map(ri -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("productId", ri.productId().toString());
-                m.put("quantity", ri.quantity());
-                m.put("inStock", true);
-                return m;
-            })
-            .toList();
-        Map<String, Object> eventPayload = new LinkedHashMap<>();
-        eventPayload.put("reservationId", reservation.getId().toString());
-        eventPayload.put("orderId", reservation.getIdempotencyKey());
-        eventPayload.put("storeId", reservation.getStoreId().toString());
-        eventPayload.put("items", eventItems);
-        eventPayload.put("releasedAt", Instant.now().toString());
-        eventPayload.put("reason", fullyCancelled ? "CANCELLED" : "PARTIAL_RELEASE");
-        eventPayload.put("partial", !fullyCancelled);
         outboxService.publish("Reservation", reservation.getId().toString(),
-            "StockReleased", eventPayload);
+            "StockReleased", ReservationSupport.buildPartialReleasePayload(reservation, releasedItems, fullyCancelled));
 
-        List<ReservedItemResponse> remainingItems = reservation.getLineItems().stream()
-            .map(li -> new ReservedItemResponse(li.getProductId(), li.getQuantity()))
-            .toList();
-        return new PartialReleaseResponse(reservation.getId(), reservation.getStatus(), releasedItems, remainingItems);
+        return new PartialReleaseResponse(
+            reservation.getId(), reservation.getStatus(), releasedItems,
+            ReservationSupport.toReservedItemResponses(reservation));
     }
 
     @Transactional(noRollbackFor = ReservationExpiredException.class)
@@ -441,7 +322,6 @@ public class ReservationService {
         releaseReserved(reservation);
         reservation.setStatus(ReservationStatus.CANCELLED);
         reservationRepository.save(reservation);
-
         publishStockReleasedEvent(reservation);
     }
 
@@ -459,36 +339,16 @@ public class ReservationService {
         releaseReserved(reservation);
         reservation.setStatus(ReservationStatus.EXPIRED);
         reservationRepository.save(reservation);
-
         publishStockReleasedEvent(reservation);
     }
 
     private void publishStockReleasedEvent(Reservation reservation) {
-        List<Map<String, Object>> itemsList = reservation.getLineItems().stream()
-            .map(item -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("productId", item.getProductId().toString());
-                m.put("quantity", item.getQuantity());
-                m.put("inStock", true);
-                return m;
-            })
-            .toList();
-        Map<String, Object> eventPayload = new LinkedHashMap<>();
-        eventPayload.put("reservationId", reservation.getId().toString());
-        eventPayload.put("orderId", reservation.getIdempotencyKey());
-        eventPayload.put("storeId", reservation.getStoreId().toString());
-        eventPayload.put("items", itemsList);
-        eventPayload.put("releasedAt", Instant.now().toString());
-        eventPayload.put("reason", reservation.getStatus().name());
         outboxService.publish("Reservation", reservation.getId().toString(),
-            "StockReleased", eventPayload);
+            "StockReleased", ReservationSupport.buildStockReleasedPayload(reservation));
     }
 
     private void releaseReserved(Reservation reservation) {
-        List<ReservationLineItem> items = reservation.getLineItems().stream()
-            .sorted(Comparator.comparing(ReservationLineItem::getProductId))
-            .toList();
-        for (ReservationLineItem item : items) {
+        for (ReservationLineItem item : ReservationSupport.sortedLineItems(reservation)) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
             stock.releaseReserved(item.getQuantity());
             stockItemRepository.save(stock);
@@ -496,10 +356,7 @@ public class ReservationService {
     }
 
     private void releaseConfirmed(Reservation reservation) {
-        List<ReservationLineItem> items = reservation.getLineItems().stream()
-            .sorted(Comparator.comparing(ReservationLineItem::getProductId))
-            .toList();
-        for (ReservationLineItem item : items) {
+        for (ReservationLineItem item : ReservationSupport.sortedLineItems(reservation)) {
             StockItem stock = lockStockItem(item.getProductId(), reservation.getStoreId());
             stock.releaseConfirmed(item.getQuantity());
             stockItemRepository.save(stock);
@@ -515,17 +372,7 @@ public class ReservationService {
     }
 
     private StockItem lockStockItem(UUID productId, UUID storeId) {
-        try {
-            return entityManager.createQuery(
-                    "SELECT s FROM StockItem s WHERE s.productId = :pid AND s.storeId = :sid",
-                    StockItem.class)
-                .setParameter("pid", productId)
-                .setParameter("sid", storeId)
-                .setLockMode(LockModeType.PESSIMISTIC_WRITE)
-                .setHint(LOCK_TIMEOUT_HINT, inventoryProperties.getLockTimeoutMs())
-                .getSingleResult();
-        } catch (NoResultException ex) {
-            throw new ProductNotFoundException(productId, storeId);
-        }
+        return ReservationSupport.lockStockItem(
+            entityManager, productId, storeId, inventoryProperties.getLockTimeoutMs());
     }
 }

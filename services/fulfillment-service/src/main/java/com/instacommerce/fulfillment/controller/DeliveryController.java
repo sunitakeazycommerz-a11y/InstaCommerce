@@ -1,6 +1,7 @@
 package com.instacommerce.fulfillment.controller;
 
 import com.instacommerce.fulfillment.dto.request.MarkDeliveredRequest;
+import com.instacommerce.fulfillment.dto.request.MarkDeliveryFailedRequest;
 import com.instacommerce.fulfillment.dto.request.ProofOfDeliveryRequest;
 import com.instacommerce.fulfillment.dto.request.RiderHandoffRequest;
 import com.instacommerce.fulfillment.dto.response.DeliveryResponse;
@@ -54,6 +55,14 @@ public class DeliveryController {
                                           @AuthenticationPrincipal String principal,
                                           Authentication authentication) {
         return deliveryService.markDelivered(orderId, toUuidOrNull(principal), isPrivileged(authentication));
+    }
+
+    @PostMapping("/fulfillment/orders/{orderId}/failed")
+    public DeliveryResponse markDeliveryFailed(@PathVariable UUID orderId,
+                                               @Valid @RequestBody MarkDeliveryFailedRequest request,
+                                               @AuthenticationPrincipal String principal,
+                                               Authentication authentication) {
+        return deliveryService.markDeliveryFailed(orderId, request, toUuidOrNull(principal), isPrivileged(authentication));
     }
 
     private UUID toUuid(String principal) {

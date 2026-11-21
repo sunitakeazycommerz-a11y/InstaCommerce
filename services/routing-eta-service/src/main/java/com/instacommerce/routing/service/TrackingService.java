@@ -1,5 +1,6 @@
 package com.instacommerce.routing.service;
 
+import com.instacommerce.platform.geo.GeoUtils;
 import com.instacommerce.routing.domain.model.Delivery;
 import com.instacommerce.routing.domain.model.DeliveryStatus;
 import com.instacommerce.routing.domain.model.DeliveryTracking;
@@ -22,7 +23,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class TrackingService {
 
     private static final Logger log = LoggerFactory.getLogger(TrackingService.class);
-    private static final double EARTH_RADIUS_KM = 6371.0;
     private static final double GEOFENCE_RADIUS_KM = 0.2;
 
     private final DeliveryTrackingRepository trackingRepository;
@@ -57,7 +57,9 @@ public class TrackingService {
             request.deliveryId(), request.latitude(), request.longitude());
 
         TrackingResponse response = toResponse(tracking);
-        messagingTemplate.convertAndSend("/topic/tracking/" + request.deliveryId(), response);
+        if (messagingTemplate != null) {
+            messagingTemplate.convertAndSend("/topic/tracking/" + request.deliveryId(), response);
+        }
         maybeTriggerNearDestination(delivery, request.latitude(), request.longitude());
         return response;
     }
@@ -94,21 +96,14 @@ public class TrackingService {
         if (delivery.getStatus() != DeliveryStatus.EN_ROUTE && delivery.getStatus() != DeliveryStatus.IN_TRANSIT) {
             return;
         }
-        double distanceKm = haversineDistance(
+        if (delivery.getDropoffLat() == null || delivery.getDropoffLng() == null) {
+            return;
+        }
+        double distanceKm = GeoUtils.haversineKm(
             latitude.doubleValue(), longitude.doubleValue(),
             delivery.getDropoffLat().doubleValue(), delivery.getDropoffLng().doubleValue());
         if (distanceKm <= GEOFENCE_RADIUS_KM) {
             deliveryService.updateStatus(delivery.getId(), DeliveryStatus.NEAR_DESTINATION);
         }
-    }
-
-    private double haversineDistance(double lat1, double lon1, double lat2, double lon2) {
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLon = Math.toRadians(lon2 - lon1);
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
-            + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
-            * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return EARTH_RADIUS_KM * c;
     }
 }

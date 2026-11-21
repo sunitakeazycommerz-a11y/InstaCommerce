@@ -218,4 +218,57 @@ class FulfillmentEventConsumerTest {
 
         verify(riderAssignmentService, never()).assignRider(any(), any(), any(), any());
     }
+
+    @Test
+    @DisplayName("Cancels rider assignment on PickTaskCancelled and DeliveryFailed and falls back to aggregateId on invalid payload orderId")
+    void cancelsRiderAssignmentOnPickTaskCancelledAndDeliveryFailed() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        Map<String, Object> pickCancelledEnvelope = Map.of(
+            "id", UUID.randomUUID().toString(),
+            "eventType", "PickTaskCancelled",
+            "aggregateId", orderId.toString(),
+            "aggregateType", "Fulfillment",
+            "eventTime", Instant.now().toString(),
+            "payload", Map.of("orderId", orderId.toString(), "reason", "Order cancelled")
+        );
+        ConsumerRecord<String, String> pickCancelledRecord = new ConsumerRecord<>(
+            "fulfillment.events", 0, 1L, orderId.toString(),
+            objectMapper.writeValueAsString(pickCancelledEnvelope)
+        );
+
+        consumer.onFulfillmentEvent(pickCancelledRecord);
+        verify(riderAssignmentService).cancelAssignment(orderId, "PickTaskCancelled");
+
+        UUID failedOrderId = UUID.randomUUID();
+        Map<String, Object> deliveryFailedEnvelope = Map.of(
+            "id", UUID.randomUUID().toString(),
+            "eventType", "DeliveryFailed",
+            "aggregateId", failedOrderId.toString(),
+            "aggregateType", "Fulfillment",
+            "eventTime", Instant.now().toString(),
+            "payload", Map.of("orderId", "not-a-valid-uuid", "reason", "Customer unreachable")
+        );
+        ConsumerRecord<String, String> deliveryFailedRecord = new ConsumerRecord<>(
+            "fulfillment.events", 0, 2L, failedOrderId.toString(),
+            objectMapper.writeValueAsString(deliveryFailedEnvelope)
+        );
+
+        consumer.onFulfillmentEvent(deliveryFailedRecord);
+        verify(riderAssignmentService).cancelAssignment(failedOrderId, "DeliveryFailed");
+
+        Map<String, Object> invalidBothEnvelope = Map.of(
+            "id", UUID.randomUUID().toString(),
+            "eventType", "PickTaskCancelled",
+            "aggregateId", "also-invalid-uuid",
+            "aggregateType", "Fulfillment",
+            "eventTime", Instant.now().toString(),
+            "payload", Map.of("orderId", "invalid-uuid")
+        );
+        ConsumerRecord<String, String> invalidRecord = new ConsumerRecord<>(
+            "fulfillment.events", 0, 3L, "bad",
+            objectMapper.writeValueAsString(invalidBothEnvelope)
+        );
+
+        consumer.onFulfillmentEvent(invalidRecord);
+    }
 }

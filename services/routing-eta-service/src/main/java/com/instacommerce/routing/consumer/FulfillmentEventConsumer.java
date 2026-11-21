@@ -49,6 +49,10 @@ public class FulfillmentEventConsumer {
                 deliveryService.advanceOrderDispatched(orderId, riderId);
             } else if ("OrderDelivered".equals(eventType)) {
                 deliveryService.advanceOrderDelivered(orderId);
+            } else if ("DeliveryFailed".equals(eventType)
+                || "PickTaskCancelled".equals(eventType)
+                || "OrderCancelled".equals(eventType)) {
+                deliveryService.markDeliveryFailed(orderId, readText(payload, "reason"));
             } else {
                 log.debug("Ignoring fulfillment event type: {}", eventType);
             }

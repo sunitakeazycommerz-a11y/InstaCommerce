@@ -1,19 +1,19 @@
 package com.instacommerce.routing.service;
 
-import com.instacommerce.platform.geo.GeoUtils;
 import com.instacommerce.routing.config.RoutingProperties;
 import com.instacommerce.routing.domain.model.Delivery;
 import com.instacommerce.routing.domain.model.DeliveryStatus;
 import com.instacommerce.routing.dto.response.DeliveryResponse;
 import com.instacommerce.routing.dto.response.ETAEstimate;
 import com.instacommerce.routing.exception.DeliveryNotFoundException;
-import com.instacommerce.routing.exception.InvalidDeliveryStateException;
 import com.instacommerce.routing.repository.DeliveryRepository;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -29,6 +29,10 @@ public class DeliveryService {
     private static final Set<DeliveryStatus> ACTIVE_STATUSES = Set.of(
         DeliveryStatus.RIDER_ASSIGNED, DeliveryStatus.ASSIGNED, DeliveryStatus.PICKED_UP,
         DeliveryStatus.EN_ROUTE, DeliveryStatus.IN_TRANSIT, DeliveryStatus.NEAR_DESTINATION);
+    private static final List<DeliveryStatus> NON_TERMINAL_STATUSES = List.of(
+        DeliveryStatus.PENDING, DeliveryStatus.RIDER_ASSIGNED, DeliveryStatus.ASSIGNED,
+        DeliveryStatus.PICKED_UP, DeliveryStatus.EN_ROUTE, DeliveryStatus.IN_TRANSIT,
+        DeliveryStatus.NEAR_DESTINATION);
 
     private final DeliveryRepository deliveryRepository;
     private final ETAService etaService;
@@ -74,27 +78,8 @@ public class DeliveryService {
             dropoffLat.doubleValue(), dropoffLng.doubleValue(),
             storeId, effectiveVehicle, 0.0);
 
-        Delivery delivery = new Delivery();
-        delivery.setOrderId(orderId);
-        delivery.setRiderId(riderId);
-        delivery.setStoreId(storeId);
-        delivery.setPickupLat(pickupLat);
-        delivery.setPickupLng(pickupLng);
-        delivery.setDropoffLat(dropoffLat);
-        delivery.setDropoffLng(dropoffLng);
-        delivery.setVehicleType(effectiveVehicle);
-        delivery.setEstimatedMinutes(eta.etaMinutes());
-        delivery.setEtaLowMinutes(eta.etaLowMinutes());
-        delivery.setEtaHighMinutes(eta.etaHighMinutes());
-        delivery.setLastEtaUpdatedAt(eta.calculatedAt());
-        delivery.setDistanceKm(eta.distanceKm());
-        if (eta.monsoonDelayActive()) {
-            delivery.setWeatherDelayActive(true);
-        }
-        if (riderId != null) {
-            delivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
-            delivery.setStartedAt(Instant.now());
-        }
+        Delivery delivery = DeliveryPayloadSupport.buildNewDelivery(
+            orderId, riderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng, effectiveVehicle, eta);
 
         delivery = deliveryRepository.save(delivery);
         log.info("Created delivery {} for order {}", delivery.getId(), orderId);
@@ -120,7 +105,7 @@ public class DeliveryService {
     }
 
     private DeliveryResponse completeDeliveryInternal(Delivery delivery) {
-        validateTransition(delivery.getStatus(), DeliveryStatus.DELIVERED);
+        DeliveryPayloadSupport.validateTransition(delivery.getStatus(), DeliveryStatus.DELIVERED);
         delivery.setStatus(DeliveryStatus.DELIVERED);
         delivery.setDeliveredAt(Instant.now());
 
@@ -161,7 +146,8 @@ public class DeliveryService {
         }
 
         double threshold = routingProperties.getBreach().getBreachAlertThreshold();
-        if (estimate.breachProbability() > threshold || estimate.etaMinutes() > routingProperties.getBreach().getSlaThresholdMinutes()) {
+        if (estimate.breachProbability() > threshold
+            || estimate.etaMinutes() > routingProperties.getBreach().getSlaThresholdMinutes()) {
             recordBreachRiskIfFirst(delivery, estimate);
         }
 
@@ -187,7 +173,8 @@ public class DeliveryService {
         outboxService.publish("Delivery", delivery.getId().toString(), "ETABreachRisk", breachPayload);
 
         if (messagingTemplate != null) {
-            messagingTemplate.convertAndSend("/topic/deliveries/" + delivery.getId() + "/breach-risk", (Object) breachPayload);
+            messagingTemplate.convertAndSend(
+                "/topic/deliveries/" + delivery.getId() + "/breach-risk", (Object) breachPayload);
         }
     }
 
@@ -240,6 +227,95 @@ public class DeliveryService {
         completeDeliveryInternal(delivery);
     }
 
+    @Transactional
+    public void markDeliveryFailed(UUID orderId) {
+        markDeliveryFailed(orderId, null);
+    }
+
+    @Transactional
+    public void markDeliveryFailed(UUID orderId, String reason) {
+        var deliveryOpt = deliveryRepository.findByOrderId(orderId);
+        if (deliveryOpt.isEmpty()) {
+            log.warn("Received failure/cancellation for unknown delivery order={}", orderId);
+            return;
+        }
+        Delivery delivery = deliveryOpt.get();
+        if (delivery.getStatus().isTerminal()) {
+            return;
+        }
+        applyTransition(delivery, DeliveryStatus.FAILED);
+    }
+
+    @Transactional
+    public List<UUID> handleRiderEnteredStore(UUID riderId, UUID zoneId, UUID orderId) {
+        List<Delivery> targets = resolveGeofenceTargets(riderId, zoneId, orderId);
+        List<UUID> transitioned = new ArrayList<>();
+        for (Delivery delivery : targets) {
+            if (delivery.getStatus().isTerminal()) {
+                continue;
+            }
+            if (delivery.getStatus() == DeliveryStatus.PENDING) {
+                delivery = applyTransition(delivery, DeliveryStatus.RIDER_ASSIGNED);
+            }
+            if (delivery.getStatus() == DeliveryStatus.RIDER_ASSIGNED
+                || delivery.getStatus() == DeliveryStatus.ASSIGNED) {
+                delivery = applyTransition(delivery, DeliveryStatus.PICKED_UP);
+                transitioned.add(delivery.getId());
+            }
+        }
+        return transitioned;
+    }
+
+    @Transactional
+    public List<UUID> handleRiderNearDelivery(UUID riderId, UUID zoneId, UUID orderId) {
+        List<Delivery> targets = resolveGeofenceTargets(riderId, zoneId, orderId);
+        List<UUID> transitioned = new ArrayList<>();
+        for (Delivery delivery : targets) {
+            if (delivery.getStatus().isTerminal() || delivery.getStatus() == DeliveryStatus.NEAR_DESTINATION) {
+                continue;
+            }
+            if (delivery.getStatus() == DeliveryStatus.PENDING) {
+                delivery = applyTransition(delivery, DeliveryStatus.RIDER_ASSIGNED);
+            }
+            if (delivery.getStatus() == DeliveryStatus.RIDER_ASSIGNED
+                || delivery.getStatus() == DeliveryStatus.ASSIGNED) {
+                delivery = applyTransition(delivery, DeliveryStatus.PICKED_UP);
+            }
+            if (delivery.getStatus() == DeliveryStatus.PICKED_UP) {
+                delivery = applyTransition(delivery, DeliveryStatus.EN_ROUTE);
+            }
+            if (delivery.getStatus() == DeliveryStatus.EN_ROUTE
+                || delivery.getStatus() == DeliveryStatus.IN_TRANSIT) {
+                delivery = applyTransition(delivery, DeliveryStatus.NEAR_DESTINATION);
+                transitioned.add(delivery.getId());
+            }
+        }
+        return transitioned;
+    }
+
+    private List<Delivery> resolveGeofenceTargets(UUID riderId, UUID zoneId, UUID orderId) {
+        if (orderId != null) {
+            return deliveryRepository.findByOrderId(orderId).map(List::of).orElse(List.of());
+        }
+        if (riderId != null) {
+            List<Delivery> candidates = deliveryRepository.findByRiderIdAndStatusIn(riderId, NON_TERMINAL_STATUSES);
+            if (candidates != null && !candidates.isEmpty()) {
+                return DeliveryPayloadSupport.selectGeofenceTargets(candidates, zoneId);
+            }
+        }
+        if (zoneId != null) {
+            Optional<Delivery> byId = deliveryRepository.findById(zoneId);
+            if (byId.isPresent()) {
+                return List.of(byId.get());
+            }
+            Optional<Delivery> byOrder = deliveryRepository.findByOrderId(zoneId);
+            if (byOrder.isPresent()) {
+                return List.of(byOrder.get());
+            }
+        }
+        return List.of();
+    }
+
     @Transactional(readOnly = true)
     public DeliveryResponse getByOrderId(UUID orderId) {
         return deliveryRepository.findByOrderId(orderId)
@@ -259,7 +335,10 @@ public class DeliveryService {
         if (delivery == null || delivery.riderId() == null) {
             return 0;
         }
-        return countPrecedingStopsForRider(delivery.id(), delivery.riderId(), delivery.createdAt(),
+        List<Delivery> active = deliveryRepository.findByRiderIdAndStatusIn(
+            delivery.riderId(), List.copyOf(ACTIVE_STATUSES));
+        return DeliveryPayloadSupport.countPrecedingStops(
+            active, delivery.id(), delivery.createdAt(),
             delivery.dropoffLat(), delivery.dropoffLng(), fromLat, fromLng);
     }
 
@@ -268,44 +347,15 @@ public class DeliveryService {
         if (delivery == null || delivery.getRiderId() == null) {
             return 0;
         }
-        return countPrecedingStopsForRider(delivery.getId(), delivery.getRiderId(), delivery.getCreatedAt(),
+        List<Delivery> active = deliveryRepository.findByRiderIdAndStatusIn(
+            delivery.getRiderId(), List.copyOf(ACTIVE_STATUSES));
+        return DeliveryPayloadSupport.countPrecedingStops(
+            active, delivery.getId(), delivery.getCreatedAt(),
             delivery.getDropoffLat(), delivery.getDropoffLng(), fromLat, fromLng);
     }
 
-    private int countPrecedingStopsForRider(UUID targetDeliveryId, UUID riderId, Instant targetCreatedAt,
-                                            BigDecimal targetDropoffLat, BigDecimal targetDropoffLng,
-                                            double fromLat, double fromLng) {
-        List<Delivery> active = deliveryRepository.findByRiderIdAndStatusIn(riderId, List.copyOf(ACTIVE_STATUSES));
-        if (active == null || active.size() <= 1) {
-            return 0;
-        }
-        double targetDistanceKm = (targetDropoffLat != null && targetDropoffLng != null)
-            ? GeoUtils.haversineKm(fromLat, fromLng, targetDropoffLat.doubleValue(), targetDropoffLng.doubleValue())
-            : Double.MAX_VALUE;
-        int preceding = 0;
-        for (Delivery other : active) {
-            if (other.getId().equals(targetDeliveryId)) {
-                continue;
-            }
-            if (other.getDropoffLat() != null && other.getDropoffLng() != null) {
-                double otherDistanceKm = GeoUtils.haversineKm(
-                    fromLat, fromLng, other.getDropoffLat().doubleValue(), other.getDropoffLng().doubleValue());
-                if (otherDistanceKm < targetDistanceKm - 1e-6) {
-                    preceding++;
-                    continue;
-                }
-                if (Math.abs(otherDistanceKm - targetDistanceKm) <= 1e-6
-                    && other.getCreatedAt() != null && targetCreatedAt != null
-                    && other.getCreatedAt().isBefore(targetCreatedAt)) {
-                    preceding++;
-                }
-            }
-        }
-        return preceding;
-    }
-
     private Delivery applyTransition(Delivery delivery, DeliveryStatus targetStatus) {
-        validateTransition(delivery.getStatus(), targetStatus);
+        DeliveryPayloadSupport.validateTransition(delivery.getStatus(), targetStatus);
         delivery.setStatus(targetStatus);
         if ((targetStatus == DeliveryStatus.RIDER_ASSIGNED || targetStatus == DeliveryStatus.ASSIGNED)
             && delivery.getStartedAt() == null) {
@@ -316,20 +366,6 @@ public class DeliveryService {
         outboxService.publish("Delivery", saved.getId().toString(),
             "DeliveryStatusUpdated", DeliveryPayloadSupport.statusPayload(saved));
         return saved;
-    }
-
-    private void validateTransition(DeliveryStatus current, DeliveryStatus target) {
-        boolean valid = switch (current) {
-            case PENDING -> target == DeliveryStatus.RIDER_ASSIGNED || target == DeliveryStatus.ASSIGNED || target == DeliveryStatus.FAILED;
-            case RIDER_ASSIGNED, ASSIGNED -> target == DeliveryStatus.PICKED_UP || target == DeliveryStatus.FAILED;
-            case PICKED_UP -> target == DeliveryStatus.EN_ROUTE || target == DeliveryStatus.IN_TRANSIT || target == DeliveryStatus.FAILED;
-            case EN_ROUTE, IN_TRANSIT -> target == DeliveryStatus.NEAR_DESTINATION || target == DeliveryStatus.DELIVERED || target == DeliveryStatus.FAILED;
-            case NEAR_DESTINATION -> target == DeliveryStatus.DELIVERED || target == DeliveryStatus.FAILED;
-            case DELIVERED, FAILED -> false;
-        };
-        if (!valid) {
-            throw new InvalidDeliveryStateException(current, target);
-        }
     }
 
     private DeliveryResponse toResponse(Delivery d) {

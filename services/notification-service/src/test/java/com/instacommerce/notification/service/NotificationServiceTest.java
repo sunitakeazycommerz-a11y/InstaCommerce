@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -38,6 +39,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.io.DefaultResourceLoader;
 
 @ExtendWith(MockitoExtension.class)
 class NotificationServiceTest {
@@ -213,5 +215,106 @@ class NotificationServiceTest {
         assertThat(skippedCaptor.getValue().getStatus()).isEqualTo(NotificationStatus.SKIPPED);
         assertThat(skippedCaptor.getValue().getLastError()).isEqualTo("Missing recipient");
         verify(sender, never()).send(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Renders and dispatches ItemSubstituted, PaymentRefundFailed, TierUpgraded, and AccountLocked while stripping PII from template_context")
+    void rendersAndDispatchesExpandedEventsWithoutPiiInTemplateContext() {
+        NotificationProperties props = new NotificationProperties();
+        DeduplicationService realDedup = new DeduplicationService(logRepository, objectMapper);
+        TemplateRegistry realRegistry = new TemplateRegistry();
+        TemplateService realTemplates = new TemplateService(new DefaultResourceLoader());
+        NotificationService realService = new NotificationService(
+            realRegistry, realTemplates, realDedup, logRepository, sender, dlqPublisher,
+            userPreferenceService, userDirectoryClient, orderLookupClient, metrics, props,
+            deviceTokenRepository, channelFallbackService);
+
+        UUID userId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        UUID originalProductId = UUID.randomUUID();
+        UUID substituteProductId = UUID.randomUUID();
+        UserContact contact = new UserContact(userId, "asha@example.com", "+919876543210", "Asha", "en");
+        UserPreferenceService.Preferences prefs = new UserPreferenceService.Preferences(
+            userId, false, false, false, false);
+        DeviceToken token = new DeviceToken();
+        token.setUserId(userId);
+        token.setToken("fcm-token-12345");
+        token.setActive(true);
+
+        when(userDirectoryClient.findUser(userId)).thenReturn(Optional.of(contact));
+        when(userPreferenceService.getPreferences(userId)).thenReturn(prefs);
+        when(userPreferenceService.allowNotification(eq(prefs), any(NotificationChannel.class), eq(false)))
+            .thenReturn(true);
+        when(deviceTokenRepository.findFirstByUserIdAndActiveTrueOrderByUpdatedAtDesc(userId))
+            .thenReturn(Optional.of(token));
+        when(orderLookupClient.findOrder(orderId))
+            .thenReturn(Optional.of(new OrderSnapshot(orderId, userId, 12500L, "INR", "CONFIRMED", Instant.now())));
+        when(logRepository.save(any(NotificationLog.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        realService.handleEvent(
+            new ConsumerRecord<>("fulfillment.events", 0, 1L, orderId.toString(), "{}"),
+            new EventEnvelope(
+                UUID.randomUUID().toString(), "ItemSubstituted", "Fulfillment", orderId.toString(),
+                Instant.now(), "v1", "fulfillment-service", null,
+                objectMapper.valueToTree(Map.of(
+                    "orderId", orderId.toString(),
+                    "storeId", UUID.randomUUID().toString(),
+                    "originalProductId", originalProductId.toString(),
+                    "substituteProductId", substituteProductId.toString(),
+                    "substitutedQuantity", 2))));
+
+        realService.handleEvent(
+            new ConsumerRecord<>("payments.events", 0, 2L, orderId.toString(), "{}"),
+            new EventEnvelope(
+                UUID.randomUUID().toString(), "PaymentRefundFailed", "Payment", UUID.randomUUID().toString(),
+                Instant.now(), "v1", "payment-service", null,
+                objectMapper.valueToTree(Map.of(
+                    "orderId", orderId.toString(),
+                    "paymentId", UUID.randomUUID().toString(),
+                    "refundId", UUID.randomUUID().toString(),
+                    "amountCents", 12500,
+                    "currency", "INR",
+                    "reason", "Gateway timeout",
+                    "failureSource", "PSP"))));
+
+        realService.handleEvent(
+            new ConsumerRecord<>("wallet.events", 0, 3L, userId.toString(), "{}"),
+            new EventEnvelope(
+                UUID.randomUUID().toString(), "TierUpgraded", "Loyalty", UUID.randomUUID().toString(),
+                Instant.now(), "v1", "wallet-loyalty-service", null,
+                objectMapper.valueToTree(Map.of(
+                    "accountId", UUID.randomUUID().toString(),
+                    "userId", userId.toString(),
+                    "previousTier", "SILVER",
+                    "tier", "GOLD",
+                    "points", 500,
+                    "totalBalance", 1200,
+                    "lifetimePoints", 2500))));
+
+        realService.handleEvent(
+            new ConsumerRecord<>("identity.events", 0, 4L, userId.toString(), "{}"),
+            new EventEnvelope(
+                UUID.randomUUID().toString(), "AccountLocked", "User", userId.toString(),
+                Instant.now(), "v1", "identity-service", null,
+                objectMapper.valueToTree(Map.of(
+                    "userId", userId.toString(),
+                    "email", "asha@example.com",
+                    "lockedUntil", "2026-11-21T18:00:00Z",
+                    "failedAttempts", 5,
+                    "reason", "EXCESSIVE_FAILED_ATTEMPTS"))));
+
+        ArgumentCaptor<NotificationLog> logCaptor = ArgumentCaptor.forClass(NotificationLog.class);
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(sender, times(9)).send(any(), logCaptor.capture(), any(), bodyCaptor.capture());
+
+        assertThat(bodyCaptor.getAllValues())
+            .anyMatch(body -> body.contains(substituteProductId.toString()) && body.contains("2x"))
+            .anyMatch(body -> body.contains("INR 125.00") && body.contains("Gateway timeout"))
+            .anyMatch(body -> body.contains("SILVER") && body.contains("GOLD") && body.contains("2500"))
+            .anyMatch(body -> body.contains("2026-11-21T18:00:00Z") && body.contains("EXCESSIVE_FAILED_ATTEMPTS"));
+
+        assertThat(logCaptor.getAllValues())
+            .allSatisfy(entry -> assertThat(entry.getTemplateContext())
+                .doesNotContain("asha@example.com", "+919876543210", "\"email\"", "\"phone\""));
     }
 }

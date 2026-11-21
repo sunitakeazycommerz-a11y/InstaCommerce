@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,6 +12,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.notification.service.NotificationService;
 import com.instacommerce.notification.service.PreferenceLookupException;
+import com.instacommerce.notification.service.UserErasureService;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -53,6 +55,22 @@ class NotificationEventConsumerTest {
 
         verify(notificationService).handleEvent(eq(paymentRecord), any(EventEnvelope.class));
         verify(notificationService).handleEvent(eq(fulfillmentRecord), any(EventEnvelope.class));
+    }
+
+    @Test
+    @DisplayName("onWalletEvent and IdentityEventConsumer route TierUpgraded and AccountLocked to NotificationService")
+    void routesWalletAndIdentityEvents() throws Exception {
+        NotificationEventConsumer consumer = new NotificationEventConsumer(notificationService, objectMapper);
+        ConsumerRecord<String, String> walletRecord = eventRecord("wallet.events", "TierUpgraded", "wallet-loyalty-service");
+        consumer.onWalletEvent(walletRecord);
+        verify(notificationService).handleEvent(eq(walletRecord), any(EventEnvelope.class));
+
+        UserErasureService erasureService = mock(UserErasureService.class);
+        IdentityEventConsumer identityConsumer = new IdentityEventConsumer(
+            objectMapper, erasureService, notificationService);
+        ConsumerRecord<String, String> lockRecord = eventRecord("identity.events", "AccountLocked", "identity-service");
+        identityConsumer.onIdentityEvent(lockRecord);
+        verify(notificationService).handleEvent(eq(lockRecord), any(EventEnvelope.class));
     }
 
     private ConsumerRecord<String, String> eventRecord(String topic, String eventType, String sourceService) throws Exception {

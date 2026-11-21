@@ -7,6 +7,7 @@ import com.instacommerce.fulfillment.domain.model.PickTask;
 import com.instacommerce.fulfillment.domain.model.PickTaskStatus;
 import com.instacommerce.fulfillment.domain.model.Rider;
 import com.instacommerce.fulfillment.dto.mapper.FulfillmentMapper;
+import com.instacommerce.fulfillment.dto.request.MarkDeliveryFailedRequest;
 import com.instacommerce.fulfillment.dto.response.DeliveryResponse;
 import com.instacommerce.fulfillment.dto.response.TrackingResponse;
 import com.instacommerce.fulfillment.dto.response.TrackingTimelineEntry;
@@ -27,6 +28,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -126,6 +128,52 @@ public class DeliveryService {
         return FulfillmentMapper.toDeliveryResponse(saved);
     }
 
+    @Transactional
+    public DeliveryResponse markDeliveryFailed(UUID orderId, MarkDeliveryFailedRequest request) {
+        return markDeliveryFailed(orderId, request, request != null ? request.riderId() : null, true);
+    }
+
+    @Transactional
+    public DeliveryResponse markDeliveryFailed(UUID orderId,
+                                               MarkDeliveryFailedRequest request,
+                                               UUID authenticatedRiderId,
+                                               boolean privileged) {
+        Delivery delivery = deliveryRepository.findByOrderId(orderId)
+            .orElseThrow(() -> new DeliveryNotFoundException(orderId));
+        assertRiderOwnership(delivery, authenticatedRiderId, privileged);
+        if (delivery.getStatus() == DeliveryStatus.FAILED) {
+            return FulfillmentMapper.toDeliveryResponse(delivery);
+        }
+        if (delivery.getStatus() == DeliveryStatus.DELIVERED) {
+            throw new InvalidDeliveryStateException(orderId, delivery.getStatus(), "mark delivery failed");
+        }
+        String reason = request != null && request.reason() != null ? request.reason().trim() : "";
+        if (reason.isEmpty()) {
+            throw new IllegalArgumentException("Delivery failure reason is required");
+        }
+        UUID resolvedRiderId = delivery.getRider() != null
+            ? delivery.getRider().getId()
+            : (request.riderId() != null ? request.riderId() : authenticatedRiderId);
+        delivery.setStatus(DeliveryStatus.FAILED);
+        if (delivery.getRider() != null) {
+            delivery.getRider().setAvailable(true);
+            riderRepository.save(delivery.getRider());
+        }
+        Delivery saved = deliveryRepository.save(delivery);
+        Instant failedAt = Instant.now();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderId", orderId);
+        payload.put("deliveryId", saved.getId());
+        payload.put("riderId", resolvedRiderId);
+        payload.put("reason", reason);
+        payload.put("failureCode", request.failureCode());
+        payload.put("notes", request.notes());
+        payload.put("failedAt", failedAt);
+        outboxService.publish("fulfillment", orderId.toString(), "DeliveryFailed", payload);
+        eventPublisher.publishEvent(new OrderStatusUpdateEvent(orderId, "FAILED", reason));
+        return FulfillmentMapper.toDeliveryResponse(saved);
+    }
+
     @Transactional(readOnly = true)
     public TrackingResponse getTracking(UUID orderId, UUID requesterId, boolean isAdmin) {
         PickTask task = pickTaskRepository.findByOrderId(orderId)
@@ -149,6 +197,9 @@ public class DeliveryService {
         if (delivery != null) {
             if (delivery.getStatus() == DeliveryStatus.DELIVERED) {
                 return "DELIVERED";
+            }
+            if (delivery.getStatus() == DeliveryStatus.FAILED) {
+                return "FAILED";
             }
             if (delivery.getStatus().isAssigned()
                 || delivery.getStatus() == DeliveryStatus.PICKED_UP
