@@ -8,6 +8,7 @@ import com.instacommerce.notification.domain.model.NotificationChannel;
 import com.instacommerce.notification.repository.DeviceTokenRepository;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Locale;
@@ -16,8 +17,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class NotificationPayloadSupport {
+    private static final Logger logger = LoggerFactory.getLogger(NotificationPayloadSupport.class);
     private static final Set<String> DEDUPLICATED_STATUS_EVENTS = Set.of(
         "OrderCreated",
         "OrderPlaced",
@@ -84,6 +88,7 @@ final class NotificationPayloadSupport {
         try {
             return Optional.of(UUID.fromString(userId));
         } catch (IllegalArgumentException ex) {
+            logger.debug("Ignoring malformed userId '{}' in notification payload", userId, ex);
             return Optional.empty();
         }
     }
@@ -96,6 +101,7 @@ final class NotificationPayloadSupport {
         try {
             return orderLookupClient.findOrder(UUID.fromString(orderId));
         } catch (IllegalArgumentException ex) {
+            logger.debug("Ignoring malformed orderId '{}' in notification payload", orderId, ex);
             return Optional.empty();
         }
     }
@@ -162,8 +168,7 @@ final class NotificationPayloadSupport {
                     variables.put("failedAttempts", payload.get("failedAttempts").asInt());
                 }
             }
-            default -> {
-            }
+            default -> logger.trace("No event-specific template variables for eventType={}", eventType);
         }
         return variables;
     }
@@ -276,8 +281,8 @@ final class NotificationPayloadSupport {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(bytes).substring(0, 64);
-        } catch (Exception ex) {
-            return value.substring(0, Math.min(64, value.length()));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 algorithm unavailable", ex);
         }
     }
 }

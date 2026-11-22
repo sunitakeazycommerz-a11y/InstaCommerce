@@ -23,7 +23,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class TrackingService {
 
     private static final Logger log = LoggerFactory.getLogger(TrackingService.class);
-    private static final double GEOFENCE_RADIUS_KM = 0.2;
 
     private final DeliveryTrackingRepository trackingRepository;
     private final DeliveryRepository deliveryRepository;
@@ -102,7 +101,7 @@ public class TrackingService {
         double distanceKm = GeoUtils.haversineKm(
             latitude.doubleValue(), longitude.doubleValue(),
             delivery.getDropoffLat().doubleValue(), delivery.getDropoffLng().doubleValue());
-        if (distanceKm <= GEOFENCE_RADIUS_KM) {
+        if (distanceKm <= DeliveryPayloadSupport.GEOFENCE_RADIUS_KM) {
             deliveryService.updateStatus(delivery.getId(), DeliveryStatus.NEAR_DESTINATION);
         }
     }

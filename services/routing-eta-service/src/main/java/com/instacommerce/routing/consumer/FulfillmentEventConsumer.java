@@ -23,7 +23,10 @@ public class FulfillmentEventConsumer {
         this.objectMapper = objectMapper;
     }
 
-    @KafkaListener(topics = TopicNames.FULFILLMENT_EVENTS, groupId = "routing-eta-service")
+    @KafkaListener(
+        topics = {TopicNames.FULFILLMENT_EVENTS, TopicNames.ORDERS_EVENTS},
+        groupId = "routing-eta-service"
+    )
     public void handleFulfillmentEvent(String message) {
         try {
             JsonNode root = objectMapper.readTree(message);
@@ -52,7 +55,8 @@ public class FulfillmentEventConsumer {
             } else if ("DeliveryFailed".equals(eventType)
                 || "PickTaskCancelled".equals(eventType)
                 || "OrderCancelled".equals(eventType)) {
-                deliveryService.markDeliveryFailed(orderId, readText(payload, "reason"));
+                String reason = readText(payload, "reason", "reasonDescription", "reasonCode");
+                deliveryService.markDeliveryFailed(orderId, reason != null ? reason : eventType);
             } else {
                 log.debug("Ignoring fulfillment event type: {}", eventType);
             }
@@ -83,6 +87,7 @@ public class FulfillmentEventConsumer {
         try {
             return UUID.fromString(raw);
         } catch (IllegalArgumentException ex) {
+            log.debug("Non-UUID value for fulfillment field {}: {}", String.join("/", fieldNames), raw);
             return null;
         }
     }

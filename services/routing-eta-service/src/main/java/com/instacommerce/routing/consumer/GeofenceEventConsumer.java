@@ -67,22 +67,27 @@ public class GeofenceEventConsumer {
             }
             UUID zoneId = parseUuid(payload, "zone_id", "zoneId");
             UUID orderId = parseUuid(payload, "orderId", "order_id");
+            UUID deliveryId = parseUuid(payload, "deliveryId", "delivery_id");
             BigDecimal lat = parseDecimal(payload, "lat", "latitude");
             BigDecimal lng = parseDecimal(payload, "lng", "longitude");
 
             List<UUID> transitionedIds;
             if ("ENTERED_STORE".equals(transitionType)) {
-                transitionedIds = deliveryService.handleRiderEnteredStore(riderId, zoneId, orderId);
+                transitionedIds = deliveryId != null
+                    ? deliveryService.handleRiderEnteredStore(riderId, zoneId, orderId, deliveryId)
+                    : deliveryService.handleRiderEnteredStore(riderId, zoneId, orderId);
             } else if ("NEAR_DELIVERY".equals(transitionType)) {
-                transitionedIds = deliveryService.handleRiderNearDelivery(riderId, zoneId, orderId);
+                transitionedIds = deliveryId != null
+                    ? deliveryService.handleRiderNearDelivery(riderId, orderId, deliveryId, zoneId, lat, lng)
+                    : deliveryService.handleRiderNearDelivery(riderId, orderId, zoneId, lat, lng);
             } else {
                 log.debug("Ignoring geofence transition type: {}", transitionType);
                 return;
             }
 
             if (trackingService != null && lat != null && lng != null && transitionedIds != null) {
-                for (UUID deliveryId : transitionedIds) {
-                    trackingService.recordLocation(new LocationUpdateRequest(deliveryId, lat, lng, null, null));
+                for (UUID transitionedId : transitionedIds) {
+                    trackingService.recordLocation(new LocationUpdateRequest(transitionedId, lat, lng, null, null));
                 }
             }
         } catch (Exception ex) {

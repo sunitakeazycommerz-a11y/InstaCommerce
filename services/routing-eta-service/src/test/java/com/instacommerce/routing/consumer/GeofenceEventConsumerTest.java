@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -180,5 +181,217 @@ class GeofenceEventConsumerTest {
         ETAEstimate estimate = new ETAEstimate(10, 8, 12, new BigDecimal("2.0"), 0.1, Instant.now());
         deliveryService.updateETA(deliveryId, estimate);
         verify(outboxService, never()).publish(eq("Delivery"), eq(deliveryId.toString()), eq("EtaUpdated"), any());
+    }
+
+    @Test
+    @DisplayName("ENTERED_STORE matches storeId only and leaves other-store, ambiguous, and unowned deliveries untouched")
+    void enteredStoreLeavesUnrelatedBatchedStopsUntouched() {
+        UUID riderId = UUID.randomUUID();
+        UUID storeA = UUID.randomUUID();
+        UUID storeB = UUID.randomUUID();
+
+        Delivery stopStoreA = new Delivery();
+        stopStoreA.setId(UUID.randomUUID());
+        stopStoreA.setOrderId(UUID.randomUUID());
+        stopStoreA.setRiderId(riderId);
+        stopStoreA.setStoreId(storeA);
+        stopStoreA.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+
+        Delivery stopStoreB = new Delivery();
+        stopStoreB.setId(UUID.randomUUID());
+        stopStoreB.setOrderId(UUID.randomUUID());
+        stopStoreB.setRiderId(riderId);
+        stopStoreB.setStoreId(storeB);
+        stopStoreB.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+
+        when(deliveryRepository.findByRiderIdAndStatusIn(eq(riderId), any()))
+            .thenReturn(List.of(stopStoreA, stopStoreB));
+        when(deliveryRepository.findById(stopStoreA.getId())).thenReturn(Optional.of(stopStoreA));
+        when(deliveryRepository.save(any(Delivery.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(trackingRepository.save(any(DeliveryTracking.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        geofenceConsumer.handleGeofenceEvent("""
+            {
+              "eventType": "RiderGeofenceTransition",
+              "payload": {
+                "rider_id": "%s",
+                "zone_id": "%s",
+                "event_type": "ENTERED_STORE",
+                "lat": 12.9716,
+                "lng": 77.5946
+              }
+            }
+            """.formatted(riderId, storeA));
+
+        assertThat(stopStoreA.getStatus()).isEqualTo(DeliveryStatus.PICKED_UP);
+        assertThat(stopStoreB.getStatus()).isEqualTo(DeliveryStatus.RIDER_ASSIGNED);
+        verify(outboxService, times(1)).publish(
+            eq("Delivery"), eq(stopStoreA.getId().toString()), eq("DeliveryStatusUpdated"), any());
+        verify(outboxService, never()).publish(
+            eq("Delivery"), eq(stopStoreB.getId().toString()), any(), any());
+
+        geofenceConsumer.handleGeofenceEvent("""
+            {
+              "eventType": "RiderGeofenceTransition",
+              "payload": {
+                "rider_id": "%s",
+                "zone_id": "non-uuid-zone",
+                "event_type": "ENTERED_STORE",
+                "lat": 12.9716,
+                "lng": 77.5946
+              }
+            }
+            """.formatted(riderId));
+
+        assertThat(stopStoreB.getStatus()).isEqualTo(DeliveryStatus.RIDER_ASSIGNED);
+
+        UUID unmatchedZone = UUID.randomUUID();
+        geofenceConsumer.handleGeofenceEvent("""
+            {
+              "eventType": "RiderGeofenceTransition",
+              "payload": {
+                "zone_id": "%s",
+                "event_type": "ENTERED_STORE",
+                "lat": 12.9716,
+                "lng": 77.5946
+              }
+            }
+            """.formatted(unmatchedZone));
+
+        verify(deliveryRepository, never()).findById(unmatchedZone);
+        verify(deliveryRepository, never()).findByOrderId(unmatchedZone);
+    }
+
+    @Test
+    @DisplayName("NEAR_DELIVERY uses (lat, lng) proximity to disambiguate batched stops and never force-steps PENDING/RIDER_ASSIGNED")
+    void nearDeliveryDisambiguatesBatchedStopsByProximityWithoutForceStepping() {
+        UUID riderId = UUID.randomUUID();
+
+        Delivery stop1EnRouteNear = new Delivery();
+        stop1EnRouteNear.setId(UUID.randomUUID());
+        stop1EnRouteNear.setOrderId(UUID.randomUUID());
+        stop1EnRouteNear.setRiderId(riderId);
+        stop1EnRouteNear.setStatus(DeliveryStatus.EN_ROUTE);
+        stop1EnRouteNear.setDropoffLat(new BigDecimal("12.9352"));
+        stop1EnRouteNear.setDropoffLng(new BigDecimal("77.6245"));
+
+        Delivery stop2EnRouteFar = new Delivery();
+        stop2EnRouteFar.setId(UUID.randomUUID());
+        stop2EnRouteFar.setOrderId(UUID.randomUUID());
+        stop2EnRouteFar.setRiderId(riderId);
+        stop2EnRouteFar.setStatus(DeliveryStatus.EN_ROUTE);
+        stop2EnRouteFar.setDropoffLat(new BigDecimal("12.9800"));
+        stop2EnRouteFar.setDropoffLng(new BigDecimal("77.6800"));
+
+        Delivery stop3PendingSameDropoff = new Delivery();
+        stop3PendingSameDropoff.setId(UUID.randomUUID());
+        stop3PendingSameDropoff.setOrderId(UUID.randomUUID());
+        stop3PendingSameDropoff.setRiderId(riderId);
+        stop3PendingSameDropoff.setStatus(DeliveryStatus.PENDING);
+        stop3PendingSameDropoff.setDropoffLat(new BigDecimal("12.9352"));
+        stop3PendingSameDropoff.setDropoffLng(new BigDecimal("77.6245"));
+
+        Delivery stop4AssignedSameDropoff = new Delivery();
+        stop4AssignedSameDropoff.setId(UUID.randomUUID());
+        stop4AssignedSameDropoff.setOrderId(UUID.randomUUID());
+        stop4AssignedSameDropoff.setRiderId(riderId);
+        stop4AssignedSameDropoff.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+        stop4AssignedSameDropoff.setDropoffLat(new BigDecimal("12.9352"));
+        stop4AssignedSameDropoff.setDropoffLng(new BigDecimal("77.6245"));
+
+        when(deliveryRepository.findByRiderIdAndStatusIn(eq(riderId), any()))
+            .thenReturn(List.of(stop1EnRouteNear, stop2EnRouteFar, stop3PendingSameDropoff, stop4AssignedSameDropoff));
+        when(deliveryRepository.findById(stop1EnRouteNear.getId())).thenReturn(Optional.of(stop1EnRouteNear));
+        when(deliveryRepository.save(any(Delivery.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(trackingRepository.save(any(DeliveryTracking.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        geofenceConsumer.handleGeofenceEvent("""
+            {
+              "eventType": "RiderGeofenceTransition",
+              "payload": {
+                "rider_id": "%s",
+                "zone_id": "%s",
+                "event_type": "NEAR_DELIVERY",
+                "lat": 12.9351,
+                "lng": 77.6244
+              }
+            }
+            """.formatted(riderId, UUID.randomUUID()));
+
+        assertThat(stop1EnRouteNear.getStatus()).isEqualTo(DeliveryStatus.NEAR_DESTINATION);
+        assertThat(stop2EnRouteFar.getStatus()).isEqualTo(DeliveryStatus.EN_ROUTE);
+        assertThat(stop3PendingSameDropoff.getStatus()).isEqualTo(DeliveryStatus.PENDING);
+        assertThat(stop4AssignedSameDropoff.getStatus()).isEqualTo(DeliveryStatus.RIDER_ASSIGNED);
+
+        verify(outboxService, times(1)).publish(
+            eq("Delivery"), eq(stop1EnRouteNear.getId().toString()), eq("DeliveryStatusUpdated"), any());
+        verify(outboxService, never()).publish(
+            eq("Delivery"), eq(stop2EnRouteFar.getId().toString()), any(), any());
+        verify(outboxService, never()).publish(
+            eq("Delivery"), eq(stop3PendingSameDropoff.getId().toString()), any(), any());
+        verify(outboxService, never()).publish(
+            eq("Delivery"), eq(stop4AssignedSameDropoff.getId().toString()), any(), any());
+        verify(trackingRepository, times(1)).save(any(DeliveryTracking.class));
+    }
+
+    @Test
+    @DisplayName("NEAR_DELIVERY with exact orderId transitions EN_ROUTE delivery but does not force-step RIDER_ASSIGNED")
+    void nearDeliveryExactOrderIdNeverForceStepsPreTransitDelivery() {
+        UUID riderId = UUID.randomUUID();
+        UUID assignedOrderId = UUID.randomUUID();
+        Delivery assignedDelivery = new Delivery();
+        assignedDelivery.setId(UUID.randomUUID());
+        assignedDelivery.setOrderId(assignedOrderId);
+        assignedDelivery.setRiderId(riderId);
+        assignedDelivery.setStatus(DeliveryStatus.RIDER_ASSIGNED);
+
+        when(deliveryRepository.findByOrderId(assignedOrderId)).thenReturn(Optional.of(assignedDelivery));
+
+        geofenceConsumer.handleGeofenceEvent("""
+            {
+              "eventType": "RiderGeofenceTransition",
+              "payload": {
+                "rider_id": "%s",
+                "orderId": "%s",
+                "event_type": "NEAR_DELIVERY",
+                "lat": 12.9351,
+                "lng": 77.6244
+              }
+            }
+            """.formatted(riderId, assignedOrderId));
+
+        assertThat(assignedDelivery.getStatus()).isEqualTo(DeliveryStatus.RIDER_ASSIGNED);
+        verifyNoInteractions(outboxService);
+        verifyNoInteractions(trackingRepository);
+
+        UUID enRouteOrderId = UUID.randomUUID();
+        Delivery enRouteDelivery = new Delivery();
+        enRouteDelivery.setId(UUID.randomUUID());
+        enRouteDelivery.setOrderId(enRouteOrderId);
+        enRouteDelivery.setRiderId(riderId);
+        enRouteDelivery.setStatus(DeliveryStatus.EN_ROUTE);
+
+        when(deliveryRepository.findByOrderId(enRouteOrderId)).thenReturn(Optional.of(enRouteDelivery));
+        when(deliveryRepository.findById(enRouteDelivery.getId())).thenReturn(Optional.of(enRouteDelivery));
+        when(deliveryRepository.save(any(Delivery.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(trackingRepository.save(any(DeliveryTracking.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        geofenceConsumer.handleGeofenceEvent("""
+            {
+              "eventType": "RiderGeofenceTransition",
+              "payload": {
+                "rider_id": "%s",
+                "orderId": "%s",
+                "event_type": "NEAR_DELIVERY",
+                "lat": 12.9351,
+                "lng": 77.6244
+              }
+            }
+            """.formatted(riderId, enRouteOrderId));
+
+        assertThat(enRouteDelivery.getStatus()).isEqualTo(DeliveryStatus.NEAR_DESTINATION);
+        verify(outboxService, times(1)).publish(
+            eq("Delivery"), eq(enRouteDelivery.getId().toString()), eq("DeliveryStatusUpdated"), any());
+        verify(trackingRepository, times(1)).save(any(DeliveryTracking.class));
     }
 }

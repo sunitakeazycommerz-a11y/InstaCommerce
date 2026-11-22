@@ -7,19 +7,30 @@ import com.instacommerce.routing.domain.model.DeliveryStatus;
 import com.instacommerce.routing.dto.response.DeliveryResponse;
 import com.instacommerce.routing.dto.response.ETAEstimate;
 import com.instacommerce.routing.exception.InvalidDeliveryStateException;
+import com.instacommerce.routing.repository.DeliveryRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class DeliveryPayloadSupport {
+    private static final Logger log = LoggerFactory.getLogger(DeliveryPayloadSupport.class);
+    static final double GEOFENCE_RADIUS_KM = 0.2;
+
     private DeliveryPayloadSupport() {
     }
 
     static Map<String, Object> statusPayload(Delivery saved) {
+        return statusPayload(saved, null);
+    }
+
+    static Map<String, Object> statusPayload(Delivery saved, String reason) {
         Map<String, Object> statusPayload = new HashMap<>();
         statusPayload.put("deliveryId", saved.getId().toString());
         statusPayload.put("orderId", saved.getOrderId().toString());
@@ -27,6 +38,9 @@ final class DeliveryPayloadSupport {
         statusPayload.put("status", saved.getStatus().name());
         statusPayload.put("updatedAt", saved.getUpdatedAt() != null
             ? saved.getUpdatedAt().toString() : Instant.now().toString());
+        if (reason != null && !reason.isBlank()) {
+            statusPayload.put("reason", reason);
+        }
         return statusPayload;
     }
 
@@ -190,18 +204,84 @@ final class DeliveryPayloadSupport {
         return delivery;
     }
 
+    static List<Delivery> resolveStoreGeofenceTargets(DeliveryRepository deliveryRepository,
+                                                      List<DeliveryStatus> nonTerminalStatuses,
+                                                      UUID riderId,
+                                                      UUID zoneId,
+                                                      UUID orderId,
+                                                      UUID deliveryId) {
+        if (deliveryId != null || orderId != null) {
+            return findExactGeofenceTarget(deliveryRepository, riderId, orderId, deliveryId)
+                .filter(d -> zoneId == null || d.getStoreId() == null || zoneId.equals(d.getStoreId()))
+                .map(List::of)
+                .orElse(List.of());
+        }
+        if (riderId == null) {
+            return List.of();
+        }
+        List<Delivery> candidates = deliveryRepository.findByRiderIdAndStatusIn(riderId, nonTerminalStatuses);
+        return selectGeofenceTargets(candidates, zoneId);
+    }
+
+    static List<Delivery> resolveNearDeliveryTargets(DeliveryRepository deliveryRepository,
+                                                     UUID riderId,
+                                                     UUID orderId,
+                                                     UUID deliveryId,
+                                                     BigDecimal lat,
+                                                     BigDecimal lng) {
+        if (deliveryId != null || orderId != null) {
+            return findExactGeofenceTarget(deliveryRepository, riderId, orderId, deliveryId)
+                .filter(d -> d.getStatus() == DeliveryStatus.EN_ROUTE || d.getStatus() == DeliveryStatus.IN_TRANSIT)
+                .map(List::of)
+                .orElse(List.of());
+        }
+        if (riderId == null || lat == null || lng == null) {
+            log.debug("Skipping NEAR_DELIVERY without orderId/deliveryId or rider coordinates (riderId={})", riderId);
+            return List.of();
+        }
+        List<Delivery> candidates = deliveryRepository.findByRiderIdAndStatusIn(
+            riderId, List.of(DeliveryStatus.EN_ROUTE, DeliveryStatus.IN_TRANSIT));
+        return selectNearDeliveryTargets(candidates, lat, lng, GEOFENCE_RADIUS_KM);
+    }
+
+    private static Optional<Delivery> findExactGeofenceTarget(DeliveryRepository deliveryRepository,
+                                                              UUID riderId,
+                                                              UUID orderId,
+                                                              UUID deliveryId) {
+        Optional<Delivery> candidate = deliveryId != null
+            ? deliveryRepository.findById(deliveryId)
+            : deliveryRepository.findByOrderId(orderId);
+        return candidate
+            .filter(d -> orderId == null || orderId.equals(d.getOrderId()))
+            .filter(d -> riderId == null || d.getRiderId() == null || riderId.equals(d.getRiderId()));
+    }
+
     static List<Delivery> selectGeofenceTargets(List<Delivery> candidates, UUID zoneId) {
         if (candidates == null || candidates.isEmpty()) {
             return List.of();
         }
         if (zoneId != null) {
-            List<Delivery> matchedByZone = candidates.stream()
-                .filter(d -> zoneId.equals(d.getStoreId()) || zoneId.equals(d.getId()) || zoneId.equals(d.getOrderId()))
+            return candidates.stream()
+                .filter(d -> zoneId.equals(d.getStoreId()))
                 .toList();
-            if (!matchedByZone.isEmpty()) {
-                return matchedByZone;
-            }
         }
-        return candidates;
+        return candidates.size() == 1 ? candidates : List.of();
+    }
+
+    static List<Delivery> selectNearDeliveryTargets(List<Delivery> candidates,
+                                                    BigDecimal lat,
+                                                    BigDecimal lng,
+                                                    double thresholdKm) {
+        if (candidates == null || candidates.isEmpty() || lat == null || lng == null) {
+            return List.of();
+        }
+        double riderLat = lat.doubleValue();
+        double riderLng = lng.doubleValue();
+        return candidates.stream()
+            .filter(d -> d.getStatus() == DeliveryStatus.EN_ROUTE || d.getStatus() == DeliveryStatus.IN_TRANSIT)
+            .filter(d -> d.getDropoffLat() != null && d.getDropoffLng() != null)
+            .filter(d -> GeoUtils.haversineKm(
+                riderLat, riderLng, d.getDropoffLat().doubleValue(), d.getDropoffLng().doubleValue()) <= thresholdKm)
+            .toList();
     }
 }

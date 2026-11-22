@@ -113,7 +113,7 @@ class InventoryRemediationTest {
             reservationRepository, stockItemRepository, new ReservationProperties(),
             entityManager, outboxService, new InventoryProperties(),
             new StaticListableBeanFactory().getBeanProvider(WarehouseClient.class),
-            null
+            null, null, null, null
         );
 
         assertThatThrownBy(() -> service.confirm(reservationId))

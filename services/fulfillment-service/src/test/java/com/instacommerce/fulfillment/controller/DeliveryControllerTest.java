@@ -132,4 +132,17 @@ class DeliveryControllerTest {
             .isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(deliveryService);
     }
+
+    @Test
+    void markDeliveryFailedRejectsMalformedNonInternalPrincipalUuid() {
+        UUID orderId = UUID.randomUUID();
+        MarkDeliveryFailedRequest request = new MarkDeliveryFailedRequest("Customer unreachable");
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+            "not-a-uuid", null, List.of(new SimpleGrantedAuthority("ROLE_RIDER")));
+
+        assertThatThrownBy(() -> controller.markDeliveryFailed(orderId, request, "not-a-uuid", auth))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("Invalid subject UUID");
+        verifyNoInteractions(deliveryService);
+    }
 }

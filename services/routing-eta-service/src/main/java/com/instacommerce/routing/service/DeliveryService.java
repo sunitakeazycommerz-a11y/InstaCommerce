@@ -13,7 +13,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -234,21 +233,33 @@ public class DeliveryService {
 
     @Transactional
     public void markDeliveryFailed(UUID orderId, String reason) {
+        String normalizedReason = (reason != null && !reason.isBlank()) ? reason.trim() : null;
         var deliveryOpt = deliveryRepository.findByOrderId(orderId);
         if (deliveryOpt.isEmpty()) {
-            log.warn("Received failure/cancellation for unknown delivery order={}", orderId);
+            log.warn("Received failure/cancellation for unknown delivery order={}, reason={}",
+                orderId, normalizedReason);
             return;
         }
         Delivery delivery = deliveryOpt.get();
         if (delivery.getStatus().isTerminal()) {
+            log.debug("Ignoring failure/cancellation for terminal delivery {} order={} status={} reason={}",
+                delivery.getId(), orderId, delivery.getStatus(), normalizedReason);
             return;
         }
-        applyTransition(delivery, DeliveryStatus.FAILED);
+        log.info("Marking delivery {} for order {} FAILED (reason={})",
+            delivery.getId(), orderId, normalizedReason);
+        applyTransition(delivery, DeliveryStatus.FAILED, normalizedReason);
     }
 
     @Transactional
     public List<UUID> handleRiderEnteredStore(UUID riderId, UUID zoneId, UUID orderId) {
-        List<Delivery> targets = resolveGeofenceTargets(riderId, zoneId, orderId);
+        return handleRiderEnteredStore(riderId, zoneId, orderId, null);
+    }
+
+    @Transactional
+    public List<UUID> handleRiderEnteredStore(UUID riderId, UUID zoneId, UUID orderId, UUID deliveryId) {
+        List<Delivery> targets = DeliveryPayloadSupport.resolveStoreGeofenceTargets(
+            deliveryRepository, NON_TERMINAL_STATUSES, riderId, zoneId, orderId, deliveryId);
         List<UUID> transitioned = new ArrayList<>();
         for (Delivery delivery : targets) {
             if (delivery.getStatus().isTerminal()) {
@@ -267,23 +278,18 @@ public class DeliveryService {
     }
 
     @Transactional
-    public List<UUID> handleRiderNearDelivery(UUID riderId, UUID zoneId, UUID orderId) {
-        List<Delivery> targets = resolveGeofenceTargets(riderId, zoneId, orderId);
+    public List<UUID> handleRiderNearDelivery(UUID riderId, UUID orderId, UUID zoneId,
+                                              BigDecimal lat, BigDecimal lng) {
+        return handleRiderNearDelivery(riderId, orderId, null, zoneId, lat, lng);
+    }
+
+    @Transactional
+    public List<UUID> handleRiderNearDelivery(UUID riderId, UUID orderId, UUID deliveryId, UUID zoneId,
+                                              BigDecimal lat, BigDecimal lng) {
+        List<Delivery> targets = DeliveryPayloadSupport.resolveNearDeliveryTargets(
+            deliveryRepository, riderId, orderId, deliveryId, lat, lng);
         List<UUID> transitioned = new ArrayList<>();
         for (Delivery delivery : targets) {
-            if (delivery.getStatus().isTerminal() || delivery.getStatus() == DeliveryStatus.NEAR_DESTINATION) {
-                continue;
-            }
-            if (delivery.getStatus() == DeliveryStatus.PENDING) {
-                delivery = applyTransition(delivery, DeliveryStatus.RIDER_ASSIGNED);
-            }
-            if (delivery.getStatus() == DeliveryStatus.RIDER_ASSIGNED
-                || delivery.getStatus() == DeliveryStatus.ASSIGNED) {
-                delivery = applyTransition(delivery, DeliveryStatus.PICKED_UP);
-            }
-            if (delivery.getStatus() == DeliveryStatus.PICKED_UP) {
-                delivery = applyTransition(delivery, DeliveryStatus.EN_ROUTE);
-            }
             if (delivery.getStatus() == DeliveryStatus.EN_ROUTE
                 || delivery.getStatus() == DeliveryStatus.IN_TRANSIT) {
                 delivery = applyTransition(delivery, DeliveryStatus.NEAR_DESTINATION);
@@ -291,29 +297,6 @@ public class DeliveryService {
             }
         }
         return transitioned;
-    }
-
-    private List<Delivery> resolveGeofenceTargets(UUID riderId, UUID zoneId, UUID orderId) {
-        if (orderId != null) {
-            return deliveryRepository.findByOrderId(orderId).map(List::of).orElse(List.of());
-        }
-        if (riderId != null) {
-            List<Delivery> candidates = deliveryRepository.findByRiderIdAndStatusIn(riderId, NON_TERMINAL_STATUSES);
-            if (candidates != null && !candidates.isEmpty()) {
-                return DeliveryPayloadSupport.selectGeofenceTargets(candidates, zoneId);
-            }
-        }
-        if (zoneId != null) {
-            Optional<Delivery> byId = deliveryRepository.findById(zoneId);
-            if (byId.isPresent()) {
-                return List.of(byId.get());
-            }
-            Optional<Delivery> byOrder = deliveryRepository.findByOrderId(zoneId);
-            if (byOrder.isPresent()) {
-                return List.of(byOrder.get());
-            }
-        }
-        return List.of();
     }
 
     @Transactional(readOnly = true)
@@ -355,6 +338,10 @@ public class DeliveryService {
     }
 
     private Delivery applyTransition(Delivery delivery, DeliveryStatus targetStatus) {
+        return applyTransition(delivery, targetStatus, null);
+    }
+
+    private Delivery applyTransition(Delivery delivery, DeliveryStatus targetStatus, String reason) {
         DeliveryPayloadSupport.validateTransition(delivery.getStatus(), targetStatus);
         delivery.setStatus(targetStatus);
         if ((targetStatus == DeliveryStatus.RIDER_ASSIGNED || targetStatus == DeliveryStatus.ASSIGNED)
@@ -364,7 +351,7 @@ public class DeliveryService {
         Delivery saved = deliveryRepository.save(delivery);
         log.info("Delivery {} status updated to {}", saved.getId(), targetStatus);
         outboxService.publish("Delivery", saved.getId().toString(),
-            "DeliveryStatusUpdated", DeliveryPayloadSupport.statusPayload(saved));
+            "DeliveryStatusUpdated", DeliveryPayloadSupport.statusPayload(saved, reason));
         return saved;
     }
 

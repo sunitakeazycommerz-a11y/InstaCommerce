@@ -86,7 +86,10 @@ class ReservationServiceTest {
             outboxService,
             new InventoryProperties(),
             provider,
-            transactionManager
+            transactionManager,
+            null,
+            null,
+            null
         );
     }
 

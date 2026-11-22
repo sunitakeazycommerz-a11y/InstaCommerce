@@ -67,7 +67,7 @@ class DeliveryServiceTest {
     }
 
     @Test
-    @DisplayName("Continuous ETA update emits ETA_UPDATED outbox event and WebSocket message (Issue #595)")
+    @DisplayName("Continuous ETA update emits ETA_UPDATED outbox event and WebSocket message")
     void shouldEmitContinuousEtaUpdates() {
         UUID deliveryId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
@@ -89,13 +89,11 @@ class DeliveryServiceTest {
 
         deliveryService.updateETA(deliveryId, estimate);
 
-        // Verify outbox event EtaUpdated
         ArgumentCaptor<Map<String, Object>> updateCaptor = ArgumentCaptor.captor();
         verify(outboxService).publish(
             eq("Delivery"), eq(deliveryId.toString()), eq("EtaUpdated"), updateCaptor.capture());
         assertEquals(12, updateCaptor.getValue().get("estimatedMinutes"));
 
-        // Verify WebSocket broadcast
         verify(messagingTemplate).convertAndSend(eq("/topic/deliveries/" + deliveryId + "/eta"), any(Object.class));
     }
 

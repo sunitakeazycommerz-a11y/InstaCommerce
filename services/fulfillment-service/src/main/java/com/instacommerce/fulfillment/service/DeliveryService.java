@@ -141,6 +141,7 @@ public class DeliveryService {
         Delivery delivery = deliveryRepository.findByOrderId(orderId)
             .orElseThrow(() -> new DeliveryNotFoundException(orderId));
         assertRiderOwnership(delivery, authenticatedRiderId, privileged);
+        ensurePickTaskNotCancelled(orderId, "mark delivery failed");
         if (delivery.getStatus() == DeliveryStatus.FAILED) {
             return FulfillmentMapper.toDeliveryResponse(delivery);
         }
@@ -169,7 +170,7 @@ public class DeliveryService {
         payload.put("failureCode", request.failureCode());
         payload.put("notes", request.notes());
         payload.put("failedAt", failedAt);
-        outboxService.publish("fulfillment", orderId.toString(), "DeliveryFailed", payload);
+        outboxService.publish("Fulfillment", orderId.toString(), "DeliveryFailed", payload);
         eventPublisher.publishEvent(new OrderStatusUpdateEvent(orderId, "FAILED", reason));
         return FulfillmentMapper.toDeliveryResponse(saved);
     }
@@ -275,6 +276,7 @@ public class DeliveryService {
         Delivery delivery = deliveryRepository.findByOrderId(orderId)
             .orElseThrow(() -> new DeliveryNotFoundException(orderId));
         assertRiderOwnership(delivery, authenticatedRiderId, privileged);
+        ensurePickTaskNotCancelled(orderId, "mark delivery failed");
         if (delivery.getStatus() == DeliveryStatus.FAILED) {
             throw new InvalidDeliveryStateException(orderId, delivery.getStatus(), "record proof of delivery");
         }

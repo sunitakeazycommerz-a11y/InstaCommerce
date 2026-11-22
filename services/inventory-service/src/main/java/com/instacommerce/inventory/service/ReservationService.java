@@ -23,6 +23,7 @@ import com.instacommerce.inventory.exception.StoreInactiveException;
 import com.instacommerce.inventory.repository.ReservationReleaseLogRepository;
 import com.instacommerce.inventory.repository.ReservationRepository;
 import com.instacommerce.inventory.repository.StockItemRepository;
+import jakarta.annotation.Nullable;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,7 +37,6 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -65,62 +65,10 @@ public class ReservationService {
                               OutboxService outboxService,
                               InventoryProperties inventoryProperties,
                               ObjectProvider<WarehouseClient> warehouseClientProvider,
-                              PlatformTransactionManager transactionManager) {
-        this(
-            reservationRepository,
-            stockItemRepository,
-            reservationProperties,
-            entityManager,
-            outboxService,
-            inventoryProperties,
-            warehouseClientProvider,
-            transactionManager,
-            null,
-            new StockLevelMonitor(inventoryProperties, outboxService),
-            null
-        );
-    }
-
-    @Autowired
-    public ReservationService(ReservationRepository reservationRepository,
-                              StockItemRepository stockItemRepository,
-                              ReservationProperties reservationProperties,
-                              EntityManager entityManager,
-                              OutboxService outboxService,
-                              InventoryProperties inventoryProperties,
-                              ObjectProvider<WarehouseClient> warehouseClientProvider,
-                              PlatformTransactionManager transactionManager,
-                              ObjectProvider<FefoBatchAllocationService> fefoAllocationProvider,
-                              ObjectProvider<StockLevelMonitor> stockLevelMonitorProvider,
-                              ObjectProvider<ReservationReleaseLogRepository> releaseLogRepositoryProvider) {
-        this(
-            reservationRepository,
-            stockItemRepository,
-            reservationProperties,
-            entityManager,
-            outboxService,
-            inventoryProperties,
-            warehouseClientProvider,
-            transactionManager,
-            fefoAllocationProvider != null ? fefoAllocationProvider.getIfAvailable() : null,
-            stockLevelMonitorProvider != null
-                ? stockLevelMonitorProvider.getIfAvailable(() -> new StockLevelMonitor(inventoryProperties, outboxService))
-                : new StockLevelMonitor(inventoryProperties, outboxService),
-            releaseLogRepositoryProvider != null ? releaseLogRepositoryProvider.getIfAvailable() : null
-        );
-    }
-
-    public ReservationService(ReservationRepository reservationRepository,
-                              StockItemRepository stockItemRepository,
-                              ReservationProperties reservationProperties,
-                              EntityManager entityManager,
-                              OutboxService outboxService,
-                              InventoryProperties inventoryProperties,
-                              ObjectProvider<WarehouseClient> warehouseClientProvider,
-                              PlatformTransactionManager transactionManager,
-                              FefoBatchAllocationService fefoBatchAllocationService,
-                              StockLevelMonitor stockLevelMonitor,
-                              ReservationReleaseLogRepository releaseLogRepository) {
+                              @Nullable PlatformTransactionManager transactionManager,
+                              @Nullable FefoBatchAllocationService fefoBatchAllocationService,
+                              @Nullable StockLevelMonitor stockLevelMonitor,
+                              @Nullable ReservationReleaseLogRepository releaseLogRepository) {
         this.reservationRepository = reservationRepository;
         this.stockItemRepository = stockItemRepository;
         this.reservationProperties = reservationProperties;

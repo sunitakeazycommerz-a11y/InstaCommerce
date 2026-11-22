@@ -282,7 +282,7 @@ class DeliveryServiceTest {
         assertThat(rider.isAvailable()).isTrue();
         verify(riderRepository).save(rider);
         verify(outboxService).publish(
-            eq("fulfillment"), eq(orderId.toString()), eq("DeliveryFailed"), payloadCaptor.capture());
+            eq("Fulfillment"), eq(orderId.toString()), eq("DeliveryFailed"), payloadCaptor.capture());
         assertThat(payloadCaptor.getValue())
             .containsEntry("orderId", orderId)
             .containsEntry("deliveryId", delivery.getId())
@@ -334,6 +334,27 @@ class DeliveryServiceTest {
         assertThatThrownBy(() -> deliveryService.markDeliveryFailed(
             orderId, new MarkDeliveryFailedRequest("Wrong rider"), otherRiderId, false))
             .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void markDeliveryFailedRejectsCancelledPickTask() {
+        UUID orderId = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        Rider rider = newRider(riderId, false);
+        Delivery inTransit = newDelivery(orderId, DeliveryStatus.PICKED_UP, rider);
+        PickTask cancelledTask = newPickTask(orderId, PickTaskStatus.CANCELLED);
+
+        when(deliveryRepository.findByOrderId(orderId)).thenReturn(Optional.of(inTransit));
+        when(pickTaskRepository.findByOrderId(orderId)).thenReturn(Optional.of(cancelledTask));
+
+        assertThatThrownBy(() -> deliveryService.markDeliveryFailed(
+            orderId, new MarkDeliveryFailedRequest("Customer unreachable"), riderId, false))
+            .isInstanceOf(InvalidPickTaskStateException.class);
+
+        verify(deliveryRepository, never()).save(any());
+        verify(riderRepository, never()).save(any());
+        verify(outboxService, never()).publish(any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     private PickTask newPickTask(UUID orderId, PickTaskStatus status) {
