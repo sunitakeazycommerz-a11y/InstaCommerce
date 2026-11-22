@@ -267,4 +267,30 @@ class PaymentEventConsumerTest {
         verify(orderLookupClient).findOrder(orderId);
         verifyNoInteractions(velocityService, blocklistService);
     }
+
+    @Test
+    void paymentFailedWithoutUserIdResolvesUserViaOrderLookupAndIncrementsVelocity() {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        String payload = """
+                {
+                  "id": "evt-pay-fail-no-user",
+                  "eventType": "PaymentFailed",
+                  "payload": {
+                    "orderId": "%s",
+                    "paymentId": "%s",
+                    "reason": "card_declined"
+                  }
+                }
+                """.formatted(orderId, UUID.randomUUID());
+
+        when(orderLookupClient.findOrder(orderId))
+                .thenReturn(Optional.of(new OrderSnapshot(orderId, userId)));
+
+        consumer.onPaymentEvent(new ConsumerRecord<>("payments.events", 0, 9L, orderId.toString(), payload));
+
+        verify(orderLookupClient).findOrder(orderId);
+        verify(velocityService).incrementCounter("USER", userId.toString(), "FAILED_PAYMENTS_5M");
+        verify(velocityService).incrementCounter("USER", userId.toString(), "FAILED_PAYMENTS_1H");
+    }
 }

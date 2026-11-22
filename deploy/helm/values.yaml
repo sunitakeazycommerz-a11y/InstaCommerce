@@ -210,6 +210,7 @@ istio:
         - fulfillment-service
         - notification-service
         - wallet-loyalty-service
+        - fraud-detection-service
         - ai-orchestrator-service
         - payment-webhook
         - reconciliation-engine
@@ -1332,6 +1333,8 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8097"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///fraud_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+      ORDER_SERVICE_URL: "http://order-service:8084"
+      INTERNAL_SERVICE_TOKEN: ${sm://internal-service-token}
     hpa:
       minReplicas: 2
       maxReplicas: 8

@@ -254,7 +254,8 @@ class DeliveryServiceTest {
 
         assertThatThrownBy(() -> deliveryService.recordProofOfDelivery(
             orderId, "https://storage.googleapis.com/pod/1.webp", "WEBP", 50_000, true))
-            .isInstanceOf(InvalidPickTaskStateException.class);
+            .isInstanceOf(InvalidPickTaskStateException.class)
+            .hasMessageContaining("record proof of delivery");
 
         verify(deliveryRepository, never()).save(any());
     }

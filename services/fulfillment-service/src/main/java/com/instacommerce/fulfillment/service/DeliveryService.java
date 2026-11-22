@@ -276,7 +276,6 @@ public class DeliveryService {
         Delivery delivery = deliveryRepository.findByOrderId(orderId)
             .orElseThrow(() -> new DeliveryNotFoundException(orderId));
         assertRiderOwnership(delivery, authenticatedRiderId, privileged);
-        ensurePickTaskNotCancelled(orderId, "mark delivery failed");
         if (delivery.getStatus() == DeliveryStatus.FAILED) {
             throw new InvalidDeliveryStateException(orderId, delivery.getStatus(), "record proof of delivery");
         }

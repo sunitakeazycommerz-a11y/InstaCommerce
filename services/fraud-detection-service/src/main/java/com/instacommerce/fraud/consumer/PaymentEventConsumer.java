@@ -85,9 +85,8 @@ public class PaymentEventConsumer {
     }
 
     private void handlePaymentFailed(JsonNode payload, long offset) {
-        String userId = extractText(payload, "userId");
+        String userId = resolveUserId(payload, "PaymentFailed", offset);
         if (userId == null) {
-            log.warn("PaymentFailed event missing userId at offset={}", offset);
             return;
         }
         incrementEntityCounters(payload, userId, COUNTER_FAILED_PAYMENTS_5M);
