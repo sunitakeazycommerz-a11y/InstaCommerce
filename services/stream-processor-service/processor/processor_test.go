@@ -347,3 +347,20 @@ func TestExtractMessageEventID_DelegatesToSharedNestedPayloadExtractor(t *testin
 		Value: []byte(`{"id":"evt-top-1"}`),
 	}))
 }
+
+func TestEvictExpired_SlicesAndClearsExpiredPrefix(t *testing.T) {
+	now := time.Now().UTC()
+	items := []velocityRecord{
+		{timestamp: now.Add(-2 * time.Hour), delta: 1},
+		{timestamp: now.Add(-90 * time.Minute), delta: 2},
+		{timestamp: now.Add(-10 * time.Minute), delta: 3},
+	}
+
+	remaining, evicted := evictExpired(items, func(r velocityRecord) time.Time { return r.timestamp }, now.Add(-1*time.Hour))
+	assert.True(t, evicted)
+	assert.Equal(t, []velocityRecord{{timestamp: now.Add(-10 * time.Minute), delta: 3}}, remaining)
+
+	same, evicted2 := evictExpired(remaining, func(r velocityRecord) time.Time { return r.timestamp }, now.Add(-1*time.Hour))
+	assert.False(t, evicted2)
+	assert.Len(t, same, 1)
+}

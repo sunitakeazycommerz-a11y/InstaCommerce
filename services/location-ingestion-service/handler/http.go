@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 )
 
@@ -194,7 +195,13 @@ func (h *LocationHandler) writeJSON(w http.ResponseWriter, status int, payload a
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(payload)
+	if err := enc.Encode(payload); err != nil {
+		logger := slog.Default()
+		if h != nil && h.logger != nil {
+			logger = h.logger
+		}
+		logger.Error("failed to encode JSON response", "error", err)
+	}
 }
 
 func (h *LocationHandler) writeError(w http.ResponseWriter, status int, message string) {

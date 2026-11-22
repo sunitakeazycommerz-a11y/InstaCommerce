@@ -171,6 +171,19 @@ func (s *LedgerStore) Restore(id string, entry LedgerEntry, existed bool) {
 	}
 }
 
+func writeIndentedJSONFile(path string, v any) error {
+	payload, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, payload, 0o644)
+}
+
 func (s *LedgerStore) Persist(_ context.Context) error {
 	if s.outputPath == "" {
 		return nil
@@ -181,16 +194,7 @@ func (s *LedgerStore) Persist(_ context.Context) error {
 		entries = append(entries, entry)
 	}
 	s.mu.Unlock()
-	payload, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return err
-	}
-	if dir := filepath.Dir(s.outputPath); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(s.outputPath, payload, 0o644)
+	return writeIndentedJSONFile(s.outputPath, entries)
 }
 
 func (r *FixRegistry) Exists(id string) bool {
@@ -212,16 +216,7 @@ func (r *FixRegistry) Record(record FixRecord) error {
 			records = append(records, rec)
 		}
 		records = append(records, record)
-		payload, err := json.MarshalIndent(records, "", "  ")
-		if err != nil {
-			return err
-		}
-		if dir := filepath.Dir(r.path); dir != "." {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return err
-			}
-		}
-		if err := os.WriteFile(r.path, payload, 0o644); err != nil {
+		if err := writeIndentedJSONFile(r.path, records); err != nil {
 			return err
 		}
 	}
@@ -255,8 +250,17 @@ func (p *KafkaPublisher) Close() error {
 	return p.writer.Close()
 }
 
+func (r *Reconciler) log() *slog.Logger {
+	if r != nil && r.logger != nil {
+		return r.logger
+	}
+	return slog.Default()
+}
+
 func (r *Reconciler) Run(ctx context.Context) {
-	_, _ = r.runOnce(ctx)
+	if _, err := r.runOnce(ctx); err != nil {
+		loggerWithContext(ctx, r.log()).Error("reconciliation run failed", "error", err)
+	}
 }
 
 func (r *Reconciler) runOnce(ctx context.Context) (ReconciliationCounts, error) {
@@ -269,10 +273,7 @@ func (r *Reconciler) runOnce(ctx context.Context) (ReconciliationCounts, error) 
 	if tracer == nil {
 		tracer = otel.Tracer("reconciliation-file")
 	}
-	logger := r.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
+	logger := r.log()
 
 	runID := newID("run")
 	runCtx, cancel := context.WithTimeout(ctx, r.timeout)
@@ -280,28 +281,31 @@ func (r *Reconciler) runOnce(ctx context.Context) (ReconciliationCounts, error) 
 	runCtx, span := tracer.Start(runCtx, "reconciliation.run", trace.WithAttributes(attribute.String("run_id", runID)))
 	defer span.End()
 
+	failLoad := func(msg string, loadErr error) (ReconciliationCounts, error) {
+		span.RecordError(loadErr)
+		span.SetStatus(codes.Error, loadErr.Error())
+		loggerWithContext(runCtx, logger).Error(msg, "error", loadErr, "run_id", runID)
+		return ReconciliationCounts{}, loadErr
+	}
 	pspTransactions, err := r.pspSource.Load(runCtx)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		loggerWithContext(runCtx, logger).Error("failed to load PSP transactions", "error", err, "run_id", runID)
-		return ReconciliationCounts{}, err
+		return failLoad("failed to load PSP transactions", err)
 	}
 	ledgerEntries, err := r.ledgerStore.Load(runCtx)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		loggerWithContext(runCtx, logger).Error("failed to load ledger entries", "error", err, "run_id", runID)
-		return ReconciliationCounts{}, err
+		return failLoad("failed to load ledger entries", err)
 	}
 	mismatches := findMismatches(pspTransactions, ledgerEntries)
 
 	counts := ReconciliationCounts{}
 	var runErrs []error
-	logPublishErr := func(eventType, txnID string, pubErr error) {
-		span.RecordError(pubErr)
-		loggerWithContext(runCtx, logger).Error("failed to publish reconciliation event", "event_type", eventType, "transaction_id", txnID, "run_id", runID, "error", pubErr)
-		runErrs = append(runErrs, fmt.Errorf("publish %s (%s): %w", eventType, txnID, pubErr))
+	publishEvent := func(eventType string, m *Mismatch, fixApplied bool, summary *ReconciliationCounts) {
+		evt := newReconciliationEvent(runID, eventType, m, fixApplied, summary)
+		if err := r.publisher.Publish(runCtx, evt); err != nil {
+			span.RecordError(err)
+			loggerWithContext(runCtx, logger).Error("failed to publish reconciliation event", "event_type", eventType, "transaction_id", evt.TransactionID, "run_id", runID, "error", err)
+			runErrs = append(runErrs, fmt.Errorf("publish %s (%s): %w", eventType, evt.TransactionID, err))
+		}
 	}
 
 	for i := range mismatches {
@@ -310,39 +314,31 @@ func (r *Reconciler) runOnce(ctx context.Context) (ReconciliationCounts, error) 
 		if r.metrics != nil {
 			r.metrics.RecordMismatch()
 		}
-		if err := r.publisher.Publish(runCtx, newReconciliationEvent(runID, "mismatch", &mismatch, false, nil)); err != nil {
-			logPublishErr("mismatch", mismatch.TransactionID, err)
-		}
-		if mismatch.Fixable {
-			applied, err := r.applyFix(runCtx, mismatch)
-			if err != nil {
-				span.RecordError(err)
-				loggerWithContext(runCtx, logger).Error("failed to apply fix", "transaction_id", mismatch.TransactionID, "mismatch_type", mismatch.Type, "run_id", runID, "error", err)
-				runErrs = append(runErrs, err)
-				continue
-			}
-			if applied {
-				counts.Fixed++
-				if r.metrics != nil {
-					r.metrics.RecordFixed()
-				}
-				if err := r.publisher.Publish(runCtx, newReconciliationEvent(runID, "fixed", &mismatch, true, nil)); err != nil {
-					logPublishErr("fixed", mismatch.TransactionID, err)
-				}
-			}
-		} else {
+		publishEvent("mismatch", &mismatch, false, nil)
+		if !mismatch.Fixable {
 			counts.ManualReview++
 			if r.metrics != nil {
 				r.metrics.RecordManualReview()
 			}
-			if err := r.publisher.Publish(runCtx, newReconciliationEvent(runID, "manual_review", &mismatch, false, nil)); err != nil {
-				logPublishErr("manual_review", mismatch.TransactionID, err)
+			publishEvent("manual_review", &mismatch, false, nil)
+			continue
+		}
+		applied, err := r.applyFix(runCtx, mismatch)
+		if err != nil {
+			span.RecordError(err)
+			loggerWithContext(runCtx, logger).Error("failed to apply fix", "transaction_id", mismatch.TransactionID, "mismatch_type", mismatch.Type, "run_id", runID, "error", err)
+			runErrs = append(runErrs, err)
+			continue
+		}
+		if applied {
+			counts.Fixed++
+			if r.metrics != nil {
+				r.metrics.RecordFixed()
 			}
+			publishEvent("fixed", &mismatch, true, nil)
 		}
 	}
-	if err := r.publisher.Publish(runCtx, newReconciliationEvent(runID, "summary", nil, false, &counts)); err != nil {
-		logPublishErr("summary", "", err)
-	}
+	publishEvent("summary", nil, false, &counts)
 	joined := errors.Join(runErrs...)
 	if joined != nil {
 		span.SetStatus(codes.Error, joined.Error())

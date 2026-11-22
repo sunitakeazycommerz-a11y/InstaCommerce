@@ -160,3 +160,32 @@ func TestInMemoryGeofenceDeduplicator_SweepsExpiredEntries(t *testing.T) {
 	dedup.mu.Unlock()
 	assert.LessOrEqual(t, count, 5)
 }
+
+func TestEncodeSpatialGridIndex_AndConfigurableIndexer(t *testing.T) {
+	assert.Equal(t, LatLngToH3Res8(12.9716, 77.5946), EncodeSpatialGridIndex(12.9716, 77.5946, 8))
+
+	res9 := EncodeSpatialGridIndex(12.9716, 77.5946, 9)
+	assert.Len(t, res9, 16)
+	assert.Equal(t, "89", res9[:2])
+	assert.Equal(t, res9, EncodeSpatialGridIndex(12.9716, 77.5946, 9))
+
+	geofencer := NewGeofenceChecker(9)
+	geofencer.SetSpatialIndexer(SpatialIndexerFunc(func(lat, lng float64, resolution int) string {
+		return fmt.Sprintf("custom-%d-%.2f-%.2f", resolution, lat, lng)
+	}))
+	geofencer.AddZone(Zone{
+		ID:        "store-custom",
+		Type:      ZoneStore,
+		CenterLat: 12.9716,
+		CenterLng: 77.5946,
+		RadiusKm:  0.2,
+	})
+	evs := geofencer.Check(LocationUpdate{
+		RiderID:   "rider-custom",
+		Lat:       12.9716,
+		Lng:       77.5946,
+		Timestamp: time.Now().UTC(),
+	})
+	require.Len(t, evs, 1)
+	assert.Equal(t, "custom-9-12.97-77.59", evs[0].H3Index)
+}

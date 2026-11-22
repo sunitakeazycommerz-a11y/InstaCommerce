@@ -219,10 +219,18 @@ func (b *LocationBatcher) Enqueue(update LocationUpdate) error {
 	return nil
 }
 
-// Add appends an update to the internal buffer. If the buffer reaches maxSize
-// the flush loop is notified immediately. Add is safe for concurrent use.
-func (b *LocationBatcher) Add(update LocationUpdate) {
-	_ = b.Enqueue(update)
+// Add appends an update to the internal buffer and logs/returns any enqueue error.
+func (b *LocationBatcher) Add(update LocationUpdate) error {
+	if err := b.Enqueue(update); err != nil {
+		if b != nil && b.logger != nil {
+			b.logger.Warn("failed to enqueue location update",
+				"rider_id", update.RiderID,
+				"error", err,
+			)
+		}
+		return err
+	}
+	return nil
 }
 
 // Start runs the flush loop until ctx is cancelled. After cancellation it

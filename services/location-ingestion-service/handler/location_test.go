@@ -167,19 +167,20 @@ func TestLocationHandler_ValidationErrors(t *testing.T) {
 		Lat:     12.0,
 		Lng:     77.0,
 	}
-	body, _ := json.Marshal(badUpdate)
+	body, err := json.Marshal(badUpdate)
+	require.NoError(t, err)
 	req = httptest.NewRequest(http.MethodPost, "/location", bytes.NewReader(body))
 	w = httptest.NewRecorder()
 	h.HandleHTTP(w, req)
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 
-	// Out of range latitude -> 422 Unprocessable Entity
 	badLatUpdate := LocationUpdate{
 		RiderID: "r1",
 		Lat:     95.0,
 		Lng:     77.0,
 	}
-	body, _ = json.Marshal(badLatUpdate)
+	body, err = json.Marshal(badLatUpdate)
+	require.NoError(t, err)
 	req = httptest.NewRequest(http.MethodPost, "/location", bytes.NewReader(body))
 	w = httptest.NewRecorder()
 	h.HandleHTTP(w, req)
@@ -194,7 +195,7 @@ func TestGeofenceChecker_DebounceAndHysteresisDeduplication(t *testing.T) {
 		CenterLat:           12.9716,
 		CenterLng:           77.5946,
 		RadiusKm:            0.2, // 200m
-		MinConsecutivePings: 3,   // Requires 3 consecutive pings before arrival confirmation (Issue #590)
+		MinConsecutivePings: 3,
 		HysteresisWindow:    3 * time.Minute,
 	})
 

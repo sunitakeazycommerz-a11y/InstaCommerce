@@ -255,25 +255,10 @@ func (p *InventoryProcessor) updateVelocity(storeID, skuID string, delta int, no
 		}
 	}
 
-	records := p.velocity[key]
-
-	// Evict old records
-	idx := 0
-	for idx < len(records) && records[idx].timestamp.Before(cutoff) {
-		idx++
-	}
-	if idx > 0 {
-		remaining := len(records) - idx
-		copy(records, records[idx:])
-		clear(records[remaining:])
-		records = records[:remaining]
-	}
-
-	// Append new record
+	records, _ := evictExpired(p.velocity[key], func(r velocityRecord) time.Time { return r.timestamp }, cutoff)
 	records = append(records, velocityRecord{timestamp: now, delta: delta})
 	p.velocity[key] = records
 
-	// Compute total velocity over the window
 	totalDelta := 0
 	for _, r := range records {
 		totalDelta += r.delta

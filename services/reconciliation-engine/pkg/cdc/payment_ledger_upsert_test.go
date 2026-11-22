@@ -246,13 +246,13 @@ func TestPurgeSnapshot_ShouldRemoveFromMemory(t *testing.T) {
 	}
 
 	runDate := "2024-03-21"
-	consumer.processRunRecord(map[string]interface{}{
+	require.NoError(t, consumer.processRunRecord(map[string]interface{}{
 		"run_date":            runDate,
 		"status":              "COMPLETED",
 		"mismatch_count":      1.0,
 		"auto_fixed_count":    0.0,
 		"manual_review_count": 0.0,
-	}, time.Now().UnixMilli())
+	}, time.Now().UnixMilli()))
 
 	_, exists := consumer.dailySnapshots[runDate]
 	if !exists {

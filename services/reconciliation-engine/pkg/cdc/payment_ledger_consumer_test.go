@@ -3,13 +3,17 @@ package cdc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/segmentio/kafka-go"
 )
 
 func TestParsing_DebeziumChangeEvent(t *testing.T) {
-	// Sample Debezium change event with pgoutput plugin structure
 	rawEvent := []byte(`{
 		"payload": {
 			"op": "i",
@@ -49,17 +53,14 @@ func TestParsing_DebeziumChangeEvent(t *testing.T) {
 		t.Fatalf("failed to unmarshal event: %v", err)
 	}
 
-	// Verify operation was correctly extracted
 	if event.Envelope.Op != "i" {
 		t.Errorf("expected op 'i', got %s", event.Envelope.Op)
 	}
 
-	// Verify source metadata
 	if event.Envelope.Source.Table != "reconciliation_runs" {
 		t.Errorf("expected table 'reconciliation_runs', got %s", event.Envelope.Source.Table)
 	}
 
-	// Verify after-image data
 	afterData := event.Envelope.After
 	if afterData["run_date"] != "2024-03-21" {
 		t.Errorf("expected run_date '2024-03-21', got %v", afterData["run_date"])
@@ -88,7 +89,6 @@ func TestProcessRunRecord_ShouldCorrectlyExtractOperationAndBeforeAfter(t *testi
 		metrics:        &CDCMetrics{},
 	}
 
-	// Test INSERT operation
 	afterImage := map[string]interface{}{
 		"run_id":              1.0,
 		"run_date":            "2024-03-21",
@@ -103,7 +103,6 @@ func TestProcessRunRecord_ShouldCorrectlyExtractOperationAndBeforeAfter(t *testi
 		t.Fatalf("processRunRecord failed: %v", err)
 	}
 
-	// Verify snapshot was created
 	snapshot, exists := consumer.dailySnapshots["2024-03-21"]
 	if !exists {
 		t.Fatal("expected snapshot to be created")
@@ -135,7 +134,6 @@ func TestDailyAggregation_ShouldGroupTransactionsByDate(t *testing.T) {
 		metrics:        &CDCMetrics{},
 	}
 
-	// Simulate multiple CDC events for the same date
 	dates := []string{
 		"2024-03-21",
 		"2024-03-21",
@@ -150,16 +148,16 @@ func TestDailyAggregation_ShouldGroupTransactionsByDate(t *testing.T) {
 			"auto_fixed_count":    float64(i),
 			"manual_review_count": 1.0,
 		}
-		consumer.processRunRecord(afterImage, time.Now().UnixMilli())
+		if err := consumer.processRunRecord(afterImage, time.Now().UnixMilli()); err != nil {
+			t.Fatalf("processRunRecord failed: %v", err)
+		}
 	}
 
-	// Aggregate the daily snapshot
 	aggregated, err := consumer.AggregateDaily(context.Background(), time.Date(2024, 3, 21, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("AggregateDaily failed: %v", err)
 	}
 
-	// Verify aggregation
 	expectedMismatches := 1 + 2 + 3 // 6
 	if aggregated.TotalMismatches != expectedMismatches {
 		t.Errorf("expected %d total mismatches, got %d", expectedMismatches, aggregated.TotalMismatches)
@@ -186,29 +184,28 @@ func TestMultipleEventsPerTransaction_ShouldSumCorrectly(t *testing.T) {
 
 	runDate := "2024-03-21"
 
-	// First event: initial mismatch count
-	consumer.processRunRecord(map[string]interface{}{
+	if err := consumer.processRunRecord(map[string]interface{}{
 		"run_date":            runDate,
 		"status":              "IN_PROGRESS",
 		"mismatch_count":      5.0,
 		"auto_fixed_count":    2.0,
 		"manual_review_count": 1.0,
-	}, time.Now().UnixMilli())
+	}, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("first processRunRecord failed: %v", err)
+	}
 
-	// Second event: same transaction with updated counts
-	consumer.processRunRecord(map[string]interface{}{
+	if err := consumer.processRunRecord(map[string]interface{}{
 		"run_date":            runDate,
 		"status":              "IN_PROGRESS",
 		"mismatch_count":      5.0,
 		"auto_fixed_count":    3.0,
 		"manual_review_count": 0.0,
-	}, time.Now().UnixMilli())
+	}, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("second processRunRecord failed: %v", err)
+	}
 
 	snapshot := consumer.dailySnapshots[runDate]
 
-	// Verify counts are summed correctly
-	// Note: In a real scenario with CDC, UPDATES would replace previous values,
-	// but multiple INSERT events would accumulate
 	if snapshot.TotalAutoFixed < 3 {
 		t.Errorf("expected at least 3 auto-fixed entries, got %d", snapshot.TotalAutoFixed)
 	}
@@ -229,7 +226,6 @@ func TestOutOfOrderEvents_ShouldHandleGracefully(t *testing.T) {
 
 	runDate := "2024-03-21"
 
-	// Simulate out-of-order events by timestamp
 	events := []struct {
 		ts   int64
 		data map[string]interface{}
@@ -263,7 +259,6 @@ func TestOutOfOrderEvents_ShouldHandleGracefully(t *testing.T) {
 		}
 	}
 
-	// Should not panic or fail
 	snapshot, exists := consumer.dailySnapshots[runDate]
 	if !exists {
 		t.Fatal("snapshot should exist despite out-of-order events")
@@ -324,15 +319,16 @@ func TestConsumerMetrics_ShouldTrackProcessingStats(t *testing.T) {
 
 	runDate := "2024-03-21"
 
-	// Process several events
 	for i := 0; i < 5; i++ {
-		consumer.processRunRecord(map[string]interface{}{
+		if err := consumer.processRunRecord(map[string]interface{}{
 			"run_date":            runDate,
 			"status":              "COMPLETED",
 			"mismatch_count":      1.0,
 			"auto_fixed_count":    1.0,
 			"manual_review_count": 0.0,
-		}, time.Now().UnixMilli())
+		}, time.Now().UnixMilli()); err != nil {
+			t.Fatalf("processRunRecord failed: %v", err)
+		}
 	}
 
 	metrics := consumer.GetMetrics()
@@ -371,5 +367,73 @@ func TestCDCConsumer_StopIsIdempotent(t *testing.T) {
 	}
 	if err := consumer.Stop(); err != nil {
 		t.Fatalf("second Stop failed: %v", err)
+	}
+}
+
+type fakeKafkaFetcher struct {
+	fetchFunc func(ctx context.Context) (kafka.Message, error)
+}
+
+func (f *fakeKafkaFetcher) FetchMessage(ctx context.Context) (kafka.Message, error) {
+	return f.fetchFunc(ctx)
+}
+
+func (f *fakeKafkaFetcher) CommitMessages(_ context.Context, _ ...kafka.Message) error {
+	return nil
+}
+
+func TestCDCConsumer_ShutdownErrorsDoNotIncrementEventsFailed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "io.EOF on reader close", err: io.EOF},
+		{name: "context.Canceled on shutdown", err: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			consumer := &CDCConsumer{
+				config:         CDCConsumerConfig{MaxWait: 50 * time.Millisecond},
+				logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+				dailySnapshots: make(map[string]*DailySnapshot),
+				metrics:        &CDCMetrics{},
+				done:           make(chan struct{}),
+			}
+			fetcher := &fakeKafkaFetcher{
+				fetchFunc: func(context.Context) (kafka.Message, error) {
+					return kafka.Message{}, tc.err
+				},
+			}
+			consumer.runConsumerLoopWithFetcher(context.Background(), fetcher)
+			if got := consumer.GetMetrics().eventsFailed; got != 0 {
+				t.Fatalf("expected eventsFailed=0 on %v, got %d", tc.err, got)
+			}
+		})
+	}
+}
+
+func TestCDCConsumer_TransientFetchErrorBacksOffAndStopsOnCancel(t *testing.T) {
+	consumer := &CDCConsumer{
+		config:         CDCConsumerConfig{MaxWait: 50 * time.Millisecond},
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		dailySnapshots: make(map[string]*DailySnapshot),
+		metrics:        &CDCMetrics{},
+		done:           make(chan struct{}),
+		retryBackoff:   time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls atomic.Int32
+	fetcher := &fakeKafkaFetcher{
+		fetchFunc: func(context.Context) (kafka.Message, error) {
+			if calls.Add(1) >= 2 {
+				cancel()
+			}
+			return kafka.Message{}, errors.New("temporary broker outage")
+		},
+	}
+
+	consumer.runConsumerLoopWithFetcher(ctx, fetcher)
+	if got := consumer.GetMetrics().eventsFailed; got < 1 {
+		t.Fatalf("expected transient fetch error to increment eventsFailed, got %d", got)
 	}
 }

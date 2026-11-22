@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/IBM/sarama"
 	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
@@ -268,16 +267,6 @@ func resolveDLQSchemaVersion(evt outboxEvent, schemaVersion string) string {
 	return "unknown"
 }
 
-func truncateUTF8(value string, maxBytes int) string {
-	if maxBytes <= 0 || len(value) <= maxBytes {
-		return value
-	}
-	for maxBytes > 0 && !utf8.RuneStart(value[maxBytes]) {
-		maxBytes--
-	}
-	return value[:maxBytes]
-}
-
 func buildDLQMessage(evt outboxEvent, targetTopic string, produceErr error) []byte {
 	return buildEnrichedDLQMessage(evt, targetTopic, strings.TrimSpace(evt.AggregateID), 1, produceErr, time.Now().UTC())
 }
@@ -322,7 +311,7 @@ func buildDLQHeaders(evt outboxEvent, targetTopic, traceID, partitionKey, schema
 		attempts = 1
 	}
 	resolvedSchema := resolveDLQSchemaVersion(evt, schemaVersion)
-	reason := truncateUTF8(errMessage(err), 512)
+	reason := sharedkafka.TruncateUTF8(errMessage(err), 512)
 	return buildSaramaHeaders(evt, traceID,
 		sarama.RecordHeader{Key: []byte("schema_version"), Value: []byte(resolvedSchema)},
 		sarama.RecordHeader{Key: []byte("partition_key"), Value: []byte(partitionKey)},

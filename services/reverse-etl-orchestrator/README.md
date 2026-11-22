@@ -88,7 +88,7 @@ All routes are mounted on the API listener (`:8109`) under `/api/v1`:
 | `KAFKA_CONSUMER_GROUP` | `reverse-etl-orchestrator` | Consumer group ID |
 | `TEMPORAL_HOST` | `localhost:7233` | Temporal server gRPC host:port |
 | `TEMPORAL_NAMESPACE` | `reverse-etl` | Temporal namespace |
-| `REDIS_ADDR` | `localhost:6379` | Operational Redis sink address |
+| `REDIS_ADDR` | `""` | Operational Redis sink address (optional; unset skips Redis readiness probe) |
 | `REDIS_PASSWORD` | `""` | Redis auth password |
 | `REDIS_DB` | `0` | Target Redis database index |
 | `WORKER_POOL_CONCURRENCY` | `10` | Concurrent worker goroutines for batch processing |

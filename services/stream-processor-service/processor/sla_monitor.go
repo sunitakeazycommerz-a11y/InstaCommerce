@@ -88,7 +88,6 @@ func NewSLAMonitor(threshold float64, logger *slog.Logger) *SLAMonitor {
 		zoneGuard: newLabelCardinalityGuard(maxBoundedLabelValues),
 	}
 
-	// Drain alert channel in background to avoid blocking
 	go m.drainAlerts()
 
 	return m
@@ -126,15 +125,12 @@ func (m *SLAMonitor) RecordDelivery(zoneID string, deliveryTimeMinutes float64) 
 		m.windows[zoneID] = w
 	}
 
-	// Evict records outside the sliding window
 	m.evictOldRecords(w, now)
 
-	// Add new record
 	rec := deliveryRecord{timestamp: now, deliveryMins: deliveryTimeMinutes}
 	w.records = append(w.records, rec)
 	w.TotalOrders = len(w.records)
 
-	// Recount SLA-met orders
 	metCount := 0
 	for _, r := range w.records {
 		if r.deliveryMins <= slaTargetMinutes {
@@ -147,11 +143,9 @@ func (m *SLAMonitor) RecordDelivery(zoneID string, deliveryTimeMinutes float64) 
 		w.SLAPercent = float64(w.SLAMetOrders) / float64(w.TotalOrders)
 	}
 
-	// Emit Prometheus metrics
 	m.metrics.slaPercent.WithLabelValues(zoneLabel).Set(w.SLAPercent)
 	m.metrics.windowOrders.WithLabelValues(zoneLabel).Set(float64(w.TotalOrders))
 
-	// Check threshold breach
 	if w.SLAPercent < m.threshold && w.TotalOrders >= 5 && !m.closed {
 		alert := SLAAlert{
 			ZoneID:     zoneID,
@@ -183,15 +177,9 @@ func (m *SLAMonitor) GetSLAPercent(zoneID string) (float64, bool) {
 
 func (m *SLAMonitor) evictOldRecords(w *SLAWindow, now time.Time) {
 	cutoff := now.Add(-windowDuration)
-	idx := 0
-	for idx < len(w.records) && w.records[idx].timestamp.Before(cutoff) {
-		idx++
-	}
-	if idx > 0 {
-		remaining := len(w.records) - idx
-		copy(w.records, w.records[idx:])
-		clear(w.records[remaining:])
-		w.records = w.records[:remaining]
+	var evicted bool
+	w.records, evicted = evictExpired(w.records, func(r deliveryRecord) time.Time { return r.timestamp }, cutoff)
+	if evicted {
 		w.WindowStart = cutoff
 	}
 }

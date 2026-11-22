@@ -71,3 +71,10 @@ func TestHeaderCarrierRoundTrip(t *testing.T) {
 	ctx := prop.Extract(context.Background(), carrier)
 	assert.NotNil(t, ctx)
 }
+
+func TestTruncateUTF8(t *testing.T) {
+	assert.Equal(t, "hello", TruncateUTF8("hello", 10))
+	assert.Equal(t, "hello", TruncateUTF8("hello", 0))
+	assert.Equal(t, "hello-", TruncateUTF8("hello-🚀-world", 8))
+	assert.Equal(t, "", TruncateUTF8("🚀", 2))
+}

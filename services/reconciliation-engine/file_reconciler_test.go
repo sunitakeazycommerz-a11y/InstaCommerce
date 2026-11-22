@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -170,4 +171,18 @@ func TestNewHTTPMux_ExactRoutesRejectArbitrarySegments(t *testing.T) {
 		mux.ServeHTTP(rec, req)
 		assert.Equal(t, tc.wantStatus, rec.Code, "unexpected status for %s %s", tc.method, tc.path)
 	}
+}
+
+func TestReconcilerRun_LogsRunOnceErrors(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	r := &Reconciler{
+		logger:    logger,
+		pspSource: &PSPSource{path: ""},
+		timeout:   time.Second,
+	}
+
+	r.Run(context.Background())
+	assert.Contains(t, logBuf.String(), "reconciliation run failed")
+	assert.Contains(t, logBuf.String(), "psp export path is required")
 }

@@ -59,7 +59,9 @@ type ErrorResponse struct {
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		slog.Error("failed to encode JSON response", "error", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, err string, message string) {
@@ -126,11 +128,7 @@ func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get user from context (would be set by auth middleware)
-	createdBy := r.Header.Get("X-User-Email")
-	if createdBy == "" {
-		createdBy = "system"
-	}
+	createdBy := resolveAuditActor(r)
 
 	sub, err := h.subscriptionSvc.Create(r.Context(), req, createdBy)
 	if err != nil {
@@ -144,6 +142,16 @@ func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, sub)
+}
+
+func resolveAuditActor(r *http.Request) string {
+	if email := strings.TrimSpace(r.Header.Get("X-User-Email")); email != "" {
+		return email
+	}
+	if svc := strings.TrimSpace(r.Header.Get("X-Internal-Service")); svc != "" {
+		return svc
+	}
+	return "system"
 }
 
 // GetSubscription handles GET /api/v1/subscriptions/{id}.

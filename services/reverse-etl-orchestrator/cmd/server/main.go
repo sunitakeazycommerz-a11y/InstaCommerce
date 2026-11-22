@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,13 +46,31 @@ func newWorkerPoolFromConfig(cfg *config.Config, subscriptionSvc *subscription.S
 	if subscriptionSvc != nil {
 		db = subscriptionSvc.DB()
 	}
+	var redisClient subscription.RedisClient
+	if rdb != nil {
+		redisClient = rdb
+	}
 	return subscription.NewWorkerPool(subscription.WorkerPoolConfig{
 		Concurrency:     cfg.WorkerPoolConcurrency,
 		RateLimitPerSec: cfg.RateLimitPerSec,
-		RedisClient:     rdb,
+		RedisClient:     redisClient,
 		DB:              db,
 		Logger:          logger,
 		RetryPolicy:     subscription.DefaultRetryPolicy(),
+	})
+}
+
+func newRedisClient(cfg *config.Config) *redis.Client {
+	if cfg == nil || strings.TrimSpace(cfg.RedisAddr) == "" {
+		return nil
+	}
+	return redis.NewClient(&redis.Options{
+		Addr:         strings.TrimSpace(cfg.RedisAddr),
+		Password:     cfg.RedisPassword,
+		DB:           cfg.RedisDB,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
 	})
 }
 
@@ -60,10 +79,16 @@ func buildHealthChecker(cfg *config.Config, subscriptionSvc *subscription.Servic
 	if cfg != nil && cfg.Version != "" {
 		opts = append(opts, health.WithVersion(cfg.Version))
 	}
-	if rdb != nil {
-		opts = append(opts, health.WithRedis(health.PingerFunc(func(ctx context.Context) error {
-			return rdb.Ping(ctx).Err()
-		})))
+	if cfg != nil && strings.TrimSpace(cfg.RedisAddr) != "" {
+		if rdb != nil {
+			opts = append(opts, health.WithRedis(health.PingerFunc(func(ctx context.Context) error {
+				return rdb.Ping(ctx).Err()
+			})))
+		} else {
+			opts = append(opts, health.WithRedis(health.PingerFunc(func(context.Context) error {
+				return errors.New("redis client not initialized")
+			})))
+		}
 	}
 	var dbPinger health.Pinger
 	if subscriptionSvc != nil {
@@ -73,13 +98,11 @@ func buildHealthChecker(cfg *config.Config, subscriptionSvc *subscription.Servic
 }
 
 func main() {
-	// Initialize structured logging
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
 
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("failed to load configuration", "error", err)
@@ -91,7 +114,6 @@ func main() {
 		"environment", cfg.Environment,
 	)
 
-	// Initialize subscription service
 	subscriptionSvc, err := subscription.NewService(cfg)
 	if err != nil {
 		logger.Error("failed to initialize subscription service", "error", err)
@@ -99,21 +121,14 @@ func main() {
 	}
 	defer subscriptionSvc.Close()
 
-	// Initialize Redis client and WorkerPool
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         cfg.RedisAddr,
-		Password:     cfg.RedisPassword,
-		DB:           cfg.RedisDB,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-	})
-	defer rdb.Close()
+	rdb := newRedisClient(cfg)
+	if rdb != nil {
+		defer rdb.Close()
+	}
 
 	workerPool := newWorkerPoolFromConfig(cfg, subscriptionSvc, rdb, logger)
 	defer workerPool.Close()
 
-	// Initialize health checker and API handler
 	healthChecker := buildHealthChecker(cfg, subscriptionSvc, rdb)
 	apiHandler := api.NewHandler(subscriptionSvc)
 
@@ -125,7 +140,6 @@ func main() {
 	metricsRouter := mux.NewRouter()
 	metricsRouter.Handle("/metrics", promhttp.Handler())
 
-	// Start servers
 	apiServer := &http.Server{
 		Addr:              cfg.APIAddr,
 		Handler:           buildAPIRouter(apiHandler, healthChecker, logger),
@@ -153,7 +167,6 @@ func main() {
 
 	errCh := make(chan error, 3)
 
-	// Start servers in goroutines
 	go func() {
 		logger.Info("starting API server", "addr", cfg.APIAddr)
 		if err := apiServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -175,7 +188,6 @@ func main() {
 		}
 	}()
 
-	// Wait for shutdown signal or fatal server error
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -190,7 +202,6 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Graceful shutdown
 	if err := apiServer.Shutdown(ctx); err != nil {
 		logger.Error("API server shutdown error", "error", err)
 	}

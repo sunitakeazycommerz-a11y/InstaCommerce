@@ -1,7 +1,3 @@
-# GKE Cluster for SF Canary Deployment
-# Phase 2 Infrastructure: us-west1 (San Francisco region)
-# Wave 40 Phase 2 - Dark Store Canary
-
 terraform {
   required_version = ">= 1.5"
   required_providers {
@@ -27,13 +23,11 @@ locals {
   )
 }
 
-# GKE Cluster
 resource "google_container_cluster" "sf_canary" {
   name     = local.cluster_name
   location = local.region
   project  = local.project_id
 
-  # Cluster configuration
   initial_node_count       = 1
   remove_default_node_pool = true
   network                  = var.network_name
@@ -43,28 +37,23 @@ resource "google_container_cluster" "sf_canary" {
     channel = "REGULAR"
   }
 
-  # Workload Identity
   workload_identity_config {
     workload_pool = "${local.project_id}.svc.id.goog"
   }
 
-  # Network Policy
   network_policy {
     enabled  = true
     provider = "PROVIDER_UNSPECIFIED"
   }
 
-  # Logging and Monitoring
   logging_service    = "logging.googleapis.com/kubernetes"
   monitoring_service = "monitoring.googleapis.com/kubernetes"
 
-  # Security
   ip_allocation_policy {
     cluster_secondary_range_name  = var.pods_range_name
     services_secondary_range_name = var.services_range_name
   }
 
-  # Addons
   addons_config {
     http_load_balancing {
       disabled = false
@@ -86,23 +75,19 @@ resource "google_container_cluster" "sf_canary" {
     }
   }
 
-  # Maintenance Window
   maintenance_policy {
     daily_maintenance_window {
       start_time = "03:00"
     }
   }
 
-  # Binary Authorization
   binary_authorization {
     evaluation_mode = "PROJECT_SINGLETON_POLICY_ENFORCE"
   }
 
-  # Resource labels
   resource_labels = local.labels
 }
 
-# Node Pool: Dark-Store Nodes (SSD-backed, high-performance)
 resource "google_container_node_pool" "dark_store_pool" {
   name       = "dark-store-pool"
   location   = local.region
@@ -125,7 +110,6 @@ resource "google_container_node_pool" "dark_store_pool" {
     disk_size_gb = 100
     disk_type    = "pd-ssd"
 
-    # GKE Service Account
     service_account = google_service_account.gke_nodes.email
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform",
@@ -133,18 +117,15 @@ resource "google_container_node_pool" "dark_store_pool" {
       "https://www.googleapis.com/auth/monitoring.write",
     ]
 
-    # Workload Identity
     workload_metadata_config {
       mode = "GKE_METADATA"
     }
 
-    # Node Security
     shielded_instance_config {
       enable_secure_boot          = true
       enable_integrity_monitoring = true
     }
 
-    # Labels
     labels = merge(
       local.labels,
       {
@@ -153,19 +134,16 @@ resource "google_container_node_pool" "dark_store_pool" {
       }
     )
 
-    # Taints
     taint {
       key    = "workload"
       value  = "dark-store"
       effect = "NO_SCHEDULE"
     }
 
-    # Metadata
     metadata = {
       disable-legacy-endpoints = "true"
     }
 
-    # Resource requests
     local_ssd_count = 1
   }
 
@@ -174,7 +152,6 @@ resource "google_container_node_pool" "dark_store_pool" {
   ]
 }
 
-# Node Pool: System Nodes
 resource "google_container_node_pool" "system_pool" {
   name       = "system-pool"
   location   = local.region
@@ -221,14 +198,12 @@ resource "google_container_node_pool" "system_pool" {
   }
 }
 
-# Service Account for GKE Nodes
 resource "google_service_account" "gke_nodes" {
   account_id   = "sf-canary-gke-nodes"
   display_name = "SF Canary GKE Nodes"
   project      = local.project_id
 }
 
-# IAM Bindings for GKE Nodes
 resource "google_project_iam_member" "gke_nodes_log_writer" {
   project = local.project_id
   role    = "roles/logging.logWriter"
@@ -241,7 +216,6 @@ resource "google_project_iam_member" "gke_nodes_metric_writer" {
   member  = "serviceAccount:${google_service_account.gke_nodes.email}"
 }
 
-# Workload Identity Binding for Dark-Store Service
 resource "google_service_account" "dark_store_workload_identity" {
   account_id   = "dark-store-service"
   display_name = "Dark Store Service Workload Identity"
@@ -257,7 +231,6 @@ resource "google_service_account_iam_binding" "dark_store_workload_identity_bind
   ]
 }
 
-# Cluster Outputs
 output "cluster_name" {
   description = "GKE cluster name"
   value       = google_container_cluster.sf_canary.name

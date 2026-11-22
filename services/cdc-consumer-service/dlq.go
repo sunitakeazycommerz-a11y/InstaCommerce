@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"cloud.google.com/go/bigquery"
+	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
 	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -86,7 +86,7 @@ func sendToDLQWithWriter(
 		tracer = otel.Tracer("cdc-consumer")
 	}
 
-	dlqReason := truncate(reason.Error(), 512)
+	dlqReason := sharedkafka.TruncateUTF8(reason.Error(), 512)
 	quarantinedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	errorCategory := classifyDLQCategory(reason)
 
@@ -144,7 +144,7 @@ func buildDLQKafkaMessages(
 		itemReason := dlqReason
 		itemCategory := errorCategory
 		if item.transformErr != nil {
-			itemReason = truncate(item.transformErr.Error(), 512)
+			itemReason = sharedkafka.TruncateUTF8(item.transformErr.Error(), 512)
 			itemCategory = classifyDLQCategory(item.transformErr)
 		}
 		headers := append([]kafka.Header{}, item.message.Headers...)
@@ -204,14 +204,4 @@ func commitMessages(ctx context.Context, timeout time.Duration, logger *slog.Log
 		}
 	}
 	return nil
-}
-
-func truncate(value string, maxBytes int) string {
-	if maxBytes <= 0 || len(value) <= maxBytes {
-		return value
-	}
-	for maxBytes > 0 && !utf8.RuneStart(value[maxBytes]) {
-		maxBytes--
-	}
-	return value[:maxBytes]
 }

@@ -298,7 +298,13 @@ func (h *ReconciliationHandler) writeJSON(w http.ResponseWriter, status int, pay
 	w.WriteHeader(status)
 	encoder := json.NewEncoder(w)
 	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(payload)
+	if err := encoder.Encode(payload); err != nil {
+		logger := slog.Default()
+		if h != nil && h.logger != nil {
+			logger = h.logger
+		}
+		logger.Error("failed to encode JSON response", "error", err)
+	}
 }
 
 func (h *ReconciliationHandler) writeError(w http.ResponseWriter, status int, message string) {

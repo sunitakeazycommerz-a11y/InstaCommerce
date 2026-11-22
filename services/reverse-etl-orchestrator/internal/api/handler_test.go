@@ -17,7 +17,6 @@ import (
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/subscription"
 )
 
-// mockSubscriptionManager implements SubscriptionManager for API testing.
 type mockSubscriptionManager struct {
 	subscriptions map[string]*subscription.Subscription
 	createErr     error
@@ -131,7 +130,8 @@ func TestAPICreateSubscription(t *testing.T) {
 		SinkType:     "redis",
 		Schedule:     "0 0 * * *",
 	}
-	body, _ := json.Marshal(createPayload)
+	body, err := json.Marshal(createPayload)
+	require.NoError(t, err)
 
 	req := httptest.NewRequest("POST", "/api/v1/subscriptions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -141,12 +141,31 @@ func TestAPICreateSubscription(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
 	var created subscription.Subscription
-	err := json.NewDecoder(rec.Body).Decode(&created)
-	require.NoError(t, err)
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
 	assert.Equal(t, "sub-uuid-1", created.ID)
 	assert.Equal(t, "User Affinity to Redis", created.Name)
 	assert.Equal(t, subscription.StateDraft, created.State)
 	assert.Equal(t, "data-eng@instacommerce.com", created.CreatedBy)
+
+	reqSvc := httptest.NewRequest("POST", "/api/v1/subscriptions", bytes.NewReader(body))
+	reqSvc.Header.Set("Content-Type", "application/json")
+	reqSvc.Header.Set("X-User-Email", "   ")
+	reqSvc.Header.Set("X-Internal-Service", "admin-gateway")
+	recSvc := httptest.NewRecorder()
+	r.ServeHTTP(recSvc, reqSvc)
+	require.Equal(t, http.StatusCreated, recSvc.Code)
+	var createdBySvc subscription.Subscription
+	require.NoError(t, json.NewDecoder(recSvc.Body).Decode(&createdBySvc))
+	assert.Equal(t, "admin-gateway", createdBySvc.CreatedBy)
+
+	reqAnon := httptest.NewRequest("POST", "/api/v1/subscriptions", bytes.NewReader(body))
+	reqAnon.Header.Set("Content-Type", "application/json")
+	recAnon := httptest.NewRecorder()
+	r.ServeHTTP(recAnon, reqAnon)
+	require.Equal(t, http.StatusCreated, recAnon.Code)
+	var createdAnon subscription.Subscription
+	require.NoError(t, json.NewDecoder(recAnon.Body).Decode(&createdAnon))
+	assert.Equal(t, "system", createdAnon.CreatedBy)
 }
 
 func TestAPIGetSubscription(t *testing.T) {
@@ -179,14 +198,12 @@ func TestAPIActivateAndPauseSubscription(t *testing.T) {
 	}
 	r := setupTestRouter(mgr)
 
-	// Activate
 	req := httptest.NewRequest("POST", "/api/v1/subscriptions/sub-456/activate", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, subscription.StateActive, mgr.subscriptions["sub-456"].State)
 
-	// Pause
 	reqPause := httptest.NewRequest("POST", "/api/v1/subscriptions/sub-456/pause", nil)
 	recPause := httptest.NewRecorder()
 	r.ServeHTTP(recPause, reqPause)
@@ -251,36 +268,31 @@ func TestAPIErrorAndValidationPaths(t *testing.T) {
 	mgr := newMockSubscriptionManager()
 	r := setupTestRouter(mgr)
 
-	// Malformed JSON -> 400
 	recBadJSON := httptest.NewRecorder()
 	r.ServeHTTP(recBadJSON, httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewBufferString("{bad")))
 	assert.Equal(t, http.StatusBadRequest, recBadJSON.Code)
 
-	// Missing required fields -> 400
 	recMissing := httptest.NewRecorder()
 	r.ServeHTTP(recMissing, httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewBufferString(`{"name":"only-name"}`)))
 	assert.Equal(t, http.StatusBadRequest, recMissing.Code)
 
-	// ErrInvalidSubscription from service -> 400
 	mgr.createErr = subscription.ErrInvalidSubscription
-	validBody, _ := json.Marshal(subscription.CreateRequest{Name: "n", SourceDomain: "orders", SinkType: "redis"})
+	validBody, err := json.Marshal(subscription.CreateRequest{Name: "n", SourceDomain: "orders", SinkType: "redis"})
+	require.NoError(t, err)
 	recInvalid := httptest.NewRecorder()
 	r.ServeHTTP(recInvalid, httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewReader(validBody)))
 	assert.Equal(t, http.StatusBadRequest, recInvalid.Code)
 
-	// Internal error on Create -> 500
 	mgr.createErr = errors.New("db offline")
 	recCreateErr := httptest.NewRecorder()
 	r.ServeHTTP(recCreateErr, httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewReader(validBody)))
 	assert.Equal(t, http.StatusInternalServerError, recCreateErr.Code)
 
-	// Internal error on List -> 500
 	mgr.listErr = errors.New("db query failed")
 	recListErr := httptest.NewRecorder()
 	r.ServeHTTP(recListErr, httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions?source_domain=orders", nil))
 	assert.Equal(t, http.StatusInternalServerError, recListErr.Code)
 
-	// Internal error on Get -> 500
 	mgr.getErr = errors.New("db timeout")
 	recGetErr := httptest.NewRecorder()
 	r.ServeHTTP(recGetErr, httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions/sub-1", nil))

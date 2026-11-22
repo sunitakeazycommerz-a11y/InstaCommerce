@@ -4,6 +4,7 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"sync"
@@ -103,6 +104,7 @@ func NewChecker(pinger Pinger, opts ...Option) *Checker {
 		deps: map[string]Pinger{
 			"database": nil,
 			"kafka":    nil,
+			"redis":    nil,
 			"temporal": nil,
 		},
 		version:      defaultVersion,
@@ -207,7 +209,9 @@ func (c *Checker) writeDependencyHealth(w http.ResponseWriter, r *http.Request, 
 func writeHealthJSON(w http.ResponseWriter, statusCode int, resp HealthResponse) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("failed to encode health response", "error", err)
+	}
 }
 
 func isNilPinger(p Pinger) bool {

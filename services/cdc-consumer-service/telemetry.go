@@ -19,9 +19,10 @@ import (
 )
 
 type Metrics struct {
-	consumerLag  *prometheus.GaugeVec
-	batchLatency prometheus.Histogram
-	dlqCount     prometheus.Counter
+	consumerLag           *prometheus.GaugeVec
+	batchLatency          prometheus.Histogram
+	dlqCount              prometheus.Counter
+	schemaEvolutionErrors prometheus.Counter
 }
 
 func initMetrics() Metrics {
@@ -41,11 +42,17 @@ func initMetrics() Metrics {
 		Help: "Number of messages sent to the Kafka DLQ.",
 	})
 
-	prometheus.MustRegister(consumerLag, batchLatency, dlqCount)
+	schemaEvolutionErrors := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "cdc_schema_evolution_errors_total",
+		Help: "Number of schema evolution failures while processing CDC messages.",
+	})
+
+	prometheus.MustRegister(consumerLag, batchLatency, dlqCount, schemaEvolutionErrors)
 	return Metrics{
-		consumerLag:  consumerLag,
-		batchLatency: batchLatency,
-		dlqCount:     dlqCount,
+		consumerLag:           consumerLag,
+		batchLatency:          batchLatency,
+		dlqCount:              dlqCount,
+		schemaEvolutionErrors: schemaEvolutionErrors,
 	}
 }
 

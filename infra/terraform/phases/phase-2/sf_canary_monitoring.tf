@@ -1,6 +1,3 @@
-# SF Canary Monitoring Infrastructure
-# Phase 2: Prometheus scrape configs and monitoring setup
-
 terraform {
   required_version = ">= 1.5"
   required_providers {
@@ -17,7 +14,6 @@ locals {
   cluster_name = var.cluster_name
 }
 
-# Alert Policy: High error rate
 resource "google_monitoring_alert_policy" "dark_store_high_error_rate" {
   display_name = "Dark Store - High Error Rate"
   combiner     = "OR"
@@ -49,7 +45,6 @@ resource "google_monitoring_alert_policy" "dark_store_high_error_rate" {
   }
 }
 
-# Alert Policy: High latency
 resource "google_monitoring_alert_policy" "dark_store_high_latency" {
   display_name = "Dark Store - High Latency (p99 > 2s)"
   combiner     = "OR"
@@ -81,7 +76,6 @@ resource "google_monitoring_alert_policy" "dark_store_high_latency" {
   }
 }
 
-# Alert Policy: Pod restart rate
 resource "google_monitoring_alert_policy" "dark_store_pod_restarts" {
   display_name = "Dark Store - Excessive Pod Restarts"
   combiner     = "OR"
@@ -104,7 +98,6 @@ resource "google_monitoring_alert_policy" "dark_store_pod_restarts" {
   notification_channels = var.notification_channels
 }
 
-# Alert Policy: Memory pressure
 resource "google_monitoring_alert_policy" "dark_store_memory_pressure" {
   display_name = "Dark Store - Memory Pressure"
   combiner     = "OR"
@@ -127,7 +120,6 @@ resource "google_monitoring_alert_policy" "dark_store_memory_pressure" {
   notification_channels = var.notification_channels
 }
 
-# Alert Policy: CPU throttling
 resource "google_monitoring_alert_policy" "dark_store_cpu_throttling" {
   display_name = "Dark Store - CPU Throttling Detected"
   combiner     = "OR"
@@ -150,7 +142,6 @@ resource "google_monitoring_alert_policy" "dark_store_cpu_throttling" {
   notification_channels = var.notification_channels
 }
 
-# Custom Monitoring Dashboard
 resource "google_monitoring_dashboard" "dark_store_dashboard" {
   dashboard_json = jsonencode({
     displayName = "SF Dark Store Canary - Real-time Monitoring"
@@ -316,7 +307,6 @@ resource "google_monitoring_dashboard" "dark_store_dashboard" {
   project = local.project_id
 }
 
-# Uptime Check (synthetic monitoring)
 resource "google_monitoring_uptime_check_config" "dark_store_health_check" {
   display_name = "Dark Store Health Check"
   timeout      = "5s"
@@ -341,7 +331,6 @@ resource "google_monitoring_uptime_check_config" "dark_store_health_check" {
   selected_regions = ["USA", "EUROPE", "ASIA_PACIFIC"]
 }
 
-# Service Level Objective (SLO)
 resource "google_monitoring_slo" "dark_store_availability" {
   display_name        = "Dark Store - 99.5% Availability SLO"
   goal                = 0.995
@@ -356,7 +345,6 @@ resource "google_monitoring_slo" "dark_store_availability" {
   }
 }
 
-# Output
 output "dashboard_url" {
   description = "Monitoring dashboard URL"
   value       = "https://console.cloud.google.com/monitoring/dashboards/custom/${google_monitoring_dashboard.dark_store_dashboard.id}?project=${local.project_id}"

@@ -68,7 +68,9 @@ func newHTTPMux(hHandler *health.Handler, readyFn func(context.Context) error) *
 			if err := readyFn(checkCtx); err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusServiceUnavailable)
-				_, _ = w.Write([]byte(`{"status":"not_ready"}`))
+				if _, writeErr := w.Write([]byte(`{"status":"not_ready"}`)); writeErr != nil {
+					slog.Error("failed to write readiness response", "error", writeErr)
+				}
 				return
 			}
 		}
@@ -95,10 +97,8 @@ func main() {
 	})
 	defer rdb.Close()
 
-	// Initialise deduplication checker with Bloom filter fast path
 	deduper := dedup.NewChecker(rdb, logger).WithBloomFilter(dedup.NewBloomFilter(100000, 0.01))
 
-	// Initialise processors
 	orderMetrics := processor.NewOrderMetrics()
 	slaMonitor := processor.NewSLAMonitor(0.90, logger)
 	defer slaMonitor.Close()
@@ -115,7 +115,6 @@ func main() {
 
 	brokers := strings.Split(cfg.KafkaBrokers, ",")
 
-	// Start Kafka consumers
 	handleOrderEvent := func(ctx context.Context, msg kafka.Message) error {
 		var event processor.OrderEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
@@ -172,7 +171,6 @@ func main() {
 		return inventoryProc.Process(ctx, event)
 	})
 
-	// HTTP server for health and metrics
 	hHandler := health.NewHandler(health.Check{
 		Name: "redis",
 		Check: func(checkCtx context.Context) error {
@@ -203,7 +201,6 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
@@ -211,7 +208,7 @@ func main() {
 	logger.Info("shutdown signal received", "signal", sig.String())
 
 	hHandler.SetReady(false)
-	cancel() // cancel context — consumers will drain and exit
+	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()

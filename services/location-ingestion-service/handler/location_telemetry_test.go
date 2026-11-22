@@ -35,24 +35,26 @@ func TestLocationHandler_OutOfOrderStoreRejectionSkipsGeofenceAndRedisLock(t *te
 	tsNew := now.UnixMilli()
 	tsStale := now.Add(-30 * time.Second).UnixMilli()
 
-	body1, _ := json.Marshal(LocationInput{
+	body1, err := json.Marshal(LocationInput{
 		RiderID:   "rider-p1-8",
 		Lat:       12.9716,
 		Lng:       77.5946,
 		Timestamp: &tsNew,
 	})
+	require.NoError(t, err)
 	rec1 := httptest.NewRecorder()
 	h.HandleIngest(rec1, httptest.NewRequest(http.MethodPost, "/ingest", bytes.NewReader(body1)))
 	require.Equal(t, http.StatusAccepted, rec1.Code)
 	require.Len(t, producer.getMessages(DefaultGeofenceTopic), 1)
 	assert.Equal(t, int64(1), dedupSpy.calls.Load())
 
-	body2, _ := json.Marshal(LocationInput{
+	body2, err := json.Marshal(LocationInput{
 		RiderID:   "rider-p1-8",
 		Lat:       12.9800,
 		Lng:       77.6000,
 		Timestamp: &tsStale,
 	})
+	require.NoError(t, err)
 	rec2 := httptest.NewRecorder()
 	h.HandleIngest(rec2, httptest.NewRequest(http.MethodPost, "/ingest", bytes.NewReader(body2)))
 	assert.Equal(t, http.StatusOK, rec2.Code)
@@ -154,7 +156,7 @@ func TestLocationHandler_TelemetryFlaggingAndTeleportHTTPStatus(t *testing.T) {
 	ts1 := now.Add(-10 * time.Second).UnixMilli()
 	batt := 11.5
 	acc := 32.0
-	body1, _ := json.Marshal(LocationInput{
+	body1, err := json.Marshal(LocationInput{
 		RiderID:    "rider-flags",
 		Lat:        12.9716,
 		Lng:        77.5946,
@@ -162,6 +164,7 @@ func TestLocationHandler_TelemetryFlaggingAndTeleportHTTPStatus(t *testing.T) {
 		BatteryPct: &batt,
 		Accuracy:   &acc,
 	})
+	require.NoError(t, err)
 	rec1 := httptest.NewRecorder()
 	h.HandleIngest(rec1, httptest.NewRequest(http.MethodPost, "/ingest", bytes.NewReader(body1)))
 	require.Equal(t, http.StatusAccepted, rec1.Code)
@@ -179,12 +182,13 @@ func TestLocationHandler_TelemetryFlaggingAndTeleportHTTPStatus(t *testing.T) {
 	assert.InDelta(t, 11.5, *ev.BatteryPct, 1e-6)
 
 	ts2 := now.UnixMilli()
-	bodyTeleport, _ := json.Marshal(LocationInput{
+	bodyTeleport, err := json.Marshal(LocationInput{
 		RiderID:   "rider-flags",
 		Lat:       13.0500,
 		Lng:       77.5946,
 		Timestamp: &ts2,
 	})
+	require.NoError(t, err)
 	rec2 := httptest.NewRecorder()
 	h.HandleIngest(rec2, httptest.NewRequest(http.MethodPost, "/ingest", bytes.NewReader(bodyTeleport)))
 	assert.Equal(t, http.StatusUnprocessableEntity, rec2.Code)
@@ -258,4 +262,14 @@ func TestLocationHandler_GeofencePublishing_EnteredStore(t *testing.T) {
 	assert.Equal(t, "rider-999", envelope.AggregateID)
 	assert.Equal(t, "ENTERED_STORE", envelope.Payload.EventType)
 	assert.Equal(t, "store-blr-01", envelope.Payload.ZoneID)
+}
+
+func TestLocationBatcher_AddPropagatesEnqueueError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	batcher, err := NewLocationBatcher(newMockKafkaProducer(), "rider.location.updates", 10, time.Hour, logger, WithBatchBufferCapacity(1))
+	require.NoError(t, err)
+
+	require.NoError(t, batcher.Add(LocationUpdate{RiderID: "r1"}))
+	err = batcher.Add(LocationUpdate{RiderID: "r2"})
+	require.ErrorIs(t, err, ErrKafkaBufferFull)
 }

@@ -1,6 +1,3 @@
-# Terraform Variables for SF Canary Phase 2
-# Define all input variables for GKE, Ingress, Monitoring, and Firewall
-
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
@@ -50,7 +47,6 @@ variable "network_dependency" {
   default     = null
 }
 
-# GKE Cluster variables
 variable "cluster_name" {
   description = "GKE cluster name"
   type        = string
@@ -97,7 +93,6 @@ variable "system_node_count" {
   }
 }
 
-# Ingress variables
 variable "ilb_ip_address" {
   description = "Internal Load Balancer IP address (must be in VPC range)"
   type        = string
@@ -108,7 +103,6 @@ variable "ilb_ip_address" {
   }
 }
 
-# Monitoring variables
 variable "notification_channels" {
   description = "Notification channel IDs for alerting"
   type        = list(string)
@@ -121,7 +115,6 @@ variable "dark_store_endpoint" {
   default     = "dark-store.instacommerce.internal"
 }
 
-# Firewall variables
 variable "admin_cidrs" {
   description = "CIDR blocks for admin SSH access"
   type        = list(string)
@@ -132,7 +125,6 @@ variable "admin_cidrs" {
   }
 }
 
-# Tags for resource organization
 variable "common_labels" {
   description = "Common labels to apply to all resources"
   type        = map(string)

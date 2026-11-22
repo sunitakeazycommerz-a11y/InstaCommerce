@@ -48,7 +48,7 @@ func Load() (*Config, error) {
 		KafkaConsumerGroup:    getEnv("KAFKA_CONSUMER_GROUP", "reverse-etl-orchestrator"),
 		TemporalHost:          getEnv("TEMPORAL_HOST", "localhost:7233"),
 		TemporalNamespace:     getEnv("TEMPORAL_NAMESPACE", "reverse-etl"),
-		RedisAddr:             getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisAddr:             getEnv("REDIS_ADDR", ""),
 		RedisPassword:         getEnv("REDIS_PASSWORD", ""),
 		RedisDB:               getEnvInt("REDIS_DB", 0),
 		WorkerPoolConcurrency: getEnvInt("WORKER_POOL_CONCURRENCY", 10),

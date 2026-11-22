@@ -60,7 +60,6 @@ func ExtractCDCFields(data []byte) (map[string]any, error) {
 		return nil, err
 	}
 
-	// 1. Check for standard Debezium envelope with payload wrapper
 	if inner, ok := raw["payload"].(map[string]any); ok {
 		if after, ok := inner["after"].(map[string]any); ok {
 			return after, nil
@@ -68,7 +67,6 @@ func ExtractCDCFields(data []byte) (map[string]any, error) {
 		return inner, nil
 	}
 
-	// 2. Check for flat Debezium envelope
 	if after, ok := raw["after"].(map[string]any); ok {
 		return after, nil
 	}
@@ -101,7 +99,6 @@ func (h *SchemaEvolutionHandler) DetectAndEvolveSchema(ctx context.Context, fiel
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Double-check under lock
 	var toAdd []*bigquery.FieldSchema
 	for _, f := range newFields {
 		if _, known := h.knownFields.Load(f.Name); !known {

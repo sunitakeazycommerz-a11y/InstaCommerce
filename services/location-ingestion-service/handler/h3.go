@@ -25,6 +25,31 @@ func LatLngToH3Res8(lat, lng float64) string {
 	return fmt.Sprintf("%016x", index64)
 }
 
+// EncodeSpatialGridIndex maps lat/lng at the given H3 resolution to a 64-bit hexagonal cell ID.
+func EncodeSpatialGridIndex(lat, lng float64, resolution int) string {
+	res := resolution
+	if res <= 0 {
+		res = 9
+	} else if res > 15 {
+		res = 15
+	}
+	if res == 8 {
+		return LatLngToH3Res8(lat, lng)
+	}
+	hexDiameterKm := H3Resolution8HexDiameterKm / math.Pow(math.Sqrt(7), float64(res-8))
+	scale := 111.32 / (hexDiameterKm * math.Sqrt(3) / 2)
+	radLat := lat * math.Pi / 180.0
+	coord := axialRound(
+		(math.Sqrt(3)/3.0)*(lng*math.Cos(radLat)*scale)-(1.0/3.0)*(lat*scale),
+		(2.0/3.0)*(lat*scale),
+	)
+	qPart := uint32(coord.Q + 1000000)
+	rPart := uint32(coord.R + 1000000)
+	prefix := uint64(0x80 | (res & 0x0F))
+	index64 := (prefix << 56) | (uint64(qPart&0xFFFFFF) << 28) | uint64(rPart&0xFFFFFF)
+	return fmt.Sprintf("%016x", index64)
+}
+
 // KRingRes8 returns the center H3 index and all 6 adjacent hexagonal neighbors (k=1 ring).
 func KRingRes8(h3Index string) []string {
 	var qPart, rPart uint32

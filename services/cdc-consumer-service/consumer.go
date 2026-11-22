@@ -43,6 +43,49 @@ func unwrapDLQWriter(writer *kafka.Writer) (dlqMessageWriter, string) {
 	return writer, writer.Topic
 }
 
+type schemaEvolver interface {
+	DetectAndEvolveSchema(ctx context.Context, fields map[string]any) error
+}
+
+func evolveSchemaIfPresent(
+	ctx context.Context,
+	msg kafka.Message,
+	evolver schemaEvolver,
+	metrics Metrics,
+	logger *slog.Logger,
+	span trace.Span,
+) {
+	if evolver == nil || isTombstonePayload(msg.Value) {
+		return
+	}
+	cdcFields, extractErr := ExtractCDCFields(msg.Value)
+	if extractErr != nil {
+		if logger != nil {
+			logger.Warn("failed to extract cdc fields for schema evolution",
+				"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", extractErr)
+		}
+		if span != nil {
+			span.RecordError(extractErr)
+		}
+		return
+	}
+	if len(cdcFields) == 0 {
+		return
+	}
+	if err := evolver.DetectAndEvolveSchema(ctx, cdcFields); err != nil {
+		if logger != nil {
+			logger.Warn("schema evolution failed",
+				"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
+		}
+		if span != nil {
+			span.RecordError(err)
+		}
+		if metrics.schemaEvolutionErrors != nil {
+			metrics.schemaEvolutionErrors.Inc()
+		}
+	}
+}
+
 func runConsumer(
 	ctx context.Context,
 	reader *kafka.Reader,
@@ -50,13 +93,17 @@ func runConsumer(
 	_ *kafka.Writer,
 	_ Config,
 	metrics Metrics,
-	_ *slog.Logger,
+	logger *slog.Logger,
 	tracer trace.Tracer,
 	schemaHandler *SchemaEvolutionHandler,
 	reportErr func(error),
 ) {
 	if tracer == nil {
 		tracer = otel.Tracer("cdc-consumer")
+	}
+	var evolver schemaEvolver
+	if schemaHandler != nil {
+		evolver = schemaHandler
 	}
 	for {
 		msg, err := reader.FetchMessage(ctx)
@@ -86,11 +133,7 @@ func runConsumer(
 			),
 		)
 
-		if schemaHandler != nil && !isTombstonePayload(msg.Value) {
-			if cdcFields, err := ExtractCDCFields(msg.Value); err == nil && len(cdcFields) > 0 {
-				_ = schemaHandler.DetectAndEvolveSchema(msgCtx, cdcFields)
-			}
-		}
+		evolveSchemaIfPresent(msgCtx, msg, evolver, metrics, logger, span)
 
 		row, err := transformMessage(msg)
 		if err != nil {

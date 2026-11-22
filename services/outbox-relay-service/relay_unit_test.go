@@ -385,7 +385,10 @@ func TestRelayBatchUnitPaths(t *testing.T) {
 		}
 		tx := &fakeTx{rows: &fakeRows{events: events}}
 		producer := &recordingProducer{}
-		svc, _ := newRelayServiceWithDB(baseCfg, nil, &fakeOutboxDB{tx: tx}, producer, nil, trace.NewNoopTracerProvider().Tracer("test"), relayMetrics{})
+		svc, err := newRelayServiceWithDB(baseCfg, nil, &fakeOutboxDB{tx: tx}, producer, nil, trace.NewNoopTracerProvider().Tracer("test"), relayMetrics{})
+		if err != nil {
+			t.Fatalf("newRelayServiceWithDB: %v", err)
+		}
 
 		if err := svc.relayBatch(context.Background()); err != nil {
 			t.Fatalf("relayBatch: %v", err)
@@ -423,10 +426,12 @@ func TestRelayBatchUnitPaths(t *testing.T) {
 				return nil
 			},
 		}
-		svc, _ := newRelayServiceWithDB(baseCfg, nil, db, producer, nil, trace.NewNoopTracerProvider().Tracer("test"), relayMetrics{})
+		svc, err := newRelayServiceWithDB(baseCfg, nil, db, producer, nil, trace.NewNoopTracerProvider().Tracer("test"), relayMetrics{})
+		if err != nil {
+			t.Fatalf("newRelayServiceWithDB: %v", err)
+		}
 
-		// Attempt 1 (< MaxRetries=2): fails publish, returns error, does not mark sent
-		err := svc.relayBatch(context.Background())
+		err = svc.relayBatch(context.Background())
 		if err == nil {
 			t.Fatal("expected error on first transient publish failure")
 		}
@@ -434,7 +439,6 @@ func TestRelayBatchUnitPaths(t *testing.T) {
 			t.Fatalf("expected no updated IDs on first retry, got %v", tx1.updatedIDs)
 		}
 
-		// Attempt 2 (== MaxRetries=2): routes to DLQ and marks sent
 		tx2 := &fakeTx{rows: &fakeRows{events: []outboxEvent{evt}}}
 		db.tx = tx2
 		if err := svc.relayBatch(context.Background()); err != nil {
@@ -464,7 +468,10 @@ func TestRelayBatchUnitPaths(t *testing.T) {
 				return errors.New("dlq unavailable")
 			},
 		}
-		svc, _ := newRelayServiceWithDB(baseCfg, nil, &fakeOutboxDB{tx: tx}, producer, nil, trace.NewNoopTracerProvider().Tracer("test"), relayMetrics{})
+		svc, err := newRelayServiceWithDB(baseCfg, nil, &fakeOutboxDB{tx: tx}, producer, nil, trace.NewNoopTracerProvider().Tracer("test"), relayMetrics{})
+		if err != nil {
+			t.Fatalf("newRelayServiceWithDB: %v", err)
+		}
 
 		if err := svc.relayBatch(context.Background()); err == nil {
 			t.Fatal("expected error when DLQ send fails")

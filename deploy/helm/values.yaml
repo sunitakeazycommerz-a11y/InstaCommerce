@@ -1206,7 +1206,7 @@ services:
       HTTP_PORT: "8108"
       SERVER_PORT: "8108"
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
-      REDIS_URL: "redis-cluster.default.svc.cluster.local:6379"
+      REDIS_ADDR: "redis-cluster.default.svc.cluster.local:6379"
       HEALTH_PORT: "8108"
 
   reverse-etl-orchestrator:
@@ -1225,6 +1225,7 @@ services:
       METRICS_ADDR: ":9090"
       DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/reverse_etl_db?sslmode=disable"
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
+      REDIS_ADDR: ""
       WAREHOUSE_SOURCE_MODE: "mock"
       TEMPORAL_HOST: temporal.temporal:7233
       TEMPORAL_NAMESPACE: reverse-etl

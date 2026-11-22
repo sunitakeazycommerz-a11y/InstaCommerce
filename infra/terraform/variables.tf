@@ -1,5 +1,3 @@
-# Wave 36 Track B: Variables for Reconciliation CDC Connector
-
 variable "reconciliation_db_host" {
   description = "PostgreSQL hostname for reconciliation database"
   type        = string

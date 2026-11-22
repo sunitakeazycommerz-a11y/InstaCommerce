@@ -1,7 +1,3 @@
-# Wave 36 Track B: CDC Connector for Reconciliation Engine
-# Debezium PostgreSQL connector to capture ledger and mismatch changes for reconciliation
-# Uses PostgreSQL logical decoding (pgoutput) to stream changes to Kafka.
-
 resource "kafka_topic" "reconciliation_cdc" {
   name               = "reconciliation.cdc"
   partitions         = 12

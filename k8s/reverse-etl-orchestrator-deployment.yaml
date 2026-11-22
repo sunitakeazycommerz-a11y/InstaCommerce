@@ -23,7 +23,8 @@ data:
   analytics.retention.days: "90"
   circuit.breaker.failure.threshold: "5"
   circuit.breaker.reset.timeout.seconds: "30"
-  consumer.lag.alert.threshold.bytes: "1048576"  # 1MB
+  consumer.lag.alert.threshold.bytes: "1048576"
+  redis.addr: ""
 
 ---
 apiVersion: apps/v1
@@ -95,8 +96,11 @@ spec:
           value: "1.0.0"
         - name: ENVIRONMENT
           value: "production"
-
-        # Kafka Configuration
+        - name: REDIS_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: reverse-etl-config
+              key: redis.addr
         - name: KAFKA_BROKERS
           valueFrom:
             configMapKeyRef:
@@ -112,8 +116,6 @@ spec:
             configMapKeyRef:
               name: reverse-etl-config
               key: kafka.topics
-
-        # Database Configuration
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef:
@@ -124,8 +126,6 @@ spec:
             configMapKeyRef:
               name: reverse-etl-config
               key: database.max.connections
-
-        # Warehouse Configuration
         - name: WAREHOUSE_TYPE
           valueFrom:
             configMapKeyRef:
@@ -151,8 +151,6 @@ spec:
             configMapKeyRef:
               name: reverse-etl-warehouse-config
               key: database
-
-        # Marketing Platform Configuration
         - name: MARKETING_PLATFORM
           valueFrom:
             configMapKeyRef:
@@ -173,8 +171,6 @@ spec:
             configMapKeyRef:
               name: reverse-etl-config
               key: marketing.batch.timeout.ms
-
-        # Analytics Configuration
         - name: ANALYTICS_HOSTS
           valueFrom:
             configMapKeyRef:
@@ -185,8 +181,6 @@ spec:
             configMapKeyRef:
               name: reverse-etl-analytics-config
               key: index_prefix
-
-        # Observability
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "http://otel-collector.observability.svc.cluster.local:4318"
         - name: OTEL_SERVICE_NAME

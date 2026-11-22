@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrInvalidSchemaVersion indicates an event schema version fails contract formatting rules.
@@ -61,4 +62,15 @@ func (e *EventEnvelope) Validate() error {
 	}
 	e.SchemaVersion = ver
 	return nil
+}
+
+// TruncateUTF8 truncates value to at most maxBytes without splitting a multi-byte UTF-8 rune.
+func TruncateUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	for maxBytes > 0 && !utf8.RuneStart(value[maxBytes]) {
+		maxBytes--
+	}
+	return value[:maxBytes]
 }

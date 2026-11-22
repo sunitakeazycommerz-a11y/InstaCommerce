@@ -61,13 +61,11 @@ func HandleAssignV2(solver *optimizer.Solver, logger *slog.Logger) http.HandlerF
 			return
 		}
 
-		// Determine which solver to use.
 		activeSolver := solver
 		if req.Config != nil {
 			activeSolver = optimizer.NewSolver(*req.Config)
 		}
 
-		// Start OTel span.
 		tracer := otel.Tracer(serviceName)
 		ctx, span := tracer.Start(r.Context(), "v2.optimize.assign")
 		defer span.End()
@@ -198,7 +196,9 @@ func WriteJSON(w http.ResponseWriter, status int, payload any) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(payload)
+	if err := enc.Encode(payload); err != nil {
+		slog.Error("failed to encode JSON response", "error", err)
+	}
 }
 
 // WriteError writes a JSON error response.

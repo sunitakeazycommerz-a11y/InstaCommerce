@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	sharedkafka "github.com/instacommerce/go-shared/pkg/kafka"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -145,7 +146,7 @@ func TestDLQMetadataEnrichmentAndUTF8Truncate(t *testing.T) {
 	require.Error(t, err)
 
 	s := "hello-🚀-world"
-	truncated := truncate(s, 8)
+	truncated := sharedkafka.TruncateUTF8(s, 8)
 	assert.True(t, utf8.ValidString(truncated))
 	assert.Equal(t, "hello-", truncated)
 }

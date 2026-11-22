@@ -1,6 +1,3 @@
-# SF Canary VPC Firewall Rules
-# Phase 2: Network security policies for dark-store canary
-
 terraform {
   required_version = ">= 1.5"
   required_providers {
@@ -17,7 +14,6 @@ locals {
   region       = var.region
 }
 
-# Allow internal traffic (VPC-internal)
 resource "google_compute_firewall" "allow_internal" {
   name        = "sf-canary-allow-internal"
   network     = local.network_name
@@ -44,7 +40,6 @@ resource "google_compute_firewall" "allow_internal" {
   target_tags   = ["dark-store", "internal"]
 }
 
-# Allow SSH from bastion/admin
 resource "google_compute_firewall" "allow_ssh_admin" {
   name        = "sf-canary-allow-ssh"
   network     = local.network_name
@@ -62,7 +57,6 @@ resource "google_compute_firewall" "allow_ssh_admin" {
   target_tags   = ["bastion", "admin"]
 }
 
-# Allow HTTP to Kubernetes nodes (for health checks and ingress)
 resource "google_compute_firewall" "allow_http_to_k8s" {
   name        = "sf-canary-allow-http-k8s"
   network     = local.network_name
@@ -80,7 +74,6 @@ resource "google_compute_firewall" "allow_http_to_k8s" {
   target_tags   = ["dark-store", "k8s-nodes"]
 }
 
-# Allow Prometheus metrics scraping
 resource "google_compute_firewall" "allow_prometheus_scrape" {
   name        = "sf-canary-allow-prometheus"
   network     = local.network_name
@@ -98,7 +91,6 @@ resource "google_compute_firewall" "allow_prometheus_scrape" {
   target_tags   = ["dark-store", "monitoring"]
 }
 
-# Allow GKE API server access (control plane to nodes)
 resource "google_compute_firewall" "allow_gke_api" {
   name        = "sf-canary-allow-gke-api"
   network     = local.network_name
@@ -119,7 +111,6 @@ resource "google_compute_firewall" "allow_gke_api" {
   target_tags = ["k8s-nodes"]
 }
 
-# Allow Cloud SQL Private IP connectivity
 resource "google_compute_firewall" "allow_cloudsql" {
   name        = "sf-canary-allow-cloudsql"
   network     = local.network_name
@@ -137,7 +128,6 @@ resource "google_compute_firewall" "allow_cloudsql" {
   target_tags   = ["cloudsql"]
 }
 
-# Allow Redis (Memorystore) connectivity
 resource "google_compute_firewall" "allow_redis" {
   name        = "sf-canary-allow-redis"
   network     = local.network_name
@@ -155,7 +145,6 @@ resource "google_compute_firewall" "allow_redis" {
   target_tags   = ["redis"]
 }
 
-# Allow Kafka connectivity (if Kafka is used)
 resource "google_compute_firewall" "allow_kafka" {
   name        = "sf-canary-allow-kafka"
   network     = local.network_name
@@ -173,7 +162,6 @@ resource "google_compute_firewall" "allow_kafka" {
   target_tags   = ["kafka"]
 }
 
-# Allow Google Cloud Health Checks
 resource "google_compute_firewall" "allow_health_checks" {
   name        = "sf-canary-allow-health-checks"
   network     = local.network_name
@@ -194,7 +182,6 @@ resource "google_compute_firewall" "allow_health_checks" {
   target_tags = ["health-checks"]
 }
 
-# Allow egress to Google APIs
 resource "google_compute_firewall" "allow_google_apis_egress" {
   name        = "sf-canary-allow-google-apis-egress"
   network     = local.network_name
@@ -214,7 +201,6 @@ resource "google_compute_firewall" "allow_google_apis_egress" {
   target_tags = ["dark-store", "k8s-nodes"]
 }
 
-# Deny all other traffic (default deny)
 resource "google_compute_firewall" "deny_all_default" {
   name        = "sf-canary-deny-all-default"
   network     = local.network_name
@@ -230,7 +216,6 @@ resource "google_compute_firewall" "deny_all_default" {
   source_ranges = ["0.0.0.0/0"]
 }
 
-# Deny all egress (default deny)
 resource "google_compute_firewall" "deny_all_egress" {
   name        = "sf-canary-deny-all-egress-default"
   network     = local.network_name
@@ -246,7 +231,6 @@ resource "google_compute_firewall" "deny_all_egress" {
   destination_ranges = ["0.0.0.0/0"]
 }
 
-# Allow DNS queries (egress)
 resource "google_compute_firewall" "allow_dns_egress" {
   name        = "sf-canary-allow-dns-egress"
   network     = local.network_name
@@ -264,7 +248,6 @@ resource "google_compute_firewall" "allow_dns_egress" {
   target_tags        = ["dark-store", "k8s-nodes"]
 }
 
-# Outputs
 output "firewall_rules" {
   description = "Firewall rules created"
   value = {

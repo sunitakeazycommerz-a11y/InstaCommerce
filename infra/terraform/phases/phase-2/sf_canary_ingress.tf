@@ -1,6 +1,3 @@
-# SF Canary Internal Load Balancer Ingress
-# Phase 2 Infrastructure: Traffic routing to dark-store canary
-
 terraform {
   required_version = ">= 1.5"
   required_providers {
@@ -26,7 +23,6 @@ locals {
   )
 }
 
-# Internal Load Balancer Address
 resource "google_compute_address" "dark_store_ilb" {
   name          = "dark-store-ilb-address"
   address_type  = "INTERNAL"
@@ -41,7 +37,6 @@ resource "google_compute_address" "dark_store_ilb" {
   labels = local.labels
 }
 
-# Health Check for backend
 resource "google_compute_health_check" "dark_store_health_check" {
   name                = "dark-store-health-check"
   project             = local.project_id
@@ -60,7 +55,6 @@ resource "google_compute_health_check" "dark_store_health_check" {
   description = "Health check for dark-store pods"
 }
 
-# Backend Service for Internal LB
 resource "google_compute_backend_service" "dark_store_backend" {
   name                    = "dark-store-backend"
   project                 = local.project_id
@@ -72,19 +66,15 @@ resource "google_compute_backend_service" "dark_store_backend" {
   session_affinity        = "CLIENT_IP"
   affinity_cookie_ttl_sec = 3600
 
-  # Health check
   health_checks = [google_compute_health_check.dark_store_health_check.id]
 
-  # Connection draining
   connection_draining_timeout_sec = 60
 
-  # Logging
   log_config {
     enable      = true
     sample_rate = 0.1
   }
 
-  # IAP (disabled for internal)
   iap {
     enabled = false
   }
@@ -96,8 +86,7 @@ resource "google_compute_backend_service" "dark_store_backend" {
   depends_on = [google_compute_health_check.dark_store_health_check]
 }
 
-# Network Endpoint Group (NEG) for Kubernetes pods
-# This is automatically managed by GKE if using Ingress with BackendConfig
+# Automatically managed by GKE when using Ingress with BackendConfig.
 resource "google_compute_network_endpoint_group" "dark_store_neg" {
   name                  = "dark-store-neg"
   project               = local.project_id
@@ -110,7 +99,6 @@ resource "google_compute_network_endpoint_group" "dark_store_neg" {
   labels = local.labels
 }
 
-# Forwarding Rule for Internal LB
 resource "google_compute_forwarding_rule" "dark_store_ilb" {
   name                  = "dark-store-ilb-rule"
   project               = local.project_id
@@ -132,7 +120,6 @@ resource "google_compute_forwarding_rule" "dark_store_ilb" {
   depends_on = [google_compute_backend_service.dark_store_backend]
 }
 
-# Firewall Rule: Allow internal traffic to ILB
 resource "google_compute_firewall" "dark_store_ilb_allow" {
   name        = "dark-store-ilb-allow"
   network     = local.network_name
@@ -147,13 +134,12 @@ resource "google_compute_firewall" "dark_store_ilb_allow" {
   }
 
   source_ranges = [
-    "10.0.0.0/8"  # Internal VPC CIDR
+    "10.0.0.0/8"
   ]
 
   target_tags = ["dark-store-ilb"]
 }
 
-# Firewall Rule: Health checks
 resource "google_compute_firewall" "dark_store_health_check" {
   name        = "dark-store-health-check"
   network     = local.network_name
@@ -175,7 +161,6 @@ resource "google_compute_firewall" "dark_store_health_check" {
   target_tags = ["dark-store"]
 }
 
-# Output values
 output "ilb_ip_address" {
   description = "Internal Load Balancer IP address"
   value       = google_compute_address.dark_store_ilb.address

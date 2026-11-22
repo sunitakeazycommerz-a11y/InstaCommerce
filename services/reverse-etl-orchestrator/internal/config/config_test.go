@@ -24,10 +24,15 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, ":8109", cfg.APIAddr)
 	assert.Equal(t, ":8110", cfg.HealthAddr)
 	assert.Equal(t, ":9090", cfg.MetricsAddr)
-	assert.Equal(t, "localhost:6379", cfg.RedisAddr)
+	assert.Equal(t, "", cfg.RedisAddr)
 	assert.Equal(t, 10, cfg.WorkerPoolConcurrency)
 	assert.Equal(t, 1000, cfg.RateLimitPerSec)
 	assert.Equal(t, "reverse-etl-orchestrator", cfg.ServiceName)
+
+	t.Setenv("REDIS_ADDR", "")
+	cfgEmptyRedis, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "", cfgEmptyRedis.RedisAddr)
 }
 
 func TestConfigCustomEnvironment(t *testing.T) {

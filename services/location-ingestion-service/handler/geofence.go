@@ -12,11 +12,10 @@ const (
 	// DefaultGeofenceTopic is the standard Kafka topic for rider geofence transitions.
 	DefaultGeofenceTopic = "rider.geofence.events"
 
-	// DefaultHysteresisWindow is the 3-minute suppression window preventing redundant geofence events (Issue #590).
+	// DefaultHysteresisWindow is the suppression window preventing redundant geofence events.
 	DefaultHysteresisWindow = 3 * time.Minute
 
-	// DefaultStoreConsecutivePings is the number of consecutive GPS pings required
-	// inside dark store dispatch bay boundary to eliminate GPS jitter false-positives (Issue #590).
+	// DefaultStoreConsecutivePings is the number of consecutive GPS pings required inside a store boundary.
 	DefaultStoreConsecutivePings = 3
 )
 
@@ -155,15 +154,28 @@ type riderZoneTracking struct {
 	inside            bool
 }
 
-// GeofenceChecker performs H3-based hexagonal geofence detection for rider
-// location updates with jitter debounce and hysteresis deduplication (Issue #590).
+// SpatialIndexer maps geographic coordinates and H3 resolution to a spatial grid cell index.
+type SpatialIndexer interface {
+	Index(lat, lng float64, resolution int) string
+}
+
+// SpatialIndexerFunc adapts a function to SpatialIndexer.
+type SpatialIndexerFunc func(lat, lng float64, resolution int) string
+
+// Index computes the spatial grid cell identifier for lat/lng at resolution.
+func (f SpatialIndexerFunc) Index(lat, lng float64, resolution int) string {
+	return f(lat, lng, resolution)
+}
+
+// GeofenceChecker performs hexagonal grid geofence detection for rider location updates.
 type GeofenceChecker struct {
 	mu                   sync.RWMutex
-	zones                map[string]Zone // zone_id → boundary
-	resolution           int             // H3 resolution (9 ≈ 174 m hexagons)
+	zones                map[string]Zone
+	resolution           int
+	indexer              SpatialIndexer
 	deduplicator         GeofenceDeduplicator
 	tracking             map[riderZoneKey]*riderZoneTracking
-	lastPingTime         map[string]time.Time // rider_id -> latest ping timestamp evaluated
+	lastPingTime         map[string]time.Time
 	defaultHysteresis    time.Duration
 	defaultRequiredPings int
 }
@@ -173,12 +185,24 @@ func NewGeofenceChecker(resolution int) *GeofenceChecker {
 	return &GeofenceChecker{
 		zones:                make(map[string]Zone),
 		resolution:           resolution,
+		indexer:              SpatialIndexerFunc(EncodeSpatialGridIndex),
 		deduplicator:         NewInMemoryGeofenceDeduplicator(),
 		tracking:             make(map[riderZoneKey]*riderZoneTracking),
 		lastPingTime:         make(map[string]time.Time),
 		defaultHysteresis:    DefaultHysteresisWindow,
 		defaultRequiredPings: 1,
 	}
+}
+
+// SetSpatialIndexer configures a custom spatial indexer implementation.
+func (g *GeofenceChecker) SetSpatialIndexer(indexer SpatialIndexer) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if indexer == nil {
+		g.indexer = SpatialIndexerFunc(EncodeSpatialGridIndex)
+		return
+	}
+	g.indexer = indexer
 }
 
 // SetDeduplicator configures an external deduplicator (e.g. Redis).
@@ -209,12 +233,11 @@ func (g *GeofenceChecker) RemoveZone(zoneID string) {
 	delete(g.zones, zoneID)
 }
 
-// Check evaluates a LocationUpdate against registered zones with hysteresis and debounce (Issue #590).
+// Check evaluates a LocationUpdate against registered zones with hysteresis and debounce.
 func (g *GeofenceChecker) Check(update LocationUpdate) []GeofenceEvent {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// Out-of-order guard: reject stale pings before touching any zone tracking state or Redis dedup locks.
 	for _, zone := range g.zones {
 		if track, exists := g.tracking[riderZoneKey{riderID: update.RiderID, zoneID: zone.ID}]; exists {
 			if !track.lastEventTime.IsZero() && !update.Timestamp.After(track.lastEventTime) {
@@ -232,7 +255,11 @@ func (g *GeofenceChecker) Check(update LocationUpdate) []GeofenceEvent {
 		g.lastPingTime[update.RiderID] = update.Timestamp
 	}
 
-	h3Index := h3IndexStub(update.Lat, update.Lng, g.resolution)
+	indexer := g.indexer
+	if indexer == nil {
+		indexer = SpatialIndexerFunc(EncodeSpatialGridIndex)
+	}
+	h3Index := indexer.Index(update.Lat, update.Lng, g.resolution)
 	var events []GeofenceEvent
 
 	for _, zone := range g.zones {
@@ -283,16 +310,13 @@ func (g *GeofenceChecker) Check(update LocationUpdate) []GeofenceEvent {
 		if isInside {
 			track.consecutiveInside++
 			if track.consecutiveInside < requiredPings {
-				// Suppress event until required consecutive pings are achieved inside boundary
 				continue
 			}
 
-			// Check 3-minute hysteresis window against duplicate entry
 			if !track.lastEventTime.IsZero() && update.Timestamp.Sub(track.lastEventTime) < hysteresis && track.lastEventType == eventType {
 				continue
 			}
 
-			// Redis deduplication check using key geofence:{riderId}:{storeId} (Issue #590)
 			redisKey := fmt.Sprintf("geofence:%s:%s", update.RiderID, zone.ID)
 			if g.deduplicator != nil && !g.deduplicator.TryAcquire(context.Background(), redisKey, hysteresis) {
 				continue
@@ -336,17 +360,8 @@ func (g *GeofenceChecker) Check(update LocationUpdate) []GeofenceEvent {
 	return events
 }
 
-// h3IndexStub generates a deterministic H3-like index string. In production,
-// replace this with a call to the uber/h3-go library.
-func h3IndexStub(lat, lng float64, resolution int) string {
-	return fmt.Sprintf("h3-%d-%.5f-%.5f", resolution, lat, lng)
-}
-
-// earthRadiusKm is the mean radius of the Earth.
 const earthRadiusKm = 6371.0
 
-// haversineKm computes the great-circle distance in kilometres between two
-// geographic coordinates.
 func haversineKm(lat1, lng1, lat2, lng2 float64) float64 {
 	dLat := degToRad(lat2 - lat1)
 	dLng := degToRad(lng2 - lng1)
@@ -359,7 +374,6 @@ func haversineKm(lat1, lng1, lat2, lng2 float64) float64 {
 	return earthRadiusKm * c
 }
 
-// degToRad converts degrees to radians.
 func degToRad(deg float64) float64 {
 	return deg * math.Pi / 180
 }

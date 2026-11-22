@@ -231,3 +231,17 @@ func unixNumberToTime(n int64) time.Time {
 	}
 	return time.Unix(n, 0).UTC()
 }
+
+func evictExpired[T any](items []T, timestamp func(T) time.Time, cutoff time.Time) ([]T, bool) {
+	idx := 0
+	for idx < len(items) && timestamp(items[idx]).Before(cutoff) {
+		idx++
+	}
+	if idx == 0 {
+		return items, false
+	}
+	remaining := len(items) - idx
+	copy(items, items[idx:])
+	clear(items[remaining:])
+	return items[:remaining], true
+}

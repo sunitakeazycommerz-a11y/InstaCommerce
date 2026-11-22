@@ -1,17 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/bigquery"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/api/googleapi"
 )
 
@@ -22,7 +29,10 @@ type fakeBQInserter struct {
 }
 
 func (f *fakeBQInserter) Put(ctx context.Context, src any) error {
-	rows, _ := src.([]bigquery.ValueSaver)
+	rows, ok := src.([]bigquery.ValueSaver)
+	if !ok {
+		return fmt.Errorf("unexpected src type %T", src)
+	}
 	f.mu.Lock()
 	call := len(f.batches)
 	copied := append([]bigquery.ValueSaver(nil), rows...)
@@ -265,7 +275,8 @@ func TestRunBatcherWithDeps_FlushesOnBatchSizeAndClose(t *testing.T) {
 			Key:       []byte(key),
 			Value:     []byte(`{"op":"c","after":{"id":"` + key + `"}}`),
 		}
-		saver, _ := transformMessage(msg)
+		saver, err := transformMessage(msg)
+		require.NoError(t, err)
 		return batchItem{message: msg, row: saver}
 	}
 
@@ -279,4 +290,42 @@ func TestRunBatcherWithDeps_FlushesOnBatchSizeAndClose(t *testing.T) {
 	require.Len(t, inserter.batches, 2)
 	assert.Len(t, inserter.batches[0], 2)
 	assert.Len(t, inserter.batches[1], 1)
+}
+
+type failingSchemaEvolver struct {
+	err error
+}
+
+func (f failingSchemaEvolver) DetectAndEvolveSchema(_ context.Context, _ map[string]any) error {
+	return f.err
+}
+
+func TestEvolveSchemaIfPresent_LogsRecordsSpanAndIncrementsMetricOnError(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	schemaErrCounter := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_schema_evo_err_total"})
+	metrics := Metrics{schemaEvolutionErrors: schemaErrCounter}
+
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+	ctx, span := tp.Tracer("test").Start(context.Background(), "kafka.consume")
+
+	msg := kafka.Message{
+		Topic:     "orders.cdc",
+		Partition: 1,
+		Offset:    42,
+		Value:     []byte(`{"payload":{"op":"c","after":{"id":"ord-1"}}}`),
+	}
+	evolveSchemaIfPresent(ctx, msg, failingSchemaEvolver{err: errors.New("bq permission denied")}, metrics, logger, span)
+	span.End()
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(schemaErrCounter))
+	assert.Contains(t, logBuf.String(), "schema evolution failed")
+	assert.Contains(t, logBuf.String(), "bq permission denied")
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	require.NotEmpty(t, spans[0].Events)
+	assert.Equal(t, "exception", spans[0].Events[0].Name)
 }
