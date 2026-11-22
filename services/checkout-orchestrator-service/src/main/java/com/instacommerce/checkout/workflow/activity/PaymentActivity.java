@@ -8,7 +8,8 @@ import io.temporal.activity.ActivityMethod;
 public interface PaymentActivity {
 
     @ActivityMethod
-    PaymentAuthResult authorizePayment(String orderId, long amountCents, String currency, String paymentMethodId, String idempotencyKey);
+    PaymentAuthResult authorizePayment(String orderId, long amountCents, String currency,
+                                       String paymentMethodId, String idempotencyKey, String userId);
 
     @ActivityMethod
     void capturePayment(String paymentId, String idempotencyKey);

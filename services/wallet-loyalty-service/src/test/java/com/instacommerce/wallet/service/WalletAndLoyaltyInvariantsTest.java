@@ -147,7 +147,7 @@ class WalletAndLoyaltyInvariantsTest {
         Authentication auth = mock(Authentication.class);
         when(mockWalletService.debit(userId, 300L, ReferenceType.ORDER, "ord-1", "checkout"))
             .thenReturn(expected);
-        controller.debit(auth, new DebitRequest(300L, "order", "ord-1", userId, "checkout"));
+        controller.debit(auth, null, new DebitRequest(300L, "order", "ord-1", userId, "checkout"));
         verify(mockWalletService).debit(userId, 300L, ReferenceType.ORDER, "ord-1", "checkout");
     }
 

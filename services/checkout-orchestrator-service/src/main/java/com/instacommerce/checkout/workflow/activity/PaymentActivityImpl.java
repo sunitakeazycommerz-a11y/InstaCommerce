@@ -23,10 +23,21 @@ public class PaymentActivityImpl implements PaymentActivity {
         this.restTemplate = restTemplate;
     }
 
-    @Override
     @CircuitBreaker(name = "paymentService", fallbackMethod = "authorizePaymentFallback")
     public PaymentAuthResult authorizePayment(String orderId, long amountCents, String currency,
                                               String paymentMethodId, String idempotencyKey) {
+        return executeAuthorizePayment(orderId, amountCents, currency, paymentMethodId, idempotencyKey, null);
+    }
+
+    @Override
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "authorizePaymentFallback")
+    public PaymentAuthResult authorizePayment(String orderId, long amountCents, String currency,
+                                              String paymentMethodId, String idempotencyKey, String userId) {
+        return executeAuthorizePayment(orderId, amountCents, currency, paymentMethodId, idempotencyKey, userId);
+    }
+
+    private PaymentAuthResult executeAuthorizePayment(String orderId, long amountCents, String currency,
+                                                      String paymentMethodId, String idempotencyKey, String userId) {
         String resolvedKey = resolveIdempotencyKey(idempotencyKey);
         String resolvedCurrency = (currency != null && !currency.isBlank()) ? currency : DEFAULT_CURRENCY;
         log.info("Authorizing payment orderId={} amount={} currency={} paymentMethod={} idempotencyKey={}",
@@ -34,6 +45,9 @@ public class PaymentActivityImpl implements PaymentActivity {
         Map<String, Object> body = new LinkedHashMap<>();
         if (orderId != null && !orderId.isBlank()) {
             body.put("orderId", orderId);
+        }
+        if (userId != null && !userId.isBlank()) {
+            body.put("userId", userId.trim());
         }
         body.put("amountCents", amountCents);
         body.put("currency", resolvedCurrency);
@@ -80,6 +94,13 @@ public class PaymentActivityImpl implements PaymentActivity {
                 orderId, amountCents, e.getMessage());
         throw new ServiceUnavailableException("paymentService",
                 "Payment service unavailable for authorizePayment", e);
+    }
+
+    @SuppressWarnings("unused")
+    private PaymentAuthResult authorizePaymentFallback(String orderId, long amountCents, String currency,
+                                                        String paymentMethodId, String idempotencyKey,
+                                                        String userId, Exception e) {
+        return authorizePaymentFallback(orderId, amountCents, currency, paymentMethodId, idempotencyKey, e);
     }
 
     @SuppressWarnings("unused")

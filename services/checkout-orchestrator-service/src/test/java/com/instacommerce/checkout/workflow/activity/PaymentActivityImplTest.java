@@ -4,6 +4,8 @@ import com.instacommerce.checkout.dto.PaymentAuthResult;
 import io.temporal.activity.Activity;
 import io.temporal.activity.ActivityExecutionContext;
 import io.temporal.activity.ActivityInfo;
+import io.temporal.testing.TestWorkflowEnvironment;
+import io.temporal.worker.Worker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -57,8 +59,40 @@ class PaymentActivityImplTest {
                     "Provided key must be passed through unchanged — no activityId suffix");
                 assertEquals("order-1", body.get("orderId"));
                 assertEquals("INR", body.get("currency"));
+                assertFalse(body.containsKey("userId"));
                 assertFalse(body.get("idempotencyKey").toString().contains("activity-id"),
                     "Key must NOT contain activityId");
+            }
+        }
+
+        @Test
+        @DisplayName("forwards trimmed userId in /payments/authorize body when provided and omits when blank")
+        void forwardsUserIdWhenProvided() {
+            String stableKey = "checkout-wf1:pay:auth";
+            when(restTemplate.postForObject(eq("/payments/authorize"), any(), eq(PaymentAuthResult.class)))
+                .thenReturn(new PaymentAuthResult("pay_1", true, null));
+
+            activity.authorizePayment("order-1", 5000L, "INR", "pm_abc", stableKey, "  user-123  ");
+
+            ArgumentCaptor<Map<String, Object>> bodyCaptor = ArgumentCaptor.captor();
+            verify(restTemplate).postForObject(eq("/payments/authorize"), bodyCaptor.capture(), eq(PaymentAuthResult.class));
+            assertEquals("user-123", bodyCaptor.getValue().get("userId"));
+
+            ArgumentCaptor<Map<String, Object>> secondCaptor = ArgumentCaptor.captor();
+            activity.authorizePayment("order-2", 5000L, "INR", "pm_abc", stableKey, "   ");
+            verify(restTemplate, times(2)).postForObject(eq("/payments/authorize"), secondCaptor.capture(), eq(PaymentAuthResult.class));
+            assertFalse(secondCaptor.getAllValues().get(1).containsKey("userId"));
+        }
+
+        @Test
+        @DisplayName("registers cleanly as a Temporal activity implementation without overload conflict")
+        void registersCleanlyWithTemporalWorker() {
+            TestWorkflowEnvironment env = TestWorkflowEnvironment.newInstance();
+            try {
+                Worker worker = env.newWorker("TEST_PAYMENT_QUEUE");
+                assertDoesNotThrow(() -> worker.registerActivitiesImplementations(activity));
+            } finally {
+                env.close();
             }
         }
 

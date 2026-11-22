@@ -6,15 +6,12 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.stereotype.Component;
 
-@Component
-public class AuthenticatedUserResolver {
+public final class AuthenticatedUserResolver {
 
     public static final String USER_ID_HEADER = "X-User-Id";
 
-    public UUID resolve(Authentication auth, String userIdHeader) {
-        return resolveUserId(auth, userIdHeader);
+    private AuthenticatedUserResolver() {
     }
 
     public static UUID resolveUserId(Authentication auth, String userIdHeader) {
@@ -41,7 +38,14 @@ public class AuthenticatedUserResolver {
         if (resolvedAuth == null || resolvedAuth.getName() == null || resolvedAuth.getName().isBlank()) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED", "Authentication is required");
         }
-        return UUID.fromString(resolvedAuth.getName().trim());
+        try {
+            return UUID.fromString(resolvedAuth.getName().trim());
+        } catch (IllegalArgumentException ex) {
+            throw new ApiException(
+                HttpStatus.BAD_REQUEST,
+                "INVALID_USER_ID",
+                "Authenticated user subject is not a valid UUID");
+        }
     }
 
     private static ApiException missingUserIdException() {

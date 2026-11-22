@@ -5,9 +5,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.events.EventEnvelope;
 import com.instacommerce.contracts.topics.TopicNames;
+import com.instacommerce.fraud.client.OrderLookupClient;
+import com.instacommerce.fraud.client.OrderSnapshot;
 import com.instacommerce.fraud.service.BlocklistService;
 import com.instacommerce.fraud.service.VelocityService;
 import jakarta.annotation.Nullable;
+import java.util.Optional;
+import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,17 +34,19 @@ public class PaymentEventConsumer {
     private final ObjectMapper objectMapper;
     private final VelocityService velocityService;
     private final BlocklistService blocklistService;
+    private final OrderLookupClient orderLookupClient;
     private final int chargebackBlockThreshold;
 
     public PaymentEventConsumer(ObjectMapper objectMapper, VelocityService velocityService) {
-        this(objectMapper, velocityService, null, DEFAULT_CHARGEBACK_BLOCK_THRESHOLD);
+        this(objectMapper, velocityService, null, null, DEFAULT_CHARGEBACK_BLOCK_THRESHOLD);
     }
 
     public PaymentEventConsumer(
             ObjectMapper objectMapper,
             VelocityService velocityService,
-            @Nullable BlocklistService blocklistService) {
-        this(objectMapper, velocityService, blocklistService, DEFAULT_CHARGEBACK_BLOCK_THRESHOLD);
+            @Nullable BlocklistService blocklistService,
+            int chargebackBlockThreshold) {
+        this(objectMapper, velocityService, blocklistService, null, chargebackBlockThreshold);
     }
 
     @Autowired
@@ -48,10 +54,12 @@ public class PaymentEventConsumer {
             ObjectMapper objectMapper,
             VelocityService velocityService,
             @Nullable BlocklistService blocklistService,
+            @Nullable OrderLookupClient orderLookupClient,
             @Value("${fraud.chargeback.auto-block-threshold:2}") int chargebackBlockThreshold) {
         this.objectMapper = objectMapper;
         this.velocityService = velocityService;
         this.blocklistService = blocklistService;
+        this.orderLookupClient = orderLookupClient;
         this.chargebackBlockThreshold = Math.max(1, chargebackBlockThreshold);
     }
 
@@ -88,9 +96,8 @@ public class PaymentEventConsumer {
     }
 
     private void handlePaymentDisputed(JsonNode payload, long offset) {
-        String userId = extractText(payload, "userId");
+        String userId = resolveUserId(payload, "PaymentDisputed", offset);
         if (userId == null) {
-            log.warn("PaymentDisputed event missing userId at offset={}", offset);
             return;
         }
         incrementEntityCounters(payload, userId, COUNTER_CHARGEBACKS_30D);
@@ -111,13 +118,41 @@ public class PaymentEventConsumer {
     }
 
     private void handlePaymentRefundFailed(JsonNode payload, long offset) {
-        String userId = extractText(payload, "userId");
+        String userId = resolveUserId(payload, "PaymentRefundFailed", offset);
         if (userId == null) {
-            log.warn("PaymentRefundFailed event missing userId at offset={}", offset);
             return;
         }
         incrementEntityCounters(payload, userId, COUNTER_REFUND_FAILURES_24H);
         log.debug("Processed PaymentRefundFailed velocity update for user={}", userId);
+    }
+
+    private String resolveUserId(JsonNode payload, String eventType, long offset) {
+        String userId = extractText(payload, "userId");
+        if (userId != null) {
+            return userId;
+        }
+        String orderIdRaw = extractText(payload, "orderId");
+        if (orderIdRaw == null || orderLookupClient == null) {
+            log.warn("{} event missing userId at offset={}", eventType, offset);
+            return null;
+        }
+        UUID orderId;
+        try {
+            orderId = UUID.fromString(orderIdRaw);
+        } catch (IllegalArgumentException ex) {
+            log.warn("{} event has invalid orderId={} at offset={}", eventType, orderIdRaw, offset, ex);
+            return null;
+        }
+        Optional<OrderSnapshot> order = orderLookupClient.findOrder(orderId);
+        if (order.isEmpty() || order.get().userId() == null) {
+            log.warn("{} event missing userId and order lookup returned empty for orderId={} at offset={}",
+                    eventType, orderId, offset);
+            return null;
+        }
+        String resolvedUserId = order.get().userId().toString();
+        log.debug("Resolved userId={} via orderId={} for {} event at offset={}",
+                resolvedUserId, orderId, eventType, offset);
+        return resolvedUserId;
     }
 
     private void incrementEntityCounters(JsonNode payload, String userId, String counterType) {

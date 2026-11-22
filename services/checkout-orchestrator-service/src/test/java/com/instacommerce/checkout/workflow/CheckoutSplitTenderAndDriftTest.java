@@ -150,7 +150,7 @@ class CheckoutSplitTenderAndDriftTest {
             .thenReturn(new InventoryReservationResult("res-1", true));
         when(walletActivity.debitWallet(eq("user-1"), eq(3000L), eq(WORKFLOW_ID + ":wallet:debit"), anyString()))
             .thenReturn(new WalletDebitResult(WORKFLOW_ID + ":wallet:debit", true, 3000L, null));
-        when(paymentActivity.authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth")))
+        when(paymentActivity.authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth"), eq("user-1")))
             .thenReturn(new PaymentAuthResult("pay-1", true, null));
         when(orderActivity.createOrder(any(OrderCreateRequest.class)))
             .thenReturn(new OrderCreationResult("ord-1", 12));
@@ -164,7 +164,7 @@ class CheckoutSplitTenderAndDriftTest {
         assertThat(response.orderId()).isEqualTo("ord-1");
         assertThat(response.totalCents()).isEqualTo(10000L);
         assertThat(workflow.getResultSnapshot()).isEqualTo(response);
-        verify(paymentActivity).authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth"));
+        verify(paymentActivity).authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth"), eq("user-1"));
         verify(paymentActivity).capturePayment("pay-1", WORKFLOW_ID + ":pay:pay-1:capture");
         verify(orderActivity).confirmOrder("ord-1", WORKFLOW_ID + ":order:confirm");
 
@@ -204,7 +204,7 @@ class CheckoutSplitTenderAndDriftTest {
             .thenReturn(new InventoryReservationResult("res-3", true));
         when(walletActivity.debitWallet(eq("user-1"), eq(3000L), eq(WORKFLOW_ID + ":wallet:debit"), anyString()))
             .thenReturn(new WalletDebitResult(WORKFLOW_ID + ":wallet:debit", true, 3000L, null));
-        when(paymentActivity.authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth")))
+        when(paymentActivity.authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth"), eq("user-1")))
             .thenReturn(new PaymentAuthResult("pay-declined", false, "INSUFFICIENT_FUNDS"));
 
         CheckoutRequest request = new CheckoutRequest(
@@ -225,7 +225,7 @@ class CheckoutSplitTenderAndDriftTest {
             .thenReturn(new InventoryReservationResult("res-4", true));
         when(walletActivity.debitWallet(eq("user-1"), eq(3000L), eq(WORKFLOW_ID + ":wallet:debit"), anyString()))
             .thenReturn(new WalletDebitResult(WORKFLOW_ID + ":wallet:debit", true, 3000L, null));
-        when(paymentActivity.authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth")))
+        when(paymentActivity.authorizePayment(anyString(), eq(7000L), eq("INR"), eq("pm-1"), eq(WORKFLOW_ID + ":pay:auth"), eq("user-1")))
             .thenReturn(new PaymentAuthResult("pay-4", true, null));
         when(orderActivity.createOrder(any(OrderCreateRequest.class)))
             .thenReturn(new OrderCreationResult("ord-4", 15));

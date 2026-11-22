@@ -160,7 +160,8 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                     paymentAmountCents,
                     currency,
                     request.paymentMethodId(),
-                    paymentKeys.authorize());
+                    paymentKeys.authorize(),
+                    request.userId());
                 if (paymentResult == null) {
                     throw new IllegalStateException("Payment authorization returned no result");
                 }

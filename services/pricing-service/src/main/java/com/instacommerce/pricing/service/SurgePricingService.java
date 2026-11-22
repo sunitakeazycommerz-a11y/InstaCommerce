@@ -1,5 +1,6 @@
 package com.instacommerce.pricing.service;
 
+import jakarta.annotation.Nullable;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Map;
@@ -8,7 +9,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -43,16 +43,8 @@ public class SurgePricingService {
     private final Map<UUID, DarkStoreDemandSignal> storeSignals = new ConcurrentHashMap<>();
     private final StoreSurgeStateStore storeSurgeStateStore;
 
-    public SurgePricingService() {
-        this((StoreSurgeStateStore) null);
-    }
-
     @Autowired
-    public SurgePricingService(ObjectProvider<StoreSurgeStateStore> storeSurgeStateStoreProvider) {
-        this(storeSurgeStateStoreProvider != null ? storeSurgeStateStoreProvider.getIfAvailable() : null);
-    }
-
-    public SurgePricingService(StoreSurgeStateStore storeSurgeStateStore) {
+    public SurgePricingService(@Nullable StoreSurgeStateStore storeSurgeStateStore) {
         this.storeSurgeStateStore = storeSurgeStateStore;
     }
 

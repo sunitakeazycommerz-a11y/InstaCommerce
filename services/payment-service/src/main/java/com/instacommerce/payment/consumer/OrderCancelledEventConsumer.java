@@ -70,7 +70,6 @@ public class OrderCancelledEventConsumer {
         }
     }
 
-    // Visible for testing
     void handleOrderCancelled(EventEnvelope envelope, ConsumerRecord<String, String> record) throws Exception {
         OrderCancelledEvent event = parsePayload(envelope);
         Payment payment = resolvePaymentOrNull(event, envelope.aggregateId(), envelope.id(), EVENT_TYPE);
@@ -156,7 +155,6 @@ public class OrderCancelledEventConsumer {
         return payment;
     }
 
-    // Package-private for testing
     void routeByPaymentState(Payment payment, OrderCancelledEvent event,
                              String idempotencyKey, String eventId) {
         PaymentStatus status = payment.getStatus();

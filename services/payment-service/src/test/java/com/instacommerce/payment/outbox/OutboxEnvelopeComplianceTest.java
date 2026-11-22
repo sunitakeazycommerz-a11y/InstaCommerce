@@ -2,14 +2,20 @@ package com.instacommerce.payment.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.payment.domain.model.OutboxEvent;
+import com.instacommerce.payment.domain.model.Payment;
+import com.instacommerce.payment.domain.model.Refund;
 import com.instacommerce.payment.repository.OutboxEventRepository;
 import com.instacommerce.payment.service.OutboxService;
+import com.instacommerce.payment.service.PaymentOutboxFactory;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -250,6 +256,73 @@ class OutboxEnvelopeComplianceTest {
 
             verify(outboxEventRepository).save(eventCaptor.capture());
             assertThat(eventCaptor.getValue().getCorrelationId()).isEqualTo("explicit-wins");
+        }
+    }
+
+    @Nested
+    @DisplayName("PaymentOutboxFactory actor metadata emission")
+    class PaymentOutboxFactoryMetadataTests {
+
+        @Test
+        @DisplayName("publishDisputed and publishRefundFailed emit userId, deviceFingerprint, and ipAddress when present")
+        void emitsActorMetadataOnDisputedAndRefundFailed() {
+            OutboxService mockOutbox = mock(OutboxService.class);
+            PaymentOutboxFactory factory = new PaymentOutboxFactory(mockOutbox);
+
+            UUID userId = UUID.randomUUID();
+            Payment payment = new Payment();
+            payment.setId(UUID.randomUUID());
+            payment.setOrderId(UUID.randomUUID());
+            payment.setCurrency("INR");
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("userId", userId.toString());
+            metadata.put("deviceFingerprint", "fp-123");
+            metadata.put("ipAddress", "203.0.113.10");
+            payment.setMetadata(metadata);
+
+            Refund refund = new Refund();
+            refund.setId(UUID.randomUUID());
+            refund.setAmountCents(2500L);
+
+            factory.publishDisputed(payment, 5000L, "fraudulent");
+            factory.publishRefundFailed(payment, refund, "psp_timeout", "gateway");
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
+            verify(mockOutbox).publish(eq("Payment"), eq(payment.getId().toString()), eq("PaymentDisputed"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                .containsEntry("userId", userId.toString())
+                .containsEntry("deviceFingerprint", "fp-123")
+                .containsEntry("ipAddress", "203.0.113.10");
+
+            verify(mockOutbox).publish(eq("Payment"), eq(payment.getId().toString()), eq("PaymentRefundFailed"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getAllValues().get(1))
+                .containsEntry("userId", userId.toString())
+                .containsEntry("deviceFingerprint", "fp-123")
+                .containsEntry("ipAddress", "203.0.113.10");
+        }
+
+        @Test
+        @DisplayName("publishDisputed and publishRefundFailed omit blank metadata fields")
+        void omitsBlankMetadataFields() {
+            OutboxService mockOutbox = mock(OutboxService.class);
+            PaymentOutboxFactory factory = new PaymentOutboxFactory(mockOutbox);
+
+            Payment payment = new Payment();
+            payment.setId(UUID.randomUUID());
+            payment.setOrderId(UUID.randomUUID());
+            payment.setCurrency("INR");
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("userId", "   ");
+            metadata.put("deviceFingerprint", "");
+            metadata.put("ipAddress", null);
+            payment.setMetadata(metadata);
+
+            factory.publishDisputed(payment, 5000L, "fraudulent");
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
+            verify(mockOutbox).publish(eq("Payment"), eq(payment.getId().toString()), eq("PaymentDisputed"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                .doesNotContainKeys("userId", "deviceFingerprint", "ipAddress");
         }
     }
 }

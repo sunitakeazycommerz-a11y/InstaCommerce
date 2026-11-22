@@ -6,12 +6,10 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -24,11 +22,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class AdminSecurityAuditFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(AdminSecurityAuditFilter.class);
     private static final Set<String> MUTATION_METHODS = Set.of("POST", "PUT", "DELETE", "PATCH");
-
-    private static final Pattern IPV4_PATTERN =
-            Pattern.compile("^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$");
-    private static final Pattern IPV6_LITERAL_CHARS =
-            Pattern.compile("^[0-9a-fA-F:.]+$");
 
     private final AdminAuditClient auditClient;
 
@@ -61,7 +54,7 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
                         ? auth.getAuthorities().toString()
                         : "[]";
                 int status = response.getStatus();
-                String clientIp = resolveClientIp(request);
+                String clientIp = ClientIpResolver.resolveClientIp(request);
                 String remoteAddr = request.getRemoteAddr();
                 String uri = request.getRequestURI();
                 String correlationId = request.getHeader("X-Correlation-ID");
@@ -90,7 +83,7 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
                             correlationId,
                             request.getHeader("User-Agent"));
                 } catch (Exception ex) {
-                    log.warn("Failed to dispatch security audit event: {}", ex.getMessage());
+                    log.warn("Failed to dispatch security audit event method={} uri={}", method, uri, ex);
                 }
             }
         }
@@ -137,58 +130,5 @@ public class AdminSecurityAuditFilter extends OncePerRequestFilter {
             userAgent,
             correlationId
         );
-    }
-
-    static String resolveClientIp(HttpServletRequest request) {
-        String remoteAddr = request.getRemoteAddr();
-        String xf = request.getHeader("X-Forwarded-For");
-        if (xf != null && !xf.isBlank() && isTrustedProxy(remoteAddr)) {
-            String[] hops = xf.split(",");
-            for (int i = hops.length - 1; i >= 0; i--) {
-                String candidate = hops[i].trim();
-                if (candidate.isEmpty()) {
-                    continue;
-                }
-                if (!isValidIp(candidate)) {
-                    log.warn("SECURITY_AUDIT_SPOOFED_IP_DETECTED: invalid X-Forwarded-For header '{}', falling back to remoteAddr {}",
-                        candidate, remoteAddr);
-                    return remoteAddr;
-                }
-                if (!isTrustedProxy(candidate) || i == 0) {
-                    return candidate;
-                }
-            }
-        }
-        return remoteAddr;
-    }
-
-    static boolean isTrustedProxy(String ip) {
-        if (!isValidIp(ip)) {
-            return false;
-        }
-        try {
-            InetAddress address = InetAddress.getByName(ip);
-            return address.isLoopbackAddress() || address.isSiteLocalAddress() || address.isLinkLocalAddress();
-        } catch (Exception ex) {
-            return false;
-        }
-    }
-
-    static boolean isValidIp(String ip) {
-        if (ip == null || ip.isBlank() || ip.length() > 45) {
-            return false;
-        }
-        if (IPV4_PATTERN.matcher(ip).matches()) {
-            return true;
-        }
-        int firstColon = ip.indexOf(':');
-        if (firstColon < 0 || firstColon == ip.lastIndexOf(':') || !IPV6_LITERAL_CHARS.matcher(ip).matches()) {
-            return false;
-        }
-        try {
-            return InetAddress.getByName(ip).getAddress().length == 16;
-        } catch (Exception ex) {
-            return false;
-        }
     }
 }

@@ -203,6 +203,37 @@ class RefundTransactionHelperRefundFailedEventTest {
             assertThat(payloadCaptor.getValue())
                 .containsEntry("reason", "PSP refund call failed");
         }
+
+        @Test
+        @DisplayName("CAS success with actor metadata → includes userId, deviceFingerprint, and ipAddress")
+        void casSuccess_withActorMetadata_emitsUserId() {
+            UUID userId = UUID.randomUUID();
+            Payment payment = capturedPayment();
+            payment.setMetadata(Map.of(
+                "userId", userId.toString(),
+                "deviceFingerprint", "fp-mobile-3",
+                "ipAddress", "203.0.113.88"));
+            Refund pending = pendingRefund(payment.getId());
+
+            when(refundRepository.findById(pending.getId())).thenReturn(Optional.of(pending));
+            when(refundRepository.compareAndSetPendingToFailed(pending.getId(), pending.getVersion()))
+                .thenReturn(1);
+            when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
+
+            helper.markRefundFailed(pending.getId(), "bank rejected");
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
+            verify(outboxService).publish(
+                eq("Payment"),
+                eq(payment.getId().toString()),
+                eq("PaymentRefundFailed"),
+                payloadCaptor.capture());
+
+            assertThat(payloadCaptor.getValue())
+                .containsEntry("userId", userId.toString())
+                .containsEntry("deviceFingerprint", "fp-mobile-3")
+                .containsEntry("ipAddress", "203.0.113.88");
+        }
     }
 
     // --- resolveStaleRefundFailed: PaymentRefundFailed event ---

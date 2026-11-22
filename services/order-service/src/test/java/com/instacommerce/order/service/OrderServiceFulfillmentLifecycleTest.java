@@ -80,10 +80,27 @@ class OrderServiceFulfillmentLifecycleTest {
         orderService.advanceLifecycleFromFulfillment(orderId, OrderStatus.PACKED, "system:fulfillment-event", "order-packed");
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PACKED);
+        verify(orderRepository, times(1)).findByIdForUpdate(orderId);
         verify(orderRepository, times(2)).save(order);
         verify(statusHistoryRepository, times(2)).save(any());
         verify(outboxService, times(2))
             .publish(eq("Order"), eq(orderId.toString()), eq("OrderStatusChanged"), any());
+    }
+
+    @Test
+    void advancesDeliveredEventThroughAllIntermediateStepsWithSingleLock() {
+        when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        orderService.advanceLifecycleFromFulfillment(orderId, OrderStatus.DELIVERED, "system:fulfillment-event", "delivered");
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.DELIVERED);
+        assertThat(order.getDeliveredAt()).isNotNull();
+        verify(orderRepository, times(1)).findByIdForUpdate(orderId);
+        verify(orderRepository, times(4)).save(order);
+        verify(statusHistoryRepository, times(4)).save(any());
+        verify(outboxService, times(4))
+            .publish(eq("Order"), eq(orderId.toString()), eq("OrderStatusChanged"), any());
+        verify(outboxService).publish(eq("Order"), eq(orderId.toString()), eq("OrderDelivered"), any());
     }
 
     @Test

@@ -31,39 +31,44 @@ public class CatalogCacheInvalidationConsumer {
         groupId = "catalog-cache-invalidator"
     )
     public void onEvent(Map<String, Object> envelope) {
-        try {
-            String eventType = (String) envelope.get("eventType");
-            if (eventType == null && envelope.containsKey("event_type")) {
-                eventType = (String) envelope.get("event_type");
-            }
-            if (eventType == null) {
-                return;
-            }
+        if (envelope == null || envelope.isEmpty()) {
+            return;
+        }
+        String eventType = asString(envelope.get("eventType"));
+        if (eventType == null) {
+            eventType = asString(envelope.get("event_type"));
+        }
+        if (eventType == null) {
+            return;
+        }
 
-            Map<String, Object> payload = envelope.get("payload") instanceof Map<?, ?> nested
+        Map<String, Object> payload;
+        try {
+            payload = envelope.get("payload") instanceof Map<?, ?> nested
                     ? objectMapper.convertValue(nested, MAP_TYPE)
                     : envelope;
+        } catch (IllegalArgumentException ex) {
+            log.warn("Skipping malformed cache invalidation payload for eventType={}", eventType, ex);
+            return;
+        }
 
-            log.info("Catalog cache invalidator received event: type={}", eventType);
+        log.info("Catalog cache invalidator received event: type={}", eventType);
 
-            switch (eventType) {
-                case "ProductUpdated", "ProductDeactivated", "ProductCreated" -> {
-                    evictProductCaches(payload);
-                    evictNamedCache("categories");
-                    evictNamedCache("search");
-                }
-                case "PriceUpdated" -> {
-                    evictProductCaches(payload);
-                    evictNamedCache("search");
-                }
-                case "LowStockAlert", "StockAdjusted", "StockConfirmed", "StockReleased",
-                        "OutOfStock", "ExpiredStockWrittenOff" -> {
-                    evictProductCaches(payload);
-                }
-                default -> log.debug("Unhandled event type for catalog cache invalidation: {}", eventType);
+        switch (eventType) {
+            case "ProductUpdated", "ProductDeactivated", "ProductCreated" -> {
+                evictProductCaches(payload);
+                evictNamedCache("categories");
+                evictNamedCache("search");
             }
-        } catch (Exception e) {
-            log.warn("Error processing cache invalidation event: {}", e.getMessage());
+            case "PriceUpdated" -> {
+                evictProductCaches(payload);
+                evictNamedCache("search");
+            }
+            case "LowStockAlert", "StockAdjusted", "StockConfirmed", "StockReleased",
+                    "OutOfStock", "ExpiredStockWrittenOff" -> {
+                evictProductCaches(payload);
+            }
+            default -> log.debug("Unhandled event type for catalog cache invalidation: {}", eventType);
         }
     }
 
@@ -98,5 +103,13 @@ public class CatalogCacheInvalidationConsumer {
             cache.clear();
             log.info("Cleared entire {} cache in catalog-service", cacheName);
         }
+    }
+
+    private static String asString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isEmpty() ? null : text;
     }
 }

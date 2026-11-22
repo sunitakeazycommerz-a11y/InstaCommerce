@@ -218,7 +218,20 @@ class WalletLoyaltyInternalAuthControllerTest {
             "jwt",
             List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
 
-        UUID resolved = new AuthenticatedUserResolver().resolve(adminAuth, null);
+        UUID resolved = AuthenticatedUserResolver.resolveUserId(adminAuth, null);
         assertThat(resolved).isEqualTo(adminUserId);
+    }
+
+    @Test
+    void shopperJwtWithMalformedSubjectReturns400InvalidUserId() throws Exception {
+        Authentication malformedAuth = new UsernamePasswordAuthenticationToken(
+            "not-a-uuid-subject",
+            "jwt-token",
+            List.of(new SimpleGrantedAuthority("ROLE_USER")));
+
+        mockMvc.perform(get("/wallet/balance")
+                .principal(malformedAuth))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_USER_ID"));
     }
 }

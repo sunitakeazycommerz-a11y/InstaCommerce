@@ -53,9 +53,7 @@ public final class PaymentOutboxFactory {
         if (resolvedBy != null) {
             payload.put("resolvedBy", resolvedBy);
         }
-        if (payment.getMetadata() != null && payment.getMetadata().get("userId") != null) {
-            payload.put("userId", payment.getMetadata().get("userId").toString());
-        }
+        appendActorMetadata(payment, payload);
         outboxService.publish("Payment", payment.getId().toString(), "PaymentFailed", payload);
     }
 
@@ -106,6 +104,7 @@ public final class PaymentOutboxFactory {
         payload.put("currency", payment.getCurrency());
         payload.put("reason", reason);
         payload.put("failureSource", failureSource);
+        appendActorMetadata(payment, payload);
         outboxService.publish("Payment", payment.getId().toString(), "PaymentRefundFailed", payload);
     }
 
@@ -116,6 +115,7 @@ public final class PaymentOutboxFactory {
         payload.put("disputeAmountCents", disputeAmountCents);
         payload.put("currency", payment.getCurrency());
         payload.put("reason", reason != null ? reason : "");
+        appendActorMetadata(payment, payload);
         outboxService.publish("Payment", payment.getId().toString(), "PaymentDisputed", payload);
     }
 
@@ -156,5 +156,26 @@ public final class PaymentOutboxFactory {
         payload.put("amountCents", amountCents);
         payload.put("currency", payment.getCurrency());
         return payload;
+    }
+
+    private static void appendActorMetadata(Payment payment, Map<String, Object> payload) {
+        Map<String, Object> metadata = payment.getMetadata();
+        if (metadata == null || metadata.isEmpty()) {
+            return;
+        }
+        putIfNonBlank(metadata, payload, "userId");
+        putIfNonBlank(metadata, payload, "deviceFingerprint");
+        putIfNonBlank(metadata, payload, "ipAddress");
+    }
+
+    private static void putIfNonBlank(Map<String, Object> metadata, Map<String, Object> payload, String key) {
+        Object value = metadata.get(key);
+        if (value == null) {
+            return;
+        }
+        String text = value.toString().trim();
+        if (!text.isEmpty()) {
+            payload.put(key, text);
+        }
     }
 }

@@ -9,10 +9,9 @@ import com.instacommerce.pricing.dto.response.BatchPriceResponse;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
 import com.instacommerce.pricing.dto.response.TaxCalculationResponse;
-import com.instacommerce.pricing.exception.PriceRuleNotFoundException;
 import com.instacommerce.pricing.repository.PriceRuleRepository;
+import jakarta.annotation.Nullable;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -21,13 +20,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,90 +32,48 @@ public class PricingService {
     private static final Logger log = LoggerFactory.getLogger(PricingService.class);
 
     private final PriceRuleRepository priceRuleRepository;
+    private final ProductPriceLookupService productPriceLookupService;
     private final PromotionService promotionService;
     private final CouponService couponService;
     private final QuoteTokenService quoteTokenService;
     private final DiscountCalculator discountCalculator;
     private final TaxCalculationService taxCalculationService;
     private final SurgePricingService surgePricingService;
-    private final StoreSurgeStateStore storeSurgeStateStore;
-
-    public PricingService(PriceRuleRepository priceRuleRepository,
-                          PromotionService promotionService,
-                          CouponService couponService,
-                          QuoteTokenService quoteTokenService,
-                          DiscountCalculator discountCalculator,
-                          TaxCalculationService taxCalculationService,
-                          SurgePricingService surgePricingService) {
-        this(
-                priceRuleRepository,
-                promotionService,
-                couponService,
-                quoteTokenService,
-                discountCalculator,
-                taxCalculationService,
-                surgePricingService,
-                (StoreSurgeStateStore) null);
-    }
 
     @Autowired
     public PricingService(PriceRuleRepository priceRuleRepository,
+                          ProductPriceLookupService productPriceLookupService,
                           PromotionService promotionService,
                           CouponService couponService,
                           QuoteTokenService quoteTokenService,
                           DiscountCalculator discountCalculator,
                           TaxCalculationService taxCalculationService,
-                          SurgePricingService surgePricingService,
-                          ObjectProvider<StoreSurgeStateStore> storeSurgeStateStoreProvider) {
-        this(
-                priceRuleRepository,
-                promotionService,
-                couponService,
-                quoteTokenService,
-                discountCalculator,
-                taxCalculationService,
-                surgePricingService,
-                storeSurgeStateStoreProvider != null ? storeSurgeStateStoreProvider.getIfAvailable() : null);
-    }
-
-    public PricingService(PriceRuleRepository priceRuleRepository,
-                          PromotionService promotionService,
-                          CouponService couponService,
-                          QuoteTokenService quoteTokenService,
-                          DiscountCalculator discountCalculator,
-                          TaxCalculationService taxCalculationService,
-                          SurgePricingService surgePricingService,
-                          StoreSurgeStateStore storeSurgeStateStore) {
+                          @Nullable SurgePricingService surgePricingService) {
         this.priceRuleRepository = priceRuleRepository;
+        this.productPriceLookupService = productPriceLookupService;
         this.promotionService = promotionService;
         this.couponService = couponService;
         this.quoteTokenService = quoteTokenService;
         this.discountCalculator = discountCalculator != null ? discountCalculator : new DiscountCalculator();
         this.taxCalculationService = taxCalculationService != null ? taxCalculationService : new TaxCalculationService();
         this.surgePricingService = surgePricingService;
-        this.storeSurgeStateStore = storeSurgeStateStore;
     }
 
-    @Cacheable(value = "productPrices", key = "#productId")
-    @Transactional(readOnly = true)
     public long calculatePrice(UUID productId) {
-        Instant now = Instant.now();
-        PriceRule rule = priceRuleRepository.findActiveRuleByProductId(productId, now)
-                .orElseThrow(() -> new PriceRuleNotFoundException(productId.toString()));
-        return applyMultiplier(rule.getBasePriceCents(), rule.getMultiplier());
+        return productPriceLookupService.calculateBasePrice(productId);
     }
 
-    @Transactional(readOnly = true)
     public long calculatePrice(UUID productId, UUID storeId) {
-        long baseCalculated = calculatePrice(productId);
-        if (storeId == null) {
+        long baseCalculated = productPriceLookupService.calculateBasePrice(productId);
+        if (storeId == null || surgePricingService == null) {
             return baseCalculated;
         }
-        BigDecimal liveMultiplier = resolveLiveWarehouseSurgeMultiplier(storeId);
-        if (liveMultiplier.compareTo(BigDecimal.ONE) <= 0) {
+        SurgePricingService.SurgeAssessment surge = surgePricingService.evaluateSurge(storeId);
+        if (surge == null || !surge.isSurgeActive() || surge.surgeMultiplier() == null
+                || surge.surgeMultiplier().compareTo(BigDecimal.ONE) <= 0) {
             return baseCalculated;
         }
-        return applyMultiplier(baseCalculated, liveMultiplier);
+        return ProductPriceLookupService.applyMultiplier(baseCalculated, surge.surgeMultiplier());
     }
 
     @Transactional(readOnly = true)
@@ -152,7 +106,7 @@ public class PricingService {
                 unavailableProductIds.add(productId);
                 continue;
             }
-            long unitPrice = applyMultiplier(rule.getBasePriceCents(), rule.getMultiplier());
+            long unitPrice = ProductPriceLookupService.applyMultiplier(rule.getBasePriceCents(), rule.getMultiplier());
             items.add(new PricedItem(productId, unitPrice, 1, unitPrice, "INR"));
         }
         return new BatchPriceResponse(items, unavailableProductIds);
@@ -169,12 +123,9 @@ public class PricingService {
 
         for (CartItem item : request.items()) {
             PriceRule rule = rulesByProduct.get(item.productId());
-            if (rule == null) {
-                rule = priceRuleRepository.findActiveRuleByProductId(item.productId(), now)
-                        .orElseThrow(() -> new PriceRuleNotFoundException(item.productId().toString()));
-            }
-
-            long unitPrice = applyMultiplier(rule.getBasePriceCents(), rule.getMultiplier());
+            long unitPrice = rule != null
+                    ? ProductPriceLookupService.applyMultiplier(rule.getBasePriceCents(), rule.getMultiplier())
+                    : productPriceLookupService.calculateBasePrice(item.productId());
             long lineTotal = Math.multiplyExact(unitPrice, (long) item.quantity());
             subtotalCents = Math.addExact(subtotalCents, lineTotal);
 
@@ -310,57 +261,14 @@ public class PricingService {
                 result.fractionalRemainderCents());
     }
 
-    public BigDecimal resolveEffectiveSurgeMultiplier(UUID storeId) {
-        if (storeId == null) {
-            return BigDecimal.ONE;
-        }
-        BigDecimal staticMultiplier = BigDecimal.ONE;
-        if (surgePricingService != null) {
-            SurgePricingService.SurgeAssessment surge = surgePricingService.evaluateSurge(storeId);
-            if (surge != null && surge.isSurgeActive() && surge.surgeMultiplier() != null) {
-                staticMultiplier = surge.surgeMultiplier();
-            }
-        }
-        BigDecimal liveMultiplier = resolveLiveWarehouseSurgeMultiplier(storeId);
-        BigDecimal effective = liveMultiplier.max(staticMultiplier);
-        if (effective.compareTo(SurgePricingService.MAX_SURGE_MULTIPLIER) > 0) {
-            return SurgePricingService.MAX_SURGE_MULTIPLIER;
-        }
-        return effective;
-    }
-
-    private BigDecimal resolveLiveWarehouseSurgeMultiplier(UUID storeId) {
-        if (storeSurgeStateStore == null || storeId == null) {
-            return BigDecimal.ONE;
-        }
-        Optional<StoreSurgeStateStore.StoreSurgeState> state = storeSurgeStateStore.getActiveState(storeId);
-        if (state.isPresent() && state.get().isSurgeActive() && state.get().surgeMultiplier() != null) {
-            return state.get().surgeMultiplier();
-        }
-        return BigDecimal.ONE;
-    }
-
     private long resolveDeliveryFeeCents(UUID storeId) {
-        if (storeId == null) {
+        if (storeId == null || surgePricingService == null) {
             return 0L;
         }
-        BigDecimal effectiveMultiplier = resolveEffectiveSurgeMultiplier(storeId);
-        if (effectiveMultiplier.compareTo(BigDecimal.ONE) > 0) {
-            return SurgePricingService.calculateDeliveryFee(effectiveMultiplier);
-        }
-        if (surgePricingService != null) {
-            SurgePricingService.SurgeAssessment surge = surgePricingService.evaluateSurge(storeId);
-            if (surge != null && surge.isSurgeActive()) {
-                return surge.surgeDeliveryFeeCents();
-            }
+        SurgePricingService.SurgeAssessment surge = surgePricingService.evaluateSurge(storeId);
+        if (surge != null && surge.isSurgeActive()) {
+            return surge.surgeDeliveryFeeCents();
         }
         return 0L;
-    }
-
-    private long applyMultiplier(long basePriceCents, BigDecimal multiplier) {
-        return BigDecimal.valueOf(basePriceCents)
-                .multiply(multiplier)
-                .setScale(0, RoundingMode.HALF_UP)
-                .longValue();
     }
 }

@@ -15,7 +15,7 @@ class SurgePricingServiceTest {
 
     @BeforeEach
     void setUp() {
-        surgePricingService = new SurgePricingService();
+        surgePricingService = new SurgePricingService(null);
     }
 
     @Test

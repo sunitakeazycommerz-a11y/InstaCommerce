@@ -50,11 +50,18 @@ spring:
 
 fraud:
   operational-mode: ${FRAUD_OPERATIONAL_MODE:AUTO_BLOCK}
+  order:
+    base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
   jwt:
     issuer: ${FRAUD_JWT_ISSUER:instacommerce-identity}
     public-key: ${sm://jwt-rsa-public-key:${FRAUD_JWT_PUBLIC_KEY}}
   cors:
     allowed-origins: ${FRAUD_CORS_ORIGINS:http://localhost:3000}
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:}
 
 management:
   tracing:

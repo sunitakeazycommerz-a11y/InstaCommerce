@@ -143,7 +143,8 @@ public class DomainEventConsumer {
         }
         try {
             return UUID.fromString(raw.trim());
-        } catch (IllegalArgumentException ignored) {
+        } catch (IllegalArgumentException ex) {
+            log.debug("Ignoring invalid UUID value '{}' for field '{}'", raw, fieldName, ex);
             return null;
         }
     }

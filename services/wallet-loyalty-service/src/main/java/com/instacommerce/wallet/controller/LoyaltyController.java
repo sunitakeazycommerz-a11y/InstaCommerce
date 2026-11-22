@@ -32,10 +32,6 @@ public class LoyaltyController {
         return ResponseEntity.ok(loyaltyService.getBalance(userId));
     }
 
-    public ResponseEntity<LoyaltyResponse> getPoints(Authentication auth) {
-        return getPoints(auth, null);
-    }
-
     @PostMapping("/redeem")
     public ResponseEntity<LoyaltyResponse> redeemPoints(
             Authentication auth,
@@ -43,9 +39,5 @@ public class LoyaltyController {
             @Valid @RequestBody RedeemPointsRequest request) {
         UUID userId = AuthenticatedUserResolver.resolveUserId(auth, userIdHeader);
         return ResponseEntity.ok(loyaltyService.redeemPoints(userId, request.points(), request.orderId()));
-    }
-
-    public ResponseEntity<LoyaltyResponse> redeemPoints(Authentication auth, RedeemPointsRequest request) {
-        return redeemPoints(auth, null, request);
     }
 }

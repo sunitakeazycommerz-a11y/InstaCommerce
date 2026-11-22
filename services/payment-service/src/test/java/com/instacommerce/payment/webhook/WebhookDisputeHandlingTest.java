@@ -237,6 +237,33 @@ class WebhookDisputeHandlingTest {
         }
 
         @Test
+        @DisplayName("Publishes PaymentDisputed with userId, deviceFingerprint, and ipAddress from payment metadata")
+        void disputeCreated_emitsActorMetadataFromPayment() {
+            UUID userId = UUID.randomUUID();
+            Payment payment = paymentInStatus(PaymentStatus.CAPTURED, 5000);
+            payment.setMetadata(Map.of(
+                "userId", userId.toString(),
+                "deviceFingerprint", "fp-web-9",
+                "ipAddress", "198.51.100.42"));
+            stubPaymentLookupWithSave(payment);
+
+            processor.processEvent(EVENT_ID, "charge.dispute.created",
+                PSP_REF, disputeObjectNode(5000, "fraudulent"), "{}");
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.captor();
+            verify(outboxService).publish(
+                eq("Payment"),
+                eq(payment.getId().toString()),
+                eq("PaymentDisputed"),
+                payloadCaptor.capture());
+
+            assertThat(payloadCaptor.getValue())
+                .containsEntry("userId", userId.toString())
+                .containsEntry("deviceFingerprint", "fp-web-9")
+                .containsEntry("ipAddress", "198.51.100.42");
+        }
+
+        @Test
         @DisplayName("Records WEBHOOK_DISPUTE_CREATED audit log")
         void disputeCreated_recordsAuditLog() {
             Payment payment = paymentInStatus(PaymentStatus.CAPTURED, 6000);

@@ -147,32 +147,7 @@ public class OrderLifecycleService {
     @Transactional
     public void updateOrderStatus(UUID orderId, OrderStatus newStatus, String changedBy, String note, UUID actorId) {
         Order order = lockOrder(orderId);
-        if (order.getStatus() == newStatus) {
-            return;
-        }
-        if (order.getStatus().isTerminal()) {
-            throw new IllegalOrderStateTransitionException(order.getStatus(), newStatus);
-        }
-        OrderStateMachine.validate(order.getStatus(), newStatus);
-        OrderStatus previous = order.getStatus();
-        Instant now = Instant.now(clock);
-        if (newStatus == OrderStatus.PLACED && order.getSlaDeadlineAt() == null) {
-            int slaMinutes = Math.max(1, orderProperties.getSla().getPromisedDeliveryMinutes());
-            order.setSlaDeadlineAt(now.plus(Duration.ofMinutes(slaMinutes)));
-        }
-        if (newStatus == OrderStatus.DELIVERED && order.getDeliveredAt() == null) {
-            order.setDeliveredAt(now);
-        }
-        boolean slaNewlyBreached = isSlaTrackedStatus(newStatus) && order.recordSlaBreachIfDue(now);
-        if (newStatus == OrderStatus.CANCELLED) {
-            String cancelReason = note != null ? note : "Order cancelled";
-            completeCancellation(order, previous, cancelReason, "Order cancelled", changedBy, actorId, true, slaNewlyBreached);
-            return;
-        }
-        order.setStatus(newStatus);
-        Order saved = orderRepository.save(order);
-        recordStatusChange(saved, previous, newStatus, changedBy, note);
-        outboxPublisher.publishStatusTransitionEffects(saved, previous, newStatus, note, actorId, now, slaNewlyBreached);
+        applyOrderStatusTransition(order, newStatus, changedBy, note, actorId);
     }
 
     @Retryable(
@@ -192,7 +167,7 @@ public class OrderLifecycleService {
                 "Cannot apply fulfillment event " + targetStatus + " while order is PENDING");
         }
         if (targetStatus == OrderStatus.FAILED) {
-            updateOrderStatus(orderId, OrderStatus.FAILED, changedBy, note, null);
+            applyOrderStatusTransition(order, OrderStatus.FAILED, changedBy, note, null);
             return;
         }
         if (hasReachedLifecycleStep(currentStatus, targetStatus)) {
@@ -204,9 +179,39 @@ public class OrderLifecycleService {
             if (hasReachedLifecycleStep(currentStatus, nextStatus)) {
                 continue;
             }
-            updateOrderStatus(orderId, nextStatus, changedBy, note, null);
+            applyOrderStatusTransition(order, nextStatus, changedBy, note, null);
             currentStatus = nextStatus;
         }
+    }
+
+    private void applyOrderStatusTransition(Order lockedOrder, OrderStatus newStatus,
+                                            String changedBy, String note, UUID actorId) {
+        if (lockedOrder.getStatus() == newStatus) {
+            return;
+        }
+        if (lockedOrder.getStatus().isTerminal()) {
+            throw new IllegalOrderStateTransitionException(lockedOrder.getStatus(), newStatus);
+        }
+        OrderStateMachine.validate(lockedOrder.getStatus(), newStatus);
+        OrderStatus previous = lockedOrder.getStatus();
+        Instant now = Instant.now(clock);
+        if (newStatus == OrderStatus.PLACED && lockedOrder.getSlaDeadlineAt() == null) {
+            int slaMinutes = Math.max(1, orderProperties.getSla().getPromisedDeliveryMinutes());
+            lockedOrder.setSlaDeadlineAt(now.plus(Duration.ofMinutes(slaMinutes)));
+        }
+        if (newStatus == OrderStatus.DELIVERED && lockedOrder.getDeliveredAt() == null) {
+            lockedOrder.setDeliveredAt(now);
+        }
+        boolean slaNewlyBreached = isSlaTrackedStatus(newStatus) && lockedOrder.recordSlaBreachIfDue(now);
+        if (newStatus == OrderStatus.CANCELLED) {
+            String cancelReason = note != null ? note : "Order cancelled";
+            completeCancellation(lockedOrder, previous, cancelReason, "Order cancelled", changedBy, actorId, true, slaNewlyBreached);
+            return;
+        }
+        lockedOrder.setStatus(newStatus);
+        Order saved = orderRepository.save(lockedOrder);
+        recordStatusChange(saved, previous, newStatus, changedBy, note);
+        outboxPublisher.publishStatusTransitionEffects(saved, previous, newStatus, note, actorId, now, slaNewlyBreached);
     }
 
     @Retryable(

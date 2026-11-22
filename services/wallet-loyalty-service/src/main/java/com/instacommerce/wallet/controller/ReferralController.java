@@ -32,10 +32,6 @@ public class ReferralController {
         return ResponseEntity.ok(referralService.getOrGenerateCode(userId));
     }
 
-    public ResponseEntity<ReferralCodeResponse> getCode(Authentication auth) {
-        return getCode(auth, null);
-    }
-
     @PostMapping("/redeem")
     public ResponseEntity<Void> redeemReferral(
             Authentication auth,
@@ -44,9 +40,5 @@ public class ReferralController {
         UUID userId = AuthenticatedUserResolver.resolveUserId(auth, userIdHeader);
         referralService.redeemReferral(request.code(), userId);
         return ResponseEntity.ok().build();
-    }
-
-    public ResponseEntity<Void> redeemReferral(Authentication auth, RedeemReferralRequest request) {
-        return redeemReferral(auth, null, request);
     }
 }

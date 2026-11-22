@@ -68,4 +68,18 @@ class AdminRateLimitFilterTest {
         verify(chain).doFilter(clientOneReq, clientOneRes);
         verify(chain).doFilter(clientTwoReq, clientTwoRes);
     }
+
+    @Test
+    void shouldBoundTrackedKeysWithinSingleWindowWhenKeyCountExceedsLimit() throws Exception {
+        AdminRateLimitFilter filter = new AdminRateLimitFilter(new ObjectMapper(), 5);
+        FilterChain chain = mock(FilterChain.class);
+
+        for (int i = 0; i < AdminRateLimitFilter.MAX_TRACKED_KEYS + 500; i++) {
+            MockHttpServletRequest req = new MockHttpServletRequest("GET", "/admin/v1/dashboard");
+            req.setRemoteAddr("198.51." + ((i >> 8) & 0xFF) + "." + (i & 0xFF));
+            filter.doFilter(req, new MockHttpServletResponse(), chain);
+        }
+
+        assertThat(filter.trackedKeyCount()).isLessThanOrEqualTo(AdminRateLimitFilter.MAX_TRACKED_KEYS);
+    }
 }

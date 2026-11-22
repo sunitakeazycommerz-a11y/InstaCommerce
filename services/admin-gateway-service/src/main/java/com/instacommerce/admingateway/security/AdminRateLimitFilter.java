@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,13 +21,14 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 public class AdminRateLimitFilter extends OncePerRequestFilter {
 
+    static final int MAX_TRACKED_KEYS = 4096;
     private static final int TOO_MANY_REQUESTS = 429;
     private static final long WINDOW_MILLIS = 60_000L;
-    private static final int MAX_TRACKED_KEYS = 4096;
 
     private final ObjectMapper objectMapper;
     private final int requestsPerMinute;
     private final ConcurrentHashMap<String, WindowCounter> counters = new ConcurrentHashMap<>();
+    private final Object evictionLock = new Object();
 
     @Autowired
     public AdminRateLimitFilter(
@@ -52,10 +54,7 @@ public class AdminRateLimitFilter extends OncePerRequestFilter {
             FilterChain filterChain) throws ServletException, IOException {
         String key = resolveRateLimitKey(request);
         long now = System.currentTimeMillis();
-        if (counters.size() > MAX_TRACKED_KEYS) {
-            counters.entrySet().removeIf(entry -> now - entry.getValue().windowStartMillis() > WINDOW_MILLIS);
-        }
-        WindowCounter counter = counters.computeIfAbsent(key, ignored -> new WindowCounter(now));
+        WindowCounter counter = acquireCounter(key, now);
         if (!counter.tryAcquire(now, requestsPerMinute)) {
             response.setStatus(TOO_MANY_REQUESTS);
             response.setHeader("Retry-After", "60");
@@ -69,12 +68,44 @@ public class AdminRateLimitFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    int trackedKeyCount() {
+        return counters.size();
+    }
+
+    private WindowCounter acquireCounter(String key, long now) {
+        WindowCounter existing = counters.get(key);
+        if (existing != null) {
+            return existing;
+        }
+        synchronized (evictionLock) {
+            existing = counters.get(key);
+            if (existing != null) {
+                return existing;
+            }
+            if (counters.size() >= MAX_TRACKED_KEYS) {
+                counters.entrySet().removeIf(entry -> now - entry.getValue().windowStartMillis() >= WINDOW_MILLIS);
+                if (counters.size() >= MAX_TRACKED_KEYS) {
+                    int excess = counters.size() - MAX_TRACKED_KEYS + 1;
+                    counters.entrySet().stream()
+                        .sorted(Comparator.comparingLong(entry -> entry.getValue().windowStartMillis()))
+                        .limit(excess)
+                        .map(Map.Entry::getKey)
+                        .toList()
+                        .forEach(counters::remove);
+                }
+            }
+            WindowCounter created = new WindowCounter(now);
+            WindowCounter raced = counters.putIfAbsent(key, created);
+            return raced != null ? raced : created;
+        }
+    }
+
     private String resolveRateLimitKey(HttpServletRequest request) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication != null && authentication.isAuthenticated() && authentication.getName() != null) {
             return "user:" + authentication.getName();
         }
-        String clientIp = AdminSecurityAuditFilter.resolveClientIp(request);
+        String clientIp = ClientIpResolver.resolveClientIp(request);
         return "ip:" + (clientIp != null ? clientIp : "unknown");
     }
 

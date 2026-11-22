@@ -1,5 +1,6 @@
 package com.instacommerce.fraud.consumer;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -8,8 +9,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.fraud.client.OrderLookupClient;
+import com.instacommerce.fraud.client.OrderSnapshot;
 import com.instacommerce.fraud.service.BlocklistService;
 import com.instacommerce.fraud.service.VelocityService;
+import java.util.Optional;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.client.ResourceAccessException;
 
 @ExtendWith(MockitoExtension.class)
 class PaymentEventConsumerTest {
@@ -29,11 +34,14 @@ class PaymentEventConsumerTest {
     @Mock
     private BlocklistService blocklistService;
 
+    @Mock
+    private OrderLookupClient orderLookupClient;
+
     private PaymentEventConsumer consumer;
 
     @BeforeEach
     void setUp() {
-        consumer = new PaymentEventConsumer(objectMapper, velocityService, blocklistService, 2);
+        consumer = new PaymentEventConsumer(objectMapper, velocityService, blocklistService, orderLookupClient, 2);
     }
 
     @Test
@@ -129,5 +137,134 @@ class PaymentEventConsumerTest {
         verify(velocityService).incrementCounter("DEVICE", "fp-device-7", "REFUND_FAILURES_24H");
         verify(velocityService).incrementCounter("IP", "198.51.100.10", "REFUND_FAILURES_24H");
         verify(blocklistService, never()).block(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void paymentDisputedWithoutUserIdResolvesUserViaOrderLookupAndIncrementsChargebacks() {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        String payload = """
+                {
+                  "id": "evt-dispute-no-user",
+                  "eventType": "PaymentDisputed",
+                  "payload": {
+                    "orderId": "%s",
+                    "paymentId": "%s",
+                    "disputeAmountCents": 9000,
+                    "currency": "INR",
+                    "reason": "fraudulent"
+                  }
+                }
+                """.formatted(orderId, UUID.randomUUID());
+
+        when(orderLookupClient.findOrder(orderId))
+                .thenReturn(Optional.of(new OrderSnapshot(orderId, userId)));
+        when(velocityService.getCount("USER", userId.toString(), "CHARGEBACKS_30D")).thenReturn(2L);
+        when(blocklistService.isBlocked("USER", userId.toString())).thenReturn(false);
+
+        consumer.onPaymentEvent(new ConsumerRecord<>("payments.events", 0, 4L, orderId.toString(), payload));
+
+        verify(orderLookupClient).findOrder(orderId);
+        verify(velocityService).incrementCounter("USER", userId.toString(), "CHARGEBACKS_30D");
+        verify(blocklistService).block(
+                eq("USER"),
+                eq(userId.toString()),
+                eq("Auto-blocked: chargeback threshold breached (fraudulent)"),
+                eq(null),
+                eq("system:payment-disputed"));
+    }
+
+    @Test
+    void paymentRefundFailedWithoutUserIdResolvesUserViaOrderLookupAndIncrementsRefundFailures() {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        String payload = """
+                {
+                  "id": "evt-refund-fail-no-user",
+                  "eventType": "PaymentRefundFailed",
+                  "payload": {
+                    "orderId": "%s",
+                    "paymentId": "%s",
+                    "refundId": "%s",
+                    "amountCents": 1800,
+                    "currency": "INR",
+                    "reason": "psp_error",
+                    "failureSource": "gateway"
+                  }
+                }
+                """.formatted(orderId, UUID.randomUUID(), UUID.randomUUID());
+
+        when(orderLookupClient.findOrder(orderId))
+                .thenReturn(Optional.of(new OrderSnapshot(orderId, userId)));
+
+        consumer.onPaymentEvent(new ConsumerRecord<>("payments.events", 0, 5L, orderId.toString(), payload));
+
+        verify(orderLookupClient).findOrder(orderId);
+        verify(velocityService).incrementCounter("USER", userId.toString(), "REFUND_FAILURES_24H");
+    }
+
+    @Test
+    void paymentDisputedAndRefundFailedPropagateTransientOrderLookupFailuresForRetry() {
+        UUID orderId = UUID.randomUUID();
+        String disputePayload = """
+                {
+                  "id": "evt-dispute-err",
+                  "eventType": "PaymentDisputed",
+                  "payload": {
+                    "orderId": "%s",
+                    "paymentId": "%s",
+                    "disputeAmountCents": 5000,
+                    "currency": "INR"
+                  }
+                }
+                """.formatted(orderId, UUID.randomUUID());
+        String refundFailPayload = """
+                {
+                  "id": "evt-refund-err",
+                  "eventType": "PaymentRefundFailed",
+                  "payload": {
+                    "orderId": "%s",
+                    "paymentId": "%s",
+                    "refundId": "%s",
+                    "amountCents": 1500,
+                    "currency": "INR"
+                  }
+                }
+                """.formatted(orderId, UUID.randomUUID(), UUID.randomUUID());
+
+        when(orderLookupClient.findOrder(orderId))
+                .thenThrow(new ResourceAccessException("order-service connection timed out"));
+
+        assertThatThrownBy(() -> consumer.onPaymentEvent(
+                new ConsumerRecord<>("payments.events", 0, 6L, orderId.toString(), disputePayload)))
+                .isInstanceOf(ResourceAccessException.class);
+        assertThatThrownBy(() -> consumer.onPaymentEvent(
+                new ConsumerRecord<>("payments.events", 0, 7L, orderId.toString(), refundFailPayload)))
+                .isInstanceOf(ResourceAccessException.class);
+        verifyNoInteractions(velocityService, blocklistService);
+    }
+
+    @Test
+    void paymentDisputedSkipsCleanlyWhenOrderLookupReturnsNotFound() {
+        UUID orderId = UUID.randomUUID();
+        String payload = """
+                {
+                  "id": "evt-dispute-missing",
+                  "eventType": "PaymentDisputed",
+                  "payload": {
+                    "orderId": "%s",
+                    "paymentId": "%s",
+                    "disputeAmountCents": 2500,
+                    "currency": "INR"
+                  }
+                }
+                """.formatted(orderId, UUID.randomUUID());
+
+        when(orderLookupClient.findOrder(orderId)).thenReturn(Optional.empty());
+
+        consumer.onPaymentEvent(new ConsumerRecord<>("payments.events", 0, 8L, orderId.toString(), payload));
+
+        verify(orderLookupClient).findOrder(orderId);
+        verifyNoInteractions(velocityService, blocklistService);
     }
 }

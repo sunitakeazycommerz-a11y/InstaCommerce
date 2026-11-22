@@ -58,7 +58,7 @@ class PromotionServiceAndStackingBehaviorTest {
         QuoteTokenService quoteTokenService = new QuoteTokenService(quoteRepo, quoteProps);
 
         PricingService pricingService = new PricingService(
-                ruleRepo, promoService, couponService, quoteTokenService,
+                ruleRepo, new ProductPriceLookupService(ruleRepo), promoService, couponService, quoteTokenService,
                 new DiscountCalculator(), new TaxCalculationService(), null);
 
         UUID productId = UUID.randomUUID();
@@ -219,12 +219,12 @@ class PromotionServiceAndStackingBehaviorTest {
         quoteProps.setHmacSecret("test-pricing-hmac-secret-32-bytes-minimum");
         QuoteTokenService quoteTokenService = new QuoteTokenService(quoteRepo, quoteProps);
 
-        SurgePricingService surgeService = new SurgePricingService();
+        SurgePricingService surgeService = new SurgePricingService(null);
         UUID storeId = UUID.randomUUID();
         surgeService.recordStoreSignal(storeId, 0.96, 10, false);
 
         PricingService pricingService = new PricingService(
-                ruleRepo, promoService, mock(CouponService.class), quoteTokenService,
+                ruleRepo, new ProductPriceLookupService(ruleRepo), promoService, mock(CouponService.class), quoteTokenService,
                 new DiscountCalculator(), new TaxCalculationService(), surgeService);
 
         UUID p1 = UUID.randomUUID();
@@ -342,7 +342,7 @@ class PromotionServiceAndStackingBehaviorTest {
         QuoteTokenService quoteTokenService = new QuoteTokenService(quoteRepo, quoteProps);
 
         PricingService pricingService = new PricingService(
-                ruleRepo, promoService, couponService, quoteTokenService,
+                ruleRepo, new ProductPriceLookupService(ruleRepo), promoService, couponService, quoteTokenService,
                 new DiscountCalculator(), new TaxCalculationService(), null);
 
         UUID productId = UUID.randomUUID();
@@ -390,6 +390,7 @@ class PromotionServiceAndStackingBehaviorTest {
         PriceRuleRepository ruleRepo = mock(PriceRuleRepository.class);
         PricingService pricingService = new PricingService(
                 ruleRepo,
+                new ProductPriceLookupService(ruleRepo),
                 mock(PromotionService.class),
                 mock(CouponService.class),
                 mock(QuoteTokenService.class),

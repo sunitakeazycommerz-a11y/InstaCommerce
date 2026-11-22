@@ -4,12 +4,12 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.instacommerce.contracts.topics.TopicNames;
 import com.instacommerce.search.service.SearchIndexService;
+import jakarta.annotation.Nullable;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.CacheManager;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -28,34 +28,11 @@ public class InventoryEventConsumer {
     @Autowired
     public InventoryEventConsumer(
             SearchIndexService searchIndexService,
-            ObjectProvider<CacheManager> cacheManagerProvider,
-            ObjectProvider<ObjectMapper> objectMapperProvider) {
-        this(
-                searchIndexService,
-                cacheManagerProvider != null ? cacheManagerProvider.getIfAvailable() : null,
-                objectMapperProvider != null ? objectMapperProvider.getIfAvailable(ObjectMapper::new) : new ObjectMapper());
-    }
-
-    public InventoryEventConsumer(
-            SearchIndexService searchIndexService,
-            ObjectProvider<CacheManager> cacheManagerProvider) {
-        this(
-                searchIndexService,
-                cacheManagerProvider != null ? cacheManagerProvider.getIfAvailable() : null,
-                new ObjectMapper());
-    }
-
-    public InventoryEventConsumer(
-            SearchIndexService searchIndexService,
-            CacheManager cacheManager,
-            ObjectMapper objectMapper) {
+            @Nullable CacheManager cacheManager,
+            @Nullable ObjectMapper objectMapper) {
         this.searchIndexService = searchIndexService;
         this.cacheManager = cacheManager;
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
-    }
-
-    public InventoryEventConsumer(SearchIndexService searchIndexService) {
-        this(searchIndexService, (CacheManager) null, new ObjectMapper());
     }
 
     @KafkaListener(topics = TopicNames.INVENTORY_EVENTS, groupId = "search-service")

@@ -173,13 +173,13 @@ class WarehouseSurgePricingTest {
         SurgePricingService surgePricingService = new SurgePricingService(stateStore);
         PricingService pricingService = new PricingService(
                 ruleRepo,
+                new ProductPriceLookupService(ruleRepo),
                 promoService,
                 mock(CouponService.class),
                 quoteTokenService,
                 new DiscountCalculator(),
                 new TaxCalculationService(),
-                surgePricingService,
-                stateStore);
+                surgePricingService);
 
         UUID productId = UUID.randomUUID();
         UUID storeId = UUID.randomUUID();

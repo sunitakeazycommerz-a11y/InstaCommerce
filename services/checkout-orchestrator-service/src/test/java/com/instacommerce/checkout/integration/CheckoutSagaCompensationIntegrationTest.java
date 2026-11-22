@@ -127,7 +127,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(13000L, 0L, 2000L, 15000L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(anyString(), eq(15000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(15000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString(), eq(USER_ID)))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenReturn(new OrderCreationResult(ORDER_ID, 15));
@@ -167,7 +167,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(45000L, 0L, 0L, 45000L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(anyString(), eq(45000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(45000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString(), eq(USER_ID)))
             .thenReturn(new PaymentAuthResult(null, false, "INSUFFICIENT_FUNDS"));
 
         CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
@@ -199,7 +199,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(18000L, 0L, 0L, 18000L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(anyString(), eq(18000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(18000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString(), eq(USER_ID)))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenThrow(new RuntimeException("Order database deadlock connection error"));
@@ -229,7 +229,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(4000L, 500L, 0L, 3500L, "INR", null, null, "SAVE500", 500L, List.of()));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(anyString(), eq(3500L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(3500L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString(), eq(USER_ID)))
             .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
         when(orderActivity.createOrder(any()))
             .thenReturn(new OrderCreationResult(ORDER_ID, 12));
@@ -261,7 +261,7 @@ class CheckoutSagaCompensationIntegrationTest {
             .thenReturn(new PricingResult(12000L, 0L, 0L, 12000L, "INR", null, null));
         when(inventoryActivity.reserveStock(any()))
             .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
-        when(paymentActivity.authorizePayment(anyString(), eq(12000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString()))
+        when(paymentActivity.authorizePayment(anyString(), eq(12000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString(), eq(USER_ID)))
             .thenReturn(new PaymentAuthResult(null, false, "CARD_EXPIRED"));
         doThrow(new RuntimeException("Inventory service connection refused"))
             .when(inventoryActivity).releaseStock(RESERVATION_ID);
@@ -309,8 +309,8 @@ class CheckoutSagaCompensationIntegrationTest {
     static class TestPaymentActivity implements PaymentActivity {
         private final PaymentActivity mock;
         TestPaymentActivity(PaymentActivity mock) { this.mock = mock; }
-        @Override public PaymentAuthResult authorizePayment(String orderId, long amountCents, String currency, String paymentMethodId, String idempotencyKey) {
-            return mock.authorizePayment(orderId, amountCents, currency, paymentMethodId, idempotencyKey);
+        @Override public PaymentAuthResult authorizePayment(String orderId, long amountCents, String currency, String paymentMethodId, String idempotencyKey, String userId) {
+            return mock.authorizePayment(orderId, amountCents, currency, paymentMethodId, idempotencyKey, userId);
         }
         @Override public void capturePayment(String paymentId, String idempotencyKey) { mock.capturePayment(paymentId, idempotencyKey); }
         @Override public void voidPayment(String paymentId, String idempotencyKey) { mock.voidPayment(paymentId, idempotencyKey); }

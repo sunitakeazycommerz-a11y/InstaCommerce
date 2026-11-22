@@ -7,6 +7,7 @@ public class FraudProperties {
 
     private final Jwt jwt = new Jwt();
     private final Cors cors = new Cors();
+    private final Order order = new Order();
 
     public Jwt getJwt() {
         return jwt;
@@ -14,6 +15,10 @@ public class FraudProperties {
 
     public Cors getCors() {
         return cors;
+    }
+
+    public Order getOrder() {
+        return order;
     }
 
     public static class Jwt {
@@ -46,6 +51,18 @@ public class FraudProperties {
 
         public void setAllowedOrigins(String allowedOrigins) {
             this.allowedOrigins = allowedOrigins;
+        }
+    }
+
+    public static class Order {
+        private String baseUrl = "http://localhost:8084";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
         }
     }
 }

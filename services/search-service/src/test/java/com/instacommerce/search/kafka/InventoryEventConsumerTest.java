@@ -29,7 +29,7 @@ class InventoryEventConsumerTest {
 
     @BeforeEach
     void setUp() {
-        consumer = new InventoryEventConsumer(searchIndexService);
+        consumer = new InventoryEventConsumer(searchIndexService, null, null);
     }
 
     @Test
