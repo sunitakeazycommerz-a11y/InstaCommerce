@@ -1,7 +1,7 @@
 """Ranking Model Predictor for search results and category feeds.
 
 Produces a relevance score for each candidate item and returns them
-sorted in descending order.  Incorporates personalisation signals,
+sorted in descending order. Incorporates personalisation signals,
 inventory freshness, and margin-aware boosting.
 """
 
@@ -11,19 +11,19 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np  # type: ignore[import-untyped]
+import numpy as np
 
 try:
-    import onnxruntime as _ort  # type: ignore[import-untyped]
+    import onnxruntime as _ort
     ort: Any = _ort
 except ImportError:
-    ort: Any = None
+    ort = None
 
 try:
-    import lightgbm as _lgb  # type: ignore[import-untyped]
+    import lightgbm as _lgb
     lgb: Any = _lgb
 except (ImportError, OSError):
-    lgb: Any = None
+    lgb = None
 
 from .predictor import BasePredictor, ModelMetadata, ModelStatus, PredictionResult
 
@@ -33,9 +33,8 @@ logger = logging.getLogger(__name__)
 class RankingPredictor(BasePredictor):
     """Production search & feed ranking predictor.
 
-    Uses a LightGBM LambdaRank model exported to ONNX.  When the model
-    is unavailable the predictor falls back to a weighted combination of
-    popularity (order count) and recency (hours since last sold).
+    Uses a LightGBM LambdaRank model exported to ONNX, falling back to a
+    weighted combination of popularity and recency.
     """
 
     def __init__(
@@ -46,17 +45,8 @@ class RankingPredictor(BasePredictor):
         super().__init__(model_name=model_name, model_dir=model_dir)
         self._feature_names: List[str] = []
 
-    # ------------------------------------------------------------------
-    # Model loading
-    # ------------------------------------------------------------------
-
     def _load_model(self, version: Optional[str]) -> None:
-        """Load ranking model from ONNX or native LightGBM.
-
-        Expected artefacts:
-        * ``model.onnx`` — ONNX-exported LambdaRank model
-        * ``metadata.json`` — :class:`ModelMetadata` fields
-        """
+        """Load ranking model from ONNX or native LightGBM."""
         resolved_version = version or self._resolve_latest_version()
         model_path = self.model_dir / resolved_version
 
@@ -76,31 +66,13 @@ class RankingPredictor(BasePredictor):
         meta_path = model_path / "metadata.json"
         if meta_path.exists():
             with open(meta_path, "r") as fh:
-                raw = json.load(fh)
-            self.metadata = ModelMetadata(**raw)
+                self.metadata = ModelMetadata(**json.load(fh))
             self._feature_names = self.metadata.features
 
         self._version = resolved_version
 
-    # ------------------------------------------------------------------
-    # Prediction
-    # ------------------------------------------------------------------
-
     def predict(self, features: Dict[str, Any]) -> PredictionResult:
-        """Score and rank candidate items.
-
-        Required features:
-        * ``candidates`` — list of dicts, each containing item-level features:
-            - ``item_id`` (str)
-            - ``category`` (str)
-            - ``order_count_7d`` (int) — orders in last 7 days
-            - ``hours_since_last_sold`` (float)
-            - ``avg_rating`` (float, 1-5)
-            - ``margin_pct`` (float, 0-100)
-            - ``in_stock`` (bool)
-        * ``query`` (str, optional) — search query for text relevance
-        * ``user_id`` (str, optional) — for personalisation features
-        """
+        """Score and rank candidate items."""
         if self.status != ModelStatus.READY or self._model is None:
             return self.rule_based_fallback(features)
 
@@ -135,39 +107,31 @@ class RankingPredictor(BasePredictor):
             return self.rule_based_fallback(features)
 
     def rule_based_fallback(self, features: Dict[str, Any]) -> PredictionResult:
-        """Popularity + recency heuristic ranking.
-
-        ``score = 0.6 * norm(order_count_7d) + 0.3 * recency_score + 0.1 * avg_rating / 5``
-        Items out of stock are pushed to the bottom.
-        """
+        """Popularity + recency heuristic ranking with out-of-stock penalty."""
         start = time.monotonic()
         candidates: List[Dict[str, Any]] = list(features.get("candidates") or [])
         if not candidates:
             return self._empty_result(start)
 
         max_orders = max(
-            max((int(c.get("order_count_7d") or 0) for c in candidates), default=0),
+            max((self._get_int(c, "order_count_7d", 0) for c in candidates), default=0),
             1,
         )
 
         scored: List[Dict[str, Any]] = []
         for c in candidates:
-            raw_oc = c.get("order_count_7d")
-            order_count = int(raw_oc if raw_oc is not None else 0)
-            raw_hs = c.get("hours_since_last_sold")
-            hours_since = float(raw_hs if raw_hs is not None else 168.0)
-            raw_ar = c.get("avg_rating")
-            avg_rating = float(raw_ar if raw_ar is not None else 3.0)
+            order_count = self._get_int(c, "order_count_7d", 0)
+            hours_since = self._get_float(c, "hours_since_last_sold", 168.0)
+            avg_rating = self._get_float(c, "avg_rating", 3.0)
             raw_stock = c.get("in_stock")
             in_stock = True if raw_stock is None else bool(raw_stock)
 
             pop_score = order_count / max_orders
             recency_score = max(0.0, 1.0 - hours_since / 168.0)
             rating_score = avg_rating / 5.0
-
             score = 0.6 * pop_score + 0.3 * recency_score + 0.1 * rating_score
             if not in_stock:
-                score *= 0.01  # penalise out-of-stock heavily
+                score *= 0.01
 
             scored.append({"item_id": c.get("item_id") or "unknown", "score": score})
 
@@ -188,16 +152,12 @@ class RankingPredictor(BasePredictor):
             is_fallback=True,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _score_candidates(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Run ML model on each candidate and attach score."""
         results: List[Dict[str, Any]] = []
         for c in candidates:
             vec = np.array(
-                [[float(v if (v := c.get(f)) is not None else 0.0) for f in self._feature_names]],
+                [[self._get_float(c, f, 0.0) for f in self._feature_names]],
                 dtype=np.float32,
             )
             if hasattr(self._model, "run"):
@@ -217,17 +177,6 @@ class RankingPredictor(BasePredictor):
             model_name=self.model_name,
             latency_ms=round(latency_ms, 2),
         )
-
-    def _resolve_latest_version(self) -> str:
-        if not self.model_dir.exists():
-            raise FileNotFoundError(f"Model directory not found: {self.model_dir}")
-        versions = sorted(
-            [d.name for d in self.model_dir.iterdir() if d.is_dir()],
-            reverse=True,
-        )
-        if not versions:
-            raise FileNotFoundError(f"No model versions found in {self.model_dir}")
-        return versions[0]
 
     def _load_native_lightgbm(self, model_path: Path) -> None:
         lgbm_path = model_path / "model.txt"

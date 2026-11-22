@@ -20,6 +20,11 @@ from pipelines.common import (
     parse_event_ts as _parse_event_ts,
     window_end_iso as _window_end_iso,
 )
+from pipelines.order_schemas import (
+    LATE_EVENT_TABLE_SCHEMA,
+    SLA_TABLE_SCHEMA,
+    VOLUME_TABLE_SCHEMA,
+)
 from pipelines.validation import coerce_int, coerce_optional_int, require_non_empty_str
 
 logger = logging.getLogger(__name__)
@@ -242,39 +247,6 @@ def format_sla_row(element, window=beam.DoFn.WindowParam):
     }
 
 
-VOLUME_TABLE_SCHEMA = {
-    "fields": [
-        {"name": "store_id", "type": "STRING", "mode": "REQUIRED"},
-        {"name": "order_count", "type": "INTEGER", "mode": "REQUIRED"},
-        {"name": "gmv_cents", "type": "INTEGER", "mode": "REQUIRED"},
-        {"name": "window_timestamp", "type": "TIMESTAMP", "mode": "REQUIRED"},
-    ]
-}
-
-SLA_TABLE_SCHEMA = {
-    "fields": [
-        {"name": "zone_id", "type": "STRING", "mode": "REQUIRED"},
-        {"name": "total_orders", "type": "INTEGER", "mode": "REQUIRED"},
-        {"name": "within_sla", "type": "INTEGER", "mode": "REQUIRED"},
-        {"name": "compliance_rate", "type": "FLOAT", "mode": "REQUIRED"},
-        {"name": "window_timestamp", "type": "TIMESTAMP", "mode": "REQUIRED"},
-    ]
-}
-
-LATE_EVENT_TABLE_SCHEMA = {
-    "fields": [
-        {"name": "order_id", "type": "STRING", "mode": "REQUIRED"},
-        {"name": "event_type", "type": "STRING", "mode": "REQUIRED"},
-        {"name": "store_id", "type": "STRING", "mode": "NULLABLE"},
-        {"name": "zone_id", "type": "STRING", "mode": "NULLABLE"},
-        {"name": "total_cents", "type": "INTEGER", "mode": "NULLABLE"},
-        {"name": "event_time", "type": "STRING", "mode": "NULLABLE"},
-        {"name": "received_at", "type": "TIMESTAMP", "mode": "REQUIRED"},
-        {"name": "lateness_seconds", "type": "FLOAT", "mode": "REQUIRED"},
-    ]
-}
-
-
 def build_pipeline(options):
     """Construct and return the order events streaming pipeline."""
     pipeline_options = options.view_as(OrderPipelineOptions)
@@ -304,7 +276,6 @@ def build_pipeline(options):
 
         events = parsed.parsed
 
-        # --- 1-minute order volume (fixed window with 1-hour allowed lateness) ---
         (
             events
             | "Window1Min" >> beam.WindowInto(
@@ -330,7 +301,6 @@ def build_pipeline(options):
             )
         )
 
-        # --- 30-minute SLA compliance (sliding window, 1-min slide with 1-hour allowed lateness) ---
         (
             events
             | "FilterDelivered"
@@ -358,7 +328,6 @@ def build_pipeline(options):
             )
         )
 
-        # --- Late events dead-letter sink (BigQuery) ---
         (
             parsed[OrderEventParser.LATE_EVENTS]
             | "WriteLateEvents"
@@ -370,7 +339,6 @@ def build_pipeline(options):
             )
         )
 
-        # --- Dead-letter sink ---
         (
             parsed[OrderEventParser.DEAD_LETTER]
             | "FormatDeadLetter" >> beam.Map(json.dumps)

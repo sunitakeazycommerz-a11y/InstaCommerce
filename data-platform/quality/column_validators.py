@@ -7,9 +7,9 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
-    from .table_validators import parse_finite_float
+    from .parsing import parse_finite_float
 except ImportError:
-    from table_validators import parse_finite_float
+    from parsing import parse_finite_float
 
 TYPE_CHECKERS: Dict[str, Callable[[Any], bool]] = {
     "str": lambda v: isinstance(v, str),

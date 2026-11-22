@@ -59,37 +59,21 @@ class ABTestRouter:
 
 
 class ModelRegistry:
-    """Central registry for all production models.
-
-    Usage::
-
-        registry = ModelRegistry(models_dir="/opt/models")
-        registry.register(ETAPredictor())
-        predictor = registry.get("eta")
-        result = predictor.predict(features)
-    """
+    """Central registry for all production models."""
 
     def __init__(self, models_dir: str) -> None:
         self._models_dir: str = models_dir
         self._models: Dict[str, BasePredictor] = {}
         self._versioned_predictors: Dict[str, Dict[str, BasePredictor]] = {}
         self._shadow: Dict[str, BasePredictor] = {}
-        self._ab_routing: Dict[str, Dict[str, float]] = {}  # model -> {version: weight}
+        self._ab_routing: Dict[str, Dict[str, float]] = {}
         self._kill_switches: Dict[str, bool] = {}
         self._previous_versions: Dict[str, str] = {}
         self._version_history: Dict[str, List[str]] = {}
         self._lock = threading.RLock()
 
-    # ------------------------------------------------------------------
-    # Registration
-    # ------------------------------------------------------------------
-
     def register(self, predictor: BasePredictor) -> None:
-        """Register a predictor in the registry.
-
-        If the model was previously killed the kill switch is cleared
-        on re-registration.
-        """
+        """Register a predictor and clear any active kill switch."""
         with self._lock:
             name = predictor.model_name
             existing = self._models.get(name)
@@ -118,10 +102,6 @@ class ModelRegistry:
             self._previous_versions.pop(model_name, None)
             self._version_history.pop(model_name, None)
         logger.info("Model unregistered", extra={"model": model_name})
-
-    # ------------------------------------------------------------------
-    # Retrieval
-    # ------------------------------------------------------------------
 
     def _build_version_predictor(
         self,
@@ -227,10 +207,6 @@ class ModelRegistry:
         with self._lock:
             return list(self._models.keys())
 
-    # ------------------------------------------------------------------
-    # A/B Routing
-    # ------------------------------------------------------------------
-
     def set_ab_routing(self, model_name: str, routing: Dict[str, float]) -> None:
         """Configure weighted traffic routing between model versions."""
         with self._lock:
@@ -243,10 +219,7 @@ class ModelRegistry:
         logger.info("A/B routing updated", extra={"model": model_name, "routing": routing})
 
     def resolve_version(self, model_name: str, user_id: Optional[str] = None) -> Optional[str]:
-        """Sample a version according to A/B routing weights.
-
-        Returns ``None`` if no routing is configured (use default version).
-        """
+        """Sample a version according to A/B routing weights, or None if unconfigured."""
         with self._lock:
             routing = self._ab_routing.get(model_name)
             if not routing:
@@ -262,18 +235,8 @@ class ModelRegistry:
         normalised = [w / total for w in weights]
         return random.choices(versions, weights=normalised, k=1)[0]
 
-    # ------------------------------------------------------------------
-    # Shadow Mode
-    # ------------------------------------------------------------------
-
     def set_shadow(self, model_name: str, shadow_predictor: BasePredictor) -> None:
-        """Register a shadow predictor that runs alongside production.
-
-        Shadow predictions are logged for comparison but never served.
-
-        Raises:
-            KeyError: if the primary ``model_name`` is not registered.
-        """
+        """Register a shadow predictor that runs alongside production."""
         with self._lock:
             if model_name not in self._models:
                 raise KeyError(f"Model '{model_name}' is not registered — cannot attach shadow")
@@ -295,16 +258,8 @@ class ModelRegistry:
         if removed:
             logger.info("Shadow predictor removed", extra={"model": model_name})
 
-    # ------------------------------------------------------------------
-    # Kill Switch
-    # ------------------------------------------------------------------
-
     def kill(self, model_name: str) -> None:
-        """Activate the kill switch for a model.
-
-        All subsequent ``get()`` calls will return a predictor in
-        ``DEGRADED`` status, causing it to use rule-based fallback.
-        """
+        """Activate the kill switch for a model so get() returns DEGRADED predictors."""
         with self._lock:
             self._kill_switches[model_name] = True
             if model_name in self._models:
@@ -314,11 +269,7 @@ class ModelRegistry:
         logger.warning("Kill switch activated", extra={"model": model_name})
 
     def unkill(self, model_name: str) -> None:
-        """Deactivate the kill switch for a model.
-
-        The predictor status is restored to ``READY`` if the underlying
-        model is still loaded.
-        """
+        """Deactivate the kill switch and restore READY status if loaded."""
         with self._lock:
             self._kill_switches.pop(model_name, None)
             predictor = self._models.get(model_name)
@@ -334,17 +285,8 @@ class ModelRegistry:
         with self._lock:
             return self._kill_switches.get(model_name, False)
 
-    # ------------------------------------------------------------------
-    # Health & Status
-    # ------------------------------------------------------------------
-
     def status(self) -> Dict[str, Any]:
-        """Aggregate health status of all registered models.
-
-        Each model entry now includes an ``integrity_verified`` flag
-        that indicates whether the model's artifacts passed SHA-256
-        checksum verification at load time.
-        """
+        """Aggregate health status of all registered models."""
         with self._lock:
             models_snapshot = dict(self._models)
             shadow_keys = set(self._shadow.keys())

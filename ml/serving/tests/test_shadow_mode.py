@@ -53,7 +53,6 @@ def test_shadow_runner_streams_and_buffers_logs():
     assert kafka_events[0][1]["champion_version"] == "v1.0"
     assert kafka_events[0][1]["shadow_version"] == "v2.0"
 
-    # BigQuery row export
     bq_rows = runner.export_to_bigquery_rows()
     assert len(bq_rows) == 1
     assert bq_rows[0]["agrees"] is True
@@ -64,14 +63,11 @@ def test_shadow_runner_promotion_gate_threshold():
     runner = ShadowRunner()
 
     champion = DummyPredictor("search_ranking", "v1.0", lambda f: {"score": 1.0})
-    # Shadow that agrees
     shadow_agree = DummyPredictor("search_ranking", "v2.0", lambda f: {"score": 1.05})
-    # Shadow that diverges (> 10% relative diff)
     shadow_disagree = DummyPredictor("search_ranking", "v2.0", lambda f: {"score": 2.0})
 
     prod_res = champion.predict({})
 
-    # 9 agreements, 1 disagreement = 90% (< 92%)
     for _ in range(9):
         runner.run_shadow(prod_res, shadow_agree, {})
     runner.run_shadow(prod_res, shadow_disagree, {})

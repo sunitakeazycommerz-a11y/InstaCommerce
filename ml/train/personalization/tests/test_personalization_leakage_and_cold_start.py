@@ -10,7 +10,6 @@ from ml.train.personalization.train import (
 
 
 def test_split_train_test_zero_label_leakage():
-    # 20 days of interaction data
     base_time = pd.Timestamp("2026-10-01 00:00:00")
     records = []
     for day in range(20):
@@ -46,10 +45,8 @@ def test_cold_start_tier_fallback_returns_exact_10_recommendations():
     }
     trainer = PersonalizationTrainer(config)
 
-    # 10 popular dark store items
     store_popular = [f"sku_top_{i}" for i in range(1, 15)]
 
-    # Brand new customer (user_cold_123, 0 orders, no embeddings)
     recs = trainer.recommend(
         user_id="user_cold_123",
         store_popular_items=store_popular,
@@ -74,7 +71,6 @@ def test_cold_start_blends_viewed_categories():
         "sku_pop_4": "snacks",
     }
 
-    # User viewed dairy category
     recs = trainer.recommend(
         user_id="user_cold_dairy",
         viewed_categories=["dairy"],
@@ -82,14 +78,13 @@ def test_cold_start_blends_viewed_categories():
     )
 
     assert len(recs) == 10
-    assert recs[0] in ["sku_pop_1", "sku_pop_3"]  # Dairy items prioritized
+    assert recs[0] in ["sku_pop_1", "sku_pop_3"]
 
 
 def test_personalization_predictor_cold_start_returns_recommendations():
     predictor = PersonalizationPredictor(model_dir="/tmp")
     predictor._popular_items = [f"sku_store_{i}" for i in range(1, 15)]
 
-    # Cold start customer request with empty candidates
     result = predictor.predict({
         "user_id": "new_user_999",
         "candidates": [],

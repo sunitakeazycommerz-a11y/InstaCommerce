@@ -43,7 +43,6 @@ def test_verify_detects_tampering():
         (model_dir / "model.onnx").write_bytes(b"original weights")
         generate_checksums(model_dir)
 
-        # Tamper with the model file
         (model_dir / "model.onnx").write_bytes(b"tampered weights")
 
         assert verify_model_integrity(model_dir, "test-model") is False
@@ -53,7 +52,6 @@ def test_verify_missing_checksums_nonstrict():
     with tempfile.TemporaryDirectory() as tmpdir:
         model_dir = Path(tmpdir)
         (model_dir / "model.onnx").write_bytes(b"weights")
-        # No CHECKSUMS.sha256 file
         assert verify_model_integrity(model_dir, "test-model", strict=False) is True
 
 
@@ -70,7 +68,6 @@ def test_verify_missing_artifact():
         (model_dir / "model.onnx").write_bytes(b"weights")
         generate_checksums(model_dir)
 
-        # Delete the artifact
         os.unlink(model_dir / "model.onnx")
 
         assert verify_model_integrity(model_dir, "test-model") is False

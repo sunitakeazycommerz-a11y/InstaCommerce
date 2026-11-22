@@ -1,7 +1,7 @@
 """Customer Lifetime Value (CLV) Predictor.
 
 Estimates the expected revenue from a customer over a configurable time
-horizon (default 12 months).  Used for acquisition cost budgets, loyalty
+horizon (default 12 months). Used for acquisition cost budgets, loyalty
 tier assignment, and personalised retention campaigns.
 """
 
@@ -11,32 +11,31 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np  # type: ignore[import-untyped]
+import numpy as np
 
 try:
-    import onnxruntime as _ort  # type: ignore[import-untyped]
+    import onnxruntime as _ort
     ort: Any = _ort
 except ImportError:
-    ort: Any = None
+    ort = None
 
 try:
-    import lightgbm as _lgb  # type: ignore[import-untyped]
+    import lightgbm as _lgb
     lgb: Any = _lgb
 except (ImportError, OSError):
-    lgb: Any = None
+    lgb = None
 
 from .predictor import BasePredictor, ModelMetadata, ModelStatus, PredictionResult
 
 logger = logging.getLogger(__name__)
 
-# Default prediction horizon
 _DEFAULT_HORIZON_MONTHS: int = 12
 
 
 class CLVPredictor(BasePredictor):
     """Production customer lifetime value predictor.
 
-    Uses a LightGBM regressor exported to ONNX.  Falls back to a simple
+    Uses a LightGBM regressor exported to ONNX. Falls back to a simple
     ``avg_order_value × order_frequency × expected_lifespan`` heuristic.
     """
 
@@ -48,17 +47,8 @@ class CLVPredictor(BasePredictor):
         super().__init__(model_name=model_name, model_dir=model_dir)
         self._feature_names: List[str] = []
 
-    # ------------------------------------------------------------------
-    # Model loading
-    # ------------------------------------------------------------------
-
     def _load_model(self, version: Optional[str]) -> None:
-        """Load CLV model from ONNX or native LightGBM.
-
-        Expected artefacts:
-        * ``model.onnx`` — ONNX-exported LightGBM regressor
-        * ``metadata.json`` — :class:`ModelMetadata` fields
-        """
+        """Load CLV model from ONNX or native LightGBM."""
         resolved_version = version or self._resolve_latest_version()
         model_path = self.model_dir / resolved_version
 
@@ -84,39 +74,16 @@ class CLVPredictor(BasePredictor):
 
         self._version = resolved_version
 
-    # ------------------------------------------------------------------
-    # Prediction
-    # ------------------------------------------------------------------
-
     def predict(self, features: Dict[str, Any]) -> PredictionResult:
-        """Predict customer lifetime value.
-
-        Required features:
-        * ``user_id`` (str)
-        * ``account_age_days`` (int)
-        * ``total_orders`` (int) — lifetime order count
-        * ``avg_order_value`` (float) — average order value in local currency
-        * ``orders_last_30d`` (int)
-        * ``orders_last_90d`` (int)
-        * ``days_since_last_order`` (int)
-        * ``preferred_category`` (str)
-        * ``payment_method`` (str)
-        * ``horizon_months`` (int, optional) — prediction window, default 12
-        """
+        """Predict customer lifetime value."""
         if self.status != ModelStatus.READY or self._model is None:
             return self.rule_based_fallback(features)
 
         start = time.monotonic()
         try:
-            raw_horizon = features.get("horizon_months")
-            horizon = max(1, int(raw_horizon if raw_horizon is not None else _DEFAULT_HORIZON_MONTHS))
+            horizon = max(1, self._get_int(features, "horizon_months", _DEFAULT_HORIZON_MONTHS))
             vec = np.array(
-                [
-                    [
-                        float(v if (v := features.get(f)) is not None else 0.0)
-                        for f in self._feature_names
-                    ]
-                ],
+                [[self._get_float(features, f, 0.0) for f in self._feature_names]],
                 dtype=np.float32,
             )
 
@@ -127,7 +94,7 @@ class CLVPredictor(BasePredictor):
             else:
                 raw_clv = float(np.asarray(self._model.predict(vec)).reshape(-1)[0])
 
-            # Scale to requested horizon (model trained on 12-month window)
+            # Model is trained on a 12-month window; scale to requested horizon.
             clv = max(0.0, raw_clv * (horizon / 12.0))
             tier = self._assign_tier(clv)
             latency_ms = (time.monotonic() - start) * 1_000
@@ -153,20 +120,12 @@ class CLVPredictor(BasePredictor):
             return self.rule_based_fallback(features)
 
     def rule_based_fallback(self, features: Dict[str, Any]) -> PredictionResult:
-        """Heuristic CLV: avg_order_value × monthly_frequency × horizon.
-
-        Monthly frequency is estimated as ``orders_last_30d`` (or
-        ``total_orders / account_age_months`` as fallback).
-        """
+        """Heuristic CLV: avg_order_value × monthly_frequency × horizon."""
         start = time.monotonic()
-        raw_aov = features.get("avg_order_value")
-        avg_order_value = float(raw_aov if raw_aov is not None else 0.0)
-        raw_total = features.get("total_orders")
-        total_orders = int(raw_total if raw_total is not None else 0)
-        raw_age = features.get("account_age_days")
-        account_age_days = max(int(raw_age if raw_age is not None else 1), 1)
-        raw_horizon = features.get("horizon_months")
-        horizon = max(1, int(raw_horizon if raw_horizon is not None else _DEFAULT_HORIZON_MONTHS))
+        avg_order_value = self._get_float(features, "avg_order_value", 0.0)
+        total_orders = self._get_int(features, "total_orders", 0)
+        account_age_days = max(self._get_int(features, "account_age_days", 1), 1)
+        horizon = max(1, self._get_int(features, "horizon_months", _DEFAULT_HORIZON_MONTHS))
         orders_last_30d = features.get("orders_last_30d")
 
         if orders_last_30d is not None:
@@ -193,10 +152,6 @@ class CLVPredictor(BasePredictor):
             is_fallback=True,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _assign_tier(clv: float) -> str:
         """Map predicted CLV to a loyalty tier."""
@@ -211,24 +166,12 @@ class CLVPredictor(BasePredictor):
     @staticmethod
     def _churn_risk(features: Dict[str, Any]) -> str:
         """Simple rule-based churn risk indicator."""
-        raw_days = features.get("days_since_last_order")
-        days_since = int(raw_days if raw_days is not None else 0)
+        days_since = BasePredictor._get_int(features, "days_since_last_order", 0)
         if days_since > 60:
             return "high"
         if days_since > 30:
             return "medium"
         return "low"
-
-    def _resolve_latest_version(self) -> str:
-        if not self.model_dir.exists():
-            raise FileNotFoundError(f"Model directory not found: {self.model_dir}")
-        versions = sorted(
-            [d.name for d in self.model_dir.iterdir() if d.is_dir()],
-            reverse=True,
-        )
-        if not versions:
-            raise FileNotFoundError(f"No model versions found in {self.model_dir}")
-        return versions[0]
 
     def _load_native_lightgbm(self, model_path: Path) -> None:
         lgbm_path = model_path / "model.txt"

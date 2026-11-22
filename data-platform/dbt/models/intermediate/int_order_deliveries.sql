@@ -24,7 +24,7 @@ SELECT
     TIMESTAMP_DIFF(d.delivered_at, o.placed_at, MINUTE) AS total_delivery_minutes,
     TIMESTAMP_DIFF(d.delivered_at, o.placed_at, MINUTE) <= 10 AS sla_met,
     o.order_date,
-    GREATEST(o._cdc_updated_at, COALESCE(d._cdc_updated_at, o._cdc_updated_at)) AS updated_at
+    GREATEST(COALESCE(o._cdc_updated_at, d._cdc_updated_at), COALESCE(d._cdc_updated_at, o._cdc_updated_at)) AS updated_at
 FROM orders o
 LEFT JOIN deliveries d ON o.order_id = d.order_id
 LEFT JOIN users u ON o.user_id = u.user_id

@@ -1,22 +1,55 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Protocol, Tuple
 
 from data_platform_jobs.bigquery import get_client, validate_bq_identifier
 
+
+class KafkaConsumerProtocol(Protocol):
+    def poll(
+        self,
+        timeout_ms: int = ...,
+        max_records: int | None = ...,
+        update_offsets: bool = ...,
+    ) -> Dict[Any, List[Any]]: ...
+    def commit(self, offsets: Optional[Mapping[Any, Any]] = ...) -> None: ...
+    def close(self, autocommit: bool = ...) -> None: ...
+
+
+class _FallbackTopicPartition(NamedTuple):
+    topic: str
+    partition: int
+
+
+class _FallbackOffsetAndMetadata(NamedTuple):
+    offset: int
+    metadata: str
+
+
 try:
-    from kafka import KafkaConsumer  # type: ignore
+    from kafka import KafkaConsumer as _KafkaConsumer
+    from kafka.structs import (
+        OffsetAndMetadata as _OffsetAndMetadata,
+        TopicPartition as _TopicPartition,
+    )
+
+    KafkaConsumer: Optional[Callable[..., KafkaConsumerProtocol]] = _KafkaConsumer
+    TopicPartition: Callable[[str, int], Any] = _TopicPartition
+    OffsetAndMetadata: Callable[[int, str], Any] = _OffsetAndMetadata
 except ImportError:  # pragma: no cover - optional dependency
     KafkaConsumer = None
+    TopicPartition = _FallbackTopicPartition
+    OffsetAndMetadata = _FallbackOffsetAndMetadata
 
 if TYPE_CHECKING:
     from data_platform_jobs.job_registry import JobContext
 
 MAX_BQ_INSERT_BATCH_SIZE = 500
+MAX_KAFKA_POLL_RECORDS = 500
 
 
 class MalformedJsonError(ValueError):
@@ -33,20 +66,44 @@ class KafkaBatchStats:
     malformed_json_count: int = 0
     invalid_envelope_count: int = 0
     quarantined_count: int = 0
+    processed_offsets: Dict[Tuple[str, int], int] = field(default_factory=dict)
+
+
+def _is_valid_kafka_position(row: Mapping[str, Any]) -> bool:
+    topic = row.get("topic")
+    partition = row.get("partition")
+    offset = row.get("offset")
+    if not isinstance(topic, str) or not topic.strip():
+        return False
+    if isinstance(partition, bool) or not isinstance(partition, int) or partition < 0:
+        return False
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return False
+    return True
 
 
 def _has_kafka_offsets(rows: List[Dict[str, Any]]) -> bool:
-    for r in rows:
-        topic = r.get("topic")
-        partition = r.get("partition")
-        offset = r.get("offset")
-        if not isinstance(topic, str) or not topic.strip():
-            return False
-        if isinstance(partition, bool) or not isinstance(partition, int) or partition < 0:
-            return False
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-            return False
-    return True
+    return all(_is_valid_kafka_position(r) for r in rows)
+
+
+def _record_processed_offset(
+    processed_offsets: Dict[Tuple[str, int], int],
+    row: Mapping[str, Any],
+) -> None:
+    if not _is_valid_kafka_position(row):
+        return
+    key = (str(row["topic"]), int(row["partition"]))
+    offset = int(row["offset"])
+    prev = processed_offsets.get(key, -1)
+    if offset > prev:
+        processed_offsets[key] = offset
+
+
+def _build_commit_offsets(processed_offsets: Mapping[Tuple[str, int], int]) -> Dict[Any, Any]:
+    return {
+        TopicPartition(topic, partition): OffsetAndMetadata(last_offset + 1, "")
+        for (topic, partition), last_offset in processed_offsets.items()
+    }
 
 
 def _insert_rows_in_batches(
@@ -106,6 +163,7 @@ def run_batch_loader(context: JobContext) -> None:
         auto_offset_reset="earliest",
         enable_auto_commit=False,
         consumer_timeout_ms=1000,
+        max_poll_records=max(1, min(settings.kafka_max_messages, MAX_KAFKA_POLL_RECORDS)),
     )
     try:
         quarantine_rows: List[Dict[str, Any]] = []
@@ -167,7 +225,14 @@ def run_batch_loader(context: JobContext) -> None:
             len(quarantine_rows),
             stats.invalid_envelope_count,
         )
-        consumer.commit()
+        if not stats.processed_offsets:
+            for item in (*rows, *quarantine_rows):
+                _record_processed_offset(stats.processed_offsets, item)
+        commit_offsets = _build_commit_offsets(stats.processed_offsets)
+        if commit_offsets:
+            consumer.commit(offsets=commit_offsets)
+        else:
+            consumer.commit()
     finally:
         consumer.close()
 
@@ -217,16 +282,18 @@ def _collect_rows(
         records = consumer.poll(timeout_ms=1000)
         for _topic_partition, messages in records.items():
             for message in messages:
+                if _processed_total() >= max_messages:
+                    break
                 try:
                     formatted = _format_message(message)
                     row = validate_kafka_row(formatted)
                 except MalformedJsonError as exc:
                     batch_stats.malformed_json_count += 1
                     batch_stats.quarantined_count += 1
+                    q_row = _build_quarantine_row(message, str(exc), exc.raw_payload)
                     if quarantine_rows is not None:
-                        quarantine_rows.append(
-                            _build_quarantine_row(message, str(exc), exc.raw_payload)
-                        )
+                        quarantine_rows.append(q_row)
+                    _record_processed_offset(batch_stats.processed_offsets, q_row)
                     if logger is not None:
                         logger.warning(
                             "Quarantining malformed JSON Kafka message (count=%d, topic=%r, partition=%r, offset=%r): %s",
@@ -250,6 +317,7 @@ def _collect_rows(
                     continue
                 rows.append(row)
                 batch_stats.valid_count += 1
+                _record_processed_offset(batch_stats.processed_offsets, row)
                 if _processed_total() >= max_messages:
                     break
             if _processed_total() >= max_messages:

@@ -9,24 +9,32 @@ Combined: expected revenue over a time horizon.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Optional, cast
 
 try:
-    import mlflow as _mlflow  # type: ignore
-    mlflow: Any = _mlflow
+    import mlflow as _mlflow
+    mlflow: Optional[MlflowProtocol] = _mlflow
 except (ImportError, OSError):
-    mlflow: Any = None
+    mlflow = None
+
 import numpy as np
 import pandas as pd
+from google.cloud import bigquery
 from scipy.optimize import minimize
 from scipy.special import gammaln
-import yaml
-from google.cloud import bigquery  # type: ignore
 from sklearn.metrics import mean_absolute_error
+
+from ml.train.common import (
+    GateRule,
+    MlflowProtocol,
+    build_training_parser,
+    check_metric_gates,
+    load_training_config,
+    log_mlflow_run,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -37,6 +45,11 @@ CLV_SEGMENTS = {
     "silver": {"min": 50, "max": 200},
     "bronze": {"min": 0, "max": 50},
 }
+
+_GATE_RULES = (
+    GateRule("mae", "max_mae", "le", float("inf"), "MAE", ".2f"),
+    GateRule("correlation", "min_correlation", "ge", 0.0, "Correlation", ".4f"),
+)
 
 
 class CLVPredictionTrainer:
@@ -49,10 +62,7 @@ class CLVPredictionTrainer:
         self.segments = config.get("segments", CLV_SEGMENTS)
 
     def load_data(self, query: str) -> pd.DataFrame:
-        """Load customer transaction data from BigQuery.
-
-        Expected columns: customer_id, order_date, order_value.
-        """
+        """Load customer transaction data from BigQuery."""
         logger.info("Loading CLV training data from BigQuery")
         client = bigquery.Client()
         df = client.query(query).to_dataframe()
@@ -61,14 +71,7 @@ class CLVPredictionTrainer:
         return df
 
     def _build_rfm(self, df: pd.DataFrame, observation_end: pd.Timestamp) -> pd.DataFrame:
-        """Build RFM (Recency, Frequency, Monetary) summary from transactions.
-
-        Returns DataFrame with columns:
-        - frequency: number of repeat purchases (total purchases - 1)
-        - recency: time between first and last purchase (in days)
-        - T: time between first purchase and observation end (in days)
-        - monetary_value: average order value (excluding first purchase)
-        """
+        """Build RFM summary from transactions for customers with >= 1 repeat order."""
         customer_first = cast(pd.Series, df.groupby("customer_id")["order_date"].min())
         customer_first.name = "first_purchase"
         customer_last = cast(pd.Series, df.groupby("customer_id")["order_date"].max())
@@ -83,62 +86,42 @@ class CLVPredictionTrainer:
         rfm["days_since_last_order"] = (observation_end - rfm["last_purchase"]).dt.days
         rfm["T"] = (observation_end - rfm["first_purchase"]).dt.days
 
-        # Monetary value: average of repeat purchases
-        repeat_purchases = df.merge(
-            customer_first.reset_index(),
-            on="customer_id",
-        )
+        repeat_purchases = df.merge(customer_first.reset_index(), on="customer_id")
         repeat_purchases = repeat_purchases[
             repeat_purchases["order_date"] > repeat_purchases["first_purchase"]
         ]
         monetary = cast(
             pd.Series,
-            repeat_purchases.groupby("customer_id")["order_value"].mean()
+            repeat_purchases.groupby("customer_id")["order_value"].mean(),
         ).to_frame("monetary_value")
         rfm = rfm.join(monetary, how="left")
         rfm["monetary_value"] = rfm["monetary_value"].fillna(0)
-
-        # Filter to customers with at least 1 repeat purchase for Gamma-Gamma
-        rfm = rfm[rfm["frequency"] > 0]
-        rfm = rfm.reset_index()
+        rfm = rfm[rfm["frequency"] > 0].reset_index()
 
         logger.info(
             "RFM summary: %d customers, avg frequency: %.2f, avg recency: %.1f days",
-            len(rfm), rfm["frequency"].mean(), rfm["recency"].mean(),
+            len(rfm),
+            rfm["frequency"].mean(),
+            rfm["recency"].mean(),
         )
         return rfm
 
     def _fit_bgnbd(self, rfm: pd.DataFrame) -> dict[str, float]:
-        """Fit BG/NBD model parameters using maximum likelihood estimation.
-
-        Simplified implementation — production should use lifetimes library.
-        Parameters: r, alpha (purchase rate gamma prior), a, b (dropout beta prior).
-        """
+        """Fit BG/NBD model parameters using maximum likelihood estimation."""
         logger.info("Fitting BG/NBD model")
 
         def _bgnbd_log_likelihood(params, frequency, recency, T):
             r, alpha, a, b = params
             if r <= 0 or alpha <= 0 or a <= 0 or b <= 0:
                 return 1e10
-
-            ln_A_0 = (
+            common = (
                 gammaln(r + frequency)
                 - gammaln(r)
                 + frequency * np.log(alpha)
-                + np.log(b)
                 - np.log(a + b + np.maximum(frequency, 1) - 1)
-                - (r + frequency) * np.log(alpha + T)
             )
-
-            ln_A_1 = (
-                gammaln(r + frequency)
-                - gammaln(r)
-                + frequency * np.log(alpha)
-                + np.log(a)
-                - np.log(a + b + np.maximum(frequency, 1) - 1)
-                - (r + frequency) * np.log(alpha + recency)
-            )
-
+            ln_A_0 = common + np.log(b) - (r + frequency) * np.log(alpha + T)
+            ln_A_1 = common + np.log(a) - (r + frequency) * np.log(alpha + recency)
             ll = np.sum(np.logaddexp(ln_A_0, ln_A_1))
             return -ll if np.isfinite(ll) else 1e10
 
@@ -149,7 +132,6 @@ class CLVPredictionTrainer:
             method="Nelder-Mead",
             options={"maxiter": 5000},
         )
-
         params = {
             "r": float(result.x[0]),
             "alpha": float(result.x[1]),
@@ -161,22 +143,15 @@ class CLVPredictionTrainer:
         return params
 
     def _fit_gamma_gamma(self, rfm: pd.DataFrame) -> dict[str, float]:
-        """Fit Gamma-Gamma model for monetary value prediction.
-
-        Parameters: p, q (shape), v (scale) for the gamma prior on spend.
-        """
+        """Fit Gamma-Gamma model for monetary value prediction."""
         logger.info("Fitting Gamma-Gamma model")
 
         def _gg_log_likelihood(params, frequency, monetary_value):
             p, q, v = params
             if p <= 0 or q <= 0 or v <= 0:
                 return 1e10
-
-            x = frequency
-            m = monetary_value
-            mask = (m > 0) & (x > 0)
-            x, m = x[mask], m[mask]
-
+            mask = (monetary_value > 0) & (frequency > 0)
+            x, m = frequency[mask], monetary_value[mask]
             ll = np.sum(
                 gammaln(p * x + q)
                 - gammaln(p * x)
@@ -195,12 +170,7 @@ class CLVPredictionTrainer:
             method="Nelder-Mead",
             options={"maxiter": 5000},
         )
-
-        params = {
-            "p": float(result.x[0]),
-            "q": float(result.x[1]),
-            "v": float(result.x[2]),
-        }
+        params = {"p": float(result.x[0]), "q": float(result.x[1]), "v": float(result.x[2])}
         self.ggf_params = params
         logger.info("Gamma-Gamma params: %s", json.dumps(params, indent=2))
         return params
@@ -219,18 +189,11 @@ class CLVPredictionTrainer:
         if not self.bgf_params or not self.ggf_params:
             raise RuntimeError("Models not trained yet")
 
-        # Predicted number of future transactions (simplified)
         r, alpha = self.bgf_params["r"], self.bgf_params["alpha"]
-        expected_purchases = (
-            (r + rfm["frequency"])
-            / (alpha + rfm["T"])
-            * horizon_days
-        )
+        expected_purchases = (r + rfm["frequency"]) / (alpha + rfm["T"]) * horizon_days
 
-        # Predicted average monetary value (Gamma-Gamma posterior mean)
         p, q, v = self.ggf_params["p"], self.ggf_params["q"], self.ggf_params["v"]
-        x = rfm["frequency"]
-        m_x = rfm["monetary_value"]
+        x, m_x = rfm["frequency"], rfm["monetary_value"]
         raw_denom = p * x + q - 1
         expected_monetary = pd.Series(
             np.where(
@@ -239,18 +202,14 @@ class CLVPredictionTrainer:
                 m_x,
             ),
             index=rfm.index,
-        )
-        # Fallback for edge cases
-        expected_monetary = expected_monetary.clip(lower=0)
+        ).clip(lower=0)
 
         clv = expected_purchases * expected_monetary
-
         result = rfm[["customer_id"]].copy()
         result["predicted_clv"] = clv
         result["predicted_purchases"] = expected_purchases
         result["predicted_avg_value"] = expected_monetary
         result["segment"] = [self._assign_segment(float(val)) for val in clv]
-
         return cast(pd.DataFrame, result)
 
     def _assign_segment(self, clv: float) -> str:
@@ -269,14 +228,12 @@ class CLVPredictionTrainer:
 
         observation_end = cast(pd.Timestamp, pd.Timestamp(str(train_df["order_date"].max())))
         rfm = self._build_rfm(train_df, observation_end)
-
         horizon_days = (test_df["order_date"].max() - observation_end).days if len(test_df) > 0 else 1
         predictions = self.predict_clv(rfm, horizon_days=max(horizon_days, 1))
 
-        # Actual spend in test period
         actual_spend = cast(
             pd.Series,
-            test_df.groupby("customer_id")["order_value"].sum()
+            test_df.groupby("customer_id")["order_value"].sum(),
         ).to_frame("actual_clv").reset_index()
 
         eval_df = predictions.merge(actual_spend, on="customer_id", how="inner")
@@ -299,13 +256,8 @@ class CLVPredictionTrainer:
             "median_abs_error": float(np.median(np.abs(actual_series - pred_series))),
             "correlation": corr,
             "customers_evaluated": len(eval_df),
+            "segment_distribution": predictions["segment"].value_counts(normalize=True).to_dict(),
         }
-
-        # Segment distribution
-        segment_dist = predictions["segment"].value_counts(normalize=True).to_dict()
-        metrics["segment_distribution"] = segment_dist
-
-        # Per-segment accuracy
         for segment in self.segments:
             seg_df = eval_df[eval_df["segment"] == segment]
             if len(seg_df) > 0:
@@ -313,9 +265,10 @@ class CLVPredictionTrainer:
                     mean_absolute_error(seg_df["actual_clv"], seg_df["predicted_clv"])
                 )
 
-        logger.info("Evaluation metrics: %s", json.dumps(
-            {k: v for k, v in metrics.items() if not isinstance(v, dict)}, indent=2
-        ))
+        logger.info(
+            "Evaluation metrics: %s",
+            json.dumps({k: val for k, val in metrics.items() if not isinstance(val, dict)}, indent=2),
+        )
         return metrics
 
     def export(self, path: str):
@@ -325,60 +278,33 @@ class CLVPredictionTrainer:
 
         export_dir = Path(path)
         export_dir.mkdir(parents=True, exist_ok=True)
-
         model_data = {
             "bgnbd_params": self.bgf_params,
             "gamma_gamma_params": self.ggf_params,
             "segments": self.segments,
         }
-
         with open(export_dir / "model_params.json", "w") as f:
             json.dump(model_data, f, indent=2)
-
         logger.info("Model exported to %s", export_dir)
-
-
-def _as_finite_float(value: Any) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        num = float(value)
-        if np.isfinite(num):
-            return num
-    return None
 
 
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
-    passed = True
-    mae = _as_finite_float(metrics.get("mae"))
-    max_mae = float(gates.get("max_mae", float("inf")))
-    if mae is None or mae > max_mae:
-        logger.warning("MAE %r above gate %.2f", metrics.get("mae"), max_mae)
-        passed = False
-    corr = _as_finite_float(metrics.get("correlation"))
-    min_correlation = float(gates.get("min_correlation", 0.0))
-    if corr is None or corr < min_correlation:
-        logger.warning("Correlation %r below gate %.4f", metrics.get("correlation"), min_correlation)
-        passed = False
+    passed, _ = check_metric_gates(metrics, gates, _GATE_RULES, log=logger)
     return passed
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CLV Prediction BG/NBD + Gamma-Gamma Training")
-    parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
-    parser.add_argument("--experiment", type=str, default="clv-prediction", help="MLflow experiment name")
-    parser.add_argument("--output-dir", type=str, default="artifacts/clv-prediction", help="Output directory")
-    parser.add_argument("--run-name", type=str, default=None, help="MLflow run name")
+    parser = build_training_parser(
+        "CLV Prediction BG/NBD + Gamma-Gamma Training",
+        "clv-prediction",
+        "artifacts/clv-prediction",
+    )
     args = parser.parse_args()
-
-    with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
-
-    if mlflow is not None:
-        mlflow.set_experiment(args.experiment)
+    config = load_training_config(args.config)
 
     trainer = CLVPredictionTrainer(config)
-    query = config["training"]["query"]
-    df = trainer.load_data(query)
+    df = trainer.load_data(config["training"]["query"])
 
     holdout_days = config["training"].get("holdout_days", 90)
     cutoff = df["order_date"].max() - pd.Timedelta(days=holdout_days)
@@ -388,8 +314,7 @@ def main():
 
     trainer.train(train_df)
     metrics = trainer.evaluate(train_df, test_df)
-    gates = config.get("promotion_gates", {})
-    gate_passed = _check_promotion_gates(metrics, gates)
+    gate_passed = _check_promotion_gates(metrics, config.get("promotion_gates", {}))
 
     observation_end = cast(pd.Timestamp, pd.Timestamp(str(df["order_date"].max())))
     rfm = trainer._build_rfm(df, observation_end)
@@ -400,17 +325,21 @@ def main():
     trainer.export(str(output_dir))
     clv_predictions.to_parquet(output_dir / "clv_predictions.parquet", index=False)
 
-    if mlflow is not None:
-        with mlflow.start_run(run_name=args.run_name):
-            mlflow.log_param("model_name", config["model_name"])
-            mlflow.log_param("version", config["version"])
-            mlflow.log_params({f"bgnbd_{k}": v for k, v in trainer.bgf_params.items()})
-            mlflow.log_params({f"gg_{k}": v for k, v in trainer.ggf_params.items()})
-            loggable = {k: v for k, v in metrics.items() if _as_finite_float(v) is not None}
-            mlflow.log_metrics(loggable)
-            mlflow.log_metric("promotion_gate_passed", int(gate_passed))
-            mlflow.log_artifacts(str(output_dir))
-            mlflow.log_artifact(args.config)
+    log_mlflow_run(
+        mlflow,
+        experiment=args.experiment,
+        run_name=args.run_name,
+        params={
+            "model_name": config["model_name"],
+            "version": config["version"],
+            **{f"bgnbd_{k}": v for k, v in trainer.bgf_params.items()},
+            **{f"gg_{k}": v for k, v in trainer.ggf_params.items()},
+        },
+        metrics=metrics,
+        gate_passed=gate_passed,
+        artifact_dir=output_dir,
+        artifact_paths=(args.config,),
+    )
 
     logger.info(
         "Training complete. Gate passed: %s. MAE: %.2f, Correlation: %.4f",

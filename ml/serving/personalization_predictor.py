@@ -10,34 +10,32 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np  # type: ignore[import-untyped]
+import numpy as np
 
 try:
-    import onnxruntime as _ort  # type: ignore[import-untyped]
+    import onnxruntime as _ort
     ort: Any = _ort
 except ImportError:
-    ort: Any = None
+    ort = None
 
 try:
-    import lightgbm as _lgb  # type: ignore[import-untyped]
+    import lightgbm as _lgb
     lgb: Any = _lgb
 except (ImportError, OSError):
-    lgb: Any = None
+    lgb = None
 
 from .predictor import BasePredictor, ModelMetadata, ModelStatus, PredictionResult
 
 logger = logging.getLogger(__name__)
 
-# Maximum number of recommendations to return
 _MAX_RECOMMENDATIONS: int = 50
 
 
 class PersonalizationPredictor(BasePredictor):
     """Production personalization predictor.
 
-    Uses a LightGBM model that combines user embeddings (from collaborative
-    filtering), item features, and real-time session context.  Falls back
-    to popularity-based recommendations when the model is unavailable.
+    Uses a LightGBM model combining user embeddings, item features, and
+    real-time session context, falling back to popularity ranking.
     """
 
     def __init__(
@@ -49,18 +47,8 @@ class PersonalizationPredictor(BasePredictor):
         self._feature_names: List[str] = []
         self._popular_items: List[str] = []
 
-    # ------------------------------------------------------------------
-    # Model loading
-    # ------------------------------------------------------------------
-
     def _load_model(self, version: Optional[str]) -> None:
-        """Load personalization model from ONNX or native LightGBM.
-
-        Expected artefacts:
-        * ``model.onnx`` — ONNX-exported LightGBM model
-        * ``metadata.json`` — :class:`ModelMetadata` fields
-        * ``popular_items.json`` — ordered list of globally popular item IDs
-        """
+        """Load personalization model from ONNX or native LightGBM."""
         resolved_version = version or self._resolve_latest_version()
         model_path = self.model_dir / resolved_version
 
@@ -80,8 +68,7 @@ class PersonalizationPredictor(BasePredictor):
         meta_path = model_path / "metadata.json"
         if meta_path.exists():
             with open(meta_path, "r") as fh:
-                raw = json.load(fh)
-            self.metadata = ModelMetadata(**raw)
+                self.metadata = ModelMetadata(**json.load(fh))
             self._feature_names = self.metadata.features
 
         popular_path = model_path / "popular_items.json"
@@ -91,36 +78,15 @@ class PersonalizationPredictor(BasePredictor):
 
         self._version = resolved_version
 
-    # ------------------------------------------------------------------
-    # Prediction
-    # ------------------------------------------------------------------
-
     def predict(self, features: Dict[str, Any]) -> PredictionResult:
-        """Score candidate items for a specific user.
-
-        Required features:
-        * ``user_id`` (str) — customer identifier
-        * ``candidates`` — list of dicts with item-level features:
-            - ``item_id`` (str)
-            - ``category`` (str)
-            - ``price`` (float)
-            - ``avg_rating`` (float)
-            - ``order_count_7d`` (int)
-        * ``user_features`` (dict, optional):
-            - ``preferred_categories`` (list[str])
-            - ``avg_basket_size`` (float)
-            - ``days_since_last_order`` (int)
-            - ``browse_history_categories`` (list[str])
-        * ``limit`` (int, optional) — max items to return, default 20
-        """
+        """Score candidate items for a specific user."""
         if self.status != ModelStatus.READY or self._model is None:
             return self.rule_based_fallback(features)
 
         start = time.monotonic()
         try:
             candidates: List[Dict[str, Any]] = list(features.get("candidates") or [])
-            raw_limit = features.get("limit")
-            limit: int = max(0, min(int(raw_limit if raw_limit is not None else 20), _MAX_RECOMMENDATIONS))
+            limit: int = max(0, min(self._get_int(features, "limit", 20), _MAX_RECOMMENDATIONS))
 
             if not candidates:
                 return self.rule_based_fallback(features)
@@ -151,14 +117,10 @@ class PersonalizationPredictor(BasePredictor):
             return self.rule_based_fallback(features)
 
     def rule_based_fallback(self, features: Dict[str, Any]) -> PredictionResult:
-        """Popularity-based recommendations with category affinity boost.
-
-        Score = popularity_norm + 0.3 × category_match + 0.1 × rating_norm
-        """
+        """Popularity-based recommendations with category affinity boost."""
         start = time.monotonic()
         candidates: List[Dict[str, Any]] = list(features.get("candidates") or [])
-        raw_limit = features.get("limit")
-        limit: int = max(0, min(int(raw_limit if raw_limit is not None else 20), _MAX_RECOMMENDATIONS))
+        limit: int = max(0, min(self._get_int(features, "limit", 20), _MAX_RECOMMENDATIONS))
         raw_user_features = features.get("user_features")
         user_features: Dict[str, Any] = raw_user_features if isinstance(raw_user_features, dict) else {}
         preferred_cats: List[str] = list(
@@ -168,7 +130,6 @@ class PersonalizationPredictor(BasePredictor):
         )
 
         if not candidates:
-            # Fallback to dark store / global popular items for cold-start customers
             popular_source = features.get("store_popular_items") or self._popular_items
             if not popular_source:
                 popular_source = [f"sku_popular_{i}" for i in range(1, 21)]
@@ -184,23 +145,17 @@ class PersonalizationPredictor(BasePredictor):
             ]
 
         max_orders = max(
-            max((int(c.get("order_count_7d") or 0) for c in candidates), default=0),
+            max((self._get_int(c, "order_count_7d", 0) for c in candidates), default=0),
             1,
         )
 
         scored: List[Dict[str, Any]] = []
         for c in candidates:
-            raw_oc = c.get("order_count_7d")
-            order_count = int(raw_oc if raw_oc is not None else 0)
-            raw_rating = c.get("avg_rating")
-            avg_rating = float(raw_rating if raw_rating is not None else 3.0)
+            order_count = self._get_int(c, "order_count_7d", 0)
+            avg_rating = self._get_float(c, "avg_rating", 3.0)
             category = str(c.get("category") or "")
 
-            pop_score = order_count / max_orders
-            cat_match = 1.0 if category in preferred_cats else 0.0
-            rating_score = avg_rating / 5.0
-
-            score = pop_score + 0.3 * cat_match + 0.1 * rating_score
+            score = (order_count / max_orders) + 0.3 * (1.0 if category in preferred_cats else 0.0) + 0.1 * (avg_rating / 5.0)
             scored.append({"item_id": c.get("item_id") or "unknown", "score": score})
 
         ranked = sorted(scored, key=lambda x: x["score"], reverse=True)[:limit]
@@ -221,10 +176,6 @@ class PersonalizationPredictor(BasePredictor):
             is_fallback=True,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _score_candidates(
         self,
         candidates: List[Dict[str, Any]],
@@ -235,7 +186,7 @@ class PersonalizationPredictor(BasePredictor):
         results: List[Dict[str, Any]] = []
         for c in candidates:
             vec = np.array(
-                [[float(v if (v := c.get(f)) is not None else 0.0) for f in self._feature_names]],
+                [[self._get_float(c, f, 0.0) for f in self._feature_names]],
                 dtype=np.float32,
             )
             if hasattr(self._model, "run"):
@@ -255,17 +206,6 @@ class PersonalizationPredictor(BasePredictor):
             model_name=self.model_name,
             latency_ms=round(latency_ms, 2),
         )
-
-    def _resolve_latest_version(self) -> str:
-        if not self.model_dir.exists():
-            raise FileNotFoundError(f"Model directory not found: {self.model_dir}")
-        versions = sorted(
-            [d.name for d in self.model_dir.iterdir() if d.is_dir()],
-            reverse=True,
-        )
-        if not versions:
-            raise FileNotFoundError(f"No model versions found in {self.model_dir}")
-        return versions[0]
 
     def _load_native_lightgbm(self, model_path: Path) -> None:
         lgbm_path = model_path / "model.txt"

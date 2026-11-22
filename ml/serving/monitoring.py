@@ -18,26 +18,22 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
-import numpy as np  # type: ignore[import-untyped]
-import scipy.stats as stats  # type: ignore[import-untyped]
-from prometheus_client import REGISTRY, Counter, Gauge, Histogram  # type: ignore[import-untyped]
+import numpy as np
+import scipy.stats as stats
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
 logger = logging.getLogger(__name__)
 
-# PSI thresholds (standard industry values)
 _PSI_THRESHOLD_WARNING: float = 0.1
 _PSI_THRESHOLD_ALERT: float = 0.2
-
-# KS-test significance threshold (p < 0.01 indicates significant covariate shift)
 _KS_ALPHA_DEFAULT: float = 0.01
-
-# Feature freshness: max age in seconds before considered stale
-_FEATURE_MAX_AGE_S: float = 3_600.0  # 1 hour
+_FEATURE_MAX_AGE_S: float = 3_600.0
 
 
 @dataclass
 class KSDriftResult:
     """Result of Two-Sample Kolmogorov-Smirnov test for feature drift."""
+
     feature_name: str
     statistic: float
     p_value: float
@@ -51,28 +47,11 @@ class KSDriftResult:
 
 
 class ModelMonitor:
-    """Monitors production model health.
-
-    Tracks:
-    * Prediction count and latency (Prometheus counter + histogram)
-    * Feature drift via Population Stability Index (PSI)
-    * Feature covariate shift via Two-Sample Kolmogorov-Smirnov (KS) test
-    * 5% feature vector sampling to BigQuery for daily drift auditing
-    * Feature freshness (staleness detection)
-    * Error rate
-
-    Usage::
-
-        monitor = ModelMonitor(model_name="eta")
-        result = predictor.predict(features)
-        monitor.record_prediction(features, result, latency_ms=result.latency_ms)
-        drift = monitor.check_ks_drift(recent_vals, baseline_vals, "basket_size")
-    """
+    """Monitors production model health via Prometheus, KS-test, PSI, and freshness."""
 
     def __init__(self, model_name: str) -> None:
         self.model_name: str = model_name
 
-        # Safe metric registration handling registry re-use
         def _get_or_create(metric_cls: Any, name: str, doc: str, labelnames: list[str], **kwargs: Any) -> Any:
             full_name = f"ml_{name}"
             if full_name in REGISTRY._names_to_collectors:
@@ -117,14 +96,9 @@ class ModelMonitor:
             ["model"],
         )
 
-        # Internal state
         self._total_predictions: int = 0
         self._error_predictions: int = 0
         self._sampled_feature_buffer: List[Dict[str, Any]] = []
-
-    # ------------------------------------------------------------------
-    # Recording
-    # ------------------------------------------------------------------
 
     def record_prediction(
         self,
@@ -134,6 +108,7 @@ class ModelMonitor:
         error: bool = False,
     ) -> None:
         """Record a single prediction for monitoring."""
+        del features
         version = getattr(result, "model_version", "unknown")
         is_fallback = str(getattr(result, "is_fallback", False))
 
@@ -160,10 +135,6 @@ class ModelMonitor:
         if self._total_predictions > 0:
             rate = self._error_predictions / self._total_predictions
             self.error_rate.labels(model=self.model_name).set(rate)
-
-    # ------------------------------------------------------------------
-    # Feature Sampling for BigQuery Drift Auditing
-    # ------------------------------------------------------------------
 
     def sample_feature_vector(
         self,
@@ -206,10 +177,6 @@ class ModelMonitor:
         """Clear the sampled feature vector buffer."""
         self._sampled_feature_buffer.clear()
 
-    # ------------------------------------------------------------------
-    # Kolmogorov-Smirnov (KS) Test Drift Detection
-    # ------------------------------------------------------------------
-
     def check_ks_drift(
         self,
         recent_features: np.ndarray,
@@ -217,11 +184,7 @@ class ModelMonitor:
         feature_name: str = "feature",
         alpha: float = _KS_ALPHA_DEFAULT,
     ) -> KSDriftResult:
-        """Calculate Two-Sample Kolmogorov-Smirnov (KS) test for feature drift.
-
-        Compares recent feature distribution against training baseline.
-        Alerts when p-value < alpha (default 0.01) indicating significant covariate shift.
-        """
+        """Calculate Two-Sample Kolmogorov-Smirnov (KS) test for feature drift."""
         r_clean = np.asarray(recent_features, dtype=float).reshape(-1)
         b_clean = np.asarray(baseline_features, dtype=float).reshape(-1)
         r_clean = r_clean[np.isfinite(r_clean)]
@@ -273,10 +236,6 @@ class ModelMonitor:
             alpha=alpha,
         )
 
-    # ------------------------------------------------------------------
-    # PSI Drift Detection
-    # ------------------------------------------------------------------
-
     def check_drift(
         self,
         recent_features: np.ndarray,
@@ -303,7 +262,6 @@ class ModelMonitor:
 
         baseline_pct = baseline_counts / (baseline_counts.sum() + eps) + eps
         recent_pct = recent_counts / (recent_counts.sum() + eps) + eps
-
         psi = float(np.sum((recent_pct - baseline_pct) * np.log(recent_pct / baseline_pct)))
 
         self.drift_score.labels(model=self.model_name).set(psi)
@@ -321,10 +279,6 @@ class ModelMonitor:
 
         return psi
 
-    # ------------------------------------------------------------------
-    # Freshness
-    # ------------------------------------------------------------------
-
     def check_freshness(
         self,
         feature_timestamps: Dict[str, float],
@@ -332,11 +286,7 @@ class ModelMonitor:
     ) -> bool:
         """Check whether any features are stale."""
         now = time.time()
-        stale: List[str] = []
-        for feature_name, ts in feature_timestamps.items():
-            age_s = now - ts
-            if age_s > max_age_s:
-                stale.append(feature_name)
+        stale = [name for name, ts in feature_timestamps.items() if (now - ts) > max_age_s]
 
         if stale:
             logger.warning(
@@ -349,10 +299,6 @@ class ModelMonitor:
             )
             return False
         return True
-
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
 
     def summary(self) -> Dict[str, Any]:
         """Return a summary of monitoring state."""

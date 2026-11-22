@@ -23,7 +23,6 @@ def test_ks_drift_detects_distribution_shift():
     monitor = ModelMonitor(model_name="search_ranking")
     np.random.seed(42)
 
-    # Shifted mean from 10.0 to 15.0
     baseline = np.random.normal(loc=10.0, scale=2.0, size=1000)
     recent = np.random.normal(loc=15.0, scale=2.0, size=1000)
 
@@ -37,7 +36,6 @@ def test_ks_drift_detects_distribution_shift():
 def test_feature_vector_sampling_and_bigquery_export():
     monitor = ModelMonitor(model_name="personalization")
 
-    # Sample 100 requests with 5% sampling rate
     sampled = []
     for i in range(100):
         feat = {"user_id": f"u_{i}", "basket_val": 25.0}
@@ -45,7 +43,6 @@ def test_feature_vector_sampling_and_bigquery_export():
         if rec:
             sampled.append(rec)
 
-    # Deterministic sampling should capture a reasonable subset (3 to 8 samples)
     assert 1 <= len(sampled) <= 15
 
     rows = monitor.export_sampled_features_to_bigquery_rows()

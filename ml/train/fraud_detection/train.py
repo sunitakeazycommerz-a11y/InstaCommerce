@@ -7,130 +7,74 @@ Metrics: AUC, Precision@95%Recall, F1
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Optional, cast
 
 try:
     import mlflow as _mlflow
-    mlflow: Any = _mlflow
+    mlflow: Optional[MlflowProtocol] = _mlflow
 except (ImportError, OSError):
     mlflow = None
+
 import numpy as np
 import pandas as pd
+
 try:
     import xgboost as _xgb
     xgb: Any = _xgb
-except Exception:
+except (ImportError, OSError, ValueError):  # XGBoostError subclasses ValueError when libomp is absent
     xgb = None
-import yaml
-from google.cloud import bigquery  # type: ignore
+
+from google.cloud import bigquery
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    auc,
-    f1_score,
-    precision_recall_curve,
-    roc_auc_score,
-)
+from sklearn.metrics import auc, f1_score, precision_recall_curve, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
+
+from ml.train.common import (
+    GateRule,
+    MlflowProtocol,
+    build_training_parser,
+    check_metric_gates,
+    load_training_config,
+    log_mlflow_run,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 FEATURE_COLUMNS = [
-    # Device & session signals
-    "device_fingerprint_score",
-    "ip_risk_score",
-    "is_vpn",
-    "is_emulator",
-    "session_duration_sec",
-    "pages_viewed",
-    "app_install_age_days",
-    # Behavioral signals
-    "time_since_last_order_hr",
-    "order_frequency_7d",
-    "order_frequency_30d",
-    "avg_order_value_30d",
-    "max_order_value_30d",
-    "distinct_addresses_30d",
-    "distinct_payment_methods_30d",
-    "address_change_count_24h",
-    "payment_change_count_24h",
-    # Transaction signals
-    "order_value",
-    "item_count",
-    "high_value_item_count",
-    "order_value_zscore",
-    "is_first_order",
-    "is_new_address",
-    "is_new_payment",
-    "shipping_billing_distance_km",
-    # Velocity signals
-    "orders_last_1h",
-    "orders_last_24h",
-    "distinct_devices_24h",
-    "distinct_ips_24h",
-    "failed_payments_24h",
-    # Payment signals
-    "payment_method_risk_score",
-    "card_bin_risk_score",
-    "card_country_mismatch",
-    "billing_address_mismatch",
-    "cvv_attempts",
-    # Account signals
-    "account_age_days",
-    "email_domain_risk",
-    "phone_verified",
-    "email_verified",
-    "kyc_level",
-    "previous_fraud_count",
-    "previous_chargeback_count",
-    # Network signals
-    "shared_device_users",
-    "shared_ip_users",
-    "shared_address_orders_24h",
-    "referral_chain_fraud_rate",
-    # Time-based signals
-    "hour_of_day",
-    "day_of_week",
-    "is_weekend",
-    "is_late_night",
-    # Derived features
-    "order_value_to_avg_ratio",
-    "item_count_to_avg_ratio",
-    "address_recency_score",
-    "payment_recency_score",
-    "behavioral_anomaly_score",
-    "velocity_anomaly_score",
-    # Aggregate risk scores
-    "rule_engine_score",
-    "historical_risk_score",
-    "network_risk_score",
-    "device_trust_score",
-    "location_risk_score",
-    # Category-level signals
-    "category_fraud_rate",
-    "merchant_fraud_rate",
-    "promo_code_risk_score",
-    "coupon_abuse_score",
-    # Additional features
-    "delivery_urgency_score",
-    "gift_order_flag",
-    "basket_diversity_score",
-    "price_sensitivity_score",
-    "return_rate_user",
-    "refund_rate_user",
-    "complaint_count_30d",
-    "support_ticket_count_30d",
-    "social_login_flag",
-    "biometric_verified",
-    "two_factor_enabled",
-    "notification_enabled",
-    "wishlist_age_days",
-    "cart_abandonment_rate",
+    "device_fingerprint_score", "ip_risk_score", "is_vpn", "is_emulator",
+    "session_duration_sec", "pages_viewed", "app_install_age_days",
+    "time_since_last_order_hr", "order_frequency_7d", "order_frequency_30d",
+    "avg_order_value_30d", "max_order_value_30d", "distinct_addresses_30d",
+    "distinct_payment_methods_30d", "address_change_count_24h", "payment_change_count_24h",
+    "order_value", "item_count", "high_value_item_count", "order_value_zscore",
+    "is_first_order", "is_new_address", "is_new_payment", "shipping_billing_distance_km",
+    "orders_last_1h", "orders_last_24h", "distinct_devices_24h", "distinct_ips_24h",
+    "failed_payments_24h", "payment_method_risk_score", "card_bin_risk_score",
+    "card_country_mismatch", "billing_address_mismatch", "cvv_attempts",
+    "account_age_days", "email_domain_risk", "phone_verified", "email_verified",
+    "kyc_level", "previous_fraud_count", "previous_chargeback_count",
+    "shared_device_users", "shared_ip_users", "shared_address_orders_24h",
+    "referral_chain_fraud_rate", "hour_of_day", "day_of_week", "is_weekend",
+    "is_late_night", "order_value_to_avg_ratio", "item_count_to_avg_ratio",
+    "address_recency_score", "payment_recency_score", "behavioral_anomaly_score",
+    "velocity_anomaly_score", "rule_engine_score", "historical_risk_score",
+    "network_risk_score", "device_trust_score", "location_risk_score",
+    "category_fraud_rate", "merchant_fraud_rate", "promo_code_risk_score",
+    "coupon_abuse_score", "delivery_urgency_score", "gift_order_flag",
+    "basket_diversity_score", "price_sensitivity_score", "return_rate_user",
+    "refund_rate_user", "complaint_count_30d", "support_ticket_count_30d",
+    "social_login_flag", "biometric_verified", "two_factor_enabled",
+    "notification_enabled", "wishlist_age_days", "cart_abandonment_rate",
 ]
+
+_GATE_RULES = (
+    GateRule("auc_roc", "min_auc_roc", "ge", 0.0, "AUC-ROC", ".4f"),
+    GateRule("precision_at_95_recall", "min_precision_at_95_recall", "ge", 0.0, "Precision@95%Recall", ".4f"),
+)
 
 
 class FraudDetectionTrainer:
@@ -144,15 +88,11 @@ class FraudDetectionTrainer:
         self.feature_columns = config.get("features", FEATURE_COLUMNS)
 
     def load_data(self, query: str) -> pd.DataFrame:
-        """Load training data from BigQuery.
-
-        Expected columns: order_id, <feature_columns>, is_fraud (0/1).
-        """
+        """Load training data from BigQuery."""
         logger.info("Loading fraud training data from BigQuery")
         client = bigquery.Client()
         df = client.query(query).to_dataframe()
-        fraud_rate = df["is_fraud"].mean()
-        logger.info("Loaded %d rows, fraud rate: %.4f", len(df), fraud_rate)
+        logger.info("Loaded %d rows, fraud rate: %.4f", len(df), df["is_fraud"].mean())
         return df
 
     def _compute_scale_pos_weight(self, y: pd.Series) -> float:
@@ -203,13 +143,7 @@ class FraudDetectionTrainer:
                 n_jobs=-1,
                 tree_method="hist",
             )
-
-            model.fit(
-                X_train,
-                y_train,
-                eval_set=[(X_val, y_val)],
-                verbose=25,
-            )
+            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=25)
 
             val_proba = model.predict_proba(X_val)[:, 1]
             fold_auc = roc_auc_score(y_val, val_proba)
@@ -233,9 +167,7 @@ class FraudDetectionTrainer:
         logger.info("Calibrating model probabilities")
         X = df[self.feature_columns]
         y = df[self.config["training"]["label_column"]]
-        self.calibrated_model = CalibratedClassifierCV(
-            self.model, method="isotonic", cv=3
-        )
+        self.calibrated_model = CalibratedClassifierCV(self.model, method="isotonic", cv=3)
         self.calibrated_model.fit(X, y)
 
     def tune_threshold(self, df: pd.DataFrame, target_recall: float = 0.95) -> float:
@@ -249,11 +181,8 @@ class FraudDetectionTrainer:
         y_proba = predictor.predict_proba(X)[:, 1]
 
         precisions, recalls, thresholds = precision_recall_curve(y_true, y_proba)
-
-        # Find threshold that achieves target recall
         valid_idx = np.where(recalls[:-1] >= target_recall)[0]
         if len(valid_idx) > 0:
-            # Among thresholds that meet recall target, pick highest precision
             best_idx = valid_idx[np.argmax(precisions[:-1][valid_idx])]
             self.optimal_threshold = float(thresholds[best_idx])
         else:
@@ -274,14 +203,11 @@ class FraudDetectionTrainer:
         y_pred = (y_proba >= self.optimal_threshold).astype(int)
 
         auc_score = roc_auc_score(y_true, y_proba)
-
         precisions, recalls, _ = precision_recall_curve(y_true, y_proba)
         pr_auc = auc(recalls, precisions)
 
-        # Precision at 95% recall
         valid_idx = np.where(recalls[:-1] >= 0.95)[0]
         precision_at_95_recall = float(precisions[:-1][valid_idx].max()) if len(valid_idx) > 0 else 0.0
-
         f1 = f1_score(y_true, y_pred)
 
         metrics = {
@@ -297,13 +223,12 @@ class FraudDetectionTrainer:
         return metrics
 
     def export(self, path: str):
-        """Export model to file for serving."""
+        """Export model and threshold metadata to disk."""
         if self.model is None:
             raise RuntimeError("Model not trained yet")
         export_path = Path(path)
         export_path.parent.mkdir(parents=True, exist_ok=True)
         self.model.save_model(str(export_path))
-        # Save threshold alongside model
         meta_path = export_path.parent / "metadata.json"
         with open(meta_path, "w") as f:
             json.dump({"optimal_threshold": self.optimal_threshold}, f)
@@ -317,103 +242,66 @@ class FraudDetectionTrainer:
         return {k: float(v) for k, v in sorted(importance.items(), key=lambda x: -x[1])}
 
 
-def _as_finite_float(value: Any) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        num = float(value)
-        if np.isfinite(num):
-            return num
-    return None
-
-
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
-    passed = True
-    auc_roc = _as_finite_float(metrics.get("auc_roc"))
-    min_auc = float(gates.get("min_auc_roc", 0.0))
-    if auc_roc is None or auc_roc < min_auc:
-        logger.warning("AUC-ROC %r below gate %.4f", metrics.get("auc_roc"), min_auc)
-        passed = False
-    prec_95 = _as_finite_float(metrics.get("precision_at_95_recall"))
-    min_prec_95 = float(gates.get("min_precision_at_95_recall", 0.0))
-    if prec_95 is None or prec_95 < min_prec_95:
-        logger.warning(
-            "Precision@95%%Recall %r below gate %.4f",
-            metrics.get("precision_at_95_recall"),
-            min_prec_95,
-        )
-        passed = False
+    passed, _ = check_metric_gates(metrics, gates, _GATE_RULES, log=logger)
     return passed
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fraud Detection XGBoost Training")
-    parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
-    parser.add_argument("--experiment", type=str, default="fraud-detection", help="MLflow experiment name")
-    parser.add_argument("--output-dir", type=str, default="artifacts/fraud-detection", help="Output directory")
-    parser.add_argument("--run-name", type=str, default=None, help="MLflow run name")
+    parser = build_training_parser(
+        "Fraud Detection XGBoost Training",
+        "fraud-detection",
+        "artifacts/fraud-detection",
+    )
     args = parser.parse_args()
+    config = load_training_config(args.config)
 
-    with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
+    trainer = FraudDetectionTrainer(config)
+    df = trainer.load_data(config["training"]["query"])
 
-    mlflow.set_experiment(args.experiment)
+    val_split = config["training"].get("validation_split", 0.2)
+    train_df, test_df = cast(
+        tuple[pd.DataFrame, pd.DataFrame],
+        train_test_split(
+            df, test_size=val_split, stratify=df[config["training"]["label_column"]], random_state=42
+        ),
+    )
+    logger.info("Train: %d rows, Test: %d rows", len(train_df), len(test_df))
 
-    with mlflow.start_run(run_name=args.run_name):
-        mlflow.log_params(config["hyperparameters"])
-        mlflow.log_param("model_name", config["model_name"])
-        mlflow.log_param("version", config["version"])
+    trainer.train(train_df)
+    trainer.calibrate(test_df)
+    trainer.tune_threshold(test_df, target_recall=0.95)
+    metrics = trainer.evaluate(test_df)
 
-        trainer = FraudDetectionTrainer(config)
+    gates = config.get("promotion_gates", {})
+    gate_passed = _check_promotion_gates(metrics, gates)
+    importance = trainer.feature_importance()
 
-        # Load data
-        query = config["training"]["query"]
-        df = trainer.load_data(query)
+    output_dir = Path(args.output_dir) / config["version"]
+    model_path = output_dir / "model.xgb"
+    trainer.export(str(model_path))
 
-        # Stratified train/test split preserving fraud ratio
-        val_split = config["training"].get("validation_split", 0.2)
-        train_df, test_df = cast(
-            tuple[pd.DataFrame, pd.DataFrame],
-            train_test_split(
-                df, test_size=val_split, stratify=df[config["training"]["label_column"]], random_state=42
-            ),
-        )
-        logger.info("Train: %d rows, Test: %d rows", len(train_df), len(test_df))
+    log_mlflow_run(
+        mlflow,
+        experiment=args.experiment,
+        run_name=args.run_name,
+        params={
+            **config["hyperparameters"],
+            "model_name": config["model_name"],
+            "version": config["version"],
+        },
+        metrics=metrics,
+        gate_passed=gate_passed,
+        dicts={"feature_importance.json": importance},
+        artifact_paths=(model_path, output_dir / "metadata.json", args.config),
+    )
 
-        # Train
-        trainer.train(train_df)
-
-        # Calibrate
-        trainer.calibrate(test_df)
-
-        # Tune threshold
-        trainer.tune_threshold(test_df, target_recall=0.95)
-
-        # Evaluate
-        metrics = trainer.evaluate(test_df)
-        mlflow.log_metrics(metrics)
-
-        # Promotion gates
-        gates = config.get("promotion_gates", {})
-        gate_passed = _check_promotion_gates(metrics, gates)
-        mlflow.log_metric("promotion_gate_passed", int(gate_passed))
-
-        # Feature importance
-        importance = trainer.feature_importance()
-        mlflow.log_dict(importance, "feature_importance.json")
-
-        # Export model
-        output_dir = Path(args.output_dir) / config["version"]
-        model_path = output_dir / "model.xgb"
-        trainer.export(str(model_path))
-        mlflow.log_artifact(str(model_path))
-        mlflow.log_artifact(str(output_dir / "metadata.json"))
-        mlflow.log_artifact(args.config)
-
-        logger.info(
-            "Training complete. Gate passed: %s. Metrics: %s",
-            gate_passed,
-            json.dumps(metrics, indent=2),
-        )
+    logger.info(
+        "Training complete. Gate passed: %s. Metrics: %s",
+        gate_passed,
+        json.dumps(metrics, indent=2),
+    )
 
 
 if __name__ == "__main__":

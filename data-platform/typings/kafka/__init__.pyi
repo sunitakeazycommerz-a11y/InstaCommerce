@@ -1,0 +1,13 @@
+from typing import Any, Mapping
+from .structs import OffsetAndMetadata as OffsetAndMetadata, TopicPartition as TopicPartition
+
+class KafkaConsumer:
+    def __init__(self, *topics: str, **configs: Any) -> None: ...
+    def poll(
+        self,
+        timeout_ms: int = ...,
+        max_records: int | None = ...,
+        update_offsets: bool = ...,
+    ) -> dict[TopicPartition, list[Any]]: ...
+    def commit(self, offsets: Mapping[TopicPartition, OffsetAndMetadata] | None = ...) -> None: ...
+    def close(self, autocommit: bool = ...) -> None: ...

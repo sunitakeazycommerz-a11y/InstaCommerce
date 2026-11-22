@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ml.serving.integrity import verify_model_integrity
 
@@ -65,21 +65,37 @@ class BasePredictor(ABC):
         self._model: Any = None
         self._version: str = "unknown"
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _get_int(features: Mapping[str, Any], key: str, default: int = 0) -> int:
+        raw = features.get(key)
+        return int(raw if raw is not None else default)
+
+    @staticmethod
+    def _get_float(features: Mapping[str, Any], key: str, default: float = 0.0) -> float:
+        raw = features.get(key)
+        return float(raw if raw is not None else default)
+
+    def _resolve_latest_version(self) -> str:
+        if not self.model_dir.exists():
+            raise FileNotFoundError(f"Model directory not found: {self.model_dir}")
+        versions = sorted(
+            [d.name for d in self.model_dir.iterdir() if d.is_dir()],
+            reverse=True,
+        )
+        if not versions:
+            raise FileNotFoundError(f"No model versions found in {self.model_dir}")
+        return versions[0]
 
     def load(self, version: Optional[str] = None) -> bool:
         """Load model from disk.
 
-        Returns ``True`` if the model loaded successfully.  On failure the
+        Returns ``True`` if the model loaded successfully. On failure the
         predictor enters ``DEGRADED`` status and all subsequent ``predict``
         calls should delegate to ``rule_based_fallback``.
 
         Before loading, verifies the integrity of model artifacts using
         SHA-256 checksums when a CHECKSUMS.sha256 manifest is present.
         """
-        # Verify artifact integrity before loading
         if not self._verify_integrity(self.model_dir):
             logger.error(
                 "Model integrity check failed, refusing to load",
@@ -121,10 +137,6 @@ class BasePredictor(ABC):
             "version": self._version,
             "status": self.status.value,
         }
-
-    # ------------------------------------------------------------------
-    # Abstract interface
-    # ------------------------------------------------------------------
 
     @abstractmethod
     def _load_model(self, version: Optional[str]) -> None:

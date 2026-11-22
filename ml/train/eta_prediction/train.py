@@ -5,11 +5,12 @@ Three-stage model: pre-order (estimated at checkout), post-assign (after rider
 assigned), in-transit (real-time updates during delivery).
 """
 
-import argparse
+from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 try:
     import lightgbm as _lgb
@@ -19,16 +20,24 @@ except (ImportError, OSError):
 
 try:
     import mlflow as _mlflow
-    import mlflow.lightgbm
-    mlflow: Any = _mlflow
+    mlflow: Optional[MlflowProtocol] = _mlflow
 except (ImportError, OSError):
     mlflow = None
+
 import numpy as np
 import pandas as pd
-import yaml
-from google.cloud import bigquery  # type: ignore
+from google.cloud import bigquery
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
+
+from ml.train.common import (
+    GateRule,
+    MlflowProtocol,
+    build_training_parser,
+    check_metric_gates,
+    load_training_config,
+    log_mlflow_run,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -91,6 +100,11 @@ STAGE_FEATURES = {
     ],
 }
 
+_GATE_RULES = (
+    GateRule("mae_min", "max_mae_min", "le", float("inf"), "MAE", ".4f"),
+    GateRule("within_2min_pct", "min_within_2min_pct", "ge", 0.0, "Within-2min", ".4f"),
+)
+
 
 class ETAPredictionTrainer:
     """Three-stage LightGBM ETA predictor: pre-order, post-assign, in-transit."""
@@ -101,10 +115,7 @@ class ETAPredictionTrainer:
         self.stage = config.get("stage", "pre_order")
 
     def load_data(self, query: str) -> pd.DataFrame:
-        """Load training data from BigQuery.
-
-        Expected columns: order_id, stage, <features>, actual_eta_min.
-        """
+        """Load training data from BigQuery."""
         logger.info("Loading ETA training data from BigQuery")
         client = bigquery.Client()
         df = client.query(query).to_dataframe()
@@ -189,7 +200,6 @@ class ETAPredictionTrainer:
         X = df[features]
         y_true = np.asarray(df[label_col].values)
         y_pred = np.asarray(model.predict(X))
-
         errors = np.abs(y_true - y_pred)
 
         metrics: dict[str, Any] = {
@@ -226,101 +236,70 @@ class ETAPredictionTrainer:
         return dict(zip(features, model.feature_importances_.tolist()))
 
 
-def _as_finite_float(value: Any) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        num = float(value)
-        if np.isfinite(num):
-            return num
-    return None
-
-
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
-    passed = True
-    mae_min = _as_finite_float(metrics.get("mae_min"))
-    max_mae = float(gates.get("max_mae_min", float("inf")))
-    if mae_min is None or mae_min > max_mae:
-        logger.warning("MAE %r above gate %.4f", metrics.get("mae_min"), max_mae)
-        passed = False
-    within_2min = _as_finite_float(metrics.get("within_2min_pct"))
-    min_within_2min = float(gates.get("min_within_2min_pct", 0.0))
-    if within_2min is None or within_2min < min_within_2min:
-        logger.warning("Within-2min %r below gate %.4f", metrics.get("within_2min_pct"), min_within_2min)
-        passed = False
+    passed, _ = check_metric_gates(metrics, gates, _GATE_RULES, log=logger)
     return passed
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ETA Prediction LightGBM Training")
-    parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
-    parser.add_argument("--experiment", type=str, default="eta-prediction", help="MLflow experiment name")
-    parser.add_argument("--output-dir", type=str, default="artifacts/eta-prediction", help="Output directory")
+    parser = build_training_parser(
+        "ETA Prediction LightGBM Training",
+        "eta-prediction",
+        "artifacts/eta-prediction",
+    )
     parser.add_argument("--stage", type=str, default=None, help="Override stage (pre_order, post_assign, in_transit)")
-    parser.add_argument("--run-name", type=str, default=None, help="MLflow run name")
     args = parser.parse_args()
 
-    with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
-
+    config = load_training_config(args.config)
     if args.stage:
         config["stage"] = args.stage
 
-    mlflow.set_experiment(args.experiment)
+    stage = config.get("stage", "pre_order")
+    trainer = ETAPredictionTrainer(config)
+    df = trainer.load_data(config["training"]["query"])
+    if "stage" in df.columns:
+        df = df[df["stage"] == stage]
 
-    with mlflow.start_run(run_name=args.run_name):
-        stage = config.get("stage", "pre_order")
-        mlflow.log_params(config["hyperparameters"])
-        mlflow.log_param("model_name", config["model_name"])
-        mlflow.log_param("version", config["version"])
-        mlflow.log_param("stage", stage)
+    val_split = config["training"].get("validation_split", 0.2)
+    shuffled = df.sample(frac=1, random_state=42)
+    split_idx = int(len(shuffled) * (1 - val_split))
+    train_df = shuffled.iloc[:split_idx]
+    test_df = shuffled.iloc[split_idx:]
+    logger.info("Train: %d rows, Test: %d rows", len(train_df), len(test_df))
 
-        trainer = ETAPredictionTrainer(config)
+    trainer.train(train_df)
+    metrics = trainer.evaluate(test_df)
+    gates = config.get("promotion_gates", {})
+    gate_passed = _check_promotion_gates(metrics, gates)
+    importance = trainer.feature_importance()
 
-        # Load data
-        query = config["training"]["query"]
-        df = trainer.load_data(query)
+    output_dir = Path(args.output_dir) / config["version"] / stage
+    model_path = output_dir / "model.lgb"
+    trainer.export(str(model_path))
 
-        # Filter to stage
-        if "stage" in df.columns:
-            df = df[df["stage"] == stage]
+    log_mlflow_run(
+        mlflow,
+        experiment=args.experiment,
+        run_name=args.run_name,
+        params={
+            **config["hyperparameters"],
+            "model_name": config["model_name"],
+            "version": config["version"],
+            "stage": stage,
+        },
+        metrics=metrics,
+        gate_passed=gate_passed,
+        dicts={"feature_importance.json": importance},
+        artifact_paths=(model_path, args.config),
+    )
 
-        # Train/test split
-        val_split = config["training"].get("validation_split", 0.2)
-        shuffled = df.sample(frac=1, random_state=42)
-        split_idx = int(len(shuffled) * (1 - val_split))
-        train_df = shuffled.iloc[:split_idx]
-        test_df = shuffled.iloc[split_idx:]
-        logger.info("Train: %d rows, Test: %d rows", len(train_df), len(test_df))
-
-        # Train
-        trainer.train(train_df)
-
-        # Evaluate
-        metrics = trainer.evaluate(test_df)
-        mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
-
-        # Promotion gates
-        gates = config.get("promotion_gates", {})
-        gate_passed = _check_promotion_gates(metrics, gates)
-        mlflow.log_metric("promotion_gate_passed", int(gate_passed))
-
-        # Feature importance
-        importance = trainer.feature_importance()
-        mlflow.log_dict(importance, "feature_importance.json")
-
-        # Export model
-        output_dir = Path(args.output_dir) / config["version"] / stage
-        model_path = output_dir / "model.lgb"
-        trainer.export(str(model_path))
-        mlflow.log_artifact(str(model_path))
-        mlflow.log_artifact(args.config)
-
-        logger.info(
-            "Training complete. Stage: %s, Gate passed: %s. MAE: %.2f min",
-            stage,
-            gate_passed,
-            metrics["mae_min"],
-        )
+    logger.info(
+        "Training complete. Stage: %s, Gate passed: %s. MAE: %.2f min",
+        stage,
+        gate_passed,
+        metrics["mae_min"],
+    )
 
 
 if __name__ == "__main__":

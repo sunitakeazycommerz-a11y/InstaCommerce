@@ -13,23 +13,24 @@ import os
 import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 try:
-    import mlflow as _mlflow  # type: ignore
-    mlflow: Any = _mlflow
+    import mlflow as _mlflow
+    mlflow: Optional[MlflowProtocol] = _mlflow
 except (ImportError, OSError):
-    mlflow: Any = None
+    mlflow = None
 try:
-    import lightgbm as _lgb  # type: ignore
+    import lightgbm as _lgb
     lgb: Any = _lgb
 except (ImportError, OSError):
-    lgb: Any = None
+    lgb = None
 try:
-    import xgboost as _xgb  # type: ignore
+    import xgboost as _xgb
     xgb: Any = _xgb
-except Exception:
-    xgb: Any = None
+except (ImportError, OSError, ValueError):  # XGBoostError subclasses ValueError when libomp is absent
+    xgb = None
+
 import numpy as np
 import pandas as pd
 import yaml
@@ -39,6 +40,7 @@ from ml.eval.metrics import (
     compute_fairness_metrics,
     evaluate_promotion_gates,
 )
+from ml.train.common import MlflowProtocol
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -97,33 +99,15 @@ class ModelEvaluator:
 
     SUPPORTED_METRICS = {
         "auc_roc", "auc_pr", "f1_score", "precision", "recall", "accuracy",
-        "false_positive_rate", "precision_at_95_recall",
-        "ndcg_at_10", "map_at_10", "mrr", "hit_at_10",
-        "mae", "mae_min", "rmse", "mape", "r2_score",
+        "false_positive_rate", "precision_at_95_recall", "ndcg_at_10", "map_at_10",
+        "mrr", "hit_at_10", "mae", "mae_min", "rmse", "mape", "r2_score",
         "within_2min_pct", "accuracy_pct", "correlation",
     }
 
     NON_FEATURE_COLUMNS = {
-        "label",
-        "target",
-        "y",
-        "is_fraud",
-        "relevance_label",
-        "query_id",
-        "group_id",
-        "group",
-        "user_id",
-        "customer_id",
-        "order_id",
-        "product_id",
-        "sku_id",
-        "item_id",
-        "rider_id",
-        "store_id",
-        "id",
-        "timestamp",
-        "event_time",
-        "created_at",
+        "label", "target", "y", "is_fraud", "relevance_label", "query_id", "group_id",
+        "group", "user_id", "customer_id", "order_id", "product_id", "sku_id",
+        "item_id", "rider_id", "store_id", "id", "timestamp", "event_time", "created_at",
     }
 
     def __init__(self):
@@ -141,11 +125,7 @@ class ModelEvaluator:
             if in_cols:
                 return in_cols
         excluded = cls.NON_FEATURE_COLUMNS | set(extra_exclude)
-        return [
-            c
-            for c in test_data.columns
-            if c not in excluded and not str(c).endswith("_id")
-        ]
+        return [c for c in test_data.columns if c not in excluded and not str(c).endswith("_id")]
 
     def evaluate(
         self,
@@ -161,7 +141,6 @@ class ModelEvaluator:
         logger.info("Evaluating model: %s %s", model_name, version)
         gates_config = gates_config or {}
         report = EvalReport(model_name=model_name, version=version)
-
         resolved_task_type = task_type or gates_config.get("task_type")
 
         feature_cols = self._select_feature_columns(model, test_data)
@@ -174,27 +153,21 @@ class ModelEvaluator:
         else:
             raise ValueError("Model must have predict or predict_proba method")
 
-        label_col = None
-        for candidate in ("label", "target", "y", "is_fraud", "relevance_label"):
-            if candidate in test_data.columns:
-                label_col = candidate
-                break
+        label_col = next(
+            (c for c in ("label", "target", "y", "is_fraud", "relevance_label") if c in test_data.columns),
+            None,
+        )
         if label_col is None:
             raise ValueError("No label column found in test data")
 
-        group_values = None
-        for group_col in ("query_id", "group_id", "group", "user_id"):
-            if group_col in test_data.columns:
-                group_values = list(test_data[group_col].values)
-                break
+        group_values = next(
+            (list(test_data[c].values) for c in ("query_id", "group_id", "group", "user_id") if c in test_data.columns),
+            None,
+        )
 
         y_true = np.asarray(test_data[label_col].values)
         metrics = self._compute_metrics(
-            y_true,
-            y_pred,
-            y_pred_proba,
-            task_type=resolved_task_type,
-            groups=group_values,
+            y_true, y_pred, y_pred_proba, task_type=resolved_task_type, groups=group_values
         )
         if extra_metrics:
             metrics.update(extra_metrics)
@@ -212,7 +185,6 @@ class ModelEvaluator:
             "task_type": resolved_task_type,
             "gate_failures": gate_failures,
         }
-
         logger.info("Evaluation complete. Gates passed: %s", report.gates_passed)
         return report
 
@@ -226,11 +198,7 @@ class ModelEvaluator:
     ) -> dict[str, float]:
         """Compute appropriate metrics based on prediction type."""
         return compute_evaluation_metrics(
-            y_true,
-            y_pred,
-            y_pred_proba,
-            task_type=task_type,
-            groups=groups,
+            y_true, y_pred, y_pred_proba, task_type=task_type, groups=groups
         )
 
     def _check_gates(self, metrics: dict, gates: dict) -> bool:
@@ -244,21 +212,7 @@ class ModelEvaluator:
         test_data: pd.DataFrame,
         protected_attributes: list[str] | None = None,
     ) -> BiasReport:
-        """Run bias and fairness checks on model predictions.
-
-        Checks:
-        - Demographic parity: P(Y_hat=1 | A=a) should be similar across groups
-        - Equalized odds: TPR and FPR should be similar across groups
-        - Disparate impact: ratio of selection rates >= 0.8 (4/5 rule)
-
-        Args:
-            model: Trained model with predict method.
-            test_data: Test data including protected attribute columns.
-            protected_attributes: List of column names for protected attributes.
-
-        Returns:
-            BiasReport with fairness metrics.
-        """
+        """Run demographic parity, equalized odds, and disparate impact checks."""
         report = BiasReport()
 
         if protected_attributes is None:
@@ -274,32 +228,24 @@ class ModelEvaluator:
         feature_cols = self._select_feature_columns(
             model, test_data, extra_exclude=tuple(protected_attributes)
         )
-
         if hasattr(model, "predict_proba"):
             y_pred = (model.predict_proba(test_data[feature_cols])[:, 1] >= 0.5).astype(int)
         else:
             y_pred = model.predict(test_data[feature_cols])
 
-        # Detect label column
-        label_col = None
-        for candidate in ("label", "target", "y", "is_fraud"):
-            if candidate in test_data.columns:
-                label_col = candidate
-                break
-
+        label_col = next(
+            (c for c in ("label", "target", "y", "is_fraud") if c in test_data.columns),
+            None,
+        )
         y_true = np.asarray(test_data[label_col].values) if label_col else None
         dp, eo, di, passed, details = compute_fairness_metrics(
-            test_data=test_data,
-            y_pred=y_pred,
-            y_true=y_true,
-            protected_attributes=protected_attributes,
+            test_data=test_data, y_pred=y_pred, y_true=y_true, protected_attributes=protected_attributes
         )
         report.demographic_parity = dp
         report.equalized_odds = eo
         report.disparate_impact = di
         report.passed = passed
         report.details.extend(details)
-
         logger.info("Bias check complete. Passed: %s", report.passed)
         return report
 
@@ -330,23 +276,15 @@ def main():
     parser.add_argument("--gates-config", type=str, required=True, help="Path to config YAML with promotion gates")
     parser.add_argument("--output", type=str, default="eval_report.json", help="Output report path")
     parser.add_argument("--bias-check", action="store_true", help="Run bias checks")
-    parser.add_argument(
-        "--protected-attrs",
-        type=str,
-        nargs="*",
-        default=None,
-        help="Protected attribute columns for bias check",
-    )
+    parser.add_argument("--protected-attrs", type=str, nargs="*", default=None, help="Protected attribute columns")
     args = parser.parse_args()
 
     with open(args.gates_config, "r") as f:
         config = yaml.safe_load(f)
 
-    # Load test data
     test_data = pd.read_parquet(args.test_data)
     logger.info("Loaded test data: %d rows, %d columns", len(test_data), len(test_data.columns))
 
-    # Load model (detect format from extension)
     model_path = Path(args.model_path)
     if model_path.suffix == ".xgb":
         if xgb is None:
@@ -373,17 +311,13 @@ def main():
     )
 
     if args.bias_check:
-        bias_report = evaluator.bias_check(
-            model=model,
-            test_data=test_data,
-            protected_attributes=args.protected_attrs,
+        report.bias_report = evaluator.bias_check(
+            model=model, test_data=test_data, protected_attributes=args.protected_attrs
         )
-        report.bias_report = bias_report
 
     report.to_json(args.output)
     logger.info("Report saved to %s", args.output)
 
-    # Log to MLflow if tracking URI is set
     if mlflow is not None and os.environ.get("MLFLOW_TRACKING_URI"):
         with mlflow.start_run():
             mlflow.log_metrics(report.metrics)

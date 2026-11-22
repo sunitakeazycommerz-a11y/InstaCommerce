@@ -95,7 +95,7 @@ def parse_json_dict(raw: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     try:
         parsed = json.loads(raw)
-    except Exception as exc:
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
         logger.warning("Failed to decode JSON feature entry: %s", exc)
         return None
     if isinstance(parsed, dict):

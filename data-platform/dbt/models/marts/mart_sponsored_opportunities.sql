@@ -46,7 +46,6 @@ daily_category_orders AS (
         p.category,
         COUNT(DISTINCT o.order_id) AS delivered_orders,
         COUNT(DISTINCT o.user_id) AS ordering_users,
-        -- Attributable GMV from add-to-cart events aligned to delivered orders on same day/user/store.
         SUM(ce.quantity * ce.unit_price_cents) / 100.0 AS attributable_gmv_usd
     FROM cart_events ce
     INNER JOIN products p

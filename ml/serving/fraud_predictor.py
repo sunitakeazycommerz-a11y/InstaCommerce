@@ -12,25 +12,24 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np  # type: ignore[import-untyped]
+import numpy as np
 
 try:
-    import onnxruntime as _ort  # type: ignore[import-untyped]
+    import onnxruntime as _ort
     ort: Any = _ort
 except ImportError:
-    ort: Any = None
+    ort = None
 
 try:
-    import xgboost as _xgb  # type: ignore[import-untyped]
+    import xgboost as _xgb
     xgb: Any = _xgb
-except Exception:
-    xgb: Any = None
+except (ImportError, OSError, ValueError):  # XGBoostError subclasses ValueError when libomp is absent
+    xgb = None
 
 from .predictor import BasePredictor, ModelMetadata, ModelStatus, PredictionResult
 
 logger = logging.getLogger(__name__)
 
-# Decision thresholds (score 0-100)
 _THRESHOLD_AUTO_APPROVE: int = 30
 _THRESHOLD_BLOCK: int = 70
 
@@ -38,9 +37,8 @@ _THRESHOLD_BLOCK: int = 70
 class FraudPredictor(BasePredictor):
     """Production fraud-detection predictor.
 
-    Uses an XGBoost classifier exported to ONNX.  When the model is
-    unavailable the predictor falls back to rule-based velocity checks
-    (order frequency, device fingerprint re-use, high-value first orders).
+    Uses an XGBoost classifier exported to ONNX. When the model is
+    unavailable the predictor falls back to rule-based velocity checks.
     """
 
     THRESHOLD_AUTO_APPROVE: int = _THRESHOLD_AUTO_APPROVE
@@ -54,17 +52,8 @@ class FraudPredictor(BasePredictor):
         super().__init__(model_name=model_name, model_dir=model_dir)
         self._feature_names: List[str] = []
 
-    # ------------------------------------------------------------------
-    # Model loading
-    # ------------------------------------------------------------------
-
     def _load_model(self, version: Optional[str]) -> None:
-        """Load XGBoost model from ONNX or native format.
-
-        Expected artefacts:
-        * ``model.onnx`` — ONNX-exported XGBoost classifier
-        * ``metadata.json`` — :class:`ModelMetadata` fields
-        """
+        """Load XGBoost model from ONNX or native format."""
         resolved_version = version or self._resolve_latest_version()
         model_path = self.model_dir / resolved_version
 
@@ -84,35 +73,19 @@ class FraudPredictor(BasePredictor):
         meta_path = model_path / "metadata.json"
         if meta_path.exists():
             with open(meta_path, "r") as fh:
-                raw = json.load(fh)
-            self.metadata = ModelMetadata(**raw)
+                self.metadata = ModelMetadata(**json.load(fh))
             self._feature_names = self.metadata.features
 
         self._version = resolved_version
 
-    # ------------------------------------------------------------------
-    # Prediction
-    # ------------------------------------------------------------------
-
     def predict(self, features: Dict[str, Any]) -> PredictionResult:
-        """Score a transaction and return a decision.
-
-        Required features:
-        * ``order_total`` — order value in local currency
-        * ``user_order_count`` — lifetime order count for this user
-        * ``orders_last_hour`` — number of orders placed in the last 60 min
-        * ``unique_devices_30d`` — distinct device fingerprints in 30 days
-        * ``payment_method`` — ``card``, ``wallet``, ``cod``
-        * ``distance_to_avg_location_km`` — deviation from typical delivery address
-        * ``account_age_days`` — age of the customer account
-        """
+        """Score a transaction and return a decision."""
         if self.status != ModelStatus.READY or self._model is None:
             return self.rule_based_fallback(features)
 
         start = time.monotonic()
         try:
-            score = self._run_model(features)
-            score = max(0.0, min(100.0, score))
+            score = max(0.0, min(100.0, self._run_model(features)))
             decision = self._score_to_decision(score)
             latency_ms = (time.monotonic() - start) * 1_000
 
@@ -136,42 +109,28 @@ class FraudPredictor(BasePredictor):
             return self.rule_based_fallback(features)
 
     def rule_based_fallback(self, features: Dict[str, Any]) -> PredictionResult:
-        """Deterministic velocity-based fraud scoring.
-
-        Rules:
-        * +25 if > 3 orders in last hour
-        * +20 if > 2 unique devices in 30 days
-        * +15 if order total > 5000 and account age < 7 days
-        * +15 if delivery address > 10 km from average location
-        * +10 if first order and payment method is card
-        """
+        """Deterministic velocity-based fraud scoring."""
         start = time.monotonic()
         score: float = 0.0
 
-        raw_olh = features.get("orders_last_hour")
-        orders_last_hour = int(raw_olh if raw_olh is not None else 0)
+        orders_last_hour = self._get_int(features, "orders_last_hour", 0)
         if orders_last_hour > 3:
             score += 25.0
 
-        raw_dev = features.get("unique_devices_30d")
-        unique_devices = int(raw_dev if raw_dev is not None else 1)
+        unique_devices = self._get_int(features, "unique_devices_30d", 1)
         if unique_devices > 2:
             score += 20.0
 
-        raw_total = features.get("order_total")
-        order_total = float(raw_total if raw_total is not None else 0.0)
-        raw_age = features.get("account_age_days")
-        account_age = int(raw_age if raw_age is not None else 365)
+        order_total = self._get_float(features, "order_total", 0.0)
+        account_age = self._get_int(features, "account_age_days", 365)
         if order_total > 5000 and account_age < 7:
             score += 15.0
 
-        raw_dist = features.get("distance_to_avg_location_km")
-        distance_deviation = float(raw_dist if raw_dist is not None else 0.0)
+        distance_deviation = self._get_float(features, "distance_to_avg_location_km", 0.0)
         if distance_deviation > 10.0:
             score += 15.0
 
-        raw_uoc = features.get("user_order_count")
-        user_order_count = int(raw_uoc if raw_uoc is not None else 1)
+        user_order_count = self._get_int(features, "user_order_count", 1)
         payment_method = str(features.get("payment_method") or "cod")
         if user_order_count == 0 and payment_method == "card":
             score += 10.0
@@ -193,10 +152,6 @@ class FraudPredictor(BasePredictor):
             is_fallback=True,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _score_to_decision(score: float) -> str:
         if score < _THRESHOLD_AUTO_APPROVE:
@@ -208,16 +163,10 @@ class FraudPredictor(BasePredictor):
     def _run_model(self, features: Dict[str, Any]) -> float:
         """Execute ONNX or native model and return raw probability × 100."""
         input_array = np.array(
-            [
-                [
-                    float(v if (v := features.get(f)) is not None else 0.0)
-                    for f in self._feature_names
-                ]
-            ],
+            [[self._get_float(features, f, 0.0) for f in self._feature_names]],
             dtype=np.float32,
         )
         if hasattr(self._model, "run"):
-            # ONNX runtime
             input_name = self._model.get_inputs()[0].name
             results = self._model.run(None, {input_name: input_array})
             if len(results) > 1:
@@ -231,24 +180,12 @@ class FraudPredictor(BasePredictor):
                 arr = np.asarray(results[0], dtype=float).reshape(-1)
                 proba = float(arr[1] if len(arr) > 1 else arr[0])
         else:
-            # Native XGBoost Booster
             if xgb is None:
                 raise ImportError("xgboost is not installed")
             dmat = xgb.DMatrix(input_array, feature_names=self._feature_names)
             proba = float(np.asarray(self._model.predict(dmat)).reshape(-1)[0])
 
         return proba * 100.0
-
-    def _resolve_latest_version(self) -> str:
-        if not self.model_dir.exists():
-            raise FileNotFoundError(f"Model directory not found: {self.model_dir}")
-        versions = sorted(
-            [d.name for d in self.model_dir.iterdir() if d.is_dir()],
-            reverse=True,
-        )
-        if not versions:
-            raise FileNotFoundError(f"No model versions found in {self.model_dir}")
-        return versions[0]
 
     def _load_native_xgboost(self, model_path: Path) -> None:
         xgb_path = model_path / "model.json"

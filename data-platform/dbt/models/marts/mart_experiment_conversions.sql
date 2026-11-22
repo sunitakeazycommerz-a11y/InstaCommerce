@@ -89,7 +89,6 @@ SELECT
     p.control_conversion_rate,
     p.conversion_rate - p.control_conversion_rate AS conversion_rate_delta,
     SAFE_DIVIDE(p.conversion_rate - p.control_conversion_rate, p.control_conversion_rate) * 100.0 AS lift_pct,
-    -- Two-proportion pooled z-score test
     CASE
         WHEN p.control_conversion_rate IS NOT NULL
             AND p.variant_name != 'control'

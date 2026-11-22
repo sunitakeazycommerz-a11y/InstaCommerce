@@ -1,0 +1,40 @@
+"""Canonical feature lists for two-tower personalization training."""
+
+USER_FEATURES = [
+    "user_id",
+    "age_bucket",
+    "gender",
+    "city_encoded",
+    "zone_encoded",
+    "account_age_days",
+    "order_count_lifetime",
+    "order_count_30d",
+    "avg_order_value_30d",
+    "preferred_categories",
+    "preferred_brands",
+    "price_sensitivity_bucket",
+    "activity_recency_days",
+    "browse_frequency_7d",
+    "search_frequency_7d",
+    "cart_abandonment_rate",
+    "promo_sensitivity",
+]
+
+ITEM_FEATURES = [
+    "sku_id",
+    "category_l1",
+    "category_l2",
+    "category_l3",
+    "brand_encoded",
+    "price_bucket",
+    "avg_rating",
+    "review_count",
+    "popularity_7d",
+    "popularity_30d",
+    "stock_status",
+    "is_new_arrival",
+    "is_on_promotion",
+    "image_quality_score",
+    "title_length",
+    "description_completeness",
+]

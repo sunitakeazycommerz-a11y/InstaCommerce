@@ -174,3 +174,80 @@ def test_kafka_to_bigquery_dry_run_and_missing_dependencies() -> None:
         patch.object(kafka_to_bigquery, "get_client", return_value=None),
     ):
         kafka_to_bigquery.run_batch_loader(live_ctx)
+
+
+def test_kafka_to_bigquery_mid_poll_multi_partition_commits_only_processed_offsets() -> None:
+    ctx = build_context(settings=_settings(max_messages=4), dry_run=False)
+    mock_consumer = MagicMock()
+    mock_client = MagicMock()
+    mock_client.insert_rows_json.return_value = []
+
+    p0_msgs = [_msg(offset, f'{{"order_id": "p0-{offset}"}}'.encode("utf-8"), partition=0) for offset in (10, 11)]
+    p1_msgs = [
+        _msg(20, b'{"order_id": "p1-20"}', partition=1),
+        _msg(21, b"{bad-json", partition=1),
+        _msg(22, b'{"order_id": "p1-22"}', partition=1),
+        _msg(23, b'{"order_id": "p1-23"}', partition=1),
+    ]
+    p2_msgs = [_msg(30, b'{"order_id": "p2-30"}', partition=2)]
+
+    mock_consumer.poll.side_effect = [
+        {
+            ("orders.events", 0): p0_msgs,
+            ("orders.events", 1): p1_msgs,
+            ("orders.events", 2): p2_msgs,
+        }
+    ]
+
+    with (
+        patch.object(kafka_to_bigquery, "KafkaConsumer", return_value=mock_consumer),
+        patch.object(kafka_to_bigquery, "get_client", return_value=mock_client),
+    ):
+        kafka_to_bigquery.run_batch_loader(ctx)
+
+    assert mock_client.insert_rows_json.call_count == 2
+    valid_call = mock_client.insert_rows_json.call_args_list[0]
+    quarantine_call = mock_client.insert_rows_json.call_args_list[1]
+    assert valid_call.kwargs["row_ids"] == [
+        "orders.events:0:10",
+        "orders.events:0:11",
+        "orders.events:1:20",
+    ]
+    assert quarantine_call.kwargs["row_ids"] == ["orders.events:1:21"]
+
+    mock_consumer.commit.assert_called_once()
+    committed_offsets = mock_consumer.commit.call_args.kwargs["offsets"]
+    assert committed_offsets == {
+        kafka_to_bigquery.TopicPartition("orders.events", 0): kafka_to_bigquery.OffsetAndMetadata(12, ""),
+        kafka_to_bigquery.TopicPartition("orders.events", 1): kafka_to_bigquery.OffsetAndMetadata(22, ""),
+    }
+    assert kafka_to_bigquery.TopicPartition("orders.events", 2) not in committed_offsets
+    mock_consumer.close.assert_called_once()
+
+
+def test_kafka_to_bigquery_mid_poll_single_partition_cutoff_leaves_trailing_uncommitted() -> None:
+    ctx = build_context(settings=_settings(max_messages=2), dry_run=False)
+    mock_consumer = MagicMock()
+    mock_client = MagicMock()
+    mock_client.insert_rows_json.return_value = []
+
+    p0_msgs = [_msg(offset, f'{{"order_id": "p0-{offset}"}}'.encode("utf-8"), partition=0) for offset in range(5)]
+    p1_msgs = [_msg(offset, f'{{"order_id": "p1-{offset}"}}'.encode("utf-8"), partition=1) for offset in range(3)]
+    mock_consumer.poll.side_effect = [{("orders.events", 0): p0_msgs, ("orders.events", 1): p1_msgs}]
+
+    with (
+        patch.object(kafka_to_bigquery, "KafkaConsumer", return_value=mock_consumer),
+        patch.object(kafka_to_bigquery, "get_client", return_value=mock_client),
+    ):
+        kafka_to_bigquery.run_batch_loader(ctx)
+
+    mock_client.insert_rows_json.assert_called_once()
+    assert mock_client.insert_rows_json.call_args.kwargs["row_ids"] == [
+        "orders.events:0:0",
+        "orders.events:0:1",
+    ]
+    committed_offsets = mock_consumer.commit.call_args.kwargs["offsets"]
+    assert committed_offsets == {
+        kafka_to_bigquery.TopicPartition("orders.events", 0): kafka_to_bigquery.OffsetAndMetadata(2, ""),
+    }
+    assert kafka_to_bigquery.TopicPartition("orders.events", 1) not in committed_offsets

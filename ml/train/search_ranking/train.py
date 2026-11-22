@@ -7,78 +7,62 @@ Metrics: NDCG@10, MAP@10
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Optional
 
 try:
-    import lightgbm as _lgb  # type: ignore
+    import lightgbm as _lgb
     lgb: Any = _lgb
 except (ImportError, OSError):
-    lgb: Any = None
+    lgb = None
 
 try:
-    import mlflow as _mlflow  # type: ignore
-    import mlflow.lightgbm  # type: ignore
-    from mlflow.tracking import MlflowClient as _MlflowClient  # type: ignore
-    mlflow: Any = _mlflow
-    MlflowClient: Any = _MlflowClient
+    import mlflow as _mlflow
+    from mlflow.tracking import MlflowClient as _MlflowClient
+    mlflow: Optional[MlflowProtocol] = _mlflow
+    MlflowClient: Optional[type[MlflowRegistryClientProtocol]] = _MlflowClient
 except (ImportError, OSError):
-    mlflow: Any = None
-    MlflowClient: Any = None
+    mlflow = None
+    MlflowClient = None
 
 import numpy as np
 import pandas as pd
 
 try:
-    import shap as _shap  # type: ignore
+    import shap as _shap
     shap: Any = _shap
 except (ImportError, OSError):
-    shap: Any = None
+    shap = None
 
-import yaml
-from google.cloud import bigquery  # type: ignore
+from google.cloud import bigquery
 from sklearn.model_selection import GroupKFold
+
+from ml.train.common import (
+    GateRule,
+    MlflowProtocol,
+    MlflowRegistryClientProtocol,
+    as_finite_float,
+    build_training_parser,
+    check_metric_gates,
+    load_training_config,
+    log_mlflow_run,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 FEATURE_COLUMNS = [
-    "bm25_score",
-    "query_title_similarity",
-    "query_description_similarity",
-    "user_category_affinity",
-    "user_brand_affinity",
-    "user_price_sensitivity",
-    "popularity_7d",
-    "popularity_30d",
-    "trending_score",
-    "price_competitiveness",
-    "price_percentile",
-    "discount_pct",
-    "stock_availability",
-    "stock_velocity",
-    "avg_rating",
-    "review_count",
-    "review_recency_score",
-    "photo_count",
-    "title_length",
-    "description_completeness",
-    "brand_tier",
-    "category_depth",
-    "click_through_rate_7d",
-    "add_to_cart_rate_7d",
-    "conversion_rate_30d",
-    "return_rate",
-    "delivery_speed_score",
-    "store_rating",
-    "store_distance_km",
-    "time_of_day_relevance",
-    "day_of_week_relevance",
-    "seasonal_relevance",
+    "bm25_score", "query_title_similarity", "query_description_similarity", "user_category_affinity",
+    "user_brand_affinity", "user_price_sensitivity", "popularity_7d", "popularity_30d",
+    "trending_score", "price_competitiveness", "price_percentile", "discount_pct",
+    "stock_availability", "stock_velocity", "avg_rating", "review_count",
+    "review_recency_score", "photo_count", "title_length", "description_completeness",
+    "brand_tier", "category_depth", "click_through_rate_7d", "add_to_cart_rate_7d",
+    "conversion_rate_30d", "return_rate", "delivery_speed_score", "store_rating",
+    "store_distance_km", "time_of_day_relevance", "day_of_week_relevance", "seasonal_relevance",
 ]
 
 
@@ -91,14 +75,9 @@ class SearchRankingTrainer:
         self.feature_columns = config.get("features", FEATURE_COLUMNS)
 
     def load_data(self, query: str) -> pd.DataFrame:
-        """Load training data from BigQuery.
-
-        Expected columns: query_id, <feature_columns>, relevance_label.
-        Relevance grading: impression=0, click=1, add-to-cart=5, purchase=10.
-        """
+        """Load training data from BigQuery."""
         logger.info("Loading training data from BigQuery")
-        client = bigquery.Client()
-        df = client.query(query).to_dataframe()
+        df = bigquery.Client().query(query).to_dataframe()
         logger.info("Loaded %d rows, %d unique queries", len(df), df["query_id"].nunique())
         return df
 
@@ -111,15 +90,14 @@ class SearchRankingTrainer:
         train_df = df.iloc[train_idx].sort_values(group_col).reset_index(drop=True)
         val_df = df.iloc[val_idx].sort_values(group_col).reset_index(drop=True)
 
-        X_train = train_df[self.feature_columns]
-        y_train = train_df[label_col]
-        groups_train = train_df.groupby(group_col, sort=False).size().values
-
-        X_val = val_df[self.feature_columns]
-        y_val = val_df[label_col]
-        groups_val = val_df.groupby(group_col, sort=False).size().values
-
-        return X_train, y_train, groups_train, X_val, y_val, groups_val
+        return (
+            train_df[self.feature_columns],
+            train_df[label_col],
+            train_df.groupby(group_col, sort=False).size().values,
+            val_df[self.feature_columns],
+            val_df[label_col],
+            val_df.groupby(group_col, sort=False).size().values,
+        )
 
     def train(self, df: pd.DataFrame) -> Any:
         """Train LambdaMART model with GroupKFold cross-validation."""
@@ -131,16 +109,12 @@ class SearchRankingTrainer:
         df = df.sort_values(group_col).reset_index(drop=True)
 
         gkf = GroupKFold(n_splits=5)
-        groups = df[group_col].values
         best_ndcg = -1.0
         best_model = None
 
-        for fold, (train_idx, val_idx) in enumerate(gkf.split(df, groups=groups)):
+        for fold, (train_idx, val_idx) in enumerate(gkf.split(df, groups=df[group_col].values)):
             logger.info("Training fold %d/5", fold + 1)
-            X_train, y_train, g_train, X_val, y_val, g_val = self._build_datasets(
-                df, (train_idx, val_idx)
-            )
-
+            X_train, y_train, g_train, X_val, y_val, g_val = self._build_datasets(df, (train_idx, val_idx))
             model = lgb.LGBMRanker(
                 objective="lambdarank",
                 metric="ndcg",
@@ -154,22 +128,16 @@ class SearchRankingTrainer:
                 random_state=42,
                 n_jobs=-1,
             )
-
             model.fit(
                 X_train,
                 y_train,
                 group=g_train,
                 eval_set=[(X_val, y_val)],
                 eval_group=[g_val],
-                callbacks=[
-                    lgb.early_stopping(stopping_rounds=50),
-                    lgb.log_evaluation(period=25),
-                ],
+                callbacks=[lgb.early_stopping(stopping_rounds=50), lgb.log_evaluation(period=25)],
             )
-
             fold_ndcg = model.best_score_["valid_0"]["ndcg@10"]
             logger.info("Fold %d NDCG@10: %.4f", fold + 1, fold_ndcg)
-
             if fold_ndcg > best_ndcg:
                 best_ndcg = fold_ndcg
                 best_model = model
@@ -189,35 +157,20 @@ class SearchRankingTrainer:
         df = df.sort_values(group_col).reset_index(drop=True)
         X = df[self.feature_columns]
         y_true = np.asarray(df[self.config["training"]["label_column"]].values)
-        scores_raw = self.model.predict(X)
-        scores: np.ndarray = np.asarray(scores_raw)
+        scores = np.asarray(self.model.predict(X))
 
-        ndcg_scores = []
-        map_scores = []
-        mrr_scores = []
-
+        ndcg_scores, map_scores, mrr_scores = [], [], []
         for qid in df[group_col].unique():
             mask = (df[group_col] == qid).to_numpy()
-            q_scores = scores[mask]
-            q_labels = y_true[mask]
+            q_scores, q_labels = scores[mask], y_true[mask]
 
-            ranked_idx = np.argsort(-q_scores)[:10]
-            ranked_labels = q_labels[ranked_idx]
-
-            # NDCG@10
-            dcg = sum(
-                (2**rel - 1) / np.log2(i + 2) for i, rel in enumerate(ranked_labels)
-            )
-            ideal_labels = np.sort(q_labels)[::-1][:10]
-            idcg = sum(
-                (2**rel - 1) / np.log2(i + 2) for i, rel in enumerate(ideal_labels)
-            )
+            ranked_labels = q_labels[np.argsort(-q_scores)[:10]]
+            dcg = sum((2**rel - 1) / np.log2(i + 2) for i, rel in enumerate(ranked_labels))
+            idcg = sum((2**rel - 1) / np.log2(i + 2) for i, rel in enumerate(np.sort(q_labels)[::-1][:10]))
             ndcg_scores.append(dcg / idcg if idcg > 0 else 0.0)
 
-            # MAP@10
             relevant = ranked_labels > 0
-            precisions = []
-            num_rel = 0
+            precisions, num_rel = [], 0
             for i, is_rel in enumerate(relevant):
                 if is_rel:
                     num_rel += 1
@@ -225,15 +178,12 @@ class SearchRankingTrainer:
             total_rel = sum(q_labels > 0)
             map_scores.append(sum(precisions) / total_rel if total_rel > 0 else 0.0)
 
-            # MRR
             first_rel = np.where(relevant)[0]
             mrr_scores.append(1.0 / (first_rel[0] + 1) if len(first_rel) > 0 else 0.0)
 
-        # Measure query latency for p99 evaluation
         query_latencies = []
         for qid in df[group_col].unique()[:50]:
-            mask = (df[group_col] == qid).to_numpy()
-            q_X = X[mask]
+            q_X = X[(df[group_col] == qid).to_numpy()]
             t_start = time.perf_counter()
             self.model.predict(q_X)
             query_latencies.append((time.perf_counter() - t_start) * 1000.0)
@@ -264,22 +214,8 @@ class SearchRankingTrainer:
             raise RuntimeError("Model not trained yet")
         if shap is not None:
             shap.TreeExplainer(self.model)
-        # Compute on a sample for efficiency
         logger.info("Computing SHAP feature importance")
-        return dict(
-            zip(
-                self.feature_columns,
-                np.abs(self.model.feature_importances_).tolist(),
-            )
-        )
-
-
-def _as_finite_float(value: Any) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        num = float(value)
-        if np.isfinite(num):
-            return num
-    return None
+        return dict(zip(self.feature_columns, np.abs(self.model.feature_importances_).tolist()))
 
 
 def _check_promotion_gates(
@@ -287,35 +223,18 @@ def _check_promotion_gates(
     gates: dict,
     shadow_metrics: dict | None = None,
 ) -> tuple[bool, list[str]]:
-    """Check if model meets automated promotion gates.
+    """Check if candidate ranking model satisfies NDCG, latency, and shadow gates."""
+    rules = [
+        GateRule("ndcg_at_10", "min_ndcg_at_10", "ge", 0.65, "NDCG@10", ".4f", missing_default=0.0),
+        GateRule("p99_latency_ms", "max_p99_latency_ms", "le", 15.0, "p99 latency", ".2f", "ms", missing_default=10.0),
+    ]
+    passed, reasons = check_metric_gates(metrics, gates, rules, log=logger, warn_each=False)
 
-    Requirements:
-    1. Absolute NDCG@10 >= min_ndcg_at_10 (e.g. 0.65)
-    2. NDCG@10 gain >= min_ndcg_gain_pct (>= 1.5% over baseline)
-    3. p99 inference latency <= max_p99_latency_ms (<= 15.0ms)
-    4. Shadow agreement >= min_shadow_agreement (>= 92%)
-    """
-    passed = True
-    reasons = []
-
-    min_ndcg = float(gates.get("min_ndcg_at_10", 0.65))
-    raw_ndcg = metrics.get("ndcg_at_10", 0.0)
-    cand_ndcg_opt = _as_finite_float(raw_ndcg)
-    if cand_ndcg_opt is None:
-        reasons.append(f"NDCG@10 {raw_ndcg!r} is non-finite")
-        cand_ndcg = 0.0
-        passed = False
-    else:
-        cand_ndcg = cand_ndcg_opt
-        if cand_ndcg < min_ndcg:
-            reasons.append(f"NDCG@10 {cand_ndcg:.4f} < min gate {min_ndcg:.4f}")
-            passed = False
-
-    # Check relative gain over production baseline
+    cand_ndcg = as_finite_float(metrics.get("ndcg_at_10", 0.0))
     baseline_ndcg = float(gates.get("baseline_ndcg_at_10", 0.65))
     min_gain_pct = float(gates.get("min_ndcg_gain_pct", gates.get("min_improvement_pct", 1.5)))
     if baseline_ndcg > 0:
-        if cand_ndcg_opt is None:
+        if cand_ndcg is None:
             reasons.append(f"NDCG@10 gain non-finite < required gain {min_gain_pct:.2f}%")
             passed = False
         else:
@@ -326,46 +245,28 @@ def _check_promotion_gates(
                 )
                 passed = False
 
-    # Latency gate: p99 <= 15.0ms
-    max_p99 = float(gates.get("max_p99_latency_ms", 15.0))
-    raw_p99 = metrics.get("p99_latency_ms", 10.0)
-    p99_opt = _as_finite_float(raw_p99)
-    if p99_opt is None:
-        reasons.append(f"p99 latency {raw_p99!r}ms is non-finite > gate {max_p99:.2f}ms")
-        p99_lat = float("inf")
-        passed = False
-    else:
-        p99_lat = p99_opt
-        if p99_lat > max_p99:
-            reasons.append(f"p99 latency {p99_lat:.2f}ms > gate {max_p99:.2f}ms")
-            passed = False
-
-    # Shadow traffic agreement gate: >= 92%
-    shadow_rate = None
-    if shadow_metrics and "shadow_agreement" in shadow_metrics:
-        shadow_rate = shadow_metrics["shadow_agreement"]
-    elif "shadow_agreement" in metrics:
-        shadow_rate = metrics["shadow_agreement"]
-
-    min_agreement = float(gates.get("min_shadow_agreement", 0.92))
+    shadow_rate = (
+        shadow_metrics["shadow_agreement"]
+        if shadow_metrics and "shadow_agreement" in shadow_metrics
+        else metrics.get("shadow_agreement")
+    )
     if shadow_rate is not None:
-        shadow_opt = _as_finite_float(shadow_rate)
-        if shadow_opt is None or shadow_opt < min_agreement:
-            reasons.append(f"Shadow agreement {shadow_rate!r} < gate {min_agreement:.4f}")
+        shadow_ok, shadow_reasons = check_metric_gates(
+            {"shadow_agreement": shadow_rate},
+            gates,
+            (GateRule("shadow_agreement", "min_shadow_agreement", "ge", 0.92, "Shadow agreement", ".4f"),),
+            log=logger,
+            warn_each=False,
+        )
+        if not shadow_ok:
+            reasons.extend(shadow_reasons)
             passed = False
 
     if not passed:
-        logger.warning(
-            "AUTOMATED DEGRADATION ALERT: Candidate model failed promotion gates: %s",
-            "; ".join(reasons),
-        )
+        logger.warning("AUTOMATED DEGRADATION ALERT: Candidate model failed promotion gates: %s", "; ".join(reasons))
     else:
-        logger.info(
-            "Candidate model passed all promotion gates (NDCG@10=%.4f, p99=%.2fms)",
-            cand_ndcg,
-            p99_lat,
-        )
-
+        p99_lat = as_finite_float(metrics.get("p99_latency_ms", 10.0)) or 10.0
+        logger.info("Candidate model passed all promotion gates (NDCG@10=%.4f, p99=%.2fms)", cand_ndcg or 0.0, p99_lat)
     return passed, reasons
 
 
@@ -376,48 +277,31 @@ def promote_in_mlflow_registry(model_name: str, version: str) -> bool:
             raise ImportError("mlflow is unavailable")
 
         client = MlflowClient()
-        logger.info(
-            "Promoting model '%s' version '%s' to Production stage in MLflow registry",
-            model_name,
-            version,
-        )
+        logger.info("Promoting model '%s' version '%s' to Production stage in MLflow registry", model_name, version)
         try:
             client.transition_model_version_stage(
-                name=model_name,
-                version=version,
-                stage="Production",
-                archive_existing_versions=True,
+                name=model_name, version=version, stage="Production", archive_existing_versions=True
             )
-        except Exception:
-            client.set_model_version_tag(
-                name=model_name,
-                version=version,
-                key="deployment_tier",
-                value="production",
+        except Exception as stage_exc:
+            logger.warning(
+                "Stage transition failed for '%s' v%s, falling back to deployment_tier tag: %s",
+                model_name, version, stage_exc, exc_info=True,
             )
+            client.set_model_version_tag(name=model_name, version=version, key="deployment_tier", value="production")
         return True
     except Exception as exc:
-        logger.warning("Could not transition model stage in MLflow registry: %s", exc)
+        logger.warning("Could not promote model '%s' v%s in MLflow registry: %s", model_name, version, exc, exc_info=True)
         return False
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Search Ranking LambdaMART Training")
-    parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
-    parser.add_argument("--experiment", type=str, default="search-ranking", help="MLflow experiment name")
-    parser.add_argument("--output-dir", type=str, default="artifacts/search-ranking", help="Output directory")
-    parser.add_argument("--run-name", type=str, default=None, help="MLflow run name")
-    args = parser.parse_args()
-
-    with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
-
-    if mlflow is not None:
-        mlflow.set_experiment(args.experiment)
+    args = build_training_parser(
+        "Search Ranking LambdaMART Training", "search-ranking", "artifacts/search-ranking"
+    ).parse_args()
+    config = load_training_config(args.config)
 
     trainer = SearchRankingTrainer(config)
-    query = config["training"]["query"]
-    df = trainer.load_data(query)
+    df = trainer.load_data(config["training"]["query"])
 
     val_split = float(config["training"].get("validation_split", 0.2))
     group_key = str(config["training"]["group_column"])
@@ -425,12 +309,9 @@ def main():
     np.random.seed(42)
     np.random.shuffle(unique_queries)
     split_idx = int(len(unique_queries) * (1 - val_split))
-    train_queries = unique_queries[:split_idx]
-    test_queries = unique_queries[split_idx:]
 
-    train_df = pd.DataFrame(df[df[group_key].isin(train_queries)]).sort_values(group_key).reset_index(drop=True)
-    test_df = pd.DataFrame(df[df[group_key].isin(test_queries)]).sort_values(group_key).reset_index(drop=True)
-
+    train_df = pd.DataFrame(df[df[group_key].isin(unique_queries[:split_idx])]).sort_values(group_key).reset_index(drop=True)
+    test_df = pd.DataFrame(df[df[group_key].isin(unique_queries[split_idx:])]).sort_values(group_key).reset_index(drop=True)
     logger.info("Train: %d rows, Test: %d rows", len(train_df), len(test_df))
 
     trainer.train(train_df)
@@ -445,22 +326,17 @@ def main():
     model_path = output_dir / "model.lgb"
     trainer.export(str(model_path))
 
-    if mlflow is not None:
-        with mlflow.start_run(run_name=args.run_name):
-            mlflow.log_params(config["hyperparameters"])
-            mlflow.log_param("model_name", config["model_name"])
-            mlflow.log_param("version", config["version"])
-            mlflow.log_metrics(metrics)
-            mlflow.log_metric("promotion_gate_passed", int(gate_passed))
-            mlflow.log_dict(importance, "feature_importance.json")
-            mlflow.log_artifact(str(model_path))
-            mlflow.log_artifact(args.config)
-
-    logger.info(
-        "Training complete. Gate passed: %s. Metrics: %s",
-        gate_passed,
-        json.dumps(metrics, indent=2),
+    log_mlflow_run(
+        mlflow,
+        experiment=args.experiment,
+        run_name=args.run_name,
+        params={**config["hyperparameters"], "model_name": config["model_name"], "version": config["version"]},
+        metrics=metrics,
+        gate_passed=gate_passed,
+        dicts={"feature_importance.json": importance},
+        artifact_paths=(model_path, args.config),
     )
+    logger.info("Training complete. Gate passed: %s. Metrics: %s", gate_passed, json.dumps(metrics, indent=2))
 
 
 if __name__ == "__main__":

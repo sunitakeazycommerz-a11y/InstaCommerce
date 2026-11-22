@@ -20,9 +20,6 @@ _UUID_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ---------------------------------------------------------------------------
-# Configurable thresholds
-# ---------------------------------------------------------------------------
 _MAX_REFUND_AMOUNT_CENTS: int = int(
     os.environ.get("OUTPUT_MAX_REFUND_CENTS", "1500")
 )
@@ -68,14 +65,7 @@ class ValidationResult(BaseModel):
 
 
 class OutputPolicy:
-    """Configurable output policies per intent type.
-
-    Validates AI-generated output against:
-      1. Schema validation (output matches expected format)
-      2. Business-rule validation (refund limits, discount caps)
-      3. Content safety (no harmful content, no blocked phrases)
-      4. Citation validation (claims must reference retrieval results)
-    """
+    """Configurable output policies per intent type."""
 
     MAX_REFUND_AMOUNT_CENTS: int = _MAX_REFUND_AMOUNT_CENTS
     MAX_DISCOUNT_PERCENT: int = _MAX_DISCOUNT_PERCENT
@@ -88,16 +78,11 @@ class OutputPolicy:
         "i am not able to",
     ]
 
-    # Map of intent → required top-level keys in output
     REQUIRED_FIELDS: Dict[str, List[str]] = {
         "refund": ["amount_cents", "reason"],
         "discount": ["discount_percent", "reason"],
         "order": ["order_id"],
     }
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def validate(
         self,
@@ -150,10 +135,6 @@ class OutputPolicy:
             requires_human_approval=requires_human,
         )
 
-    # ------------------------------------------------------------------
-    # 1. Schema validation
-    # ------------------------------------------------------------------
-
     def _check_schema(
         self, intent: str, output: Dict[str, Any]
     ) -> List[ValidationViolation]:
@@ -180,10 +161,6 @@ class OutputPolicy:
                     )
                 )
         return violations
-
-    # ------------------------------------------------------------------
-    # 2. Business-rule validation
-    # ------------------------------------------------------------------
 
     def _check_business_rules(
         self, intent: str, output: Dict[str, Any]
@@ -245,7 +222,6 @@ class OutputPolicy:
                 except ValueError:
                     pass
 
-        # Discount cap
         if intent == "discount":
             pct = output.get("discount_percent") or pricing_ctx.get("discount_percent")
             if isinstance(pct, (int, float)) and pct > self.MAX_DISCOUNT_PERCENT:
@@ -262,10 +238,6 @@ class OutputPolicy:
                 )
 
         return violations
-
-    # ------------------------------------------------------------------
-    # 3. Content safety
-    # ------------------------------------------------------------------
 
     def _check_content_safety(
         self, output: Dict[str, Any]
@@ -286,24 +258,14 @@ class OutputPolicy:
                 )
         return violations
 
-    # ------------------------------------------------------------------
-    # 4. Citation validation
-    # ------------------------------------------------------------------
-
     def _check_citations(
         self, output: Dict[str, Any], tool_results: List[Any]
     ) -> List[ValidationViolation]:
-        """Warn when output makes claims without matching retrieval data.
-
-        This is a heuristic check: if the output mentions specific product
-        IDs or order IDs that are not present in *tool_results*, a warning
-        is raised.
-        """
+        """Warn when output makes claims without matching retrieval data."""
         violations: List[ValidationViolation] = []
         if not tool_results:
             return violations
 
-        # Build set of known IDs from tool results
         known_ids: set[str] = set()
         for result in tool_results:
             data = getattr(result, "data", None) or (
@@ -312,7 +274,6 @@ class OutputPolicy:
             if isinstance(data, dict):
                 self._collect_ids(data, known_ids)
 
-        # Check output references
         output_ids: set[str] = set()
         self._collect_ids(output, output_ids)
 
@@ -329,10 +290,6 @@ class OutputPolicy:
                 )
             )
         return violations
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _extract_text(output: Dict[str, Any]) -> str:
@@ -391,5 +348,4 @@ class OutputPolicy:
         return sanitised
 
 
-# Alias for backward-compatibility and explicit naming (#615)
 OutputPolicyValidator = OutputPolicy

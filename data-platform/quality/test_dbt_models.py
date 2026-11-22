@@ -208,7 +208,6 @@ def test_mart_experiment_conversions_z_score_sql_matches_two_proportion_pooled_t
     assert actual_a > 2.0
     assert actual_b < 0.0
 
-    # End-to-end execution from raw exposures & stg_orders
     conn.execute(
         """
         CREATE TABLE fact_experiment_exposures (
@@ -262,3 +261,55 @@ def test_mart_experiment_conversions_z_score_sql_matches_two_proportion_pooled_t
     expected_e2e = _expected_pooled_z(20, 50, 8, 40)
     assert expected_e2e is not None
     assert e2e_by_variant["variant_a"][12] == pytest.approx(expected_e2e, rel=1e-9)
+
+
+def test_int_order_deliveries_updated_at_handles_null_order_timestamp() -> None:
+    sql_text = (MODELS_DIR / "intermediate" / "int_order_deliveries.sql").read_text(encoding="utf-8")
+    expected_expr = (
+        "GREATEST(COALESCE(o._cdc_updated_at, d._cdc_updated_at), "
+        "COALESCE(d._cdc_updated_at, o._cdc_updated_at)) AS updated_at"
+    )
+    assert expected_expr in sql_text
+
+    conn = sqlite3.connect(":memory:")
+    conn.create_function(
+        "GREATEST",
+        2,
+        lambda a, b: None if (a is None or b is None) else max(a, b),
+    )
+    conn.execute("CREATE TABLE stg_orders (order_id TEXT, _cdc_updated_at TEXT)")
+    conn.execute("CREATE TABLE stg_deliveries (order_id TEXT, _cdc_updated_at TEXT)")
+    conn.executemany(
+        "INSERT INTO stg_orders VALUES (?, ?)",
+        [
+            ("ord-both", "2026-10-01T10:00:00Z"),
+            ("ord-null-o", None),
+            ("ord-null-d", "2026-10-01T09:00:00Z"),
+            ("ord-both-null", None),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO stg_deliveries VALUES (?, ?)",
+        [
+            ("ord-both", "2026-10-01T11:00:00Z"),
+            ("ord-null-o", "2026-10-01T12:00:00Z"),
+            ("ord-null-d", None),
+            ("ord-both-null", None),
+        ],
+    )
+    rows = conn.execute(
+        f"""
+        SELECT
+            o.order_id,
+            {expected_expr}
+        FROM stg_orders o
+        LEFT JOIN stg_deliveries d ON o.order_id = d.order_id
+        """
+    ).fetchall()
+    conn.close()
+
+    by_id = dict(rows)
+    assert by_id["ord-both"] == "2026-10-01T11:00:00Z"
+    assert by_id["ord-null-o"] == "2026-10-01T12:00:00Z"
+    assert by_id["ord-null-d"] == "2026-10-01T09:00:00Z"
+    assert by_id["ord-both-null"] is None

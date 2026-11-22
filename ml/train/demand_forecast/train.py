@@ -7,33 +7,41 @@ promotion effects, and cannibalization adjustments.
 
 from __future__ import annotations
 
-import argparse
 import importlib
 import json
 import logging
 import pickle
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Optional, cast
 
 try:
     import mlflow as _mlflow
-    mlflow: Any = _mlflow
+    mlflow: Optional[MlflowProtocol] = _mlflow
 except (ImportError, OSError):
     mlflow = None
+
 import numpy as np
 import pandas as pd
-import yaml
-from google.cloud import bigquery  # type: ignore
+from google.cloud import bigquery
+
 try:
     Prophet: Any = getattr(importlib.import_module("prophet"), "Prophet", None)
 except (ImportError, OSError):
     Prophet = None
 from sklearn.metrics import mean_absolute_error
 
+from ml.train.common import (
+    GateRule,
+    MlflowProtocol,
+    build_training_parser,
+    check_metric_gates,
+    load_training_config,
+    log_mlflow_run,
+)
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-# Indian holiday calendar for Prophet
 INDIAN_HOLIDAYS = pd.DataFrame({
     "holiday": [
         "republic_day", "holi", "good_friday", "eid_ul_fitr",
@@ -64,6 +72,11 @@ REGRESSORS = [
     "is_payday_week",
 ]
 
+_GATE_RULES = (
+    GateRule("mape", "max_mape", "le", 1.0, "MAPE", ".4f"),
+    GateRule("accuracy_pct", "min_accuracy_pct", "ge", 0.0, "Accuracy", ".2f", "%"),
+)
+
 
 class DemandForecastTrainer:
     """Prophet-based demand forecaster with weather and promotion regressors."""
@@ -74,11 +87,7 @@ class DemandForecastTrainer:
         self.regressors = config.get("regressors", REGRESSORS)
 
     def load_data(self, query: str) -> pd.DataFrame:
-        """Load historical demand data from BigQuery.
-
-        Expected columns: store_id, sku_id, ds (timestamp), y (demand),
-        plus regressor columns.
-        """
+        """Load historical demand data from BigQuery."""
         logger.info("Loading demand training data from BigQuery")
         client = bigquery.Client()
         df = client.query(query).to_dataframe()
@@ -102,14 +111,9 @@ class DemandForecastTrainer:
             weekly_seasonality=True,
             yearly_seasonality=True,
         )
-
-        # Add hourly seasonality for intra-day patterns
         model.add_seasonality(name="hourly", period=1, fourier_order=8)
-
-        # Add regressors
         for reg in self.regressors:
             model.add_regressor(reg, mode="multiplicative")
-
         return model
 
     def train(self, df: pd.DataFrame) -> dict[str, Any]:
@@ -158,15 +162,11 @@ class DemandForecastTrainer:
             future = group_df[["ds"] + self.regressors].copy()
             forecast = model.predict(future)
             y_true = np.asarray(group_df["y"].values)
-            y_pred = np.asarray(forecast["yhat"].values)
-
-            # Clip negative predictions to zero (demand can't be negative)
-            y_pred = np.clip(y_pred, 0, None)
+            y_pred = np.clip(np.asarray(forecast["yhat"].values), 0, None)
 
             all_actuals.extend(y_true.tolist())
             all_predictions.extend(y_pred.tolist())
 
-            # Per-model MAPE (avoid division by zero)
             mask = y_true > 0
             if mask.sum() > 0:
                 model_mape = np.mean(np.abs(y_true[mask] - y_pred[mask]) / y_true[mask])
@@ -208,95 +208,65 @@ class DemandForecastTrainer:
                 pickle.dump(model, f)
             manifest[key] = str(model_path)
 
-        manifest_path = export_dir / "manifest.json"
-        with open(manifest_path, "w") as f:
+        with open(export_dir / "manifest.json", "w") as f:
             json.dump(manifest, f, indent=2)
 
         logger.info("Exported %d models to %s", len(self.models), export_dir)
 
 
-def _as_finite_float(value: Any) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        num = float(value)
-        if np.isfinite(num):
-            return num
-    return None
-
-
 def _check_promotion_gates(metrics: dict, gates: dict) -> bool:
     """Check if model meets promotion gates."""
-    passed = True
-    mape = _as_finite_float(metrics.get("mape"))
-    max_mape = float(gates.get("max_mape", 1.0))
-    if mape is None or mape > max_mape:
-        logger.warning("MAPE %r above gate %.4f", metrics.get("mape"), max_mape)
-        passed = False
-    accuracy = _as_finite_float(metrics.get("accuracy_pct"))
-    min_accuracy = float(gates.get("min_accuracy_pct", 0.0))
-    if accuracy is None or accuracy < min_accuracy:
-        logger.warning("Accuracy %r%% below gate %.2f%%", metrics.get("accuracy_pct"), min_accuracy)
-        passed = False
+    passed, _ = check_metric_gates(metrics, gates, _GATE_RULES, log=logger)
     return passed
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Demand Forecast Prophet Training")
-    parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
-    parser.add_argument("--experiment", type=str, default="demand-forecast", help="MLflow experiment name")
-    parser.add_argument("--output-dir", type=str, default="artifacts/demand-forecast", help="Output directory")
-    parser.add_argument("--run-name", type=str, default=None, help="MLflow run name")
+    parser = build_training_parser(
+        "Demand Forecast Prophet Training",
+        "demand-forecast",
+        "artifacts/demand-forecast",
+    )
     args = parser.parse_args()
+    config = load_training_config(args.config)
 
-    with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
+    trainer = DemandForecastTrainer(config)
+    df = trainer.load_data(config["training"]["query"])
 
-    mlflow.set_experiment(args.experiment)
+    cutoff_days = config["training"].get("test_days", 7)
+    cutoff_date = df["ds"].max() - pd.Timedelta(days=cutoff_days)
+    train_df = cast(pd.DataFrame, df[df["ds"] <= cutoff_date])
+    test_df = cast(pd.DataFrame, df[df["ds"] > cutoff_date])
+    logger.info("Train: %d rows (up to %s), Test: %d rows", len(train_df), cutoff_date, len(test_df))
 
-    with mlflow.start_run(run_name=args.run_name):
-        mlflow.log_params({
-            k: v for k, v in config.get("hyperparameters", {}).items()
-            if isinstance(v, (str, int, float, bool))
-        })
-        mlflow.log_param("model_name", config["model_name"])
-        mlflow.log_param("version", config["version"])
+    trainer.train(train_df)
+    metrics = trainer.evaluate(test_df)
+    gates = config.get("promotion_gates", {})
+    gate_passed = _check_promotion_gates(metrics, gates)
 
-        trainer = DemandForecastTrainer(config)
+    output_dir = Path(args.output_dir) / config["version"]
+    trainer.export(str(output_dir / "models"))
 
-        # Load data
-        query = config["training"]["query"]
-        df = trainer.load_data(query)
+    log_mlflow_run(
+        mlflow,
+        experiment=args.experiment,
+        run_name=args.run_name,
+        params={
+            **config.get("hyperparameters", {}),
+            "model_name": config["model_name"],
+            "version": config["version"],
+        },
+        metrics=metrics,
+        gate_passed=gate_passed,
+        artifact_dir=output_dir,
+        artifact_paths=(args.config,),
+    )
 
-        # Time-based split: train on history, test on recent period
-        cutoff_days = config["training"].get("test_days", 7)
-        cutoff_date = df["ds"].max() - pd.Timedelta(days=cutoff_days)
-        train_df = cast(pd.DataFrame, df[df["ds"] <= cutoff_date])
-        test_df = cast(pd.DataFrame, df[df["ds"] > cutoff_date])
-        logger.info("Train: %d rows (up to %s), Test: %d rows", len(train_df), cutoff_date, len(test_df))
-
-        # Train
-        trainer.train(train_df)
-
-        # Evaluate
-        metrics = trainer.evaluate(test_df)
-        mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
-
-        # Promotion gates
-        gates = config.get("promotion_gates", {})
-        gate_passed = _check_promotion_gates(metrics, gates)
-        mlflow.log_metric("promotion_gate_passed", int(gate_passed))
-
-        # Export models
-        output_dir = Path(args.output_dir) / config["version"]
-        trainer.export(str(output_dir / "models"))
-        mlflow.log_artifacts(str(output_dir))
-        mlflow.log_artifact(args.config)
-
-        logger.info(
-            "Training complete. Gate passed: %s. MAPE: %.4f, Accuracy: %.2f%%",
-            gate_passed,
-            metrics["mape"],
-            metrics["accuracy_pct"],
-        )
+    logger.info(
+        "Training complete. Gate passed: %s. MAPE: %.4f, Accuracy: %.2f%%",
+        gate_passed,
+        metrics["mape"],
+        metrics["accuracy_pct"],
+    )
 
 
 if __name__ == "__main__":

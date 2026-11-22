@@ -2,7 +2,7 @@
 
 Shadow mode allows safe validation of new model versions in production traffic.
 The shadow predictor runs on the same input as the production model, but its
-results are **never** returned to the caller.  Instead, comparison metrics and
+results are **never** returned to the caller. Instead, comparison metrics and
 detailed feature logs are streamed to Kafka/BigQuery for offline audit,
 agreement monitoring, and CI promotion gate verification.
 """
@@ -21,27 +21,20 @@ from .predictor import BasePredictor, PredictionResult
 
 logger = logging.getLogger(__name__)
 
-# Maximum time (seconds) to wait for shadow prediction before abandoning
 _SHADOW_TIMEOUT_S: float = 1.0
-
-# Thread pool shared across shadow runners
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="shadow")
-
-# Default Kafka topic for shadow prediction events
 DEFAULT_SHADOW_TOPIC = "ml.shadow.events"
-
-# Minimum agreement rate required for model promotion (92%)
 DEFAULT_PROMOTION_AGREEMENT_THRESHOLD: float = 0.92
 
 
 class ShadowAgreementGateFailedError(Exception):
     """Raised when shadow agreement rate fails the promotion threshold."""
-    pass
 
 
 @dataclass
 class ShadowPredictionLog:
     """Structured record for shadow vs champion prediction comparison."""
+
     event_id: str
     timestamp: str
     model_name: str
@@ -81,14 +74,6 @@ class ShadowPredictionLog:
 class ShadowRunner:
     """Executes shadow predictions alongside production, logs comparison metrics,
     and streams audit logs to Kafka and BigQuery.
-
-    Usage::
-
-        runner = ShadowRunner()
-        prod_result = production_predictor.predict(features)
-        runner.run_shadow(prod_result, shadow_predictor, features)
-        # Verify CI gate before promotion:
-        runner.verify_promotion_gate(threshold=0.92)
     """
 
     def __init__(
@@ -105,27 +90,13 @@ class ShadowRunner:
         self._log_buffer: List[ShadowPredictionLog] = []
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def run_shadow(
         self,
         production_result: PredictionResult,
         shadow_predictor: BasePredictor,
         features: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        """Run the shadow predictor asynchronously, compare, and stream log.
-
-        Args:
-            production_result: The result already served from the production model.
-            shadow_predictor: The candidate model to evaluate.
-            features: The same feature dict sent to production.
-
-        Returns:
-            A comparison metrics dict (for testing / debugging), or ``None``
-            if the shadow prediction failed or timed out.
-        """
+        """Run the shadow predictor asynchronously, compare, and stream log."""
         try:
             future = _EXECUTOR.submit(shadow_predictor.predict, features)
             shadow_result = future.result(timeout=self._timeout_s)
@@ -152,6 +123,7 @@ class ShadowRunner:
                     "model": shadow_predictor.model_name,
                     "error": str(exc),
                 },
+                exc_info=True,
             )
             return None
 
@@ -188,16 +160,7 @@ class ShadowRunner:
         min_samples: int = 1,
         raise_on_failure: bool = True,
     ) -> bool:
-        """Evaluate shadow agreement promotion gate.
-
-        Args:
-            threshold: Minimum agreement fraction required (default 0.92 / 92%).
-            min_samples: Minimum comparisons required before gate can pass.
-            raise_on_failure: If True, raises ShadowAgreementGateFailedError on failure.
-
-        Returns:
-            True if gate passed, False otherwise.
-        """
+        """Evaluate shadow agreement promotion gate."""
         if self._comparison_count < min_samples:
             msg = f"Insufficient shadow samples ({self._comparison_count} < {min_samples})"
             if raise_on_failure:
@@ -227,10 +190,6 @@ class ShadowRunner:
         )
         return True
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _compare_pair(
         pv: Any,
@@ -249,7 +208,6 @@ class ShadowRunner:
                 return False, score_delta
             delta = abs(sv_f - pv_f)
             next_delta = delta if score_delta is None else score_delta
-            # Agreement if within 10 % relative tolerance (guard pv == 0)
             relative_diff = delta / max(abs(pv_f), 1e-9)
             return relative_diff <= 0.10, next_delta
         return pv == sv, score_delta
@@ -329,7 +287,7 @@ class ShadowRunner:
             try:
                 self._kafka_producer(self._kafka_topic, log_record.to_dict())
             except Exception as e:
-                logger.warning("Failed to stream shadow prediction to Kafka: %s", e)
+                logger.warning("Failed to stream shadow prediction to Kafka: %s", e, exc_info=True)
 
     @staticmethod
     def _log_comparison(
