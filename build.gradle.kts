@@ -124,8 +124,8 @@ subprojects {
             dependency("com.google.cloud:google-cloud-storage:2.38.0")
             dependency("org.apache.parquet:parquet-column:1.13.1")
             dependency("com.squareup.okhttp3:mockwebserver:5.5.1")
-            dependency("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.5")
-            dependency("org.springdoc:springdoc-openapi-starter-webflux-ui:2.8.5")
+            dependency("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.2.0")
+            dependency("org.springdoc:springdoc-openapi-starter-webflux-ui:3.2.0")
             dependency("org.openjdk.jmh:jmh-core:1.37")
             dependency("org.openjdk.jmh:jmh-generator-annprocess:1.37")
         }
