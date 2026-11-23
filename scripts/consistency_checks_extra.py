@@ -336,7 +336,7 @@ def verify_dockerfile_base_images() -> list[str]:
     issues: list[str] = []
     for svc_dir in sorted(p for p in services_root.iterdir() if p.is_dir()):
         svc = svc_dir.name
-        if svc in {"build", "go-shared"}:
+        if svc.startswith(".") or svc in {"build", "go-shared"}:
             continue
         df = svc_dir / "Dockerfile"
         if not df.is_file():
