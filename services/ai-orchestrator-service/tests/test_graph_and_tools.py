@@ -418,7 +418,7 @@ async def test_tool_registry_sends_internal_headers_without_bearer_authorization
 @pytest.mark.asyncio
 async def test_substitute_intent_skips_inventory_check_without_store_and_items() -> None:
     without_ctx = AgentState(query="oat milk substitute", intent=IntentType.SUBSTITUTE)
-    assert plan_tools(without_ctx) == [{"tool": "catalog.search", "params": {"q": "oat milk substitute"}}]
+    assert plan_tools(without_ctx) == [{"tool": "catalog.search", "params": {"query": "oat milk substitute"}}]
 
     with_ctx = AgentState(
         query="oat milk substitute",
@@ -426,7 +426,7 @@ async def test_substitute_intent_skips_inventory_check_without_store_and_items()
         context={"store_id": "store-1", "items": [{"productId": "prod-1", "quantity": 1}]},
     )
     assert plan_tools(with_ctx) == [
-        {"tool": "catalog.search", "params": {"q": "oat milk substitute"}},
+        {"tool": "catalog.search", "params": {"query": "oat milk substitute"}},
         {"tool": "inventory.check", "body": {"storeId": "store-1", "items": [{"productId": "prod-1", "quantity": 1}]}},
     ]
 

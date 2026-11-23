@@ -47,6 +47,9 @@ __all__ = [
 ]
 
 
+_USER_SCOPED_TOOLS = frozenset({"order.get", "cart.get"})
+
+
 class ToolRegistry:
     """Central registry of callable tools backed by Java micro-services.
 
@@ -157,6 +160,7 @@ class ToolRegistry:
         params: Optional[Dict[str, Any]] = None,
         body: Optional[Dict[str, Any]] = None,
         path_params: Optional[Dict[str, str]] = None,
+        user_id: Optional[str] = None,
     ) -> ToolResult:
         """Invoke a tool with circuit breaker, retry, and timeout.
 
@@ -185,6 +189,14 @@ class ToolRegistry:
                 error="Circuit breaker open",
             )
 
+        caller_uid: Optional[str] = user_id.strip() if user_id is not None else None
+        if user_id is not None and tool_name in _USER_SCOPED_TOOLS and not caller_uid:
+            return ToolResult(
+                tool_name=tool_name,
+                success=False,
+                error="authorization_denied: user_id required for user-scoped tool call",
+            )
+
         if tool_name == "cart.get":
             raw_uid = (path_params or {}).get("user_id") if path_params else None
             if (raw_uid is None or not str(raw_uid).strip()) and params:
@@ -195,7 +207,14 @@ class ToolRegistry:
                     success=False,
                     error="user_id_required: empty user_id rejected before cart lookup",
                 )
-            path_params = {**(path_params or {}), "user_id": str(raw_uid).strip()}
+            target_uid = str(raw_uid).strip()
+            if caller_uid is not None and target_uid != caller_uid:
+                return ToolResult(
+                    tool_name=tool_name,
+                    success=False,
+                    error="authorization_denied: cart user_id does not match caller",
+                )
+            path_params = {**(path_params or {}), "user_id": target_uid}
 
         url, validation_error = _validate_and_build_url(tool, params=params, path_params=path_params)
         if validation_error or url is None:
@@ -205,6 +224,11 @@ class ToolRegistry:
                 error=validation_error or "Security violation: invalid request URL",
             )
 
+        effective_params = dict(params) if params else None
+        if tool_name == "catalog.search" and effective_params is not None:
+            if "query" not in effective_params and "q" in effective_params:
+                effective_params["query"] = effective_params["q"]
+
         headers: Dict[str, str] = {}
         if tool.is_write:
             headers["X-Idempotency-Key"] = str(uuid.uuid4())
@@ -212,6 +236,9 @@ class ToolRegistry:
         if self._settings.internal_service_token:
             headers["X-Internal-Service"] = "ai-orchestrator-service"
             headers["X-Internal-Token"] = self._settings.internal_service_token
+
+        if caller_uid:
+            headers[self._settings.user_id_header_name] = caller_uid
 
         if self._client is None:
             await self.start()
@@ -230,14 +257,14 @@ class ToolRegistry:
                     resp = await self._client.post(
                         url,
                         json=body or {},
-                        params=params,
+                        params=effective_params,
                         headers=headers,
                         timeout=tool.timeout_s,
                     )
                 else:
                     resp = await self._client.get(
                         url,
-                        params=params,
+                        params=effective_params,
                         headers=headers,
                         timeout=tool.timeout_s,
                     )
@@ -247,6 +274,23 @@ class ToolRegistry:
                 if resp.status_code < 400:
                     tool.circuit_breaker.record_success()
                     data = resp.json() if resp.content else {}
+                    if caller_uid is not None and tool_name in _USER_SCOPED_TOOLS:
+                        owner_uid = (
+                            data.get("userId") or data.get("user_id")
+                            if isinstance(data, dict)
+                            else None
+                        )
+                        if not owner_uid or str(owner_uid).strip() != caller_uid:
+                            logger.warning(
+                                "tool.call.bola_blocked",
+                                extra={"tool": tool_name, "caller_uid": caller_uid},
+                            )
+                            return ToolResult(
+                                tool_name=tool_name,
+                                success=False,
+                                error="authorization_denied: resource ownership mismatch",
+                                latency_ms=elapsed_ms,
+                            )
                     logger.info(
                         "tool.call.success",
                         extra={

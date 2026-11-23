@@ -79,6 +79,7 @@ class ExecutionService:
         runner: AgentExecutionRunner,
         checkpointer: Optional[CheckpointSaver] = None,
         graph_wrapper: Optional[GraphWrapperFn] = None,
+        restore_pii: bool = True,
     ) -> ExecutionOutcome:
         start_ns = time.monotonic_ns()
 
@@ -153,10 +154,17 @@ class ExecutionService:
                 elapsed_ms=elapsed_ms,
             )
 
+        response_text = evaluation.response
+        if restore_pii and bool((user_id or "").strip()):
+            response_text = pii_vault.restore(
+                response_text,
+                allowed_types={"EMAIL", "PHONE", "ADDRESS"},
+            )
+
         return CompletedOutcome(
             request_id=result.request_id,
             state=result,
-            response_text=evaluation.response,
+            response_text=response_text,
             citations=evaluation.citations,
             elapsed_ms=elapsed_ms,
         )

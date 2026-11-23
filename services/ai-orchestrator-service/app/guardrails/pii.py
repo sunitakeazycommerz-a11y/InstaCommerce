@@ -11,7 +11,7 @@ import logging
 import os
 import re
 import threading
-from typing import Any, Dict, List, Tuple
+from typing import AbstractSet, Any, Dict, List, Optional, Tuple
 
 from app.core.redaction import (
     CARD_PATTERN,
@@ -123,16 +123,27 @@ class PIIVault:
 
         return text, mapping
 
-    def restore(self, text: str) -> str:
+    def restore(
+        self,
+        text: str,
+        *,
+        allowed_types: Optional[AbstractSet[str]] = None,
+    ) -> str:
         """Restore PII in *text* using the internal vault.
 
-        Placeholders that have no matching vault entry are left unchanged.
+        When *allowed_types* is supplied (e.g., ``{"EMAIL", "PHONE", "ADDRESS"}``),
+        only placeholders matching those PII categories are restored.
         """
         if not isinstance(text, str) or not text:
             return text
 
         with self._lock:
             for placeholder, original in self._vault.items():
+                if allowed_types is not None:
+                    parts = placeholder.strip("[]").split("_")
+                    pii_type = parts[1] if len(parts) >= 3 else ""
+                    if pii_type not in allowed_types:
+                        continue
                 text = text.replace(placeholder, original)
         return text
 

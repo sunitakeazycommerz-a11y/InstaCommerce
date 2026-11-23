@@ -51,6 +51,11 @@ def _get_settings() -> Settings:
     return _settings
 
 
+def get_settings() -> Settings:
+    """Return the shared ``Settings`` singleton."""
+    return _get_settings()
+
+
 async def _get_registry() -> ToolRegistry:
     global _tool_registry
     if _tool_registry is None:
@@ -98,6 +103,9 @@ async def _get_graph():
             settings=settings,
             tool_registry=registry,
             checkpointer=_checkpoint_saver,
+            llm_client=_llm_client,
+            retriever=_retriever,
+            semantic_cache=_semantic_cache,
         )
     return _compiled_graph
 
@@ -123,8 +131,9 @@ def get_audit_publisher() -> Optional[AuditEventPublisher]:
 
 
 def set_llm_client(client: Optional[LlmClient]) -> None:
-    global _llm_client
+    global _llm_client, _compiled_graph
     _llm_client = client
+    _compiled_graph = None
 
 
 def get_llm_client() -> Optional[LlmClient]:
@@ -132,8 +141,9 @@ def get_llm_client() -> Optional[LlmClient]:
 
 
 def set_retriever(retriever: Optional[CachedRetrievalProvider]) -> None:
-    global _retriever
+    global _retriever, _compiled_graph
     _retriever = retriever
+    _compiled_graph = None
 
 
 def get_retriever() -> Optional[CachedRetrievalProvider]:
@@ -141,8 +151,9 @@ def get_retriever() -> Optional[CachedRetrievalProvider]:
 
 
 def set_semantic_cache(cache: Optional[SemanticCache]) -> None:
-    global _semantic_cache
+    global _semantic_cache, _compiled_graph
     _semantic_cache = cache
+    _compiled_graph = None
 
 
 def get_semantic_cache() -> Optional[SemanticCache]:
@@ -180,6 +191,11 @@ async def shutdown_handlers() -> None:
             logger.exception("handlers.shutdown.llm_client_close_failed")
         finally:
             _llm_client = None
+
+    try:
+        await _execution_runner.close()
+    except Exception:
+        logger.exception("handlers.shutdown.runner_close_failed")
 
     _compiled_graph = None
 

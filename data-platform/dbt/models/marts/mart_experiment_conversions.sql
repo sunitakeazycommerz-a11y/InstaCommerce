@@ -46,6 +46,7 @@ aggregated_metrics AS (
 
 control_benchmark AS (
     SELECT
+        experiment_id,
         experiment_key,
         converted_users AS control_converted_users,
         conversion_rate AS control_conversion_rate,
@@ -73,7 +74,7 @@ pooled_comparison AS (
             m.total_users + cb.control_users
         ) AS p_pool
     FROM aggregated_metrics m
-    LEFT JOIN control_benchmark cb USING (experiment_key)
+    LEFT JOIN control_benchmark cb USING (experiment_id, experiment_key)
 )
 
 SELECT

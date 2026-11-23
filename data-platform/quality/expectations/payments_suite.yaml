@@ -18,7 +18,7 @@ expectation_suite:
     - expectation_type: expect_column_values_to_be_in_set
       kwargs:
         column: status
-        value_set: [INITIATED, PROCESSING, SUCCESS, FAILED, DECLINED, REFUNDED, REVERSED]
+        value_set: [INITIATED, PROCESSING, SUCCESS, AUTHORIZE_PENDING, AUTHORIZED, CAPTURE_PENDING, CAPTURED, VOID_PENDING, VOIDED, PARTIALLY_REFUNDED, FAILED, DECLINED, REFUNDED, REVERSED, DISPUTED]
     - expectation_type: expect_column_values_to_be_in_set
       kwargs:
         column: method

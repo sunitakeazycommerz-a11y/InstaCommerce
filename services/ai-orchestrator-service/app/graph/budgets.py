@@ -17,6 +17,11 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+try:
+    import redis.asyncio as aioredis  # type: ignore[import-untyped]
+except ImportError:
+    aioredis = None  # type: ignore[assignment]
+
 if TYPE_CHECKING:
     from app.config import Settings
     from app.graph.state import AgentState
@@ -234,6 +239,127 @@ def apply_budget_to_state(state: "AgentState", tracker: BudgetTracker) -> "Agent
             "elapsed_ms": max(state.elapsed_ms, snap["elapsed_ms"]),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Distributed Redis session budget store (with graceful fallback)
+# ---------------------------------------------------------------------------
+
+class RedisSessionBudgetStore:
+    """Optional Redis-backed store for distributed per-session budget enforcement."""
+
+    _KEY_PREFIX = "instacommerce:agent:budget:"
+
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379/0",
+        ttl_s: int = 3_600,
+        retry_cooldown_s: float = 15.0,
+        max_cooldown_s: float = 300.0,
+    ) -> None:
+        self._redis_url = redis_url
+        self._ttl_s = max(60, ttl_s)
+        self._retry_cooldown_s = max(0.0, retry_cooldown_s)
+        self._max_cooldown_s = max(self._retry_cooldown_s, max_cooldown_s)
+        self._redis: Any = None
+        self._use_fallback = False
+        self._consecutive_failures = 0
+        self._next_retry_at = 0.0
+
+    @property
+    def is_fallback_active(self) -> bool:
+        return self._use_fallback
+
+    def _mark_failure(self) -> None:
+        self._redis = None
+        self._use_fallback = True
+        backoff = min(
+            self._retry_cooldown_s * (2 ** self._consecutive_failures),
+            self._max_cooldown_s,
+        )
+        self._consecutive_failures += 1
+        self._next_retry_at = time.monotonic() + backoff
+
+    async def _get_redis(self) -> Any:
+        if self._redis is not None and not self._use_fallback:
+            return self._redis
+        if self._use_fallback and time.monotonic() < self._next_retry_at:
+            return None
+        if aioredis is None or not self._redis_url:
+            self._mark_failure()
+            return None
+        try:
+            client = aioredis.Redis.from_url(
+                self._redis_url,
+                decode_responses=True,
+                socket_connect_timeout=0.5,
+                socket_timeout=0.5,
+            )
+            await client.ping()
+            self._redis = client
+            self._use_fallback = False
+            self._consecutive_failures = 0
+            self._next_retry_at = 0.0
+            return self._redis
+        except Exception:
+            logger.debug("budget.redis.unavailable", extra={"url": self._redis_url})
+            self._mark_failure()
+            return None
+
+    async def load_usage(self, session_id: str) -> Optional[Dict[str, Any]]:
+        redis = await self._get_redis()
+        if redis is None:
+            return None
+        try:
+            raw = await redis.hgetall(f"{self._KEY_PREFIX}{session_id}")
+            if not raw:
+                return {"total_cost_usd": 0.0, "total_tokens": 0, "tool_calls_used": 0}
+            return {
+                "total_cost_usd": float(raw.get("total_cost_usd", 0.0)),
+                "total_tokens": int(float(raw.get("total_tokens", 0))),
+                "tool_calls_used": int(float(raw.get("tool_calls_used", 0))),
+            }
+        except Exception:
+            logger.warning("budget.redis.load_failed", extra={"session_id": session_id})
+            self._mark_failure()
+            return None
+
+    async def record_usage_delta(
+        self,
+        session_id: str,
+        *,
+        cost_delta: float = 0.0,
+        token_delta: int = 0,
+        tool_calls_delta: int = 0,
+    ) -> Optional[Dict[str, Any]]:
+        redis = await self._get_redis()
+        if redis is None:
+            return None
+        try:
+            key = f"{self._KEY_PREFIX}{session_id}"
+            pipe = redis.pipeline()
+            pipe.hincrbyfloat(key, "total_cost_usd", max(0.0, float(cost_delta)))
+            pipe.hincrby(key, "total_tokens", max(0, int(token_delta)))
+            pipe.hincrby(key, "tool_calls_used", max(0, int(tool_calls_delta)))
+            pipe.expire(key, self._ttl_s)
+            results = await pipe.execute()
+            return {
+                "total_cost_usd": float(results[0]),
+                "total_tokens": int(results[1]),
+                "tool_calls_used": int(results[2]),
+            }
+        except Exception:
+            logger.warning("budget.redis.record_failed", extra={"session_id": session_id})
+            self._mark_failure()
+            return None
+
+    async def close(self) -> None:
+        if self._redis is not None:
+            try:
+                await self._redis.aclose()
+            except Exception:
+                logger.debug("budget.redis.close_failed", exc_info=True)
+            self._redis = None
 
 
 # ---------------------------------------------------------------------------

@@ -40,7 +40,7 @@ DEMAND_VALUE = Histogram(
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
-class DemandFeatures(BaseModel):
+class DemandFeatures(MLBaseModel):
     """Input features for demand forecasting."""
     store_id: str = Field(..., description="Dark-store identifier")
     product_id: str = Field(..., description="SKU / product identifier")
@@ -59,6 +59,7 @@ class DemandFeatures(BaseModel):
     # Promotion
     active_promotion: bool = False
     discount_percent: float = Field(default=0.0, ge=0, le=100, description="Active discount %")
+    model_version: Optional[str] = None
 
 
 class DemandResponse(MLBaseModel):
@@ -72,6 +73,9 @@ class DemandResponse(MLBaseModel):
     model_version: str
     feature_contributions: Dict[str, float] = Field(default_factory=dict)
     method: str = Field(default="rule_based")
+    is_cold_start: bool = False
+    drift_detected: bool = False
+    sla_breached: bool = False
 
 
 # ---------------------------------------------------------------------------

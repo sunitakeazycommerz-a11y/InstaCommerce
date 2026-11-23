@@ -35,6 +35,8 @@ class SubstituteRequest(BaseModel):
     product_id: UUID
     candidate_ids: List[UUID] = Field(default_factory=list, max_length=20)
     store_id: Optional[str] = Field(None, min_length=1, max_length=64)
+    user_id: Optional[UUID] = None
+    session_id: Optional[str] = Field(None, min_length=1, max_length=64)
     limit: int = Field(1, ge=1, le=5)
     execute_tools: bool = False
     request_id: Optional[str] = Field(None, min_length=6, max_length=64)
@@ -42,6 +44,7 @@ class SubstituteRequest(BaseModel):
 
 class RecommendRequest(BaseModel):
     user_id: Optional[UUID] = None
+    session_id: Optional[str] = Field(None, min_length=1, max_length=64)
     seed_product_id: Optional[UUID] = None
     recent_product_ids: List[UUID] = Field(default_factory=list, max_length=20)
     category: Optional[str] = Field(None, min_length=1, max_length=64)

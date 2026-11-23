@@ -48,7 +48,7 @@ class CLVSegment(str, Enum):
     BRONZE = "bronze"       # <$50/yr
 
 
-class CLVFeatures(BaseModel):
+class CLVFeatures(MLBaseModel):
     """Input features for CLV prediction."""
     user_id: str = Field(..., description="User identifier")
     # RFM features (Recency, Frequency, Monetary)
@@ -69,6 +69,7 @@ class CLVFeatures(BaseModel):
     # Channel
     is_organic_acquisition: bool = True
     preferred_payment: str = Field(default="card", description="Preferred payment method")
+    model_version: Optional[str] = None
 
 
 class CLVResponse(MLBaseModel):
@@ -82,6 +83,9 @@ class CLVResponse(MLBaseModel):
     model_version: str
     feature_contributions: Dict[str, float] = Field(default_factory=dict)
     method: str = Field(default="rule_based")
+    is_cold_start: bool = False
+    drift_detected: bool = False
+    sla_breached: bool = False
 
 
 # ---------------------------------------------------------------------------

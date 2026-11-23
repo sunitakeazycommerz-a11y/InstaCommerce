@@ -62,16 +62,19 @@ async def lifespan(app_instance: FastAPI):
     set_checkpoint_saver(checkpoint_saver)
 
     registry = await get_registry()
+    semantic_cache = SemanticCache()
+    set_llm_client(llm_client)
+    set_retriever(retriever)
+    set_semantic_cache(semantic_cache)
     agent_graph = build_agent_graph(
         settings=settings,
         tool_registry=registry,
         checkpointer=checkpoint_saver,
+        llm_client=llm_client,
+        retriever=retriever,
+        semantic_cache=semantic_cache,
     )
     set_compiled_graph(agent_graph)
-    set_llm_client(llm_client)
-    set_retriever(retriever)
-    semantic_cache = SemanticCache()
-    set_semantic_cache(semantic_cache)
 
     app_instance.state.audit_publisher = audit_publisher
     app_instance.state.checkpoint_saver = checkpoint_saver

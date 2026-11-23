@@ -66,6 +66,8 @@ class Settings:
     max_missing_feature_ratio: float = float(os.getenv("AI_INFERENCE_MAX_MISSING_RATIO", "0.35"))
     strict_sla_timeout: bool = parse_bool(os.getenv("AI_INFERENCE_STRICT_SLA_TIMEOUT"), False)
     shadow_timeout_seconds: float = float(os.getenv("AI_INFERENCE_SHADOW_TIMEOUT_SECONDS", "0.25"))
+    onnx_model_dir: str = os.getenv("AI_INFERENCE_ONNX_MODEL_DIR", "")
+    model_artifact_dir: str = os.getenv("AI_INFERENCE_MODEL_ARTIFACT_DIR", "")
     sla_budgets_ms: Dict[str, float] = field(
         default_factory=lambda: {
             model: float(os.getenv(f"AI_INFERENCE_SLA_{model.upper()}_MS", str(default_ms)))
@@ -84,32 +86,192 @@ def configure_logging() -> None:
 
 DEFAULT_WEIGHTS: Dict[str, Any] = {
     "eta": {
-        "version": "eta-linear-v1",
-        "bias": 4.5,
-        "weights": {
-            "distance_km": 2.3,
-            "item_count": 0.6,
-            "traffic_factor": 3.1,
+        "default_version": "eta-linear-v1",
+        "versions": {
+            "eta-linear-v1": {
+                "bias": 4.5,
+                "weights": {
+                    "distance_km": 2.3,
+                    "item_count": 0.6,
+                    "traffic_factor": 3.1,
+                },
+            },
+            "eta-lgbm-v1": {
+                "bias": 4.5,
+                "weights": {
+                    "distance_km": 2.3,
+                    "item_count": 0.6,
+                    "traffic_factor": 3.1,
+                },
+            },
+            "eta-onnx-v1": {
+                "bias": 4.5,
+                "weights": {
+                    "distance_km": 2.3,
+                    "item_count": 0.6,
+                    "traffic_factor": 3.1,
+                },
+            },
         },
     },
     "ranking": {
-        "version": "ranking-linear-v1",
-        "bias": 0.15,
-        "weights": {
-            "relevance_score": 0.55,
-            "price_score": 0.2,
-            "availability_score": 0.35,
-            "user_affinity": 0.4,
+        "default_version": "ranking-linear-v1",
+        "versions": {
+            "ranking-linear-v1": {
+                "bias": 0.15,
+                "weights": {
+                    "relevance_score": 0.55,
+                    "price_score": 0.2,
+                    "availability_score": 0.35,
+                    "user_affinity": 0.4,
+                },
+            },
+            "ranking-lambdamart-v1": {
+                "bias": 0.15,
+                "weights": {
+                    "relevance_score": 0.55,
+                    "price_score": 0.2,
+                    "availability_score": 0.35,
+                    "user_affinity": 0.4,
+                },
+            },
+            "ranking-onnx-v1": {
+                "bias": 0.15,
+                "weights": {
+                    "relevance_score": 0.55,
+                    "price_score": 0.2,
+                    "availability_score": 0.35,
+                    "user_affinity": 0.4,
+                },
+            },
         },
     },
     "fraud": {
-        "version": "fraud-logit-v1",
-        "bias": -1.4,
-        "weights": {
-            "order_amount": 0.012,
-            "chargeback_rate": 4.8,
-            "device_risk": 2.1,
-            "account_age_days": -0.015,
+        "default_version": "fraud-logit-v1",
+        "versions": {
+            "fraud-logit-v1": {
+                "bias": -1.4,
+                "weights": {
+                    "order_amount": 0.012,
+                    "chargeback_rate": 4.8,
+                    "device_risk": 2.1,
+                    "account_age_days": -0.015,
+                },
+            },
+            "fraud-xgb-v1": {
+                "bias": -1.4,
+                "weights": {
+                    "order_amount": 0.012,
+                    "chargeback_rate": 4.8,
+                    "device_risk": 2.1,
+                    "account_age_days": -0.015,
+                },
+            },
+            "fraud-onnx-v1": {
+                "bias": -1.4,
+                "weights": {
+                    "order_amount": 0.012,
+                    "chargeback_rate": 4.8,
+                    "device_risk": 2.1,
+                    "account_age_days": -0.015,
+                },
+            },
+        },
+    },
+    "demand": {
+        "default_version": "demand-tft-v1",
+        "versions": {
+            "demand-tft-v1": {
+                "bias": 1.5,
+                "weights": {
+                    "sales_same_hour_last_week": 0.45,
+                    "sales_avg_7d": 0.35,
+                    "sales_avg_30d": 0.20,
+                    "temperature_celsius": 0.05,
+                    "discount_percent": 0.12,
+                },
+            },
+            "demand-onnx-v1": {
+                "bias": 1.5,
+                "weights": {
+                    "sales_same_hour_last_week": 0.45,
+                    "sales_avg_7d": 0.35,
+                    "sales_avg_30d": 0.20,
+                    "temperature_celsius": 0.05,
+                    "discount_percent": 0.12,
+                },
+            },
+        },
+    },
+    "personalization": {
+        "default_version": "pers-ncf-v1",
+        "versions": {
+            "pers-ncf-v1": {
+                "bias": 0.10,
+                "weights": {
+                    "user_avg_order_value": 0.001,
+                    "user_order_frequency_7d": 0.15,
+                    "time_of_day_hour": 0.02,
+                },
+            },
+            "pers-onnx-v1": {
+                "bias": 0.10,
+                "weights": {
+                    "user_avg_order_value": 0.001,
+                    "user_order_frequency_7d": 0.15,
+                    "time_of_day_hour": 0.02,
+                },
+            },
+        },
+    },
+    "clv": {
+        "default_version": "clv-bg-nbd-v1",
+        "versions": {
+            "clv-bg-nbd-v1": {
+                "bias": 2000.0,
+                "weights": {
+                    "frequency_total": 1200.0,
+                    "frequency_30d": 4500.0,
+                    "monetary_avg_cents": 6.0,
+                    "tenure_days": 15.0,
+                    "recency_days": -40.0,
+                },
+            },
+            "clv-onnx-v1": {
+                "bias": 2000.0,
+                "weights": {
+                    "frequency_total": 1200.0,
+                    "frequency_30d": 4500.0,
+                    "monetary_avg_cents": 6.0,
+                    "tenure_days": 15.0,
+                    "recency_days": -40.0,
+                },
+            },
+        },
+    },
+    "pricing": {
+        "default_version": "pricing-bandit-v1",
+        "versions": {
+            "pricing-bandit-v1": {
+                "bias": 250.0,
+                "weights": {
+                    "distance_km": 35.0,
+                    "item_count": 10.0,
+                    "surge_multiplier": 180.0,
+                    "pending_orders_in_zone": 8.0,
+                    "active_riders_in_zone": -12.0,
+                },
+            },
+            "pricing-onnx-v1": {
+                "bias": 250.0,
+                "weights": {
+                    "distance_km": 35.0,
+                    "item_count": 10.0,
+                    "surge_multiplier": 180.0,
+                    "pending_orders_in_zone": 8.0,
+                    "active_riders_in_zone": -12.0,
+                },
+            },
         },
     },
 }

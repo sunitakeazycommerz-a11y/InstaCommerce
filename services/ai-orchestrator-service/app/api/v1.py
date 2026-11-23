@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 
 from app.api.execution import (
     BudgetExceededOutcome,
@@ -21,13 +21,12 @@ from app.api.handlers import (
     get_llm_client,
     get_retriever,
     get_semantic_cache,
+    get_settings,
 )
 from app.api.v1_flows import (
     handle_recommend,
     handle_substitute,
-    redact_retrieval_payload,
 )
-from app.config import Settings
 from app.core.llm import derive_request_id
 from app.core.logging import log_event, sanitize_llm_payload
 from app.graph.budgets import token_cost
@@ -51,7 +50,6 @@ router = APIRouter(tags=["agent-v1"])
 
 _v1_injection_detector = InjectionDetector()
 _v1_output_policy = OutputPolicy()
-_settings = Settings()
 
 
 def _to_v1_tool_results(graph_results: List[GraphToolResult]) -> List[ToolResult]:
@@ -67,7 +65,7 @@ def _to_v1_tool_results(graph_results: List[GraphToolResult]) -> List[ToolResult
 
 
 class _AssistGraphAdapter:
-    """Runs optional semantic-cache / LLM step before the shared compiled LangGraph."""
+    """Routes unified graphs directly and bridges stub graphs with cache/retrieval/LLM."""
 
     def __init__(
         self,
@@ -77,19 +75,24 @@ class _AssistGraphAdapter:
         self._graph = compiled_graph
         self._sanitized_payload = sanitized_payload
         self.mode: Literal["fallback", "llm"] = "fallback"
-        self.override_intent: Optional[str] = None
 
     async def ainvoke(self, state_dict: Dict[str, Any]) -> Dict[str, Any]:
+        if getattr(self._graph, "_is_unified_orchestrator_graph", False):
+            return await self._graph.ainvoke(state_dict)
+
         updated = dict(state_dict)
         semantic_cache = get_semantic_cache()
         llm_client = get_llm_client()
         retriever = get_retriever()
 
-        safe_query, safe_payload = redact_retrieval_payload(
-            self._sanitized_payload,
-            str(updated.get("query", "")),
+        safe_query = str(updated.get("query", ""))
+        safe_payload = sanitize_llm_payload(
+            {
+                **self._sanitized_payload,
+                "query": safe_query,
+                "context": updated.get("context", {}),
+            }
         )
-        updated["query"] = safe_query
 
         if semantic_cache is not None:
             match = semantic_cache.find_match(safe_query)
@@ -102,8 +105,10 @@ class _AssistGraphAdapter:
                 )
                 updated["response"] = str(match["answer"])
                 updated["intent"] = IntentType.SUPPORT.value
+                updated["intent_confidence"] = float(match["similarity"])
+                updated["generation_mode"] = "llm"
+                updated["execute_tools"] = False
                 self.mode = "llm"
-                self.override_intent = IntentType.SUPPORT.value
 
         if self.mode != "llm" and llm_client is not None:
             if retriever is not None:
@@ -113,8 +118,16 @@ class _AssistGraphAdapter:
             if isinstance(message, str) and message.strip():
                 self.mode = "llm"
                 updated["response"] = message
+                updated["generation_mode"] = "llm"
                 if llm_resp and llm_resp.get("intent"):
-                    self.override_intent = str(llm_resp["intent"])
+                    try:
+                        updated["intent"] = IntentType(str(llm_resp["intent"])).value
+                        updated["intent_confidence"] = max(
+                            float(updated.get("intent_confidence", 0.0) or 0.0),
+                            0.8,
+                        )
+                    except ValueError:
+                        pass
                 usage = llm_resp.get("usage") if isinstance(llm_resp, dict) else None
                 if isinstance(usage, dict):
                     in_tok = int(usage.get("prompt_tokens", 0) or 0)
@@ -122,7 +135,7 @@ class _AssistGraphAdapter:
                 else:
                     in_tok = max(1, len(safe_query) // 4)
                     out_tok = max(1, len(message) // 4)
-                model_name = _settings.llm_model or "default"
+                model_name = get_settings().llm_model or "default"
                 updated["total_tokens_used"] = int(updated.get("total_tokens_used", 0)) + in_tok + out_tok
                 updated["total_cost_usd"] = float(updated.get("total_cost_usd", 0.0)) + token_cost(
                     model_name, in_tok, out_tok
@@ -133,7 +146,7 @@ class _AssistGraphAdapter:
 
 @router.post("/agent/assist", response_model=AssistResponse)
 async def assist(request: AssistRequest) -> AssistResponse:
-    _, sanitized_payload = redact_retrieval_payload(request.model_dump(mode="json"), request.query)
+    sanitized_payload = sanitize_llm_payload(request.model_dump(mode="json"))
     request_id = derive_request_id(request.request_id, sanitized_payload, "assist")
     raw_context = request.context.model_dump(mode="json", exclude_none=True)
 
@@ -161,6 +174,7 @@ async def assist(request: AssistRequest) -> AssistResponse:
         runner=get_execution_runner(),
         checkpointer=get_checkpoint_saver(),
         graph_wrapper=_wrap_graph,
+        restore_pii=get_settings().pii_redaction_enabled,
     )
 
     if isinstance(outcome, PolicyViolationOutcome) and outcome.stage == "injection":
@@ -191,20 +205,25 @@ async def assist(request: AssistRequest) -> AssistResponse:
     assert outcome.state is not None
     result = outcome.state
     adapter = adapter_holder[0] if adapter_holder else None
-    mode: Literal["fallback", "llm"] = adapter.mode if adapter is not None else "fallback"
-    final_intent = (adapter.override_intent if adapter is not None else None) or result.intent.value
+    mode: Literal["fallback", "llm"] = (
+        "llm"
+        if (result.generation_mode == "llm" or (adapter is not None and adapter.mode == "llm"))
+        else "fallback"
+    )
+    final_intent = result.intent.value
     final_message = (
         "Connecting you with a support specialist to review this request."
         if isinstance(outcome, PolicyViolationOutcome)
         else outcome.response_text
     )
 
+    raw_plans = result.planned_tool_calls or plan_tools(result)
     planned_calls = [
         ToolCall(
             name=str(plan["tool"]),
             arguments=dict(plan.get("params") or plan.get("body") or plan.get("path_params") or {}),
         )
-        for plan in plan_tools(result)
+        for plan in raw_plans
     ]
     response = AssistResponse(
         request_id=result.request_id,
@@ -240,10 +259,16 @@ async def assist(request: AssistRequest) -> AssistResponse:
 
 
 @router.post("/agent/substitute", response_model=SubstituteResponse)
-async def substitute(request: SubstituteRequest) -> SubstituteResponse:
-    return await handle_substitute(request)
+async def substitute(
+    request: SubstituteRequest,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> SubstituteResponse:
+    return await handle_substitute(request, user_id_header=x_user_id)
 
 
 @router.post("/agent/recommend", response_model=RecommendResponse)
-async def recommend(request: RecommendRequest) -> RecommendResponse:
-    return await handle_recommend(request)
+async def recommend(
+    request: RecommendRequest,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> RecommendResponse:
+    return await handle_recommend(request, user_id_header=x_user_id)

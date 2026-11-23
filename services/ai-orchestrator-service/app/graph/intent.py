@@ -68,19 +68,23 @@ def classify_intent(state: AgentState) -> AgentState:
                 }
             )
 
-        query_lower = state.query.lower()
-        scores: Dict[IntentType, int] = {}
-        for intent, keywords in _INTENT_KEYWORDS.items():
-            score = sum(1 for kw in keywords if kw in query_lower)
-            if score > 0:
-                scores[intent] = score
-
-        if scores:
-            best_intent = max(scores, key=lambda item: scores[item])
-            confidence = min(1.0, scores[best_intent] / max(len(_INTENT_KEYWORDS[best_intent]), 1))
+        if state.intent != IntentType.UNKNOWN and state.intent_confidence > 0.0:
+            best_intent = state.intent
+            confidence = state.intent_confidence
         else:
-            best_intent = IntentType.UNKNOWN
-            confidence = 0.0
+            query_lower = state.query.lower()
+            scores: Dict[IntentType, int] = {}
+            for intent, keywords in _INTENT_KEYWORDS.items():
+                score = sum(1 for kw in keywords if kw in query_lower)
+                if score > 0:
+                    scores[intent] = score
+
+            if scores:
+                best_intent = max(scores, key=lambda item: scores[item])
+                confidence = min(1.0, scores[best_intent] / max(len(_INTENT_KEYWORDS[best_intent]), 1))
+            else:
+                best_intent = IntentType.UNKNOWN
+                confidence = 0.0
 
         risk = _RISK_INTENTS.get(best_intent, RiskLevel.MEDIUM)
         needs_escalation = best_intent == IntentType.UNKNOWN and confidence < 0.1

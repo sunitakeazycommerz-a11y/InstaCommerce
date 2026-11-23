@@ -22,7 +22,11 @@ SELECT
     d.delivered_at,
     d.distance_meters,
     TIMESTAMP_DIFF(d.delivered_at, o.placed_at, MINUTE) AS total_delivery_minutes,
-    TIMESTAMP_DIFF(d.delivered_at, o.placed_at, MINUTE) <= 10 AS sla_met,
+    CASE
+        WHEN o.status = 'DELIVERED' AND d.delivered_at IS NOT NULL
+        THEN TIMESTAMP_DIFF(d.delivered_at, o.placed_at, MINUTE) <= 10
+        ELSE NULL
+    END AS sla_met,
     o.order_date,
     GREATEST(COALESCE(o._cdc_updated_at, d._cdc_updated_at), COALESCE(d._cdc_updated_at, o._cdc_updated_at)) AS updated_at
 FROM orders o

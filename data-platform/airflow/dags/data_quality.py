@@ -39,22 +39,22 @@ QUALITY_THRESHOLD = 0.95  # Block downstream if pass rate below 95%
 
 DOMAIN_SUITES = {
     "orders": {
-        "suite_name": "orders_suite",
+        "suite_name": "orders_validation",
         "datasource": f"{PROJECT_ID}.staging.stg_orders",
         "critical": True,
     },
     "payments": {
-        "suite_name": "payments_suite",
+        "suite_name": "payments_validation",
         "datasource": f"{PROJECT_ID}.staging.stg_payments",
         "critical": True,
     },
     "inventory": {
-        "suite_name": "inventory_suite",
+        "suite_name": "inventory_validation",
         "datasource": f"{PROJECT_ID}.staging.stg_inventory_movements",
         "critical": True,
     },
     "users": {
-        "suite_name": "users_suite",
+        "suite_name": "users_validation",
         "datasource": f"{PROJECT_ID}.staging.stg_users",
         "critical": False,
     },
@@ -202,13 +202,13 @@ with DAG(
             SELECT COALESCE(SUM(total_cents), 0) / 100.0 AS orders_revenue
             FROM `{orders_table}`
             WHERE DATE(placed_at) = '{date_str}'
-              AND status IN ('PLACED', 'PACKED', 'OUT_FOR_DELIVERY', 'DELIVERED')
+              AND status IN ('PLACED', 'PACKING', 'PACKED', 'OUT_FOR_DELIVERY', 'DELIVERED')
         ),
         daily_payments AS (
             SELECT COALESCE(SUM(amount_cents), 0) / 100.0 AS payments_captured
             FROM `{payments_table}`
-            WHERE DATE(created_at) = '{date_str}'
-              AND status = 'SUCCESS'
+            WHERE DATE(COALESCE(completed_at, initiated_at)) = '{date_str}'
+              AND status IN ('CAPTURED', 'COMPLETED', 'SUCCESS')
         )
         SELECT orders_revenue, payments_captured,
                ABS(orders_revenue - payments_captured) AS discrepancy_amount,

@@ -17,7 +17,7 @@ SELECT
     ROUND(SUM(d.total_cents) / 100.0, 2) AS total_revenue_usd,
     ROUND(AVG(d.total_cents) / 100.0, 2) AS avg_order_value_usd,
     COUNTIF(d.sla_met) AS on_time_orders,
-    ROUND(COUNTIF(d.sla_met) * 100.0 / NULLIF(COUNT(*), 0), 2) AS on_time_pct,
+    ROUND(COUNTIF(d.sla_met) * 100.0 / NULLIF(COUNT(d.sla_met), 0), 2) AS on_time_pct,
     CURRENT_TIMESTAMP() AS calculated_at
 FROM {{ ref('int_order_deliveries') }} d
 GROUP BY 1, 2

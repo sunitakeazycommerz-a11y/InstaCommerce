@@ -5,7 +5,12 @@ import logging
 from typing import Any, Dict, Optional
 
 from app.config import Settings
-from app.graph.budgets import BudgetExceededError, BudgetTracker, budget_tracker_from_state
+from app.graph.budgets import (
+    BudgetExceededError,
+    BudgetTracker,
+    RedisSessionBudgetStore,
+    budget_tracker_from_state,
+)
 from app.graph.checkpoints import CheckpointSaver, run_agent_graph
 from app.graph.state import AgentState
 
@@ -24,6 +29,7 @@ class AgentExecutionRunner:
         max_session_tool_calls: int = 25,
         max_sessions: int = 10_000,
         settings: Optional[Settings] = None,
+        budget_store: Optional[RedisSessionBudgetStore] = None,
     ) -> None:
         self.max_session_cost_usd = max_session_cost_usd
         self.max_session_tokens = max_session_tokens
@@ -31,6 +37,15 @@ class AgentExecutionRunner:
         self.max_sessions = max(1, max_sessions)
         self._settings = settings or _DEFAULT_SETTINGS
         self._session_trackers: OrderedDict[str, BudgetTracker] = OrderedDict()
+        if budget_store is not None:
+            self._budget_store: Optional[RedisSessionBudgetStore] = budget_store
+        elif self._settings.redis_session_budgets_enabled and self._settings.redis_url:
+            self._budget_store = RedisSessionBudgetStore(
+                redis_url=self._settings.redis_url,
+                ttl_s=self._settings.session_budget_ttl_seconds,
+            )
+        else:
+            self._budget_store = None
 
     def get_session_tracker(self, session_id: Optional[str]) -> Optional[BudgetTracker]:
         if not session_id:
@@ -53,6 +68,10 @@ class AgentExecutionRunner:
     def build_request_tracker(self, state: AgentState) -> BudgetTracker:
         return budget_tracker_from_state(state, settings=self._settings)
 
+    async def close(self) -> None:
+        if self._budget_store is not None:
+            await self._budget_store.close()
+
     async def run(
         self,
         graph: Any,
@@ -63,6 +82,22 @@ class AgentExecutionRunner:
         session_id = state.session_id or state.user_id
         session_tracker = self.get_session_tracker(session_id)
         request_tracker = self.build_request_tracker(state)
+
+        if session_tracker is not None and session_id and self._budget_store is not None:
+            remote = await self._budget_store.load_usage(session_id)
+            if remote is not None:
+                session_tracker.total_cost_usd = max(
+                    session_tracker.total_cost_usd,
+                    float(remote["total_cost_usd"]),
+                )
+                session_tracker.total_tokens = max(
+                    session_tracker.total_tokens,
+                    int(remote["total_tokens"]),
+                )
+                session_tracker.tool_calls_used = max(
+                    session_tracker.tool_calls_used,
+                    int(remote["tool_calls_used"]),
+                )
 
         try:
             if session_tracker is not None:
@@ -114,10 +149,33 @@ class AgentExecutionRunner:
         result = AgentState(**result_dict) if isinstance(result_dict, dict) else result_dict
 
         if session_tracker is not None:
+            cost_delta = max(0.0, result.total_cost_usd - state.total_cost_usd)
+            token_delta = max(0, result.total_tokens_used - state.total_tokens_used)
+            tool_calls_delta = max(0, len(result.tool_results) - len(state.tool_results))
             session_tracker.record_usage_delta(
-                cost_delta=result.total_cost_usd - state.total_cost_usd,
-                token_delta=result.total_tokens_used - state.total_tokens_used,
-                tool_calls_delta=len(result.tool_results) - len(state.tool_results),
+                cost_delta=cost_delta,
+                token_delta=token_delta,
+                tool_calls_delta=tool_calls_delta,
             )
+            if session_id and self._budget_store is not None:
+                remote_after = await self._budget_store.record_usage_delta(
+                    session_id,
+                    cost_delta=cost_delta,
+                    token_delta=token_delta,
+                    tool_calls_delta=tool_calls_delta,
+                )
+                if remote_after is not None:
+                    session_tracker.total_cost_usd = max(
+                        session_tracker.total_cost_usd,
+                        float(remote_after["total_cost_usd"]),
+                    )
+                    session_tracker.total_tokens = max(
+                        session_tracker.total_tokens,
+                        int(remote_after["total_tokens"]),
+                    )
+                    session_tracker.tool_calls_used = max(
+                        session_tracker.tool_calls_used,
+                        int(remote_after["tool_calls_used"]),
+                    )
 
         return result

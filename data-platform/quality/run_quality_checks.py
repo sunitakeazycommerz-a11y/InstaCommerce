@@ -53,10 +53,10 @@ SUITES_DIR = Path(__file__).parent / "expectations"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 SUITE_TABLE_MAP = {
-    "orders_validation": "analytics.orders",
-    "payments_validation": "analytics.payments",
-    "inventory_validation": "analytics.inventory",
-    "users_validation": "analytics.users",
+    "orders_validation": "staging.stg_orders",
+    "payments_validation": "staging.stg_payments",
+    "inventory_validation": "staging.stg_inventory_movements",
+    "users_validation": "staging.stg_users",
     "daily_sales_validation": "marts.mart_daily_sales",
 }
 
