@@ -1,10 +1,10 @@
-FROM eclipse-temurin:25-jre-alpine AS runtime
-RUN apk upgrade --no-cache && addgroup -g 1001 appuser && adduser -u 1001 -G appuser -D appuser
+FROM eclipse-temurin:21-jre-alpine AS runtime
+RUN apk upgrade --no-cache && addgroup -g 1001 app && adduser -u 1001 -G app -D app
 WORKDIR /app
 COPY build/libs/*.jar app.jar
-RUN chown -R appuser:appuser /app
+RUN chown -R app:app /app
 
-USER appuser
+USER app
 ENV SERVER_PORT=8088
 EXPOSE 8088
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

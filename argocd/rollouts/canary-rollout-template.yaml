@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: order-service
-          image: asia-south1-docker.pkg.dev/instacommerce/images/order-service:latest
+          image: asia-south1-docker.pkg.dev/instacommerce/images/order-service:v0.1.0
           ports:
             - containerPort: 8084
               name: http

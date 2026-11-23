@@ -34,13 +34,13 @@ canary:
       - name: error-rate
         provider: prometheus
         query: |
-          sum(rate(http_requests_total{status=~"5..",service="{{ .ServiceName }}",region="us-west-2"}[5m])) 
-          / sum(rate(http_requests_total{service="{{ .ServiceName }}",region="us-west-2"}[5m]))
+          sum(rate(http_server_requests_seconds_count{status=~"5..",service="{{ .ServiceName }}",region="us-west-2"}[5m])) 
+          / sum(rate(http_server_requests_seconds_count{service="{{ .ServiceName }}",region="us-west-2"}[5m]))
         successCondition: result < 0.01
       - name: latency-p99
         provider: prometheus
         query: |
-          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="{{ .ServiceName }}",region="us-west-2"}[5m])) by (le))
+          histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{service="{{ .ServiceName }}",region="us-west-2"}[5m])) by (le))
         successCondition: result < 2.0
 
 services:

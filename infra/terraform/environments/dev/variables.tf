@@ -12,6 +12,11 @@ variable "env" {
   default = "dev"
 }
 
+variable "k8s_namespace" {
+  type    = string
+  default = "instacommerce"
+}
+
 variable "subnet_cidr" {
   type    = string
   default = "10.20.0.0/16"

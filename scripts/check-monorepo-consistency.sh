@@ -4,6 +4,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+STRICT_DOCS=false
+for arg in "$@"; do
+    case "$arg" in
+        --strict-docs) STRICT_DOCS=true ;;
+        -h|--help)
+            echo "Usage: $0 [--strict-docs]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $arg" >&2
+            exit 2
+            ;;
+    esac
+done
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; PURPLE='\033[0;35m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 ERRORS=0; WARNINGS=0; CHECKS=0
@@ -254,7 +269,9 @@ check_contracts_and_argocd() {
 
     run_python_check "argocd-apps" "No duplicate ArgoCD Application metadata.name in argocd/" "Duplicate ArgoCD Application metadata.name found"
     run_python_check "argocd-ports" "ArgoCD Rollout containerPorts match canonical GLOSSARY.md ports" "ArgoCD Rollout containerPort drift detected"
+    run_python_check "argocd-tags" "ArgoCD manifests pin non-latest container image tags" "Unpinned or :latest image tag found in argocd/"
     run_python_check "dockerfile-ports" "Service Dockerfiles match canonical GLOSSARY.md ports" "Dockerfile port drift detected"
+    run_python_check "dockerfile-base-images" "Service Dockerfiles use standardized base images and non-root USER app" "Dockerfile base-image/user drift detected"
     run_python_check "k8s-compose-ports" "k8s manifests and docker-compose.yml ports and image tags align with GLOSSARY.md" "k8s/docker-compose drift detected"
 
     stale_hikari=$(grep -rnE 'hikaricp_(active_connections|max_connections|pending_threads|connection_timeout_total)' monitoring/ prometheus/ || true)
@@ -302,6 +319,19 @@ check_data_platform() {
     run_python_check "dbt-refs" "dbt models reference valid sources/models and incremental models use is_incremental()" "dbt model reference or incremental guard drift detected"
 }
 
+check_live_doc_drift() {
+    log_header "9. Live Documentation Drift"
+    if ! has_pyyaml; then return 0; fi
+    local output
+    if output=$(python3 scripts/consistency_checks.py doc-drift 2>&1); then
+        log_pass "Live root/architecture documentation aligns with codebase truth"
+    elif [ "$STRICT_DOCS" = "true" ]; then
+        log_fail "Live documentation drift detected: ${output}"
+    else
+        log_warn "Live documentation drift detected (re-run with --strict-docs after doc sync): ${output}"
+    fi
+}
+
 echo -e "${BOLD}${PURPLE}================================================================${NC}"
 echo -e "${BOLD}${PURPLE}       InstaCommerce Monorepo Consistency & Drift Scanner       ${NC}"
 echo -e "${BOLD}${PURPLE}================================================================${NC}"
@@ -316,6 +346,7 @@ check_service_artifacts_and_governance
 check_contracts_and_argocd
 check_agent_customizations
 check_data_platform
+check_live_doc_drift
 
 echo -e "\n${BOLD}${PURPLE}================================================================${NC}"
 echo -e "${BOLD}Scan Summary:${NC}"

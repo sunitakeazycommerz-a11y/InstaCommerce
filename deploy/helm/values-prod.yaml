@@ -141,6 +141,8 @@ services:
     replicas: 2
     tag: prod
     env:
+      REDIS_HOST: instacommerce-redis-prod.redis.cache.goog
+      REDIS_PORT: "6379"
       SPRING_DATA_REDIS_HOST: instacommerce-redis-prod.redis.cache.goog
       SPRING_DATA_REDIS_PORT: "6379"
   mobile-bff-service:

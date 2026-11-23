@@ -1,0 +1,6 @@
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}
+frontend.enableClientVersionCheck:
+  - value: true
+    constraints: {}

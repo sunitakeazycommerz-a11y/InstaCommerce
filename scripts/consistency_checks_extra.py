@@ -319,3 +319,59 @@ def check_k8s_compose_ports() -> list[str]:
     """Verify k8s/**/*.yaml ports match GLOSSARY.md and docker-compose.yml avoids port collisions and :latest."""
     glossary_ports = parse_glossary_ports()
     return _check_k8s_ports(glossary_ports) + _check_compose_ports_and_tags(glossary_ports)
+
+
+_EXPECTED_JAVA_BASE = "eclipse-temurin:21-jre-alpine"
+_EXPECTED_GO_BUILDER = "golang:1.25-alpine"
+_EXPECTED_GO_RUNTIME = "alpine:3.23"
+_EXPECTED_PYTHON_BASE = "python:3.12-slim"
+
+
+def verify_dockerfile_base_images() -> list[str]:
+    """Verify standardized Dockerfile base images and non-root runtime user across Java/Go/Python services."""
+    services_root = REPO_ROOT / "services"
+    if not services_root.is_dir():
+        return ["missing services/ directory"]
+
+    issues: list[str] = []
+    for svc_dir in sorted(p for p in services_root.iterdir() if p.is_dir()):
+        svc = svc_dir.name
+        if svc in {"build", "go-shared"}:
+            continue
+        df = svc_dir / "Dockerfile"
+        if not df.is_file():
+            issues.append(f"{svc}: missing Dockerfile")
+            continue
+        text = df.read_text(encoding="utf-8")
+        from_images = re.findall(r"^FROM\s+([^\s]+)", text, re.M)
+        if not from_images:
+            issues.append(f"{svc}: Dockerfile missing FROM directive")
+            continue
+
+        if (svc_dir / "build.gradle.kts").is_file():
+            runtime_img = from_images[-1]
+            if runtime_img != _EXPECTED_JAVA_BASE:
+                issues.append(f"{svc}: Java Dockerfile uses '{runtime_img}' expected '{_EXPECTED_JAVA_BASE}'")
+            user_match = re.findall(r"^USER\s+([^\s]+)", text, re.M)
+            if not user_match or user_match[-1] != "app":
+                issues.append(f"{svc}: Java Dockerfile must run as USER app (found {user_match})")
+        elif (svc_dir / "go.mod").is_file():
+            if len(from_images) < 2:
+                issues.append(f"{svc}: Go Dockerfile must use multi-stage build")
+            else:
+                if from_images[0] != _EXPECTED_GO_BUILDER:
+                    issues.append(f"{svc}: Go builder uses '{from_images[0]}' expected '{_EXPECTED_GO_BUILDER}'")
+                if from_images[-1] != _EXPECTED_GO_RUNTIME:
+                    issues.append(f"{svc}: Go runtime uses '{from_images[-1]}' expected '{_EXPECTED_GO_RUNTIME}'")
+            user_match = re.findall(r"^USER\s+([^\s]+)", text, re.M)
+            if not user_match or user_match[-1] != "app":
+                issues.append(f"{svc}: Go Dockerfile must run as USER app (found {user_match})")
+        elif (svc_dir / "requirements.txt").is_file():
+            runtime_img = from_images[-1]
+            if runtime_img != _EXPECTED_PYTHON_BASE:
+                issues.append(f"{svc}: Python Dockerfile uses '{runtime_img}' expected '{_EXPECTED_PYTHON_BASE}'")
+            user_match = re.findall(r"^USER\s+([^\s]+)", text, re.M)
+            if not user_match or user_match[-1] != "app":
+                issues.append(f"{svc}: Python Dockerfile must run as USER app (found {user_match})")
+
+    return issues
