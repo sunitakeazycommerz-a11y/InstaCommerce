@@ -78,6 +78,10 @@ func setupTracing(ctx context.Context, logger *slog.Logger) (*sdktrace.TracerPro
 }
 
 func startHTTPServer(port string, healthHandler *health.Handler, logger *slog.Logger) *http.Server {
+	return startHTTPServerWithErr(port, healthHandler, logger, nil)
+}
+
+func startHTTPServerWithErr(port string, healthHandler *health.Handler, logger *slog.Logger, reportErr func(error)) *http.Server {
 	mux := http.NewServeMux()
 	healthHandler.RegisterRoutes(mux)
 	mux.HandleFunc("/ready", healthHandler.ReadyHandler())
@@ -96,6 +100,9 @@ func startHTTPServer(port string, healthHandler *health.Handler, logger *slog.Lo
 		logger.Info("http server listening", "addr", server.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server failed", "error", err)
+			if reportErr != nil {
+				reportErr(err)
+			}
 		}
 	}()
 	return server

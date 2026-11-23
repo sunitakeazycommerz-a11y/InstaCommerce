@@ -63,10 +63,11 @@ func parseLogLevel(level string) slog.Level {
 
 func initTracer(ctx context.Context, serviceName string, logger *slog.Logger) (func(context.Context) error, error) {
 	providers, err := observability.InitOTel(ctx, observability.OTelConfig{
-		ServiceName:    serviceName,
-		Protocol:       observability.OTelProtocolGRPC,
-		ResolveEnv:     true,
-		StdoutFallback: true,
+		ServiceName:      serviceName,
+		Protocol:         observability.OTelProtocolGRPC,
+		ResolveEnv:       true,
+		NoopIfNoEndpoint: true,
+		FallbackNoop:     true,
 	}, logger)
 	if err != nil {
 		return nil, err

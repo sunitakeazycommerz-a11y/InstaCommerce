@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -41,16 +42,29 @@ func main() {
 		}()
 	}
 
-	bqClient, err := bigquery.NewClient(ctx, cfg.BQProject)
-	if err != nil {
-		logger.Error("failed to create bigquery client", "error", err)
-		os.Exit(1)
+	var inserter bqInserter = noopBQInserter{}
+	var schemaHandler *SchemaEvolutionHandler
+	localMode := isLocalBigQueryOptional()
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("DISABLE_BIGQUERY")), "true") {
+		logger.Warn("BigQuery disabled via DISABLE_BIGQUERY; using noop BigQuery inserter")
+	} else {
+		bqClient, err := bigquery.NewClient(ctx, cfg.BQProject)
+		if err != nil {
+			if !localMode {
+				logger.Error("failed to create bigquery client", "error", err)
+				os.Exit(1)
+			}
+			logger.Warn("failed to initialize bigquery client in local mode; falling back to noop inserter", "error", err)
+		} else {
+			defer bqClient.Close()
+			table := bqClient.Dataset(cfg.BQDataset).Table(cfg.BQTable)
+			bqIns := table.Inserter()
+			bqIns.IgnoreUnknownValues = true
+			bqIns.SkipInvalidRows = true
+			inserter = unwrapBQInserter(bqIns)
+			schemaHandler = NewSchemaEvolutionHandler(table, logger)
+		}
 	}
-	defer bqClient.Close()
-
-	inserter := bqClient.Dataset(cfg.BQDataset).Table(cfg.BQTable).Inserter()
-	inserter.IgnoreUnknownValues = true
-	inserter.SkipInvalidRows = true
 
 	dlqWriter := &kafka.Writer{
 		Addr:         kafka.TCP(cfg.KafkaBrokers...),
@@ -82,10 +96,6 @@ func main() {
 		defer reader.Close()
 	}
 
-	schemaHandler := NewSchemaEvolutionHandler(bqClient.Dataset(cfg.BQDataset).Table(cfg.BQTable), logger)
-	healthHandler := health.NewHandler()
-	server := startHTTPServer(cfg.Port, healthHandler, logger)
-
 	errCh := make(chan error, 1)
 	reportErr := func(err error) {
 		select {
@@ -93,6 +103,9 @@ func main() {
 		default:
 		}
 	}
+
+	healthHandler := health.NewHandler()
+	server := startHTTPServerWithErr(cfg.Port, healthHandler, logger, reportErr)
 
 	batchCh := make(chan batchItem, cfg.BatchSize*2)
 	var consumerWg sync.WaitGroup
@@ -108,7 +121,8 @@ func main() {
 	batchWg.Add(1)
 	go func() {
 		defer batchWg.Done()
-		if err := runBatcher(batchCh, inserter, dlqWriter, cfg, metrics, logger, tracer); err != nil {
+		dlqMsgWriter, dlqTopic := unwrapDLQWriter(dlqWriter)
+		if err := runBatcherWithDeps(batchCh, inserter, dlqMsgWriter, dlqTopic, cfg, metrics, logger, tracer); err != nil {
 			reportErr(err)
 		}
 	}()
@@ -149,4 +163,18 @@ func main() {
 		logger.Warn("http server shutdown failed", "error", err)
 	}
 	logger.Info("cdc consumer service stopped")
+}
+
+type noopBQInserter struct{}
+
+func (noopBQInserter) Put(context.Context, any) error {
+	return nil
+}
+
+func isLocalBigQueryOptional() bool {
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))
+	if env == "local" || env == "dev" || env == "development" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("DISABLE_BIGQUERY")), "true")
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -86,6 +87,55 @@ func evolveSchemaIfPresent(
 	}
 }
 
+func evolveSchemaFromMap(
+	ctx context.Context,
+	msg kafka.Message,
+	raw map[string]any,
+	evolver schemaEvolver,
+	metrics Metrics,
+	logger *slog.Logger,
+	span trace.Span,
+) {
+	if evolver == nil || len(raw) == 0 {
+		return
+	}
+	cdcFields := ExtractCDCFieldsFromMap(raw)
+	if len(cdcFields) == 0 {
+		return
+	}
+	if err := evolver.DetectAndEvolveSchema(ctx, cdcFields); err != nil {
+		if logger != nil {
+			logger.Warn("schema evolution failed",
+				"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
+		}
+		if span != nil {
+			span.RecordError(err)
+		}
+		if metrics.schemaEvolutionErrors != nil {
+			metrics.schemaEvolutionErrors.Inc()
+		}
+	}
+}
+
+func processMessageForConsumer(
+	ctx context.Context,
+	msg kafka.Message,
+	evolver schemaEvolver,
+	metrics Metrics,
+	logger *slog.Logger,
+	span trace.Span,
+) (bigquery.ValueSaver, error) {
+	if isTombstonePayload(msg.Value) {
+		return transformMessage(msg)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(msg.Value, &payload); err != nil {
+		return nil, err
+	}
+	evolveSchemaFromMap(ctx, msg, payload, evolver, metrics, logger, span)
+	return transformParsedMessage(msg, payload)
+}
+
 func runConsumer(
 	ctx context.Context,
 	reader *kafka.Reader,
@@ -133,9 +183,7 @@ func runConsumer(
 			),
 		)
 
-		evolveSchemaIfPresent(msgCtx, msg, evolver, metrics, logger, span)
-
-		row, err := transformMessage(msg)
+		row, err := processMessageForConsumer(msgCtx, msg, evolver, metrics, logger, span)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "transform failed")

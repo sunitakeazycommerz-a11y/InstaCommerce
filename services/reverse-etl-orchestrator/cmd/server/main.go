@@ -130,7 +130,7 @@ func main() {
 	defer workerPool.Close()
 
 	healthChecker := buildHealthChecker(cfg, subscriptionSvc, rdb)
-	apiHandler := api.NewHandler(subscriptionSvc)
+	apiHandler := api.NewHandlerWithSync(subscriptionSvc, workerPool)
 
 	healthRouter := mux.NewRouter()
 	healthRouter.HandleFunc("/health", healthChecker.Health).Methods("GET")

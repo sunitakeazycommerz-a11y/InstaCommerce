@@ -20,16 +20,14 @@ type Config struct {
 	Schedule              string
 	RunOnStartup          bool
 	ReconciliationTimeout time.Duration
-	PSPExportPath         string
-	LedgerPath            string
-	LedgerOutputPath      string
-	FixStatePath          string
 	KafkaBrokers          []string
 	KafkaTopic            string
 	KafkaClientID         string
 	CDCEnabled            bool
 	CDCTopics             []string
+	CDCDLTTopic           string
 	CDCGroupID            string
+	CDCMaxRetries         int
 	CDCMinBytes           int
 	CDCMaxBytes           int
 	CDCMaxWait            time.Duration
@@ -51,12 +49,6 @@ func loadConfig() Config {
 		port = sharedconfig.GetEnvTrimmed("SERVER_PORT", defaultPort)
 	}
 
-	ledgerPath := sharedconfig.GetEnvTrimmed("LEDGER_PATH", "")
-	outputPath := sharedconfig.GetEnvTrimmed("LEDGER_OUTPUT_PATH", "")
-	if outputPath == "" {
-		outputPath = ledgerPath
-	}
-
 	return Config{
 		Port:                  port,
 		ServiceName:           sharedconfig.GetEnvTrimmed("OTEL_SERVICE_NAME", "reconciliation-engine"),
@@ -64,16 +56,14 @@ func loadConfig() Config {
 		Schedule:              sharedconfig.GetEnvTrimmed("RECONCILIATION_SCHEDULE", defaultSchedule),
 		RunOnStartup:          sharedconfig.GetEnvBool("RECONCILIATION_RUN_ON_STARTUP", true),
 		ReconciliationTimeout: sharedconfig.GetEnvDuration("RECONCILIATION_TIMEOUT", defaultReconciliationTimeout),
-		PSPExportPath:         sharedconfig.GetEnvTrimmed("PSP_EXPORT_PATH", ""),
-		LedgerPath:            ledgerPath,
-		LedgerOutputPath:      outputPath,
-		FixStatePath:          sharedconfig.GetEnvTrimmed("FIX_STATE_PATH", ""),
 		KafkaBrokers:          sharedconfig.SplitCSV(sharedconfig.GetEnvTrimmed("KAFKA_BROKERS", "")),
 		KafkaTopic:            sharedconfig.GetEnvTrimmed("KAFKA_TOPIC", defaultKafkaTopic),
 		KafkaClientID:         sharedconfig.GetEnvTrimmed("KAFKA_CLIENT_ID", "reconciliation-engine"),
 		CDCEnabled:            sharedconfig.GetEnvBool("CDC_ENABLED", true),
 		CDCTopics:             sharedconfig.SplitCSV(sharedconfig.GetEnvTrimmed("CDC_TOPICS", "payments.cdc,reconciliation.cdc")),
+		CDCDLTTopic:           sharedconfig.GetEnvTrimmed("CDC_DLT_TOPIC", "reconciliation.events.DLT"),
 		CDCGroupID:            sharedconfig.GetEnvTrimmed("CDC_GROUP_ID", "reconciliation-cdc-consumer"),
+		CDCMaxRetries:         sharedconfig.GetEnvInt("CDC_MAX_RETRIES", 3),
 		CDCMinBytes:           sharedconfig.GetEnvInt("CDC_MIN_BYTES", 10*1024),
 		CDCMaxBytes:           sharedconfig.GetEnvInt("CDC_MAX_BYTES", 10*1024*1024),
 		CDCMaxWait:            sharedconfig.GetEnvDuration("CDC_MAX_WAIT", 5*time.Second),
@@ -82,8 +72,8 @@ func loadConfig() Config {
 		CDCBatchTimeout:       sharedconfig.GetEnvDuration("CDC_BATCH_TIMEOUT", 5*time.Second),
 		DBHost:                sharedconfig.GetEnvTrimmed("DB_HOST", "localhost"),
 		DBPort:                sharedconfig.GetEnvTrimmed("DB_PORT", "5432"),
-		DBUser:                sharedconfig.GetEnvTrimmed("DB_USER", "reconciliation"),
-		DBPassword:            sharedconfig.GetEnvTrimmed("DB_PASSWORD", ""),
+		DBUser:                sharedconfig.GetEnvTrimmed("DB_USER", "postgres"),
+		DBPassword:            sharedconfig.GetEnvTrimmed("DB_PASSWORD", "devpass"),
 		DBName:                sharedconfig.GetEnvTrimmed("DB_NAME", "reconciliation"),
 		DBMaxConnections:      sharedconfig.GetEnvInt("DB_MAX_CONNECTIONS", 20),
 		DBConnTimeout:         sharedconfig.GetEnvDuration("DB_CONN_TIMEOUT", 10*time.Second),

@@ -130,8 +130,7 @@ func (h *LocationHandler) handleWebSocketConn(ctx context.Context, conn *websock
 			case <-pingDone:
 				return
 			case <-ticker.C:
-				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 					return
 				}
 			}

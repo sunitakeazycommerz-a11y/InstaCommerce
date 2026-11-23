@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds the service configuration.
@@ -39,11 +40,24 @@ type Config struct {
 
 // Load reads configuration from environment variables.
 func Load() (*Config, error) {
+	apiAddr := os.Getenv("API_ADDR")
+	if apiAddr == "" {
+		if p := getEnv("PORT", getEnv("SERVER_PORT", "")); p != "" {
+			if strings.HasPrefix(p, ":") {
+				apiAddr = p
+			} else {
+				apiAddr = ":" + p
+			}
+		} else {
+			apiAddr = ":8109"
+		}
+	}
+
 	cfg := &Config{
-		APIAddr:               getEnv("API_ADDR", ":8109"),
+		APIAddr:               apiAddr,
 		HealthAddr:            getEnv("HEALTH_ADDR", ":8110"),
 		MetricsAddr:           getEnv("METRICS_ADDR", ":9090"),
-		DatabaseURL:           getEnv("DATABASE_URL", "postgres://localhost:5432/reverse_etl?sslmode=disable"),
+		DatabaseURL:           getEnv("DATABASE_URL", "postgres://postgres:devpass@localhost:5432/reverse_etl?sslmode=disable"),
 		KafkaBrokers:          getEnv("KAFKA_BROKERS", "localhost:9092"),
 		KafkaConsumerGroup:    getEnv("KAFKA_CONSUMER_GROUP", "reverse-etl-orchestrator"),
 		TemporalHost:          getEnv("TEMPORAL_HOST", "localhost:7233"),

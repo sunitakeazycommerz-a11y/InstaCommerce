@@ -46,6 +46,7 @@ func TestEventEnvelope_CanonicalADR004Fields(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 
 	requiredCamelKeys := []string{
+		"id",
 		"eventId",
 		"eventType",
 		"aggregateId",
@@ -53,6 +54,7 @@ func TestEventEnvelope_CanonicalADR004Fields(t *testing.T) {
 		"schemaVersion",
 		"sourceService",
 		"correlationId",
+		"eventTime",
 		"timestamp",
 		"payload",
 	}

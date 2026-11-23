@@ -170,7 +170,11 @@ func (h *WebhookHandler) handlePSP(w http.ResponseWriter, r *http.Request, psp P
 	}
 	h.metrics.VerifyLatency.WithLabelValues(string(psp)).Observe(time.Since(verifyStart).Seconds())
 
-	event, err := ParseEvent(psp, payload)
+	headerEventID := ""
+	if psp == Razorpay {
+		headerEventID = r.Header.Get("X-Razorpay-Event-Id")
+	}
+	event, err := ParseEventWithHeaderID(psp, payload, headerEventID)
 	if err != nil {
 		h.metrics.EventsFailed.WithLabelValues(string(psp), "parse").Inc()
 		h.loggerWithTrace(ctx).WarnContext(ctx, "event parse failed", "psp", psp, "error", err)

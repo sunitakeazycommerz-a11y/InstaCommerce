@@ -57,17 +57,19 @@ type ReconciliationLedgerEntry struct {
 }
 
 type CDCConsumerConfig struct {
-	KafkaBrokers   []string
-	KafkaGroupID   string
-	CDCTopic       string
-	CDCTopics      []string
-	DB             *sql.DB
-	MinBytes       int
-	MaxBytes       int
-	MaxWait        time.Duration
-	CommitInterval time.Duration
-	BatchSize      int
-	BatchTimeout   time.Duration
+	KafkaBrokers      []string
+	KafkaGroupID      string
+	CDCTopic          string
+	CDCTopics         []string
+	DLTTopic          string
+	MaxProcessRetries int
+	DB                *sql.DB
+	MinBytes          int
+	MaxBytes          int
+	MaxWait           time.Duration
+	CommitInterval    time.Duration
+	BatchSize         int
+	BatchTimeout      time.Duration
 }
 
 type DailySnapshot struct {
@@ -84,6 +86,7 @@ type CDCMetrics struct {
 	eventsReceived   int64
 	eventsProcessed  int64
 	eventsFailed     int64
+	eventsDLQ        int64
 	snapshotsCreated int64
 	lastProcessedLSN int64
 }

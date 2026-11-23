@@ -237,6 +237,24 @@ func (h *LocationHandler) ingestNormalized(ctx context.Context, update LocationU
 		defer span.End()
 	}
 
+	var kafkaRes *BatchReservation
+	if h.kafkaBatcher != nil {
+		var err error
+		kafkaRes, err = h.kafkaBatcher.Reserve()
+		if err != nil {
+			h.recordDropped(source, "enqueue")
+			trace.SpanFromContext(processCtx).RecordError(err)
+			h.logger.ErrorContext(processCtx, "kafka enqueue failed", "rider_id", update.RiderID, "error", err)
+			return fmt.Errorf("kafka enqueue failed: %w", err)
+		}
+	}
+	committed := false
+	defer func() {
+		if kafkaRes != nil && !committed {
+			kafkaRes.Abort()
+		}
+	}()
+
 	if h.redisStore != nil {
 		if err := h.redisStore.Update(processCtx, update); err != nil {
 			if isOutOfOrderErr(err) {
@@ -258,13 +276,9 @@ func (h *LocationHandler) ingestNormalized(ctx context.Context, update LocationU
 		}
 	}
 
-	if h.kafkaBatcher != nil {
-		if err := h.kafkaBatcher.Enqueue(update); err != nil {
-			h.recordDropped(source, "enqueue")
-			trace.SpanFromContext(processCtx).RecordError(err)
-			h.logger.ErrorContext(processCtx, "kafka enqueue failed", "rider_id", update.RiderID, "error", err)
-			return fmt.Errorf("kafka enqueue failed: %w", err)
-		}
+	if kafkaRes != nil {
+		kafkaRes.Commit(update)
+		committed = true
 	}
 
 	if hasCandidate && h.telemetrySmoother != nil {

@@ -83,6 +83,7 @@ type RiderState struct {
 	ActiveOrders           int       `json:"active_orders"`
 	ConsecutiveDeliveries  int       `json:"consecutive_deliveries"`
 	TotalDeliveries        int       `json:"total_deliveries"`
+	AvgRating              float64   `json:"avg_rating,omitempty"`
 	AvgSpeedKmh            float64   `json:"avg_speed_kmh"`
 	IsAvailable            bool      `json:"is_available"`
 	LastBreakAt            time.Time `json:"last_break_at"`

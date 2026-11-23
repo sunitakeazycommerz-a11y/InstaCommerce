@@ -10,12 +10,8 @@ import (
 
 	"github.com/instacommerce/go-shared/pkg/config"
 	"github.com/instacommerce/go-shared/pkg/health"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
+	"github.com/instacommerce/go-shared/pkg/observability"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.25.0"
 )
 
 const (
@@ -109,27 +105,18 @@ func newLogger(cfg Config) *slog.Logger {
 }
 
 func initTracing(ctx context.Context, cfg Config, logger *slog.Logger) *sdktrace.TracerProvider {
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewSchemaless(semconv.ServiceName(cfg.ServiceName)),
-	)
+	providers, err := observability.InitOTel(ctx, observability.OTelConfig{
+		ServiceName:      cfg.ServiceName,
+		Protocol:         observability.OTelProtocolGRPC,
+		ResolveEnv:       true,
+		NoopIfNoEndpoint: true,
+		FallbackNoop:     true,
+	}, logger)
 	if err != nil {
-		res = resource.NewSchemaless(semconv.ServiceName(cfg.ServiceName))
+		logger.Warn("otel init failed, tracing disabled", "error", err)
+		return nil
 	}
-	exporter, err := otlptracegrpc.New(ctx)
-	if err != nil {
-		logger.Warn("otel exporter init failed, tracing disabled", "error", err)
-		tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res))
-		otel.SetTracerProvider(tp)
-		return tp
-	}
-	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res))
-	otel.SetTracerProvider(tp)
-	return tp
+	return providers.TracerProvider
 }
 
 func shutdownServer(server *http.Server, healthHandler *health.Handler, timeout time.Duration, logger *slog.Logger) {

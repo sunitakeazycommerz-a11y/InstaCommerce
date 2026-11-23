@@ -58,6 +58,11 @@ func TestBuildAPIRouter_RequiresInternalAuthOnAPIv1(t *testing.T) {
 	router.ServeHTTP(recAuth, reqAuth)
 	assert.Equal(t, http.StatusOK, recAuth.Code)
 
+	reqSyncUnauth := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions/sub-1/sync", nil)
+	recSyncUnauth := httptest.NewRecorder()
+	router.ServeHTTP(recSyncUnauth, reqSyncUnauth)
+	assert.Equal(t, http.StatusUnauthorized, recSyncUnauth.Code)
+
 	reqHealth := httptest.NewRequest(http.MethodGet, "/health/live", nil)
 	recHealth := httptest.NewRecorder()
 	router.ServeHTTP(recHealth, reqHealth)

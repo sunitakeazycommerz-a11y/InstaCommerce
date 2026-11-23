@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/instacommerce/go-shared/pkg/auth"
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
 	_ "github.com/lib/pq"
@@ -43,6 +46,10 @@ func main() {
 		return
 	}
 	logger.Info("database connection established")
+	if err := ensureReconciliationSchema(ctx, db); err != nil {
+		logger.Error("failed to ensure reconciliation schema", "error", err)
+		return
+	}
 
 	eventPub := reconciliation.NewEventPublisher(cfg.KafkaBrokers, cfg.KafkaTopic, logger)
 	defer eventPub.Close()
@@ -53,16 +60,18 @@ func main() {
 	var cdcConsumer *cdc.CDCConsumer
 	if cfg.CDCEnabled && len(cfg.KafkaBrokers) > 0 {
 		cdcConsumer, err = cdc.NewCDCConsumer(ctx, cdc.CDCConsumerConfig{
-			KafkaBrokers:   cfg.KafkaBrokers,
-			KafkaGroupID:   cfg.CDCGroupID,
-			CDCTopics:      cfg.CDCTopics,
-			DB:             db,
-			MinBytes:       cfg.CDCMinBytes,
-			MaxBytes:       cfg.CDCMaxBytes,
-			MaxWait:        cfg.CDCMaxWait,
-			CommitInterval: cfg.CDCCommitInterval,
-			BatchSize:      cfg.CDCBatchSize,
-			BatchTimeout:   cfg.CDCBatchTimeout,
+			KafkaBrokers:      cfg.KafkaBrokers,
+			KafkaGroupID:      cfg.CDCGroupID,
+			CDCTopics:         cfg.CDCTopics,
+			DLTTopic:          cfg.CDCDLTTopic,
+			MaxProcessRetries: cfg.CDCMaxRetries,
+			DB:                db,
+			MinBytes:          cfg.CDCMinBytes,
+			MaxBytes:          cfg.CDCMaxBytes,
+			MaxWait:           cfg.CDCMaxWait,
+			CommitInterval:    cfg.CDCCommitInterval,
+			BatchSize:         cfg.CDCBatchSize,
+			BatchTimeout:      cfg.CDCBatchTimeout,
 		}, logger)
 		if err != nil {
 			logger.Error("failed to create cdc consumer", "error", err)
@@ -71,8 +80,21 @@ func main() {
 	}
 
 	reconciliationHandler := api.NewReconciliationHandler(dbReconciler, logger)
-	healthHandler := health.NewHandler()
-	mux := newHTTPMux(healthHandler, reconciliationHandler)
+	healthChecks := []health.Check{
+		{
+			Name:  "postgres",
+			Check: func(c context.Context) error { return db.PingContext(c) },
+		},
+	}
+	if len(cfg.KafkaBrokers) > 0 {
+		healthChecks = append(healthChecks, health.Check{
+			Name:  "kafka",
+			Check: func(c context.Context) error { return health.CheckTCPBrokers(c, cfg.KafkaBrokers, 2*time.Second) },
+		})
+	}
+	healthHandler := health.NewHandler(healthChecks...)
+	authMiddleware := auth.NewInternalAuthMiddleware(logger)
+	mux := newHTTPMux(healthHandler, reconciliationHandler, authMiddleware, db, cfg.KafkaBrokers)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -135,20 +157,66 @@ func main() {
 	logger.Info("shutdown complete")
 }
 
-func newHTTPMux(healthHandler *health.Handler, reconciliationHandler *api.ReconciliationHandler) *http.ServeMux {
+func newHTTPMux(
+	healthHandler *health.Handler,
+	reconciliationHandler *api.ReconciliationHandler,
+	authMiddleware *auth.InternalAuthMiddleware,
+	db *sql.DB,
+	kafkaBrokers []string,
+) *http.ServeMux {
 	mux := http.NewServeMux()
-	if healthHandler != nil {
-		healthHandler.RegisterRoutes(mux)
-		mux.HandleFunc("/ready", healthHandler.ReadyHandler())
+	readyFn := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if healthHandler != nil {
+			rec := httptest.NewRecorder()
+			healthHandler.ReadyHandler()(rec, r)
+			if rec.Code != http.StatusOK {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"status":"not_ready"}`))
+				return
+			}
+		}
+		checkCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if db != nil {
+			if err := db.PingContext(checkCtx); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"status":"not_ready","error":"postgres unavailable"}`))
+				return
+			}
+		}
+		if len(kafkaBrokers) > 0 {
+			if err := health.CheckTCPBrokers(checkCtx, kafkaBrokers, 2*time.Second); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"status":"not_ready","error":"kafka unavailable"}`))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	}
+
+	if healthHandler != nil {
+		mux.HandleFunc("/health", healthHandler.HealthHandler())
+		mux.HandleFunc("/health/live", healthHandler.LiveHandler())
+	}
+	mux.HandleFunc("/health/ready", readyFn)
+	mux.HandleFunc("/ready", readyFn)
 	mux.Handle("/metrics", promhttp.Handler())
+
+	wrap := func(fn http.HandlerFunc) http.Handler {
+		if authMiddleware != nil {
+			return authMiddleware.Wrap(fn)
+		}
+		return fn
+	}
 	if reconciliationHandler != nil {
-		mux.HandleFunc("/reconciliation/runs", reconciliationHandler.HandleListRuns)
-		mux.HandleFunc("/reconciliation/pending", reconciliationHandler.HandleGetPendingMismatches)
-		mux.HandleFunc("/pending", reconciliationHandler.HandleGetPendingMismatches)
-		mux.HandleFunc("/reconciliation/runs/{runID}/mismatches", reconciliationHandler.HandleGetRunMismatches)
-		mux.HandleFunc("/reconciliation/mismatches/{mismatchID}/review", reconciliationHandler.HandleReviewMismatch)
-		mux.HandleFunc("/reconciliation/mismatches/{mismatchID}/fix", reconciliationHandler.HandleApplyFix)
+		mux.Handle("/reconciliation/runs", wrap(reconciliationHandler.HandleListRuns))
+		mux.Handle("/reconciliation/pending", wrap(reconciliationHandler.HandleGetPendingMismatches))
+		mux.Handle("/pending", wrap(reconciliationHandler.HandleGetPendingMismatches))
+		mux.Handle("/reconciliation/runs/{runID}/mismatches", wrap(reconciliationHandler.HandleGetRunMismatches))
+		mux.Handle("/reconciliation/mismatches/{mismatchID}/review", wrap(reconciliationHandler.HandleReviewMismatch))
+		mux.Handle("/reconciliation/mismatches/{mismatchID}/fix", wrap(reconciliationHandler.HandleApplyFix))
 	}
 	return mux
 }

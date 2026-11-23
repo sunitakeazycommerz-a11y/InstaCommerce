@@ -56,7 +56,7 @@ func dropAndCreateSchema(db *sql.DB) error {
 		mismatch_count INT DEFAULT 0,
 		auto_fixed_count INT DEFAULT 0,
 		manual_review_count INT DEFAULT 0,
-		status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED')),
+		status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'PARTIAL_FAILED', 'FAILED')),
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()
 	);
 
