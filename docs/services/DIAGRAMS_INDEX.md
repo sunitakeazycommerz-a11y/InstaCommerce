@@ -14,11 +14,11 @@ This document indexes all Mermaid diagrams created for the 5 critical Money Path
 
 | Service | HLD | LLD | Flowchart | Sequence | State Machine | ER Diagram | End-to-End | Status |
 |---------|-----|-----|-----------|----------|---------------|-----------|-----------|--------|
-| **checkout-orchestrator** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | COMPLETE |
-| **order-service** | ✅ | ✅ | ✅ | ⏳ | ⏳ | ✅ | ⏳ | IN PROGRESS |
-| **payment-service** | ✅ | ⏳ | ⏳ | ⏳ | ✅ | ✅ | ⏳ | IN PROGRESS |
-| **payment-webhook-service** | ✅ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | IN PROGRESS |
-| **inventory-service** | ✅ | ⏳ | ⏳ | ⏳ | ✅ | ✅ | ⏳ | IN PROGRESS |
+| **checkout-orchestrator-service** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | COMPLETE |
+| **order-service** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | COMPLETE |
+| **payment-service** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | COMPLETE |
+| **payment-webhook-service** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | COMPLETE |
+| **inventory-service** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | COMPLETE |
 
 ---
 
@@ -27,7 +27,7 @@ This document indexes all Mermaid diagrams created for the 5 critical Money Path
 ### Checkout Orchestrator Service
 
 ```
-docs/services/checkout-orchestrator/diagrams/
+docs/services/checkout-orchestrator-service/diagrams/
 ├── hld.md ✅
 │   ├─ System Context Diagram (services, neighbors, latency SLOs)
 │   ├─ Request Flow (happy path with latency targets)
@@ -75,7 +75,7 @@ docs/services/checkout-orchestrator/diagrams/
 ### Order Service
 
 ```
-docs/services/order/diagrams/
+docs/services/order-service/diagrams/
 ├── hld.md ✅
 │   ├─ System Context (Order Service, neighbors: CO, Inventory, Payment, Fulfillment)
 │   ├─ Event Publishing (Transactional Outbox pattern)
@@ -105,7 +105,7 @@ docs/services/order/diagrams/
 ### Payment Service
 
 ```
-docs/services/payment/diagrams/
+docs/services/payment-service/diagrams/
 ├── hld.md ✅
 │   ├─ System Context (Payment Service, PSPs, Webhook, Reconciliation)
 │   ├─ Request Flows (Authorize, Capture, Refund sequences)
@@ -124,7 +124,7 @@ docs/services/payment/diagrams/
 ### Payment Webhook Service
 
 ```
-docs/services/payment-webhook/diagrams/
+docs/services/payment-webhook-service/diagrams/
 └── hld.md ✅
     ├─ System Context (PSPs → Webhook Service → Kafka bridge)
     ├─ Webhook Processing Flow (Signature verify → Dedup → Parse → Publish)
@@ -136,7 +136,7 @@ docs/services/payment-webhook/diagrams/
 ### Inventory Service
 
 ```
-docs/services/inventory/diagrams/
+docs/services/inventory-service/diagrams/
 ├── hld.md ✅
 │   ├─ System Context (Checkout → Reserve/Confirm, Warehouse, Fulfillment)
 │   ├─ Request Flows (Reserve with pessimistic lock, Confirm, Cancel)
@@ -307,17 +307,12 @@ docs/services/inventory/diagrams/
 
 ---
 
-## Next Steps (Remaining Diagrams)
+## Coverage Summary
 
-To complete the full set, the following diagrams should be created in a follow-up pass:
+All 5 Tier 1 Money Path services have all 7 diagrams (`diagrams/` and `diagrams-v2/` where applicable):
 
-1. **Order Service**: Sequence, State Machine, End-to-End (3 diagrams)
-2. **Payment Service**: LLD, Flowchart, Sequence, End-to-End (4 diagrams)
-3. **Payment Webhook Service**: LLD, Flowchart, Sequence, State Machine, ER, End-to-End (6 diagrams)
-4. **Inventory Service**: LLD, Flowchart, Sequence, End-to-End (4 diagrams)
-
-**Total diagrams created**: 18 / 35 (51%)
-**Estimated completion**: With batching, remaining 17 diagrams can be created in ~2 hours
+**Total diagrams created**: 35 / 35 (100%)
+**Status**: ✅ COMPLETE
 
 ---
 
@@ -340,6 +335,6 @@ To complete the full set, the following diagrams should be created in a follow-u
 
 ---
 
-**Status**: 🔄 IN PROGRESS
+**Status**: ✅ COMPLETE
 **Completion Target**: 100% (35/35 diagrams)
 **Last Updated**: 2026-03-21 14:30 UTC

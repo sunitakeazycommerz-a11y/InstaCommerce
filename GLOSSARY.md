@@ -124,5 +124,5 @@ All asynchronous domain events across Kafka must conform to `EventEnvelope.v1.js
    - Backward-compatible additions stay in `v1`.
    - Breaking field changes require creating `v2` schema files and multi-stage consumer migration.
 4. **Deploy Keys vs Module Paths**:
-   - Module names ending in `-service` may map to shorter Helm release names (`cdc-consumer`, `location-ingestion`, `payment-webhook`, `stream-processor`). Always cross-reference `deploy/helm/values.yaml` and `.github/workflows/ci.yml`.
+   - Module names ending in `-service` may map to shorter Helm release names (`cdc-consumer`, `location-ingestion`, `outbox-relay`, `payment-webhook`, `stream-processor`). Always cross-reference `deploy/helm/values.yaml` and `.github/workflows/ci.yml`.
 

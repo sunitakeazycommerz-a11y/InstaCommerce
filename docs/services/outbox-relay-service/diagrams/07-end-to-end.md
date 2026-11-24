@@ -129,7 +129,7 @@ spec:
               cpu: "1000m"
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 8103
             - name: metrics
               containerPort: 9090
           env:

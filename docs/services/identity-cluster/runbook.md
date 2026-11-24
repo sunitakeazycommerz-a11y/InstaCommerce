@@ -46,8 +46,8 @@
 ```bash
 # 1. Build and push new image
 ./gradlew :services:identity-service:bootJar
-docker build -t gcr.io/my-project/identity-service:v1.2.3 services/identity-service/
-docker push gcr.io/my-project/identity-service:v1.2.3
+docker build -t asia-south1-docker.pkg.dev/instacommerce/images/identity-service:v1.2.3 services/identity-service/
+docker push asia-south1-docker.pkg.dev/instacommerce/images/identity-service:v1.2.3
 
 # 2. Update Helm values
 cat > deploy/helm/values-prod.yaml <<EOF
@@ -250,7 +250,7 @@ helm upgrade identity-service deploy/helm/ -f deploy/helm/values-prod.yaml -n in
 **Root Cause Analysis**:
 ```bash
 # 1. Check JWKS endpoint availability
-curl http://identity-service:8080/.well-known/jwks.json | jq .
+curl http://identity-service:8081/.well-known/jwks.json | jq .
 
 # 2. Verify JWT structure manually
 # Use https://jwt.io and paste token; check payload.iss and payload.aud
@@ -274,7 +274,7 @@ kubectl exec -it deployment/identity-service -n instacommerce -- \
 
 # If downstream service can't reach JWKS:
 kubectl logs deployment/api-gateway -n instacommerce | grep "jwks"
-# → Check network policy: allow identity-service:8080/tcp from all pods
+# → Check network policy: allow identity-service:8081/tcp from all pods
 ```
 
 ### Problem: Database Connection Pool Exhaustion

@@ -56,7 +56,7 @@
         │                                                │
         │  2. Request JWKS from Identity-Service        │
         │     (Cached, TTL = 5 min)                    │
-        │     GET /jwt/jwks                             │
+        │     GET /.well-known/jwks.json                │
         │                                                │
         │  3. Parse JWT Header & Signature             │
         │     - alg: RS256                              │
@@ -298,7 +298,7 @@ Scenario 6: Insufficient Role
 2. Helm Render (values.yaml + templates/)
    └─ Render RequestAuthentication policy:
       issuer: instacommerce-identity
-      jwksUri: http://identity-service/jwt/jwks
+      jwksUri: http://identity-service:8081/.well-known/jwks.json
       audiences: ["instacommerce-admin"]
 
 3. Deploy to GKE

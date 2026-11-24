@@ -8,17 +8,17 @@
 - [ ] Kafka brokers reachable from pod (test: `kafka-topics.sh --list`)
 - [ ] All 13 producer services have Flyway migration V1 (creates `outbox_events` table)
 - [ ] Outbox relay image built: `go build -o outbox-relay .`
-- [ ] Go 1.24+ version confirmed
+- [ ] Go 1.25 version confirmed
 
 ### Deployment
 
 ```bash
 # 1. Build multi-stage Docker image
 cd services/outbox-relay-service
-docker build -t gcr.io/my-project/outbox-relay:v1.0.0 .
+docker build -t asia-south1-docker.pkg.dev/instacommerce/images/outbox-relay-service:v1.0.0 .
 
 # 2. Push to registry
-docker push gcr.io/my-project/outbox-relay:v1.0.0
+docker push asia-south1-docker.pkg.dev/instacommerce/images/outbox-relay-service:v1.0.0
 
 # 3. Deploy to Kubernetes
 helm install outbox-relay deploy/helm/ \
@@ -93,7 +93,7 @@ kubectl rollout restart deployment/outbox-relay-service -n instacommerce
 
 - [ ] Kafka brokers and topics exist: `orders.events`, `payments.events`, etc. (7 topics)
 - [ ] Redis 7.0+ instance running and reachable
-- [ ] Go 1.24+ environment available
+- [ ] Go 1.25 environment available
 - [ ] Consumer group `stream-processor` can be created
 
 ### Deployment
@@ -101,10 +101,10 @@ kubectl rollout restart deployment/outbox-relay-service -n instacommerce
 ```bash
 # 1. Build Docker image
 cd services/stream-processor-service
-docker build -t gcr.io/my-project/stream-processor:v1.0.0 .
+docker build -t asia-south1-docker.pkg.dev/instacommerce/images/stream-processor-service:v1.0.0 .
 
 # 2. Push to registry
-docker push gcr.io/my-project/stream-processor:v1.0.0
+docker push asia-south1-docker.pkg.dev/instacommerce/images/stream-processor-service:v1.0.0
 
 # 3. Deploy
 helm install stream-processor deploy/helm/ \

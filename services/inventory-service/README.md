@@ -4,7 +4,7 @@
 
 The single authority for per-SKU per-store stock counts and the checkout reservation lifecycle in InstaCommerce. Every stock mutation — reserve, confirm, cancel, adjust, expire — flows through this service. No other service may write `stock_items`.
 
-Spring Boot 3 / Java 21 · PostgreSQL with Flyway · Transactional outbox → Debezium/CDC → Kafka · Pessimistic row-level locking · ShedLock distributed scheduling · OTEL traces + Micrometer/OTLP metrics · Structured JSON logging (Logstash encoder).
+Spring Boot 4.0.0 / Java 21 · PostgreSQL with Flyway · Transactional outbox → Debezium/CDC → Kafka · Pessimistic row-level locking · ShedLock distributed scheduling · OTEL traces + Micrometer/OTLP metrics · Structured JSON logging (Logstash encoder).
 
 ---
 
@@ -796,7 +796,7 @@ docker run -d --name inventory-pg \
 # Option 3: Docker image
 ./gradlew :services:inventory-service:bootJar
 docker build -t inventory-service services/inventory-service
-docker run -p 8083:8080 \
+docker run -p 8083:8083 \
   -e INVENTORY_DB_URL=jdbc:postgresql://host.docker.internal:5432/inventory \
   -e INVENTORY_DB_PASSWORD=postgres \
   -e INVENTORY_JWT_PUBLIC_KEY="<pem>" \

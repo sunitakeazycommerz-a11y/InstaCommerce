@@ -1,5 +1,7 @@
 # Wave 40 Planning Index
 
+> **Status:** ARCHIVED / HISTORICAL REFERENCE — Wave 40 planning snapshot. See [`docs/archive/README.md`](../../README.md) and [`docs/README.md`](../../../README.md) for current navigation.
+
 **Created**: 2026-03-21
 **Status**: Planning Complete
 **Total Scope**: 220-360 hours across 5 priority tracks

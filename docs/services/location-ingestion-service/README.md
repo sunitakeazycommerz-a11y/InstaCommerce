@@ -83,7 +83,7 @@ The location-ingestion-service is a high-performance GPS event ingestion and geo
 ### REST Dependencies
 | Service | Endpoint | Purpose | Timeout |
 |---------|----------|---------|---------|
-| warehouse-service | http://warehouse-service:8088/warehouses/geo | Geofence polygons | 5s (cached 5 min) |
+| warehouse-service | http://warehouse-service:8092/warehouses/geo | Geofence polygons | 5s (cached 5 min) |
 
 ## Endpoints
 
@@ -104,17 +104,17 @@ The location-ingestion-service is a high-performance GPS event ingestion and geo
 
 ```bash
 # WebSocket location streaming (from rider app)
-wscat -c 'ws://location-ingestion:8086/v1/location/stream?apiKey=rider-key-123'
+wscat -c 'ws://location-ingestion:8105/v1/location/stream?apiKey=rider-key-123'
 # Then send: {"riderId":"rider-001","lat":37.7749,"lon":-122.4194,"accuracy":8,"timestamp":"2024-01-01T12:00:00Z"}
 
 # REST location update
-curl -X POST 'http://location-ingestion:8086/v1/location/update' \
+curl -X POST 'http://location-ingestion:8105/v1/location/update' \
   -H 'Authorization: Bearer <jwt_token>' \
   -H 'Content-Type: application/json' \
   -d '{"riderId":"rider-001","lat":37.7749,"lon":-122.4194,"accuracy":8}'
 
 # Find nearby riders
-curl -X GET 'http://location-ingestion:8086/v1/location/nearby?lat=37.7749&lon=-122.4194&radiusKm=2' \
+curl -X GET 'http://location-ingestion:8105/v1/location/nearby?lat=37.7749&lon=-122.4194&radiusKm=2' \
   -H 'Authorization: Bearer <jwt_token>'
 
 # Response:
@@ -126,7 +126,7 @@ curl -X GET 'http://location-ingestion:8086/v1/location/nearby?lat=37.7749&lon=-
 # }
 
 # Get rider current location
-curl -X GET 'http://location-ingestion:8086/v1/location/rider/rider-001' \
+curl -X GET 'http://location-ingestion:8105/v1/location/rider/rider-001' \
   -H 'Authorization: Bearer <jwt_token>'
 ```
 
@@ -134,13 +134,13 @@ curl -X GET 'http://location-ingestion:8086/v1/location/rider/rider-001' \
 
 ### Environment Variables
 ```env
-SERVER_PORT=8086
+SERVER_PORT=8105
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 KAFKA_TOPIC=location-updates
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=<redis_password>
-WAREHOUSE_SERVICE_URL=http://warehouse-service:8088
+WAREHOUSE_SERVICE_URL=http://warehouse-service:8092
 GEOFENCE_CACHE_TTL_MINUTES=5
 RIDER_RATE_LIMIT_EVENTS_PER_SEC=100
 GPS_ACCURACY_THRESHOLD_METERS=100
@@ -154,7 +154,7 @@ LOG_LEVEL=info
 ### config.yaml
 ```yaml
 server:
-  port: ${SERVER_PORT:8086}
+  port: ${SERVER_PORT:8105}
   websocket-max-connections: 5000
 
 kafka:
@@ -243,7 +243,7 @@ observability:
 ### High Event Drop Rate
 1. **Check GPS accuracy**: Validate that rider devices report accuracy ≤ 100m
 2. **Review geofence logic**: Confirm geofence cache is fresh (check `geofence_cache_miss_rate`)
-3. **Verify warehouse service**: Ensure warehouse-service:8088 is reachable and responsive
+3. **Verify warehouse service**: Ensure warehouse-service:8092 is reachable and responsive
 4. **Monitor rate limits**: Check if `rider_rate_limit_exceeded_total` counter increasing
 
 ### Redis GEO Index Growing Too Large

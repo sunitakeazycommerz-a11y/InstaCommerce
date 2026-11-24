@@ -82,12 +82,12 @@ The dispatch-optimizer-service is responsible for optimal rider assignment and r
 
 ```bash
 # Get authorization token
-TOKEN=$(curl -X POST http://identity-service:8080/token/internal \
+TOKEN=$(curl -X POST http://identity-service:8081/token/internal \
   -H "Content-Type: application/json" \
   -d '{"service":"checkout-orchestrator-service"}' | jq -r '.token')
 
 # Request optimal rider assignment
-curl -X POST http://dispatch-optimizer-service:8083/api/v1/assignments \
+curl -X POST http://dispatch-optimizer-service:8102/api/v1/assignments \
   -H "X-Internal-Token: $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -101,11 +101,11 @@ curl -X POST http://dispatch-optimizer-service:8083/api/v1/assignments \
   }'
 
 # Get current rider capacity
-curl -X GET http://dispatch-optimizer-service:8083/api/v1/riders/capacity \
+curl -X GET http://dispatch-optimizer-service:8102/api/v1/riders/capacity \
   -H "X-Internal-Token: $TOKEN"
 
 # Trigger rebalancing to optimize all active routes
-curl -X POST http://dispatch-optimizer-service:8083/api/v1/rebalance \
+curl -X POST http://dispatch-optimizer-service:8102/api/v1/rebalance \
   -H "X-Internal-Token: $TOKEN"
 ```
 
@@ -113,12 +113,12 @@ curl -X POST http://dispatch-optimizer-service:8083/api/v1/rebalance \
 
 ### Environment Variables
 ```env
-PORT=8083
+PORT=8102
 
 # Location and Fleet Services
-LOCATION_SERVICE_URL=http://location-ingestion-service:8087
-RIDER_FLEET_SERVICE_URL=http://rider-fleet-service:8085
-WAREHOUSE_SERVICE_URL=http://warehouse-service:8088
+LOCATION_SERVICE_URL=http://location-ingestion-service:8105
+RIDER_FLEET_SERVICE_URL=http://rider-fleet-service:8093
+WAREHOUSE_SERVICE_URL=http://warehouse-service:8092
 SERVICE_CALL_TIMEOUT_SECONDS=3
 
 # Distance Calculation
@@ -219,7 +219,7 @@ LOG_FORMAT=json (for structured logging)
 4. **Compare against manual assignment**: Run optimization in dry-run mode (`DISPATCH_DRY_RUN_ENABLED=true`)
 
 ### Service Call Failures
-1. **Verify dependent services**: `curl http://location-ingestion-service:8087/health`
+1. **Verify dependent services**: `curl http://location-ingestion-service:8105/health`
 2. **Check network policies**: Ensure fulfillment namespace can reach location-service and rider-fleet
 3. **Increase timeout**: Adjust `SERVICE_CALL_TIMEOUT_SECONDS` if services are slow
 
@@ -395,7 +395,7 @@ Assignment success rate: > 99.9% (rare feasibility failures)
 **Diagnosis**:
 ```bash
 # Check solver statistics
-curl http://dispatch-optimizer-service:8083/actuator/metrics/dispatch_optimization_duration_ms \
+curl http://dispatch-optimizer-service:8102/actuator/metrics/dispatch_optimization_duration_ms \
   | jq '.[] | select(.percentile == "0.99")'
 # If > 500ms: Solver taking too long
 
@@ -451,7 +451,7 @@ echo "Current: w_distance=$(env | grep w_distance)"
 echo "Baseline: w_distance=0.6"
 
 # Check solver timeout rate
-curl http://dispatch-optimizer-service:8083/actuator/metrics/dispatch_optimization_timeout_rate
+curl http://dispatch-optimizer-service:8102/actuator/metrics/dispatch_optimization_timeout_rate
 
 # Analyze assignment quality
 SELECT

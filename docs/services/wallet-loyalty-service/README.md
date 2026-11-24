@@ -7,7 +7,7 @@
 | **Module** | `:services:wallet-loyalty-service` |
 | **Port** | `8090` |
 | **Runtime** | Spring Boot 4.0 · Java 21 |
-| **Database** | PostgreSQL 15+ (@Version locking, CHECK constraints) |
+| **Database** | PostgreSQL 16 (@Version locking, CHECK constraints) |
 | **Messaging** | Kafka consumer (orders.events, payments.events) |
 | **Resilience** | Optimistic locking, idempotency keys |
 | **Auth** | JWT RS256 + user isolation |
@@ -540,11 +540,11 @@ alerts:
 kubectl get pods -n services | grep wallet
 
 # Check if balance issue
-curl http://wallet-loyalty-service:8090/wallet/balance \
+curl http://wallet-loyalty-service:8095/wallet/balance \
   -H "Authorization: Bearer $JWT_TOKEN"
 
 # Check database health
-curl http://wallet-loyalty-service:8090/actuator/health/ready
+curl http://wallet-loyalty-service:8095/actuator/health/ready
 
 # Increase connection pool if contention
 SPRING_DATASOURCE_HIKARI_POOL_SIZE=50 (from 30)
@@ -609,7 +609,7 @@ GROUP BY user_id
 HAVING balance_cents != SUM(amount);
 
 # Manual correction if needed
-curl -X POST http://wallet-loyalty-service:8090/admin/reconcile \
+curl -X POST http://wallet-loyalty-service:8095/admin/reconcile \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{
     "walletId": "wallet-uuid",
@@ -642,7 +642,7 @@ WHERE name = 'ExpireLoyaltyPointsJob'
 AND lock_at_most_until < NOW();
 
 # Trigger manual expiry
-curl -X POST http://wallet-loyalty-service:8090/admin/jobs/expire-points
+curl -X POST http://wallet-loyalty-service:8095/admin/jobs/expire-points
 
 # Increase job memory
 LOYALTY_JOB_MEMORY_MB=1024 (from 512)
@@ -666,10 +666,10 @@ LOYALTY_JOB_MEMORY_MB=1024 (from 512)
 kubectl get pods -n services | grep payment
 
 # Test connectivity
-curl http://payment-service:8084/actuator/health/live
+curl http://payment-service:8085/actuator/health/live
 
 # Force circuit breaker reset
-curl -X POST http://wallet-loyalty-service:8090/admin/circuit-breaker/reset
+curl -X POST http://wallet-loyalty-service:8095/admin/circuit-breaker/reset
 
 # Allow topup without verification (not recommended)
 WALLET_SKIP_PAYMENT_VERIFICATION=true
@@ -690,13 +690,13 @@ WALLET_SKIP_PAYMENT_VERIFICATION=true
 **Resolution:**
 ```bash
 # Check tier progression config
-curl http://wallet-loyalty-service:8090/admin/config/tier-thresholds
+curl http://wallet-loyalty-service:8095/admin/config/tier-thresholds
 
 # Manually trigger tier check
-curl -X POST http://wallet-loyalty-service:8090/admin/jobs/update-tiers
+curl -X POST http://wallet-loyalty-service:8095/admin/jobs/update-tiers
 
 # Verify tier thresholds
-curl -X GET http://wallet-loyalty-service:8090/admin/loyalty/user/{userId}/tier-status
+curl -X GET http://wallet-loyalty-service:8095/admin/loyalty/user/{userId}/tier-status
 ```
 
 ### Scenario 7: Idempotency Key Collision (Duplicate transactions)
@@ -721,7 +721,7 @@ GROUP BY order_id
 HAVING COUNT(*) > 1;
 
 # Manually reverse duplicate charge
-curl -X POST http://wallet-loyalty-service:8090/admin/transactions/{txnId}/reverse \
+curl -X POST http://wallet-loyalty-service:8095/admin/transactions/{txnId}/reverse \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # Ensure idempotency key always set
@@ -743,10 +743,10 @@ WALLET_ENFORCE_IDEMPOTENCY=true
 **Resolution:**
 ```bash
 # Check anti-fraud flag
-curl http://wallet-loyalty-service:8090/wallet/{walletId}/fraud-status
+curl http://wallet-loyalty-service:8095/wallet/{walletId}/fraud-status
 
 # Whitelist user temporarily
-curl -X POST http://wallet-loyalty-service:8090/admin/fraud/whitelist \
+curl -X POST http://wallet-loyalty-service:8095/admin/fraud/whitelist \
   -d '{"walletId": "wallet-uuid", "ttlHours": 24}'
 
 # Adjust velocity thresholds
@@ -754,7 +754,7 @@ FRAUD_TOPUP_SPIKE_THRESHOLD=10 (from 5)
 FRAUD_TOPUP_DAILY_MAX=500000 (from 100000 cents)
 
 # Review and clear flag
-curl -X POST http://wallet-loyalty-service:8090/admin/fraud/clear \
+curl -X POST http://wallet-loyalty-service:8095/admin/fraud/clear \
   -d '{"walletId": "wallet-uuid", "reason": "Manual review - legitimate user"}'
 ```
 
@@ -807,7 +807,7 @@ curl -X POST http://wallet-loyalty-service:8090/admin/fraud/clear \
 ### Environment Variables
 
 ```env
-SERVER_PORT=8090
+SERVER_PORT=8095
 SPRING_PROFILES_ACTIVE=gcp
 
 SPRING_DATASOURCE_URL=jdbc:postgresql://cloudsql-proxy:5432/wallet

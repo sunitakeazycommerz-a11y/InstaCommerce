@@ -696,7 +696,7 @@ The service declares test dependencies for JUnit Platform, Spring Boot Test, Spr
 # Docker build
 ./gradlew :services:routing-eta-service:bootJar
 docker build -t routing-eta-service services/routing-eta-service/
-docker run -p 8092:8092 routing-eta-service
+docker run -p 8094:8094 routing-eta-service
 ```
 
 **Dockerfile details:** Packages the pre-built Spring Boot jar from `build/libs/` into an `eclipse-temurin:21-jre-alpine` runtime image. Runs as non-root user `app` (UID 1001). JVM flags: `-XX:MaxRAMPercentage=75.0 -XX:+UseZGC`. Container `HEALTHCHECK` calls `/actuator/health/liveness` every 30 s. Default `SERVER_PORT` inside the container is `8080` (overridden by env var in Kubernetes).

@@ -8,7 +8,7 @@ The config-feature-flag-service is the operational authority for feature flags, 
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8092
 **Status**: Tier 2 Critical (enables rapid iteration; impacts all feature launches)
-**Database**: PostgreSQL 15+ (flag definitions, experiments, rollouts)
+**Database**: PostgreSQL 16 (flag definitions, experiments, rollouts)
 **Cache**: Caffeine (JVM-local, 30s TTL) + Redis pub/sub (Wave 35 invalidation)
 
 ## SLOs & Availability
@@ -42,7 +42,7 @@ The config-feature-flag-service is the operational authority for feature flags, 
 - **Readiness Probe**: `/actuator/health/ready` (checks DB + Redis)
 
 ### Database
-- **Name**: `featureflag` (PostgreSQL 15+)
+- **Name**: `featureflag` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V4) auto-applied
 - **Connection Pool**: HikariCP 20 connections (read-heavy)
 - **Replication**: Async (eventual consistency acceptable for flags)
@@ -536,7 +536,7 @@ alerts:
 **Diagnosis:**
 ```bash
 # Check cache metrics
-curl http://localhost:8092/actuator/metrics/cache.caffeine.hitRate
+curl http://localhost:8098/actuator/metrics/cache.caffeine.hitRate
 
 # Check Redis connection
 kubectl logs -n default deployment/feature-flag-service | grep -i "redis\|connection"
@@ -566,7 +566,7 @@ kubectl exec -n default pod/feature-flag-service-0 -- \
 kubectl logs -n default deployment/feature-flag-service | grep "flag-invalidation"
 
 # Check if entry was evicted
-curl http://localhost:8092/actuator/metrics/cache.caffeine.evictions
+curl http://localhost:8098/actuator/metrics/cache.caffeine.evictions
 ```
 
 **Resolution:**
@@ -589,7 +589,7 @@ psql -d featureflag -c "SELECT * FROM experiments WHERE key='test_exp';"
 psql -d featureflag -c "SELECT assigned_variant FROM experiment_assignments WHERE experiment_id=? AND user_id=?;"
 
 # Test hash consistency
-curl -s http://localhost:8092/flags/bulk \
+curl -s http://localhost:8098/flags/bulk \
   -H "Authorization: Bearer $JWT" \
   -d '{"keys":["test_flag"], "userId":"same-uuid"}' \
   | jq '.flags[].variant'  # Run multiple times; should be same
@@ -605,7 +605,7 @@ curl -s http://localhost:8092/flags/bulk \
 ### Environment Variables
 ```env
 # Server
-SERVER_PORT=8092
+SERVER_PORT=8098
 SPRING_PROFILES_ACTIVE=gcp
 
 # Database
@@ -631,7 +631,7 @@ OTEL_TRACES_SAMPLER=always_on
 ### application.yml
 ```yaml
 server:
-  port: 8092
+  port: 8098
 spring:
   jpa:
     hibernate:
@@ -675,14 +675,14 @@ spec:
         app: feature-flag-service
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8092"
+        prometheus.io/port: "8098"
         prometheus.io/path: "/actuator/prometheus"
     spec:
       containers:
       - name: feature-flag-service
         image: feature-flag-service:v1.2.3
         ports:
-        - containerPort: 8092
+        - containerPort: 8098
           name: http
         env:
         - name: SPRING_PROFILES_ACTIVE
@@ -699,13 +699,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/live
-            port: 8092
+            port: 8098
           initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /actuator/health/ready
-            port: 8092
+            port: 8098
           initialDelaySeconds: 15
           periodSeconds: 5
 ---
@@ -718,8 +718,8 @@ spec:
   selector:
     app: feature-flag-service
   ports:
-  - port: 8092
-    targetPort: 8092
+  - port: 8098
+    targetPort: 8098
     name: http
   type: ClusterIP
 ```

@@ -388,7 +388,7 @@ Response:
 
 ```yaml
 server:
-  port: ${SERVER_PORT:8096}
+  port: ${SERVER_PORT:8098}
   shutdown: graceful
 
 spring:
@@ -434,7 +434,7 @@ feature-flag:
 
 ### Tech Stack
 
-- Java 21, Spring Boot 3.x
+- Java 21, Spring Boot 4.0.0
 - PostgreSQL, Spring Data JPA
 - Caffeine Cache, ShedLock
 - Guava Murmur3 Hashing

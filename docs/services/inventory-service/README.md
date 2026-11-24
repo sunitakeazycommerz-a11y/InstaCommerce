@@ -8,7 +8,7 @@ The inventory-service maintains the authoritative stock levels for all products 
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8083
 **Status**: Tier 1 Critical (inventory authority)
-**Database**: PostgreSQL 15+ (stock ledger, reservations)
+**Database**: PostgreSQL 16 (stock ledger, reservations)
 
 ## SLOs & Availability
 
@@ -41,7 +41,7 @@ The inventory-service maintains the authoritative stock levels for all products 
 - **Startup Probe**: 15s initial delay
 
 ### Database
-- **Name**: `inventory` (PostgreSQL 15+)
+- **Name**: `inventory` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V14)
 - **Connection Pool**: HikariCP 60 connections (HIGHEST of all services due to concurrency)
 - **Idle Timeout**: 5 minutes

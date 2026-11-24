@@ -49,7 +49,7 @@ kubectl exec -n engagement deploy/notification-service -- \
 ### Blue-Green Deployment
 
 ```bash
-helm upgrade notification-service deploy/helm/notification-service -n engagement
+helm upgrade instacommerce deploy/helm -n engagement
 kubectl rollout status deploy/notification-service -n engagement --timeout=10m
 
 # Monitor Kafka consumer rebalancing
@@ -258,6 +258,6 @@ notification_bounce_rate
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/notification-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/notification-service/README.md`
 - **Alert Rules**: `/monitoring/prometheus/notification-rules.yaml`

@@ -310,7 +310,7 @@ flowchart LR
     subgraph Topics
         T1[identity.events]
         T2[orders.events]
-        T3[payment.events]
+        T3[payments.events]
         T4[fulfillment.events]
         T5[catalog.events]
         T6[inventory.events]
@@ -382,7 +382,7 @@ flowchart LR
 |--------------------------|-----------------------|----------------------------------------------------------|-----------------------------------------------------------|
 | `identity.events`        | identity-service      | order-service, fulfillment-service, notification-service | UserCreated, UserUpdated, UserDeleted (GDPR erasure)       |
 | `orders.events`          | order-service         | fulfillment, notification, fraud-detection, wallet-loyalty, audit-trail, stream-processor | OrderPlaced, OrderCancelled, OrderDelivered, OrderFailed   |
-| `payment.events`         | payment-service       | notification, fraud-detection, wallet-loyalty, audit-trail, stream-processor | PaymentAuthorized, PaymentCaptured, PaymentRefunded        |
+| `payments.events`        | payment-service       | notification, fraud-detection, wallet-loyalty, audit-trail, stream-processor | PaymentAuthorized, PaymentCaptured, PaymentRefunded        |
 | `fulfillment.events`     | fulfillment-service   | notification, rider-fleet, audit-trail                   | PickStarted, PickCompleted, OrderPacked, OrderDispatched   |
 | `catalog.events`         | catalog-service       | search-service, pricing-service, audit-trail             | ProductCreated, ProductUpdated, PriceChanged, CouponCreated |
 | `inventory.events`       | inventory-service     | audit-trail, stream-processor                            | StockAdjusted, ReservationCreated, ReservationReleased     |
@@ -661,19 +661,19 @@ all cross-service communication happens via Kafka events or synchronous HTTP/gRP
 
 | Service                   | Database           | Engine         |
 |---------------------------|--------------------|----------------|
-| identity-service          | `identity_db`      | PostgreSQL 15  |
-| catalog-service           | `catalog_db`       | PostgreSQL 15  |
-| inventory-service         | `inventory_db`     | PostgreSQL 15  |
-| order-service             | `order_db`         | PostgreSQL 15  |
-| payment-service           | `payment_db`       | PostgreSQL 15  |
-| fulfillment-service       | `fulfillment_db`   | PostgreSQL 15  |
-| notification-service      | `notification_db`  | PostgreSQL 15  |
-| fraud-detection-service   | `fraud_db`         | PostgreSQL 15  |
-| wallet-loyalty-service    | `wallet_db`        | PostgreSQL 15  |
-| config-feature-flag-service | `config_db`      | PostgreSQL 15  |
-| warehouse-service         | `warehouse_db`     | PostgreSQL 15  |
-| routing-eta-service       | `routing_db`       | PostgreSQL 15  |
-| audit-trail-service       | `audit_db`         | PostgreSQL 15  |
+| identity-service          | `identity_db`      | PostgreSQL 16  |
+| catalog-service           | `catalog_db`       | PostgreSQL 16  |
+| inventory-service         | `inventory_db`     | PostgreSQL 16  |
+| order-service             | `order_db`         | PostgreSQL 16  |
+| payment-service           | `payment_db`       | PostgreSQL 16  |
+| fulfillment-service       | `fulfillment_db`   | PostgreSQL 16  |
+| notification-service      | `notification_db`  | PostgreSQL 16  |
+| fraud-detection-service   | `fraud_db`         | PostgreSQL 16  |
+| wallet-loyalty-service    | `wallet_db`        | PostgreSQL 16  |
+| config-feature-flag-service | `config_db`      | PostgreSQL 16  |
+| warehouse-service         | `warehouse_db`     | PostgreSQL 16  |
+| routing-eta-service       | `routing_db`       | PostgreSQL 16  |
+| audit-trail-service       | `audit_db`         | PostgreSQL 16  |
 
 ### 8.2 Key Tables per Service
 
@@ -966,8 +966,8 @@ and writes to Redis counters and Prometheus metrics.
 ```mermaid
 flowchart TD
     subgraph Kafka Topics
-        T1[order.events]
-        T2[payment.events]
+        T1[orders.events]
+        T2[payments.events]
         T3[rider.events]
         T4[rider.location.updates]
         T5[inventory.events]
@@ -1051,14 +1051,14 @@ type AssignResponse struct {
 
 ### 10.7 CDC Consumer Service
 
-Consumes Debezium CDC topics from Kafka (`*.public.*`), validates payload JSON schemas, and batches streaming inserts into Google BigQuery `cdc_events` with exponential backoff and dead-letter queueing (`cdc.dlq`).
+Consumes Debezium CDC topics from Kafka (`*.public.*`), validates payload JSON schemas, and batches streaming inserts into Google BigQuery `cdc_events` with exponential backoff and dead-letter queueing (`cdc.events.DLT`).
 
 ```mermaid
 flowchart LR
     Kafka["Kafka CDC Topics<br/>orders_db.public.orders<br/>payments_db.public.payments"] --> Reader["kafka-go Batch Reader"]
     Reader --> Transform["Transform & Schema Normalizer"]
     Transform --> BQ["BigQuery Streaming Inserter<br/>table.Inserter()"]
-    Transform -. "Malformed JSON<br/>dlq_reason header" .-> DLQ["Kafka cdc.dlq"]
+    Transform -. "Malformed JSON<br/>dlq_reason header" .-> DLQ["Kafka cdc.events.DLT"]
     BQ -. "Permanent 4xx Error" .-> DLQ
 ```
 
@@ -1197,8 +1197,8 @@ The feature-flag service also supports A/B experiments:
 ```mermaid
 flowchart TD
     subgraph Event Sources
-        OE[order.events<br/>OrderPlaced]
-        PE[payment.events<br/>PaymentAuthorized]
+        OE[orders.events<br/>OrderPlaced]
+        PE[payments.events<br/>PaymentAuthorized]
     end
 
     OE --> FC[Fraud Consumer]
@@ -1378,7 +1378,7 @@ Raw (BigQuery) → Staging (views) → Intermediate (tables) → Marts (partitio
 |---------------------------|------------------------|-----------------------|
 | cart_events_pipeline      | cart.events            | BigQuery              |
 | order_events_pipeline     | orders.events          | BigQuery              |
-| payment_events_pipeline   | payment.events         | BigQuery              |
+| payment_events_pipeline   | payments.events        | BigQuery              |
 | inventory_events_pipeline | inventory.events       | BigQuery              |
 | rider_location_pipeline   | rider.location.updates | BigQuery + Feature Store |
 

@@ -61,7 +61,7 @@ This cluster comprises three **event plane** services handling reliable domain e
 - **Partial Commit**: Keeps batch progress on individual failures
 - **Graceful Shutdown**: Drains current batch on termination
 - **Port**: 8103 (dev), 8080 (container)
-- **Runtime**: Go 1.24, stateless single binary
+- **Runtime**: Go 1.25, stateless single binary
 
 ### Stream Processor Service (Tier 2)
 - **Real-Time Aggregation**: Sliding-window counters (orders, payments, riders, inventory)
@@ -69,7 +69,7 @@ This cluster comprises three **event plane** services handling reliable domain e
 - **Dual Sinks**: Redis (for dashboards) + Prometheus (for alerting)
 - **Deduplication**: Redis SET-based event ID dedup (Wave 32 improvement)
 - **Port**: 8108 (dev), 8080 (container)
-- **Runtime**: Go 1.24
+- **Runtime**: Go 1.25
 
 ### Reconciliation Engine (Tier 2)
 - **Financial Ledger**: Tallies transactions, settlements, refunds
@@ -77,7 +77,7 @@ This cluster comprises three **event plane** services handling reliable domain e
 - **Reconciliation Reports**: Daily/hourly settlement verification
 - **DLQ Management**: Routes unprocessable records for manual review
 - **Port**: 8090 (dev), 8080 (container)
-- **Runtime**: Go 1.24 (Wave 36: migrate from file-based to DB-backed)
+- **Runtime**: Go 1.25 (Wave 36: migrate from file-based to DB-backed)
 
 ## Key Technologies
 

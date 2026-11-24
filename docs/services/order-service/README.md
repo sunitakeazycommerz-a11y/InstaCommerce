@@ -8,7 +8,7 @@ The order-service is the source of truth for all order data in InstaCommerce. It
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8084
 **Status**: Tier 1 Critical (money path)
-**Database**: PostgreSQL 15+ (primary ordering system, immutable audit trail)
+**Database**: PostgreSQL 16 (primary ordering system, immutable audit trail)
 
 ## SLOs & Availability
 
@@ -46,7 +46,7 @@ The order-service is the source of truth for all order data in InstaCommerce. It
 - **Pod Disruption Budget**: minAvailable: 2/3
 
 ### Database
-- **Name**: `orders` (PostgreSQL 15+)
+- **Name**: `orders` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V12) - auto-applied on startup
 - **Connection Pool**: HikariCP 20 connections, 5 min idle timeout
 - **Failover**: Read replicas in standby zones (via cloudsql-proxy)
@@ -402,10 +402,10 @@ alerts:
 **Resolution**:
 ```bash
 # Check database write latency
-curl http://order-service:8085/actuator/metrics/db_write_latency_ms | jq '.measurements'
+curl http://order-service:8084/actuator/metrics/db_write_latency_ms | jq '.measurements'
 
 # Check connection pool utilization
-curl http://order-service:8085/actuator/metrics/db_connection_pool_active
+curl http://order-service:8084/actuator/metrics/db_connection_pool_active
 
 # Identify slow queries
 SELECT query, calls, mean_time FROM pg_stat_statements
@@ -674,13 +674,13 @@ kafka-consumer-groups --bootstrap-server kafka:9092 \
 
 # Check Fulfillment service health
 kubectl get pods -n fulfillment | grep fulfillment-service
-curl http://fulfillment-service:8080/actuator/health
+curl http://fulfillment-service:8086/actuator/health
 
 # If Fulfillment crashed: Restart
 kubectl rollout restart deployment/fulfillment-service -n fulfillment
 
 # Manually trigger picking task creation (for stuck orders)
-curl -X POST http://order-service:8085/admin/orders/{order_id}/repulish-event
+curl -X POST http://order-service:8084/admin/orders/{order_id}/repulish-event
 ```
 
 ### Scenario 9: Database Table Bloat (Large orders Table)
@@ -784,7 +784,7 @@ SELECT * FROM payments WHERE order_id IS NULL AND created_at > NOW() - INTERVAL 
 
 ### Environment Variables
 ```env
-SERVER_PORT=8085
+SERVER_PORT=8084
 SPRING_PROFILES_ACTIVE=gcp
 
 SPRING_DATASOURCE_URL=jdbc:postgresql://cloudsql-proxy:5432/orders
@@ -803,8 +803,8 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://otel-collector.monitoring:4318/v1/trac
 ### Synchronous Calls
 | Service | Endpoint | Timeout | Purpose | Critical |
 |---------|----------|---------|---------|----------|
-| identity-service | http://identity-service:8080/jwt/validate | 1s | JWT validation | Yes |
-| payment-service | http://payment-service:8084/payments/{id} | 2s | Payment lookup | Yes |
+| identity-service | http://identity-service:8081/jwt/validate | 1s | JWT validation | Yes |
+| payment-service | http://payment-service:8085/payments/{id} | 2s | Payment lookup | Yes |
 
 ### Event Publishing
 | Topic | Event | Pattern | Reliability |
@@ -836,7 +836,7 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://otel-collector.monitoring:4318/v1/trac
 
 ```bash
 # Create order
-curl -X POST http://order-service:8085/orders \
+curl -X POST http://order-service:8084/orders \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{
@@ -848,11 +848,11 @@ curl -X POST http://order-service:8085/orders \
   }' | jq '.order_id'
 
 # Get order
-curl -X GET http://order-service:8085/orders/order-123 \
+curl -X GET http://order-service:8084/orders/order-123 \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.status'
 
 # Cancel order
-curl -X PUT http://order-service:8085/orders/order-123/cancel \
+curl -X PUT http://order-service:8084/orders/order-123/cancel \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{"reason": "customer_cancelled"}' | jq '.status'
 ```

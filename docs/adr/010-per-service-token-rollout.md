@@ -7,7 +7,7 @@ Accepted
 2026-03-13
 
 ## Context
-All 28 services share a single INTERNAL_SERVICE_TOKEN. A compromise of any
+All 30 deployed services historically shared a single `INTERNAL_SERVICE_TOKEN`. A compromise of any
 service grants full impersonation capability across the entire platform.
 ADR-006 identified this as a critical security gap.
 
@@ -28,4 +28,4 @@ from all service client configurations to prevent accidental use in production.
 - Per-service secrets must be provisioned in GCP Secret Manager
 - Helm values must be updated per-environment to inject caller-specific tokens
 - Token rotation affects only a single caller-receiver pair, not the entire fleet
-- Shared token remains as fallback until Wave 28 full migration
+- Shared token remains as migration fallback until per-environment Phase 2 enforcement is completed across all 30 services

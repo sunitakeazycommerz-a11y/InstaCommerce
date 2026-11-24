@@ -366,7 +366,7 @@ client := httpclient.NewClient(
     httpclient.WithLogger(logger),
 )
 
-resp, err := client.Get(ctx, "http://order-service:8080/api/v1/orders/123")
+resp, err := client.Get(ctx, "http://order-service:8084/api/v1/orders/123")
 ```
 
 ---
@@ -764,7 +764,7 @@ the iter3 review cycle.
 ```
 go-shared/
 ├── README.md
-├── go.mod                          # module github.com/instacommerce/go-shared — Go 1.23
+├── go.mod                          # module github.com/instacommerce/go-shared — Go 1.25
 ├── go.sum
 └── pkg/
     ├── auth/

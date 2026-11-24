@@ -74,8 +74,8 @@ flowchart TB
     subgraph Edge["Edge Plane"]
         direction LR
         Istio["Istio Ingress\n+ AuthorizationPolicy"]
-        BFF["mobile-bff-service\n🟡 scaffold"]
-        Admin["admin-gateway-service\n🟡 scaffold"]
+        BFF["mobile-bff-service\n(WebFlux Gateway)"]
+        Admin["admin-gateway-service\n(Admin RBAC Gateway)"]
         Identity["identity-service"]
     end
 
@@ -278,8 +278,8 @@ technology per cluster. Aligned with the nine service clusters from
 graph TB
     subgraph C1["Cluster 1 — Edge & Identity"]
         c1a["identity-service<br/>Java · JWT/OAuth2 · PostgreSQL"]
-        c1b["mobile-bff-service<br/>Java · 🟡 scaffold"]
-        c1c["admin-gateway-service<br/>Java · 🟡 scaffold"]
+        c1b["mobile-bff-service<br/>Java · WebFlux · RS256 JWT"]
+        c1c["admin-gateway-service<br/>Java · MVC · RBAC · RS256 JWT"]
     end
 
     subgraph C2["Cluster 2 — Transactional Core"]
@@ -290,7 +290,7 @@ graph TB
 
     subgraph C3["Cluster 3 — Browse & Decision"]
         c3a["catalog-service<br/>Java · PostgreSQL"]
-        c3b["search-service<br/>Java · Elasticsearch"]
+        c3b["search-service<br/>Java · PostgreSQL FTS"]
         c3c["cart-service<br/>Java · Redis"]
         c3d["pricing-service<br/>Java · promotions engine"]
     end
@@ -364,8 +364,8 @@ Status reflects checked-in implementation, not design intent.
 | 9 | inventory-service | Java | `services/inventory-service` | ✅ Active |
 | 10 | fulfillment-service | Java | `services/fulfillment-service` | ✅ Active |
 | 11 | notification-service | Java | `services/notification-service` | ✅ Active |
-| 12 | mobile-bff-service | Java | `services/mobile-bff-service` | 🟡 Scaffold |
-| 13 | admin-gateway-service | Java | `services/admin-gateway-service` | 🟡 Scaffold |
+| 12 | mobile-bff-service | Java | `services/mobile-bff-service` | ✅ Active |
+| 13 | admin-gateway-service | Java | `services/admin-gateway-service` | ✅ Active |
 | 14 | wallet-loyalty-service | Java | `services/wallet-loyalty-service` | ✅ Active |
 | 15 | fraud-detection-service | Java | `services/fraud-detection-service` | ✅ Active |
 | 16 | audit-trail-service | Java | `services/audit-trail-service` | ✅ Active |
@@ -385,10 +385,12 @@ Status reflects checked-in implementation, not design intent.
 | 30 | reverse-etl-orchestrator | Go | `services/reverse-etl-orchestrator` | ✅ Active |
 | 31 | go-shared | Go | `services/go-shared` | Shared library |
 
-> **Go deploy-name mapping:** Some Go modules have different Helm/deploy keys.
+> **Go deploy-name mapping:** Some Go modules have shorter Helm/deploy keys.
 > Current CI mappings: `cdc-consumer-service` → `cdc-consumer`,
 > `location-ingestion-service` → `location-ingestion`,
-> `payment-webhook-service` → `payment-webhook`.
+> `outbox-relay-service` → `outbox-relay`,
+> `payment-webhook-service` → `payment-webhook`,
+> `stream-processor-service` → `stream-processor`.
 > See `.github/workflows/ci.yml` for the authoritative list.
 
 ---
@@ -405,7 +407,7 @@ Status reflects checked-in implementation, not design intent.
 | Kafka topic topology | [`docs/architecture/DATA-FLOW.md`](docs/architecture/DATA-FLOW.md) §6 | Per-domain topics: `orders.events`, `payments.events`, `inventory.events`, etc. |
 | Event envelope | [`contracts/README.md`](contracts/README.md) | Standard fields: `event_id`, `event_type`, `aggregate_id`, `schema_version`, `source_service`, `correlation_id`, `timestamp`, `payload` |
 | Schema evolution | [`contracts/README.md`](contracts/README.md) | Additive changes stay in-version; breaking changes create new `vN` file with 90-day deprecation window |
-| Database isolation | [`scripts/init-dbs.sql`](scripts/init-dbs.sql) | 17 per-service PostgreSQL databases (database-per-service pattern) |
+| Database isolation | [`scripts/init-dbs.sql`](scripts/init-dbs.sql) | 39 `CREATE DATABASE` statements across per-service PostgreSQL databases & aliases (database-per-service pattern) |
 | ML model inventory | [`ml/README.md`](ml/README.md) | Search ranking (LightGBM), fraud (XGBoost), ETA (LightGBM), demand forecast (Prophet+TFT), personalization (PyTorch), CLV (BG/NBD) |
 | Data platform layers | [`data-platform/README.md`](data-platform/README.md) | Kafka → Beam/Dataflow → BigQuery raw → dbt staging → intermediate → marts → feature store |
 | Infrastructure | [`docs/architecture/INFRASTRUCTURE.md`](docs/architecture/INFRASTRUCTURE.md) | GKE (regional, private), Cloud SQL (HA), Memorystore Redis, Istio mesh, Cloud Armor WAF |
@@ -415,7 +417,7 @@ Status reflects checked-in implementation, not design intent.
 
 ```
 InstaCommerce/
-├── services/                         # 29 service modules + 1 Go shared library
+├── services/                         # 30 service modules + 1 Go shared library
 │   ├── <service-name>/               # Each has its own build, config, migrations
 │   └── go-shared/                    # Reusable Go: auth, config, health, Kafka, HTTP, observability
 ├── contracts/                        # Protobuf (gRPC) + JSON Schema event definitions
@@ -430,10 +432,10 @@ InstaCommerce/
 ├── docs/
 │   ├── architecture/                 # HLD, LLD, DATA-FLOW, INFRASTRUCTURE, ITER3-HLD-DIAGRAMS
 │   └── reviews/                      # Service reviews, iter3/ principal review program
-├── scripts/                          # init-dbs.sql (local DB bootstrap), utilities
-├── docker-compose.yml                # Local infra: PostgreSQL 15, Redis 7, Kafka, Debezium, Temporal
-├── build.gradle.kts                  # Root Gradle: Spring Boot 4.0.0, spring-cloud-gcp 5.1.0
-├── settings.gradle.kts               # 20 Java modules + contracts
+├── scripts/                          # dev-local.sh, init-dbs.sql (local DB bootstrap), utilities
+├── docker-compose.yml                # Local infra: PostgreSQL 16, Redis 7, Kafka, Debezium, Temporal
+├── build.gradle.kts                  # Root Gradle: Spring Boot 4.0.0, spring-cloud-gcp 8.3.1
+├── settings.gradle.kts               # 22 Gradle modules (20 Java services + contracts + libs:platform-common)
 └── .github/workflows/ci.yml          # Path-filtered CI: build, test, security gates
 ```
 
@@ -441,12 +443,16 @@ InstaCommerce/
 
 ## Runtime & Validation Entrypoints
 
-### Local Infrastructure
+### Local Infrastructure & Quickstart
 
 ```bash
-# Start PostgreSQL, Redis, Kafka, Debezium Connect, Temporal, Temporal UI, Kafka UI
+# Bootstrap local infra, ephemeral RSA-2048 JWT keys, and .local-dev/.env.local
+# Subcommands: up | down | reset | status | env | start-core | stop-core | smoke
+./scripts/dev-local.sh up
+
+# Or start infrastructure containers directly (PostgreSQL 16, Redis 7, Kafka on localhost:9092, Debezium, Temporal)
 docker-compose up -d
-# init-dbs.sql auto-creates 17 per-service databases
+# scripts/init-dbs.sql auto-creates 39 database entries (all stateful service DBs + aliases)
 ```
 
 ### Java Services (20 modules via Gradle)
@@ -460,7 +466,7 @@ docker-compose up -d
 ./gradlew :contracts:build                                 # Rebuild Protobuf + JSON Schema stubs
 ```
 
-### Go Services (7 modules + go-shared)
+### Go Services (8 modules + go-shared)
 
 ```bash
 cd services/outbox-relay-service && go test -race ./... && go build ./...
@@ -475,9 +481,9 @@ cd services/ai-orchestrator-service && pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload
 
 cd services/ai-inference-service && pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8101 --reload
 
-cd services/<python-service> && pytest -v                  # Run tests
+cd services/<python-service> && .venv/bin/pytest -v       # Run tests (or pytest -v in active venv)
 ```
 
 ### Data Platform
@@ -578,7 +584,7 @@ delta between target architecture and current codebase.
 
 | Area | Gap | Reference |
 |------|-----|-----------|
-| **Edge services** | `mobile-bff-service` and `admin-gateway-service` are scaffolds with stub endpoints, not production aggregators | iter3 master-review §4.2, §5 P0 |
+| **Edge services** | `mobile-bff-service` (`8080`) and `admin-gateway-service` (`8099`) are hardened RS256 JWT + Resilience4j gateways; additional BFF screen aggregations and admin endpoints are expanded iteratively | `docs/repo-truth/04-risks-gaps-and-readiness.md` |
 | **Checkout authority** | Checkout logic exists in both `checkout-orchestrator-service` and `order-service`; needs single-owner ADR | iter3 master-review §4.3 |
 | **Payment idempotency** | Pending-state recovery and webhook durability are incomplete | iter3 master-review §4.3 |
 | **Search indexing** | catalog → search indexing path is non-functional; availability-aware ranking absent | iter3 master-review §4.4 |
@@ -588,7 +594,7 @@ delta between target architecture and current codebase.
 | **Deploy lineage** | Image registry references may not match deploy artifact expectations | iter3 master-review §5 P0 |
 | **ML serving** | Training scripts export native artifacts (`.lgb`, `.xgb`); end-to-end ONNX export/promotion path is partial | `ml/README.md` honesty note |
 | **Data platform** | Beam pipelines use processing time instead of event time in some paths | iter3 master-review §5 P1 |
-| **AI governance** | AI services exist but governance (tool-risk classification, HITL, PII redaction) is not yet implemented | iter3 master-review §10 |
+| **AI governance** | `ai-orchestrator-service` enforces runtime guardrails (`InjectionDetector`, `PIIVault`, `OutputPolicy`, `EscalationPolicy`, `TokenBucketRateLimiter` via `app/guardrails/` and `app/middleware.py`); centralized Governance PDP and Copilot policy surfaces remain roadmap items | `services/ai-orchestrator-service/README.md`, iter3 master-review §10 |
 
 The iteration-3 implementation program prescribes a **seven-wave remediation sequence:**
 Wave 0 (truth restoration) → Wave 1 (money-path hardening) → Wave 2 (dark-store loop) →

@@ -180,7 +180,7 @@ resilience4j:
 
 ```bash
 # Initiate checkout
-curl -X POST http://localhost:8089/checkout \
+curl -X POST http://localhost:8091/checkout \
   -H "Authorization: Bearer <JWT>" \
   -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
   -H "Content-Type: application/json" \
@@ -192,7 +192,7 @@ curl -X POST http://localhost:8089/checkout \
   }'
 
 # Check status
-curl -X GET "http://localhost:8089/checkout/checkout-user123-abc456/status" \
+curl -X GET "http://localhost:8091/checkout/checkout-user123-abc456/status" \
   -H "Authorization: Bearer <JWT>"
 ```
 

@@ -122,7 +122,7 @@ management:
 **Readiness Endpoint**: `/actuator/health/ready`
 
 ```bash
-curl http://localhost:8085/actuator/health/ready
+curl http://localhost:8084/actuator/health/ready
 # {
 #   "status": "UP",
 #   "components": {
@@ -150,7 +150,7 @@ psql -d orders -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE 
 kubectl rollout restart deployment/order-service -n money-path
 
 # Verify health
-curl http://localhost:8085/actuator/health
+curl http://localhost:8084/actuator/health
 ```
 
 ### Deadlock in Order Creation

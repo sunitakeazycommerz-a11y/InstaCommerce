@@ -374,11 +374,11 @@ graph TB
     end
 
     subgraph ServiceURLs["Service Base URLs (from application.yml)"]
-        CartURL["cart.service.url\n= http://cart-service:8084"]
-        PricingURL["pricing.service.url\n= http://pricing-service:8087"]
+        CartURL["cart.service.url\n= http://cart-service:8090"]
+        PricingURL["pricing.service.url\n= http://pricing-service:8089"]
         InventoryURL["inventory.service.url\n= http://inventory-service:8083"]
-        PaymentURL["payment.service.url\n= http://payment-service:8086"]
-        OrderURL["order.service.url\n= http://order-service:8085"]
+        PaymentURL["payment.service.url\n= http://payment-service:8085"]
+        OrderURL["order.service.url\n= http://order-service:8084"]
     end
 
     subgraph CommonConfig["Common RestTemplate Config"]

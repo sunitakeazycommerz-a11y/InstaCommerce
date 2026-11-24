@@ -533,7 +533,7 @@ erDiagram
 ### Prerequisites
 
 - **Java 21+**
-- **PostgreSQL 15+**
+- **PostgreSQL 16**
 - **Kafka** (for catalog event consumption)
 
 ### 1. Start dependencies
@@ -553,18 +553,18 @@ docker compose up -d postgres kafka
 
 ```bash
 # Health check
-curl http://localhost:8087/actuator/health
+curl http://localhost:8089/actuator/health
 
 # Get product price
-curl http://localhost:8087/pricing/products/{productId}
+curl http://localhost:8089/pricing/products/{productId}
 
 # Calculate cart price
-curl -X POST http://localhost:8087/pricing/calculate \
+curl -X POST http://localhost:8089/pricing/calculate \
   -H "Content-Type: application/json" \
   -d '{"items":[{"productId":"uuid","quantity":2}]}'
 
 # List promotions (requires admin JWT)
-curl http://localhost:8087/admin/promotions \
+curl http://localhost:8089/admin/promotions \
   -H "Authorization: Bearer <admin-jwt>"
 ```
 

@@ -1,5 +1,7 @@
 # Spring Boot 4 Migration Plan - InstaCommerce Platform
 
+> **Status:** ARCHIVED / HISTORICAL REFERENCE — Spring Boot 4.0.0 migration specification. See [`build.gradle.kts`](../../../build.gradle.kts) and [`settings.gradle.kts`](../../../settings.gradle.kts) for current build configuration.
+
 ## Executive Summary
 Migrating 13 Java services from Spring Boot 3.3.4 → 4.0.0 with Jakarta EE 11 (javax → jakarta namespace). All main application code compiles successfully. Test suite requires modernization for Spring Boot 4 API changes.
 

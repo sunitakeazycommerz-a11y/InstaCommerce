@@ -621,7 +621,7 @@ validated locally by running against the `docker-compose.yml` infrastructure
 
 ### Deployment
 
-- The service is a single Go binary in a **distroless** container (`gcr.io/distroless/static:nonroot`), running as non-root.
+- The service is a single Go binary in a **distroless** container (`alpine:3.23`), running as non-root.
 - CI path filter: `services/stream-processor-service/**` in `.github/workflows/ci.yml`.
 - Helm deploy key: `stream-processor-service` (no Go-to-Helm name mapping needed).
 - HPA scaling recommendation from `docs/architecture/HLD.md`: min 2, max 20 replicas, scaling on Kafka consumer lag < 10,000.
@@ -695,7 +695,7 @@ stream-processor-service/
 │   ├── inventory_processor.go       # InventoryProcessor: velocity (1-hr window), stockout cascade
 │   └── sla_monitor.go              # SLAMonitor: 30-min sliding window, 90% threshold, alert channel
 ├── Dockerfile                       # Multi-stage: golang:1.26-alpine builder → distroless nonroot
-└── go.mod                           # Go 1.24; kafka-go, go-redis/v9, prometheus/client_golang
+└── go.mod                           # Go 1.25; kafka-go, go-redis/v9, prometheus/client_golang
 ```
 
 ---

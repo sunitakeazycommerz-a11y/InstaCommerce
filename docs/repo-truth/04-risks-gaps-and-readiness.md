@@ -19,7 +19,7 @@ Examples:
 
 - HLD references search in Elasticsearch, while the implemented search service uses PostgreSQL FTS
 - Some HLD narrative implies rider gRPC streaming, while the location ingestion service currently exposes HTTP/WebSocket ingestion
-- AI orchestration docs read as settled, but the service still contains both legacy and newer graph-based flows
+- Some older architecture docs describe an un-unified AI setup, whereas `ai-orchestrator-service` now routes both `v1_router` and `v2_router` through `ExecutionService` + LangGraph + `app/guardrails/`
 
 Risk:
 
@@ -39,15 +39,14 @@ Failure mode examples:
 - CDC failures create silent freshness gaps in BigQuery and dbt marts
 - poison events can create persistent lag or replay storms
 
-### 4. AI stack is mid-transition
+### 4. AI governance roadmap vs. runtime guardrails
 
-The orchestrator has both legacy and LangGraph-oriented flows.
+`ai-orchestrator-service` now routes both `v1_router` and `v2_router` through a unified `ExecutionService` + LangGraph runtime with wired guardrails (`InjectionDetector`, `PIIVault`, `OutputPolicy`, `EscalationPolicy`, `TokenBucketRateLimiter`), but centralized cross-service Governance PDP and v1 route deprecation remain in progress.
 
 Risk:
 
-- split debugging path
-- duplicated request handling logic
-- policy/guardrail divergence between versions
+- clients still calling `/v1` routes delay full schema consolidation onto `/v2`
+- centralized Governance PDP and human-in-the-loop approval consoles are still roadmap items before autonomous write tools can expand
 
 ### 5. Documentation sprawl is itself a maintenance cost
 
@@ -84,7 +83,7 @@ Positive signals:
 Gaps to watch:
 
 - scaffold services can satisfy deploy shape without delivering meaningful traces or domain metrics
-- dual AI orchestrator paths may fragment telemetry
+- maintaining both v1 and v2 API route adapters requires parity checks on telemetry labels
 - multi-hop event debugging still depends on consistent correlation IDs everywhere
 
 ## Rollback and Recovery Considerations

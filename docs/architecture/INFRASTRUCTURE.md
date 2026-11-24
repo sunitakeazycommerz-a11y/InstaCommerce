@@ -61,7 +61,7 @@ graph TB
 | Service | Purpose | Configuration |
 |---|---|---|
 | **GKE** | Container orchestration | Regional, private cluster, 2 node pools |
-| **Cloud SQL (PostgreSQL 15)** | Relational data | HA with read replica, `db-custom-4-16384` |
+| **Cloud SQL (PostgreSQL 16)** | Relational data | HA with read replica, `db-custom-4-16384` |
 | **Memorystore (Redis 7)** | Caching & sessions | 5 GB, Standard tier with failover |
 | **BigQuery** | Analytics data warehouse | Partitioned tables, streaming inserts |
 | **Cloud Storage** | Object storage / data lake | Multi-regional, lifecycle policies |
@@ -120,7 +120,7 @@ flowchart LR
 
 | Stage | Tool | Details |
 |---|---|---|
-| **Lint** | ktlint, ESLint | Code style enforcement |
+| **Lint / Format** | Spotless, ESLint | Code style enforcement |
 | **Unit Tests** | JUnit 5, Kotest | Per-service test suites |
 | **Integration Tests** | Testcontainers | Postgres, Redis, Kafka containers |
 | **Contract Tests** | Pact | Consumer-driven contract verification |
@@ -152,8 +152,8 @@ jobs:
           distribution: 'temurin'
       - name: Build & Test
         run: ./gradlew build test --parallel
-      - name: Lint
-        run: ./gradlew ktlintCheck
+      - name: Format Check
+        run: ./gradlew spotlessCheck
 
   docker-publish:
     needs: build-test
@@ -303,7 +303,7 @@ spec:
         - destination:
             host: order-service
             port:
-              number: 8080
+              number: 8084
       retries:
         attempts: 3
         perTryTimeout: 2s
@@ -351,7 +351,7 @@ spec:
     - from:
         - source:
             principals:
-              - cluster.local/ns/instacommerce/sa/api-gateway
+              - cluster.local/ns/instacommerce/sa/mobile-bff-service
               - cluster.local/ns/instacommerce/sa/payment-service
       to:
         - operation:
@@ -594,10 +594,10 @@ graph TD
     Base --> Prod[values-prod.yaml - Prod Overrides]
     Dev --> DevRelease[Dev Helm Release]
     Prod --> ProdRelease[Prod Helm Release]
-    ProdRelease --> S1[api-gateway: 3 replicas]
+    ProdRelease --> S1[mobile-bff-service: 3 replicas]
     ProdRelease --> S2[order-service: 3 replicas]
-    ProdRelease --> S3[product-catalog-service: 3 replicas]
-    DevRelease --> S4[api-gateway: 1 replica]
+    ProdRelease --> S3[catalog-service: 3 replicas]
+    DevRelease --> S4[mobile-bff-service: 1 replica]
     DevRelease --> S5[order-service: 1 replica]
 ```
 
@@ -606,7 +606,7 @@ graph TD
 ```yaml
 global:
   image:
-    registry: asia-south1-docker.pkg.dev/instacommerce-prod/services
+    registry: asia-south1-docker.pkg.dev/instacommerce/images
     pullPolicy: IfNotPresent
   istio:
     enabled: true
@@ -615,7 +615,7 @@ global:
     port: 9090
 
 services:
-  api-gateway:
+  mobile-bff-service:
     port: 8080
     replicas: 2
     resources:
@@ -644,36 +644,36 @@ services:
       maxReplicas: 15
       targetCPU: 65
 
-  product-catalog-service:
-    port: 8080
+  catalog-service:
+    port: 8082
     replicas: 2
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits:   { cpu: 1000m, memory: 1Gi }
 
   inventory-service:
-    port: 8080
+    port: 8083
     replicas: 2
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits:   { cpu: 1000m, memory: 1Gi }
 
   payment-service:
-    port: 8080
+    port: 8085
     replicas: 2
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits:   { cpu: 1000m, memory: 1Gi }
 
-  delivery-service:
-    port: 8080
+  fulfillment-service:
+    port: 8086
     replicas: 2
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits:   { cpu: 1000m, memory: 1Gi }
 
   notification-service:
-    port: 8080
+    port: 8087
     replicas: 1
     resources:
       requests: { cpu: 250m, memory: 256Mi }
@@ -688,7 +688,7 @@ global:
     pullPolicy: Always
 
 services:
-  api-gateway:
+  mobile-bff-service:
     replicas: 3
     hpa:
       minReplicas: 3
@@ -701,11 +701,11 @@ services:
       maxReplicas: 20
   inventory-service:
     replicas: 3
-  delivery-service:
+  fulfillment-service:
     replicas: 3
-  product-catalog-service:
+  catalog-service:
     replicas: 3
-  event-processor:
+  stream-processor:
     replicas: 3
 ```
 
@@ -714,10 +714,10 @@ services:
 ```yaml
 global:
   image:
-    registry: asia-south1-docker.pkg.dev/instacommerce-dev/services
+    registry: asia-south1-docker.pkg.dev/instacommerce/images
 
 services:
-  api-gateway:
+  mobile-bff-service:
     replicas: 1
     hpa:
       minReplicas: 1
@@ -726,7 +726,7 @@ services:
     replicas: 1
   inventory-service:
     replicas: 1
-  delivery-service:
+  fulfillment-service:
     replicas: 1
 ```
 
@@ -1138,19 +1138,19 @@ spec:
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: event-processor-scaler
+  name: stream-processor-scaler
   namespace: instacommerce
 spec:
   scaleTargetRef:
-    name: event-processor
+    name: stream-processor
   minReplicaCount: 2
   maxReplicaCount: 15
   triggers:
     - type: kafka
       metadata:
         bootstrapServers: kafka-bootstrap.kafka:9092
-        consumerGroup: event-processor-group
-        topic: order-events
+        consumerGroup: stream-processor-group
+        topic: orders.events
         lagThreshold: "100"
 ```
 
@@ -1210,10 +1210,10 @@ cluster_autoscaling {
 
 | Component | Trigger | Min | Max | Cool-down |
 |---|---|---|---|---|
-| api-gateway | CPU 60% | 3 | 20 | 5 min |
+| mobile-bff-service | CPU 60% | 3 | 20 | 5 min |
 | order-service | CPU 65% | 3 | 20 | 5 min |
-| event-processor | Kafka lag > 100 | 2 | 15 | 3 min |
-| delivery-service | CPU 65% | 3 | 15 | 5 min |
+| stream-processor | Kafka lag > 100 | 2 | 15 | 3 min |
+| fulfillment-service | CPU 65% | 3 | 15 | 5 min |
 | inventory-service | CPU 70% | 3 | 12 | 5 min |
 | Node pool (services) | Pod scheduling pressure | 3 | 12 | 10 min |
 | Node pool (data) | Pod scheduling pressure | 3 | 6 | 10 min |
@@ -1231,7 +1231,7 @@ cluster_autoscaling {
 | Package Manager | Helm 3 |
 | GitOps | ArgoCD 2.9+ |
 | CI | GitHub Actions |
-| Database | Cloud SQL PostgreSQL 15 |
+| Database | Cloud SQL PostgreSQL 16 |
 | Cache | Memorystore Redis 7 |
 | Messaging | Kafka (Strimzi) 3.6+ |
 | Workflow Engine | Temporal |

@@ -29,7 +29,7 @@
 - [ ] Verify wallet-loyalty-service connectivity
   ```bash
   kubectl exec -n payment deploy/payment-service -- \
-    curl -v http://wallet-loyalty-service:8104/health
+    curl -v http://wallet-loyalty-service:8095/health
   ```
 
 ---
@@ -51,14 +51,14 @@ kubectl get deploy payment-service -n payment -o jsonpath='{.status.availableRep
 kubectl get deploy -n payment payment-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Stage new version
-helm upgrade payment-service deploy/helm/payment-service \
+helm upgrade instacommerce deploy/helm \
   -n payment \
   --values deploy/helm/values.yaml \
   --values deploy/helm/values-prod.yaml \
   --dry-run --debug
 
 # 3. Apply update
-helm upgrade payment-service deploy/helm/payment-service \
+helm upgrade instacommerce deploy/helm \
   -n payment \
   --values deploy/helm/values.yaml \
   --values deploy/helm/values-prod.yaml
@@ -170,7 +170,7 @@ kubectl exec -n payment deploy/payment-service -- \
 ```bash
 # Wallet loyalty service (synchronous dependency)
 kubectl exec -n payment deploy/payment-service -- \
-  curl -v http://wallet-loyalty-service:8104/health
+  curl -v http://wallet-loyalty-service:8095/health
 
 # Payment gateway (Stripe/Square - async with retry)
 kubectl exec -n payment deploy/payment-service -- \
@@ -397,7 +397,7 @@ kubectl describe pod -n payment <pod-name> | grep -i "oom"
 kubectl exec -n payment deploy/payment-service -- java -XX:+PrintFlagsFinal | grep -i heapsize
 
 # Resolution: Increase memory limit
-helm upgrade payment-service deploy/helm/payment-service \
+helm upgrade instacommerce deploy/helm \
   -n payment \
   --set resources.requests.memory=1Gi \
   --set resources.limits.memory=2Gi
@@ -510,7 +510,7 @@ kubectl exec -n payment deploy/payment-service -- \
 # For 1.5 GB container limit:
 # -Xms900m -Xmx900m
 
-helm upgrade payment-service deploy/helm/payment-service \
+helm upgrade instacommerce deploy/helm \
   -n payment \
   --set jvmOpts="-Xms900m -Xmx900m -XX:+UseG1GC"
 ```
@@ -540,7 +540,7 @@ kubectl exec -n payment deploy/payment-service -- \
   curl -s http://localhost:8085/actuator/metrics | grep -i cache
 
 # Increase Caffeine cache size for payment methods
-helm upgrade payment-service deploy/helm/payment-service \
+helm upgrade instacommerce deploy/helm \
   -n payment \
   --set cache.paymentMethods.size=5000 \
   --set cache.paymentMethods.ttlMinutes=30
@@ -554,7 +554,7 @@ kubectl exec -n payment deploy/payment-service -- \
   curl -s http://localhost:8085/actuator/metrics/jvm.gc.pause | jq '.measurements'
 
 # Switch to G1GC if pauses > 100ms
-helm upgrade payment-service deploy/helm/payment-service \
+helm upgrade instacommerce deploy/helm \
   -n payment \
   --set jvmOpts="-Xms900m -Xmx900m -XX:+UseG1GC -XX:MaxGCPauseMillis=50"
 ```
@@ -666,7 +666,7 @@ hikaricp_connections_active / hikaricp_connections_max
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/payment-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/payment-service/`
 - **API Specification**: `/docs/services/payment-service/README.md`
 - **Alert Rules**: `/monitoring/prometheus/payment-rules.yaml`

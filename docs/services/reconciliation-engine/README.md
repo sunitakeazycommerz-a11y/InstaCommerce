@@ -211,7 +211,7 @@ LOG_FORMAT=json (for structured logging)
 1. **Check lease**: `SELECT * FROM pg_locks WHERE pid = current_setting('backend_pid')`
 2. **Verify schedule**: Check `RECONCILIATION_SCHEDULE_UTC` env var (should be `0 2 * * *`)
 3. **Check logs**: `kubectl logs -n finance -l app=reconciliation-engine | grep -i scheduler`
-4. **Manual trigger**: `curl -X POST http://reconciliation-engine:8098/api/v1/admin/trigger-reconciliation`
+4. **Manual trigger**: `curl -X POST http://reconciliation-engine:8107/api/v1/admin/trigger-reconciliation`
 
 ### High Mismatch Volumes
 1. **Check for data quality issues**: Review order-service and payment-service logs for injection errors

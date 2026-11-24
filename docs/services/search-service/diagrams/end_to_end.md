@@ -28,14 +28,13 @@ T+50ms:  search-service receives request
          Checks Redis: search_results:fresh_tomatoes:LAT_LON (5min TTL)
 
 T+100ms: Cache miss
-         Query Elasticsearch:
-         - match(name, description) = "fresh"
-         - AND "tomatoes"
+         Query PostgreSQL FTS (tsvector + GIN index):
+         - to_tsvector('english', name || ' ' || description) @@ plainto_tsquery('fresh tomatoes')
          - filter: in_stock = true
          - geo_filter: within 5km
-         - sort: relevance
+         - sort: ts_rank + relevance
 
-T+150ms: ES returns ~500 results
+T+150ms: PostgreSQL FTS returns ~500 results
          search-service applies ranking:
          1. Relevance score (full-text match)
          2. Store distance (closer = higher)
@@ -106,17 +105,17 @@ Kafka topic: catalog.events
 search-service Consumer Group
   Consuming at offset tracked in Kafka
   ↓
-Elasticsearch Cluster
-  Replica sync across data nodes
+PostgreSQL Search Projection (tsvector + GIN)
+  Transactional upserts from catalog.events
   ↓
-Redis Cache (5min TTL)
+Caffeine L1 + Redis Cache
   Stores computed results (ranked, filtered)
 ```
 
 ## Resilience & Degradation
 
 ```
-NORMAL MODE (ES + Redis both healthy):
+NORMAL MODE (PostgreSQL FTS + Caffeine/Redis healthy):
   Search → Redis hit (cache) → <10ms response
   Search → Redis miss → ES query → <200ms response
   Availability: 99%

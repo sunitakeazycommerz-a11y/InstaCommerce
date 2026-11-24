@@ -151,7 +151,7 @@ sequenceDiagram
 flowchart TD
     A["POST /cart/items<br/>{productId, productName, unitPriceCents?, quantity}"] --> B[CartService.addItem]
 
-    B --> C[PricingClient.getPrice<br/>GET pricing-service:8087/api/v1/prices/:id]
+    B --> C[PricingClient.getPrice<br/>GET pricing-service:8089/api/v1/prices/:id]
 
     C --> D{Response OK?}
     D -->|No| E["❌ 502 Bad Gateway<br/>Pricing service unavailable"]
@@ -465,7 +465,7 @@ Two-level cache architecture (`TwoLevelCacheManager` in `CacheConfig.java`):
 | Connect timeout | 2 seconds |
 | Read timeout | 3 seconds |
 | Auth | `X-Internal-Service` + `X-Internal-Token` headers |
-| Base URL | `http://pricing-service:8087` |
+| Base URL | `http://pricing-service:8089` |
 
 ### Security
 
@@ -482,7 +482,7 @@ Two-level cache architecture (`TwoLevelCacheManager` in `CacheConfig.java`):
 ### Prerequisites
 
 - **Java 21+**
-- **PostgreSQL 15+**
+- **PostgreSQL 16**
 - **Kafka** (for outbox event publishing)
 - **Pricing Service** running on port `8087`
 
@@ -506,26 +506,26 @@ docker compose up -d postgres kafka
 
 ```bash
 # Health check
-curl http://localhost:8088/actuator/health
+curl http://localhost:8090/actuator/health
 
 # Get cart (requires JWT)
-curl http://localhost:8088/cart \
+curl http://localhost:8090/cart \
   -H "Authorization: Bearer <jwt-token>"
 
 # Add item to cart
-curl -X POST http://localhost:8088/cart/items \
+curl -X POST http://localhost:8090/cart/items \
   -H "Authorization: Bearer <jwt-token>" \
   -H "Content-Type: application/json" \
   -d '{"productId":"uuid","productName":"Organic Milk","quantity":2}'
 
 # Update quantity
-curl -X PATCH http://localhost:8088/cart/items/{productId} \
+curl -X PATCH http://localhost:8090/cart/items/{productId} \
   -H "Authorization: Bearer <jwt-token>" \
   -H "Content-Type: application/json" \
   -d '{"quantity":3}'
 
 # Validate cart prices
-curl -X POST http://localhost:8088/cart/validate \
+curl -X POST http://localhost:8090/cart/validate \
   -H "Authorization: Bearer <jwt-token>"
 ```
 

@@ -10,7 +10,7 @@ The `routing-eta-service` is the single source of truth for delivery lifecycle s
 - **Readiness Probe:** `http://localhost:8094/actuator/health/readiness`
 - **Liveness Probe:** `http://localhost:8094/actuator/health/liveness`
 - **Metrics:** `http://localhost:8094/actuator/prometheus`
-- **Database:** PostgreSQL 15+ (partitioned telemetry, barrier zones, outbox pattern)
+- **Database:** PostgreSQL 16 (partitioned telemetry, barrier zones, outbox pattern)
 - **Status:** Tier 1 Critical (Customer delivery visibility and SLA guarantees)
 
 ---

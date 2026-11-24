@@ -30,7 +30,7 @@ This cluster comprises two critical services for user authentication, authorizat
         │
    ┌────┴────────────────┐
    ▼                     ▼
-PostgreSQL 15+      Kafka identity.events
+PostgreSQL 16      Kafka identity.events
 ```
 
 ## Service Responsibilities
@@ -52,7 +52,7 @@ PostgreSQL 15+      Kafka identity.events
 ## Deployment Model
 
 - **Infrastructure**: GKE asia-south1, Istio mesh, ArgoCD GitOps
-- **Database**: Cloud SQL PostgreSQL 15+ (private VPC)
+- **Database**: Cloud SQL PostgreSQL 16 (private VPC)
 - **Secrets**: GCP Secret Manager (JWKS keys, DB credentials)
 - **Messaging**: Apache Kafka for user erasure events
 - **Replicas**: Stateless; horizontally scalable (min 2, max 10 recommended)

@@ -23,7 +23,7 @@
 - [ ] Check payment-service connectivity (payment settlement)
   ```bash
   kubectl exec -n engagement deploy/wallet-loyalty-service -- \
-    curl -v http://payment-service:8080/health
+    curl -v http://payment-service:8085/health
   ```
 
 ---
@@ -49,7 +49,7 @@ kubectl exec -n engagement deploy/wallet-loyalty-service -- \
 ### Blue-Green Deployment
 
 ```bash
-helm upgrade wallet-loyalty-service deploy/helm/wallet-loyalty-service -n engagement
+helm upgrade instacommerce deploy/helm -n engagement
 kubectl rollout status deploy/wallet-loyalty-service -n engagement --timeout=10m
 
 # Verify balance consistency maintained
@@ -210,7 +210,7 @@ kubectl exec -n engagement deploy/wallet-loyalty-service -- \
 ### Cache Settings
 
 ```bash
-helm upgrade wallet-loyalty-service deploy/helm/wallet-loyalty-service \
+helm upgrade instacommerce deploy/helm \
   -n engagement \
   --set cache.maxSize=100000 \
   --set cache.ttlMinutes=60
@@ -257,6 +257,6 @@ loyalty_points_per_transaction_rate
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/wallet-loyalty-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/wallet-loyalty-service/README.md`
 - **SLO**: `/docs/slos/service-slos.md#wallet`

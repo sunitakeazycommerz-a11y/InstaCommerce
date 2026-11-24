@@ -32,7 +32,7 @@ Every order/payment event is evaluated through a multi-stage pipeline that produ
 ```
 ┌──────────────┐   REST    ┌──────────────────────────────┐   JPA    ┌────────────┐
 │  API Gateway │ ────────▶ │  fraud-detection-service      │ ───────▶│ PostgreSQL │
-└──────────────┘           │  (Spring Boot 3 / Java)       │         └────────────┘
+└──────────────┘           │  (Spring Boot 4.0.0 / Java)       │         └────────────┘
                            │                                │
   Kafka (orders.events) ──▶ │  OrderEventConsumer            │
   Kafka (payments.events) ▶ │  PaymentEventConsumer          │
@@ -405,8 +405,8 @@ Key properties in `application.yml` / environment:
 
 ### Dependencies
 
-- Java 17+, Spring Boot 3, Spring Kafka
-- PostgreSQL 15+, Flyway
+- Java 21, Spring Boot 4.0.0, Spring Kafka
+- PostgreSQL 16, Flyway
 - Caffeine 3.1.8 (fraudRules & blocklist caches)
 - ShedLock 5.10.2
 - JJWT 0.12.5 (RSA JWT)
@@ -426,10 +426,10 @@ docker compose up -d postgres kafka
 ./gradlew :services:fraud-detection-service:bootRun
 
 # Health check
-curl http://localhost:8095/actuator/health
+curl http://localhost:8097/actuator/health
 
 # Score a transaction
-curl -X POST http://localhost:8095/fraud/score \
+curl -X POST http://localhost:8097/fraud/score \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{"userId":"...","orderId":"...","totalCents":5000}'

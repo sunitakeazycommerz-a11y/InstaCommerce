@@ -105,13 +105,13 @@ curl -s http://localhost:8104/metrics | grep cdc_
 ```
 
 # View current metrics
-curl -s http://cdc-consumer-service:8088/metrics | grep cdc_consumer
+curl -s http://cdc-consumer-service:8104/metrics | grep cdc_consumer
 
 # Check partition lag
-curl -s http://cdc-consumer-service:8088/status | jq '.partitions[] | {id, lag_ms, offset}'
+curl -s http://cdc-consumer-service:8104/status | jq '.partitions[] | {id, lag_ms, offset}'
 
 # View deduplication cache size (debug only)
-curl -s http://cdc-consumer-service:8088/debug/dedup-cache \
+curl -s http://cdc-consumer-service:8104/debug/dedup-cache \
   -H "Authorization: Bearer $SERVICE_TOKEN" | jq '.cache_size'
 ```
 
@@ -119,7 +119,7 @@ curl -s http://cdc-consumer-service:8088/debug/dedup-cache \
 
 ### Environment Variables
 ```env
-SERVER_PORT=8088
+SERVER_PORT=8104
 KAFKA_BROKERS=kafka-0.kafka.event-infrastructure:9092,kafka-1.kafka.event-infrastructure:9092
 KAFKA_CONSUMER_GROUP=cdc-consumer-service
 KAFKA_TOPICS=db.public.orders,db.public.payments,db.public.fulfillment

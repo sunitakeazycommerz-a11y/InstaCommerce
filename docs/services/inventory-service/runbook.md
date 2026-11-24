@@ -59,7 +59,7 @@ kubectl get deploy inventory-service -n inventory -o jsonpath='{.spec.replicas}'
 kubectl get deploy -n inventory inventory-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Upgrade
-helm upgrade inventory-service deploy/helm/inventory-service \
+helm upgrade instacommerce deploy/helm \
   -n inventory \
   --values deploy/helm/values.yaml \
   --values deploy/helm/values-prod.yaml
@@ -275,7 +275,7 @@ kubectl exec -n inventory deploy/inventory-service -- \
   curl -s http://localhost:8083/metrics/cache-size | jq '.measurements'
 
 # Increase cache size
-helm upgrade inventory-service deploy/helm/inventory-service \
+helm upgrade instacommerce deploy/helm \
   -n inventory \
   --set cache.maxSize=10000 \
   --set cache.ttlMinutes=60
@@ -312,7 +312,7 @@ kubectl top pod -n inventory -l app=inventory-service
 kubectl describe pod -n inventory <pod-name> | grep -i "oom"
 
 # Increase memory limit
-helm upgrade inventory-service deploy/helm/inventory-service \
+helm upgrade instacommerce deploy/helm \
   -n inventory \
   --set resources.limits.memory=2Gi \
   --set resources.requests.memory=1Gi
@@ -326,7 +326,7 @@ helm upgrade inventory-service deploy/helm/inventory-service \
 
 ```bash
 # For fast-moving SKUs (fashion, daily deals):
-helm upgrade inventory-service deploy/helm/inventory-service \
+helm upgrade instacommerce deploy/helm \
   -n inventory \
   --set cache.maxSize=20000 \
   --set cache.ttlMinutes=30 \
@@ -406,6 +406,6 @@ histogram_quantile(0.95, rate(db_query_seconds_bucket{service="inventory"}[5m]))
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/inventory-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/inventory-service/README.md`
 - **Alert Rules**: `/monitoring/prometheus/inventory-rules.yaml`

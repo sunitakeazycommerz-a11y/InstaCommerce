@@ -21,11 +21,11 @@ graph TB
     end
 
     subgraph TransactionalCore["Transactional Core Services"]
-        CartService["cart-service :8084\n• validateCart\n• clearCart"]
-        PricingService["pricing-service :8087\n• calculatePrice"]
+        CartService["cart-service :8090\n• validateCart\n• clearCart"]
+        PricingService["pricing-service :8089\n• calculatePrice"]
         InventoryService["inventory-service :8083\n• reserveStock\n• confirmStock\n• releaseStock"]
-        PaymentService["payment-service :8086\n• authorizePayment\n• capturePayment\n• voidPayment\n• refundPayment"]
-        OrderService["order-service :8085\n• createOrder\n• cancelOrder"]
+        PaymentService["payment-service :8085\n• authorizePayment\n• capturePayment\n• voidPayment\n• refundPayment"]
+        OrderService["order-service :8084\n• createOrder\n• cancelOrder"]
     end
 
     subgraph ExternalGateway["Payment Gateway"]

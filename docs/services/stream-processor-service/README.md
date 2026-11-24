@@ -108,11 +108,11 @@ curl -s http://localhost:8108/metrics | grep stream_processor_
 # }
 
 # Check consumer lag
-curl -X GET 'http://stream-processor:8085/v1/stream/lag' \
+curl -X GET 'http://stream-processor:8108/v1/stream/lag' \
   -H 'Authorization: Bearer <jwt_token>'
 
 # Get inventory deltas
-curl -X GET 'http://stream-processor:8085/v1/stream/state/inventory-delta' \
+curl -X GET 'http://stream-processor:8108/v1/stream/state/inventory-delta' \
   -H 'Authorization: Bearer <jwt_token>'
 ```
 
@@ -120,7 +120,7 @@ curl -X GET 'http://stream-processor:8085/v1/stream/state/inventory-delta' \
 
 ### Environment Variables
 ```env
-SERVER_PORT=8085
+SERVER_PORT=8108
 KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
 KAFKA_CONSUMER_GROUP=stream-processor-v1
 KAFKA_TOPICS=orders,payments,inventory,shipments

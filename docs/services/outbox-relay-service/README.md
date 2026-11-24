@@ -122,16 +122,16 @@ The outbox-relay-service is a CDC (Change Data Capture) alternative that polls t
 
 ```bash
 # Check outbox-relay health
-curl -s http://outbox-relay-service:8087/health | jq .
+curl -s http://outbox-relay-service:8103/health | jq .
 
 # Check relay metrics
-curl -s http://outbox-relay-service:8087/metrics | grep outbox_relay
+curl -s http://outbox-relay-service:8103/metrics | grep outbox_relay
 
 # Get per-service relay status
-curl -s http://outbox-relay-service:8087/status | jq '.services[] | {name, lag_ms, errors}'
+curl -s http://outbox-relay-service:8103/status | jq '.services[] | {name, lag_ms, errors}'
 
 # Skip a service temporarily (600 seconds)
-curl -X POST http://outbox-relay-service:8087/relay/skip/order-service \
+curl -X POST http://outbox-relay-service:8103/relay/skip/order-service \
   -H "Authorization: Bearer $SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"ttlSeconds":600}'
@@ -141,7 +141,7 @@ curl -X POST http://outbox-relay-service:8087/relay/skip/order-service \
 
 ### Environment Variables
 ```env
-SERVER_PORT=8087
+SERVER_PORT=8103
 POSTGRES_URL=postgresql://user:pass@pg.default.svc.cluster.local:5432/instacommerce
 KAFKA_BROKERS=kafka-0.kafka.event-infrastructure:9092,kafka-1.kafka.event-infrastructure:9092
 POLLING_INTERVAL_MS=100

@@ -167,9 +167,9 @@ docs/archive/
 | `waves/wave-40/WAVE_40_SESSION_COMPLETION_SUMMARY.md` | Wave 40: Planning package completion summary | [`docs/README.md`](../README.md) |
 | `waves/wave-40/WAVE_40_SESSION4_REPORT.md` | Wave 40: Phase 1 service documentation session 4 | [`docs/services/INDEX.md`](../services/INDEX.md) |
 | `waves/wave-40/IMPLEMENTATION_PLAN.md` | Wave 40: Stabilization & tracing implementation plan | [`docs/reviews/iter3/implementation-program.md`](../reviews/iter3/implementation-program.md) |
-| `waves/wave-40/INDEX.md` | Wave 40: Planning index & quick navigation | [`docs/archive/waves/wave-40/IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) |
-| `waves/wave-40/QUICK_REFERENCE.md` | Wave 40: 1-page priority summary | [`docs/archive/waves/wave-40/IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) |
-| `waves/wave-40/TASK_TRACKER.md` | Wave 40: Weekly task tracking template | [`docs/archive/waves/wave-40/IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) |
+| `waves/wave-40/INDEX.md` | Wave 40: Planning index & quick navigation | [`waves/wave-40/IMPLEMENTATION_PLAN.md`](waves/wave-40/IMPLEMENTATION_PLAN.md) |
+| `waves/wave-40/QUICK_REFERENCE.md` | Wave 40: 1-page priority summary | [`waves/wave-40/IMPLEMENTATION_PLAN.md`](waves/wave-40/IMPLEMENTATION_PLAN.md) |
+| `waves/wave-40/TASK_TRACKER.md` | Wave 40: Weekly task tracking template | [`waves/wave-40/IMPLEMENTATION_PLAN.md`](waves/wave-40/IMPLEMENTATION_PLAN.md) |
 | `waves/wave-41/WAVE_41_TEST_MIGRATION_PLAN.md` | Wave 41: Spring Boot 4 test suite modernization | [`build.gradle.kts`](../../build.gradle.kts), [`settings.gradle.kts`](../../settings.gradle.kts) |
 | `migrations/SPRING_BOOT_4_MIGRATION.md` | Spring Boot 4: Service migration & Jakarta EE baseline | [`build.gradle.kts`](../../build.gradle.kts), [`settings.gradle.kts`](../../settings.gradle.kts) |
 | `migrations/SPRING_BOOT_4_UPGRADE_PLAN.md` | Spring Boot 4: Upgrade plan & breaking changes | [`build.gradle.kts`](../../build.gradle.kts), [`settings.gradle.kts`](../../settings.gradle.kts) |

@@ -629,11 +629,11 @@ All `Settings` fields use the `AI_ORCHESTRATOR_` env prefix (case-insensitive vi
 
 | Variable | Default |
 |---|---|
-| `AI_ORCHESTRATOR_CATALOG_SERVICE_URL` | `http://catalog-service:8080` |
-| `AI_ORCHESTRATOR_PRICING_SERVICE_URL` | `http://pricing-service:8087` |
-| `AI_ORCHESTRATOR_INVENTORY_SERVICE_URL` | `http://inventory-service:8080` |
-| `AI_ORCHESTRATOR_CART_SERVICE_URL` | `http://cart-service:8088` |
-| `AI_ORCHESTRATOR_ORDER_SERVICE_URL` | `http://order-service:8080` |
+| `AI_ORCHESTRATOR_CATALOG_SERVICE_URL` | `http://catalog-service:8082` |
+| `AI_ORCHESTRATOR_PRICING_SERVICE_URL` | `http://pricing-service:8089` |
+| `AI_ORCHESTRATOR_INVENTORY_SERVICE_URL` | `http://inventory-service:8083` |
+| `AI_ORCHESTRATOR_CART_SERVICE_URL` | `http://cart-service:8090` |
+| `AI_ORCHESTRATOR_ORDER_SERVICE_URL` | `http://order-service:8084` |
 | `AI_ORCHESTRATOR_INTERNAL_SERVICE_TOKEN` | — (token for outbound `Authorization` header) |
 
 **Guardrail-Specific (not prefixed):**

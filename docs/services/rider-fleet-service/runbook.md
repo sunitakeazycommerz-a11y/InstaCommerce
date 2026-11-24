@@ -58,7 +58,7 @@ kubectl get deploy rider-fleet-service -n rider-fleet -o jsonpath='{.spec.replic
 kubectl get deploy -n rider-fleet rider-fleet-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Upgrade
-helm upgrade rider-fleet-service deploy/helm/rider-fleet-service \
+helm upgrade instacommerce deploy/helm \
   -n rider-fleet \
   --values deploy/helm/values.yaml \
   --values deploy/helm/values-prod.yaml
@@ -275,7 +275,7 @@ kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
 
 # Check push notification service connectivity
 kubectl exec -n rider-fleet deploy/rider-fleet-service -- \
-  curl -v http://notification-service:8090/health
+  curl -v http://notification-service:8087/health
 
 # Increase timeout if network latency is root cause
 kubectl set env deploy/rider-fleet-service -n rider-fleet \
@@ -315,7 +315,7 @@ kubectl set env deploy/rider-fleet-service -n rider-fleet \
 
 ```bash
 # For faster location lookups:
-helm upgrade rider-fleet-service deploy/helm/rider-fleet-service \
+helm upgrade instacommerce deploy/helm \
   -n rider-fleet \
   --set redis.cache.ttlSeconds=300 \
   --set redis.cache.maxSize=100000
@@ -353,5 +353,5 @@ rider_location_update_staleness_seconds
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/rider-fleet-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/rider-fleet-service/README.md`

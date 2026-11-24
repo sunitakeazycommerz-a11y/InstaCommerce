@@ -480,7 +480,7 @@ From `deploy/helm/values.yaml`:
 
 ## 8. Dependencies
 
-From `go.mod` (Go 1.24):
+From `go.mod` (Go 1.25):
 
 | Dependency | Purpose |
 |---|---|
@@ -672,7 +672,7 @@ dispatch-optimizer-service/
 │   ├── constraints.go       # ConstraintChecker with 6 hard constraints
 │   └── metrics.go           # Prometheus metrics for V2 solver (registered via init)
 ├── Dockerfile               # Multi-stage build: Go 1.26-alpine → alpine:3.23, non-root user
-└── go.mod                   # Go 1.24 module definition
+└── go.mod                   # Go 1.25 module definition
 ```
 
 ---

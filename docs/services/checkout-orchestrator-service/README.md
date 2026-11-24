@@ -8,7 +8,7 @@ The checkout-orchestrator-service is the critical orchestration layer for the co
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8091
 **Status**: Tier 1 Critical (blocks revenue; zero-tolerance for silent failures)
-**Database**: PostgreSQL 15+ (idempotency ledger, DLQ records)
+**Database**: PostgreSQL 16 (idempotency ledger, DLQ records)
 
 ## SLOs & Availability
 
@@ -45,7 +45,7 @@ The checkout-orchestrator-service is the critical orchestration layer for the co
 - **Pod Disruption Budget**: minAvailable: 2/3 (always maintain 2 replicas)
 
 ### Database
-- **Name**: `checkout` (PostgreSQL 15+)
+- **Name**: `checkout` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V3) auto-applied on startup
 - **Connection Pool**: HikariCP 20 connections
 - **Replication**: Synchronous streaming to standby (RTO <1s)
@@ -396,16 +396,16 @@ kubectl get pods -n temporal temporal-server-0
 kubectl logs -n temporal temporal-server-0 | grep ERROR
 
 # Check downstream service latency
-curl -w "@curl-format.txt" http://payment-service:8084/health
+curl -w "@curl-format.txt" http://payment-service:8085/health
 
 # Monitor workflow task queue lag
-curl http://checkout-orchestrator-service:8089/actuator/metrics/temporal_task_queue_lag
+curl http://checkout-orchestrator-service:8091/actuator/metrics/temporal_task_queue_lag
 
 # Increase Temporal worker pool if needed
 TEMPORAL_WORKER_POOL_SIZE=150 (restart pod)
 
 # Identify slow upstream service
-curl http://checkout-orchestrator-service:8089/actuator/metrics/temporal_activity_latency_ms?tag=activity:PaymentAuthorization
+curl http://checkout-orchestrator-service:8091/actuator/metrics/temporal_activity_latency_ms?tag=activity:PaymentAuthorization
 ```
 
 ### Scenario 2: Checkouts Failing with 409 Conflict (Inventory Exhausted)
@@ -453,14 +453,14 @@ POST /admin/inventory/rebalance?from_warehouse=sf&to_warehouse=ny&quantity=500
 **Resolution**:
 ```bash
 # Check pending compensation workflows
-curl http://checkout-orchestrator-service:8089/admin/workflows?state=COMPENSATION_IN_PROGRESS
+curl http://checkout-orchestrator-service:8091/admin/workflows?state=COMPENSATION_IN_PROGRESS
 
 # Retry failed compensations manually
-curl -X POST http://checkout-orchestrator-service:8089/admin/compensation/retry \
+curl -X POST http://checkout-orchestrator-service:8091/admin/compensation/retry \
   -d '{"workflow_ids": ["wf-123", "wf-456"]}'
 
 # Check payment service circuit breaker status
-curl http://payment-service:8084/actuator/health/circuitBreakers
+curl http://payment-service:8085/actuator/health/circuitBreakers
 
 # Verify authorization_id exists in payment-service
 SELECT * FROM payment_authorizations WHERE auth_id = 'auth-xyz' LIMIT 1;
@@ -526,11 +526,11 @@ kubectl exec -it temporal-server-0 -- \
   psql -U temporal -d temporal -c "SELECT COUNT(*) FROM events WHERE workflow_id LIKE 'checkout-%';"
 
 # Identify corrupted workflows
-curl http://checkout-orchestrator-service:8089/admin/workflows/status \
+curl http://checkout-orchestrator-service:8091/admin/workflows/status \
   | jq '.[] | select(.state == "PENDING" and .created_at < (now - 3600))'
 
 # Manually mark stuck workflows as FAILED and compensate
-curl -X POST http://checkout-orchestrator-service:8089/admin/workflows/mark-failed \
+curl -X POST http://checkout-orchestrator-service:8091/admin/workflows/mark-failed \
   -d '{"workflow_ids": ["wf-123"], "reason": "temporal_recovery_failed"}'
 
 # Recover manually (contact Temporal support for event store repair)
@@ -558,7 +558,7 @@ GROUP BY step
 ORDER BY failure_count DESC;
 
 # Check circuit breaker trip rate by service
-curl http://checkout-orchestrator-service:8089/actuator/metrics/resilience4j_circuitbreaker_calls_total
+curl http://checkout-orchestrator-service:8091/actuator/metrics/resilience4j_circuitbreaker_calls_total
 
 # If inventory service failing: Check stock levels, scaling, DB performance
 # If pricing service failing: Check tax service, network connectivity
@@ -619,15 +619,15 @@ for svc in cart-service inventory-service payment-service pricing-service order-
 done
 
 # Check circuit breaker state
-curl http://checkout-orchestrator-service:8089/actuator/health/circuitBreakers | jq '..'
+curl http://checkout-orchestrator-service:8091/actuator/health/circuitBreakers | jq '..'
 
 # Manually reset circuit breaker if healthy
-curl -X POST http://checkout-orchestrator-service:8089/admin/circuit-breaker/reset \
+curl -X POST http://checkout-orchestrator-service:8091/admin/circuit-breaker/reset \
   -d '{"service": "payment-service"}'
 
 # Check network connectivity
 kubectl exec -it deployment/checkout-orchestrator-service -- \
-  curl -v http://payment-service:8084/health
+  curl -v http://payment-service:8085/health
 
 # Scale up failing service
 kubectl scale deployment payment-service --replicas=5 -n money-path
@@ -648,13 +648,13 @@ kubectl scale deployment payment-service --replicas=5 -n money-path
 **Resolution**:
 ```bash
 # Check Temporal worker utilization
-curl http://checkout-orchestrator-service:8089/actuator/metrics/temporal_worker_utilization
+curl http://checkout-orchestrator-service:8091/actuator/metrics/temporal_worker_utilization
 
 # Increase worker pool size
 TEMPORAL_WORKER_POOL_SIZE=200 (restart pods)
 
 # Identify slow activities
-curl http://checkout-orchestrator-service:8089/actuator/metrics/temporal_activity_latency_ms \
+curl http://checkout-orchestrator-service:8091/actuator/metrics/temporal_activity_latency_ms \
   | grep -E "PaymentAuthorization|InventoryReservation" | sort -k2 -rn
 
 # Optimize slow activity (if inventory taking too long)
@@ -724,7 +724,7 @@ kubectl scale deployment checkout-orchestrator-service --replicas=5 -n money-pat
 
 ### Environment Variables
 ```env
-SERVER_PORT=8089
+SERVER_PORT=8091
 SPRING_PROFILES_ACTIVE=gcp
 
 # Database
@@ -796,11 +796,11 @@ spring:
 ### Synchronous Calls
 | Service | Endpoint | Timeout | Purpose | Critical |
 |---------|----------|---------|---------|----------|
-| cart-service | http://cart-service:8086/carts/{id}/validate | 2s | Cart validation | Yes |
+| cart-service | http://cart-service:8090/carts/{id}/validate | 2s | Cart validation | Yes |
 | inventory-service | http://inventory-service:8083/inventory/reserve | 3s | Inventory hold | Yes |
-| payment-service | http://payment-service:8084/payments/authorize | 5s | Payment authorization | Yes |
-| pricing-service | http://pricing-service:8096/pricing/calculate | 2s | Final price calculation | Yes |
-| order-service | http://order-service:8085/orders | 3s | Order creation | Yes |
+| payment-service | http://payment-service:8085/payments/authorize | 5s | Payment authorization | Yes |
+| pricing-service | http://pricing-service:8089/pricing/calculate | 2s | Final price calculation | Yes |
+| order-service | http://order-service:8084/orders | 3s | Order creation | Yes |
 
 ### Event Publishers
 | Topic | Event | Pattern | Reliability |
@@ -831,7 +831,7 @@ spring:
 
 ```bash
 # Initiate checkout
-curl -X POST http://checkout-orchestrator-service:8089/checkout \
+curl -X POST http://checkout-orchestrator-service:8091/checkout \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{
@@ -843,16 +843,16 @@ curl -X POST http://checkout-orchestrator-service:8089/checkout \
   }' | jq '.workflow_id'
 
 # Poll checkout status
-curl -X GET http://checkout-orchestrator-service:8089/checkout/wf-123abc/status \
+curl -X GET http://checkout-orchestrator-service:8091/checkout/wf-123abc/status \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.state, .order_id'
 
 # Cancel in-flight checkout
-curl -X POST http://checkout-orchestrator-service:8089/checkout/wf-123abc/cancel \
+curl -X POST http://checkout-orchestrator-service:8091/checkout/wf-123abc/cancel \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{"reason": "customer_cancelled"}' | jq '.state'
 
 # Lookup by idempotency key
-curl -X GET http://checkout-orchestrator-service:8089/checkout/idempotency/uuid-abc123 \
+curl -X GET http://checkout-orchestrator-service:8091/checkout/idempotency/uuid-abc123 \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.workflow_id, .order_id, .state'
 ```
 

@@ -135,7 +135,7 @@ graph TB
     end
 
     subgraph gcp["GCP (asia-south1 region)"]
-        CloudSQL[("Cloud SQL<br/>PostgreSQL 15+<br/>HA: Primary + Replica")]
+        CloudSQL[("Cloud SQL<br/>PostgreSQL 16<br/>HA: Primary + Replica")]
         SecretMgr["Secret Manager<br/>RSA keys"]
         Kafka["Cloud Pubsub<br/>(or self-managed Kafka)"]
     end

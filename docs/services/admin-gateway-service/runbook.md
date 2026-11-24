@@ -20,7 +20,7 @@ kubectl logs -n admin deploy/admin-gateway-service | grep "TOKEN_INVALID\|audien
 kubectl get pods -n admin -l app=admin-gateway-service
 
 # Check identity-service JWKS endpoint
-kubectl exec -n identity deploy/identity-service -- curl -s http://localhost:8081/jwt/jwks | jq .
+kubectl exec -n identity deploy/identity-service -- curl -s http://localhost:8081/.well-known/jwks.json | jq .
 
 # Verify clock sync between services
 kubectl exec -n admin deploy/admin-gateway-service -- date -u
@@ -111,7 +111,7 @@ kubectl get vs -n admin admin-gateway-service -o yaml | grep timeout
 kubectl get deploy -n admin admin-gateway-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # Update to new version (Helm)
-helm upgrade admin-gateway-service deploy/helm/admin-gateway-service \
+helm upgrade instacommerce deploy/helm \
   -n admin \
   --values deploy/helm/values.yaml \
   --values deploy/helm/values-prod.yaml
@@ -208,7 +208,7 @@ URL: https://grafana.internal.instacommerce.com/d/admin-gateway-service
 
 ```bash
 # 1. Get a valid JWT token
-JWT_TOKEN=$(curl -X POST http://identity-service:8080/jwt/issue \
+JWT_TOKEN=$(curl -X POST http://identity-service:8081/jwt/issue \
   -H "Content-Type: application/json" \
   -d '{"userId":"admin-test","aud":"instacommerce-admin"}' | jq -r '.token')
 
@@ -223,7 +223,7 @@ curl -X POST http://admin-gateway-service:8099/admin/v1/flags/test-flag/override
   -d '{"value":true,"ttlSeconds":600}'
 
 # 4. Test 401 with wrong audience
-JWT_WRONG_AUD=$(curl -X POST http://identity-service:8080/jwt/issue \
+JWT_WRONG_AUD=$(curl -X POST http://identity-service:8081/jwt/issue \
   -H "Content-Type: application/json" \
   -d '{"userId":"admin-test","aud":"instacommerce-api"}' | jq -r '.token')
 
@@ -284,7 +284,7 @@ If JWT validation is compromised:
 
 ## Related Documentation
 
-- **Deployment**: `deploy/helm/admin-gateway-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `docs/services/admin-gateway-service/diagrams/`
 - **ADR-011**: `docs/adr/011-admin-gateway-auth-model.md`
 - **Alert Rules**: `monitoring/prometheus/admin-gateway-rules.yaml`

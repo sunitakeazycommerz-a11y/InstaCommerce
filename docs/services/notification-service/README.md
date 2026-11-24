@@ -7,7 +7,7 @@
 | **Module** | `:services:notification-service` |
 | **Port** | `8089` |
 | **Runtime** | Spring Boot 4.0 · Java 21 |
-| **Database** | PostgreSQL 15+ (notification_log, audit_log, outbox_events) |
+| **Database** | PostgreSQL 16 (notification_log, audit_log, outbox_events) |
 | **Messaging** | Kafka consumer (orders.events, payments.events, fulfillment.events, identity.events) |
 | **Channels** | Email, SMS, Push notifications |
 | **Auth** | JWT RS256 + service-to-service |
@@ -568,7 +568,7 @@ curl https://api.sendgrid.com/v3/mail/send \
   -d '{"personalizations":[{"to":[{"email":"test@example.com"}]}]}'
 
 # Check current email volume vs quota
-curl http://notification-service:8089/admin/sendgrid/usage
+curl http://notification-service:8087/admin/sendgrid/usage
 
 # Switch to failover provider if needed
 NOTIFICATION_EMAIL_PRIMARY_PROVIDER=mailgun (from sendgrid)
@@ -596,14 +596,14 @@ curl https://api.twilio.com/2010-04-01/Accounts/{ACCOUNT_SID}/Messages \
   -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN"
 
 # Verify webhook endpoint
-curl http://notification-service:8089/webhooks/twilio/delivery \
+curl http://notification-service:8087/webhooks/twilio/delivery \
   -d 'test_delivery_receipt'
 
 # Ensure delivery receipts enabled
 # Twilio Console → Settings → Webhooks → Enable SMS delivery receipts
 
 # Check phone number format
-curl http://notification-service:8089/admin/sms/validate-number \
+curl http://notification-service:8087/admin/sms/validate-number \
   -d '{"phoneNumber":"+919876543210"}'
 ```
 
@@ -630,7 +630,7 @@ AND created_at > NOW() - INTERVAL '1 hour'
 GROUP BY error;
 
 # Validate push payload size
-curl http://notification-service:8089/admin/push/validate-payload \
+curl http://notification-service:8087/admin/push/validate-payload \
   -d '{"title":"...","body":"..."}'
 
 # Simplify notification payload (reduce size)
@@ -669,7 +669,7 @@ ORDER BY max_latency DESC;
 -- Remove conditional logic; pre-compute in service
 
 # Test optimized template
-curl http://notification-service:8089/admin/templates/test-render \
+curl http://notification-service:8087/admin/templates/test-render \
   -d '{
     "templateId": "order-confirmation",
     "context": {"order": {...}},
@@ -692,11 +692,11 @@ curl http://notification-service:8089/admin/templates/test-render \
 **Resolution:**
 ```bash
 # Check user preference
-curl http://notification-service:8089/admin/user/{userId}/preferences \
+curl http://notification-service:8087/admin/user/{userId}/preferences \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # Force preference refresh
-curl -X POST http://notification-service:8089/admin/preferences/refresh \
+curl -X POST http://notification-service:8087/admin/preferences/refresh \
   -d '{"userId":"user-uuid"}'
 
 # Reduce cache TTL
@@ -734,14 +734,14 @@ kafka-console-consumer --bootstrap-server kafka:9092 \
   --max-messages 10 | jq '.reason'
 
 # Manually process DLQ
-curl -X POST http://notification-service:8089/admin/dlq/reprocess \
+curl -X POST http://notification-service:8087/admin/dlq/reprocess \
   -d '{
     "limit": 1000,
     "notifyAfter": true
   }'
 
 # Monitor reprocess
-curl http://notification-service:8089/admin/dlq/status
+curl http://notification-service:8087/admin/dlq/status
 ```
 
 ### Scenario 7: Rate Limit Exceeded (Notification sending blocked)
@@ -759,14 +759,14 @@ curl http://notification-service:8089/admin/dlq/status
 **Resolution:**
 ```bash
 # Check rate limit config
-curl http://notification-service:8089/admin/config/rate-limits
+curl http://notification-service:8087/admin/config/rate-limits
 
 # Adjust limits if needed
 NOTIFICATION_EMAIL_RATE_LIMIT_PER_USER=100 (from 10, per min)
 NOTIFICATION_SMS_RATE_LIMIT_PER_USER=20 (from 5, per min)
 
 # For bulk operations, use bypass
-curl -X POST http://notification-service:8089/admin/bulk-send \
+curl -X POST http://notification-service:8087/admin/bulk-send \
   -H "X-Bypass-RateLimit: true" \
   -d '{"userIds":[...], "templateId":"daily-digest"}'
 
@@ -789,7 +789,7 @@ kubectl rollout restart deployment/notification-service
 **Resolution:**
 ```bash
 # Check webhook endpoint health
-curl http://notification-service:8089/webhooks/twilio/delivery
+curl http://notification-service:8087/webhooks/twilio/delivery
 
 # Check if pods are running
 kubectl get pods -n services | grep notification

@@ -114,7 +114,7 @@ The admin-gateway-service is the entry point for internal administrative operati
 | 401 | `JWT_EXPIRED` | Expiry claim in past | Refresh JWT token |
 | 403 | `FORBIDDEN_INSUFFICIENT_ROLE` | Role not ADMIN or SUPER_ADMIN | Contact access management |
 | 429 | `RATE_LIMIT_EXCEEDED` | > 100 requests/min from IP | Backoff exponentially; contact ops |
-| 500 | `JWKS_FETCH_FAILED` | Cannot reach identity-service | Check identity-service:8080/jwt/jwks connectivity |
+| 500 | `JWKS_FETCH_FAILED` | Cannot reach identity-service | Check identity-service:8081/.well-known/jwks.json connectivity |
 
 ### Admin Role Hierarchy
 
@@ -556,7 +556,7 @@ alerts:
 **Resolution**:
 ```bash
 # Verify identity-service JWKS endpoint
-curl http://identity-service:8080/jwt/jwks | jq '.keys[0]'
+curl http://identity-service:8081/.well-known/jwks.json | jq '.keys[0]'
 
 # Check JWKS cache freshness
 curl http://admin-gateway-service:8099/actuator/metrics/identity_service_jwks_cache_age
@@ -738,10 +738,10 @@ curl -X POST http://admin-gateway-service:8099/admin/internal/cache/refresh-jwks
 ADMIN_GATEWAY_JWKS_CACHE_TTL_SECONDS=60 (instead of 300)
 
 # Verify identity-service key rotation
-curl http://identity-service:8080/jwt/jwks | jq '.keys | length'
+curl http://identity-service:8081/.well-known/jwks.json | jq '.keys | length'
 
 # Test JWT validation with new key
-JWT_TOKEN=$(curl -X POST http://identity-service:8080/jwt/issue \
+JWT_TOKEN=$(curl -X POST http://identity-service:8081/jwt/issue \
   -d '{"userId":"test","aud":"instacommerce-admin"}' | jq -r '.token')
 
 curl -H "Authorization: Bearer $JWT_TOKEN" \
@@ -793,13 +793,13 @@ kafka-consumer-groups --bootstrap-server kafka:9092 \
 redis-cli GET flag-override-dark-mode
 
 # Trigger manual flag refresh in config-feature-flag-service
-curl -X POST http://config-feature-flag-service:8095/admin/cache/refresh
+curl -X POST http://config-feature-flag-service:8098/admin/cache/refresh
 
 # Check downstream service's cached flag
-curl http://mobile-bff-service:8090/actuator/metrics/feature_flag_cache_dark_mode
+curl http://mobile-bff-service:8080/actuator/metrics/feature_flag_cache_dark_mode
 
 # Query flag value directly from config-feature-flag-service
-curl http://config-feature-flag-service:8095/flags/dark-mode | jq '.value'
+curl http://config-feature-flag-service:8098/flags/dark-mode | jq '.value'
 
 # Verify flag key consistency across services
 grep -r "dark.mode\|darkMode\|dark_mode" src/ | wc -l
@@ -901,14 +901,14 @@ ANALYZE audit_log;
 ### Synchronous Calls
 | Service | Endpoint | Timeout | Purpose | Critical |
 |---------|----------|---------|---------|----------|
-| config-feature-flag-service | http://config-feature-flag-service:8095/flags | 5s | Fetch feature flags | Yes |
-| reconciliation-engine | http://reconciliation-engine:8098/pending | 5s | Query pending items | Yes |
-| order-service | http://order-service:8085/stats | 500ms | Dashboard order volume | Yes |
-| payment-service | http://payment-service:8084/volume | 500ms | Dashboard payment volume | Yes |
-| fulfillment-service | http://fulfillment-service:8080/backlog | 500ms | Dashboard fulfillment backlog | Yes |
+| config-feature-flag-service | http://config-feature-flag-service:8098/flags | 5s | Fetch feature flags | Yes |
+| reconciliation-engine | http://reconciliation-engine:8107/pending | 5s | Query pending items | Yes |
+| order-service | http://order-service:8084/stats | 500ms | Dashboard order volume | Yes |
+| payment-service | http://payment-service:8085/volume | 500ms | Dashboard payment volume | Yes |
+| fulfillment-service | http://fulfillment-service:8086/backlog | 500ms | Dashboard fulfillment backlog | Yes |
 
 ### Identity-Service JWKS
-- **Endpoint**: http://identity-service:8080/jwt/jwks
+- **Endpoint**: http://identity-service:8081/.well-known/jwks.json
 - **Refresh**: 5-minute TTL (via Spring HTTP client caching)
 - **Fallback**: Cached keys valid for signed tokens
 - **Validation**: RSA public key must match issued JWT signature
@@ -940,7 +940,7 @@ ANALYZE audit_log;
 
 ```bash
 # Get JWT token from identity-service
-JWT_TOKEN=$(curl -X POST http://identity-service:8080/jwt/issue \
+JWT_TOKEN=$(curl -X POST http://identity-service:8081/jwt/issue \
   -H "Content-Type: application/json" \
   -d '{"userId":"admin-1","aud":"instacommerce-admin"}' \
   | jq -r '.token')
@@ -1019,13 +1019,13 @@ admin-gateway:
     cache-ttl-seconds: ${ADMIN_GATEWAY_DASHBOARD_CACHE_TTL_SECONDS:5}
     services:
       - name: order-service
-        url: http://order-service:8085/stats
+        url: http://order-service:8084/stats
         timeout-ms: 500
       - name: payment-service
-        url: http://payment-service:8084/volume
+        url: http://payment-service:8085/volume
         timeout-ms: 500
       - name: fulfillment-service
-        url: http://fulfillment-service:8080/backlog
+        url: http://fulfillment-service:8086/backlog
         timeout-ms: 500
   rate-limit:
     super-admin-rps: 500

@@ -8,7 +8,7 @@ flowchart TD
         PAYMENT_KAFKA["Kafka: payment.events<br/>(failure tracking)"]
     end
 
-    subgraph FDS["fraud-detection-service :8090"]
+    subgraph FDS["fraud-detection-service :8097"]
         direction TB
         CTRL["FraudController<br/>(check endpoint)"]
         SCORING["FraudScoringService<br/>(orchestrator)"]

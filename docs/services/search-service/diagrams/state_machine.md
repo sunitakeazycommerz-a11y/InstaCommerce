@@ -29,8 +29,8 @@ stateDiagram-v2
     end note
 
     note right of INDEXING
-        Adding/updating document
-        in Elasticsearch cluster
+        Upserting tsvector projection
+        in PostgreSQL search_db
     end note
 
     note right of INDEXED
@@ -41,7 +41,7 @@ stateDiagram-v2
 
     note right of RETRY
         Temporary issue
-        (ES down, network lag)
+        (DB transient error, network lag)
         Exponential backoff
     end note
 

@@ -1,5 +1,7 @@
 # Iteration 3 Review Index
 
+> **Status:** ARCHIVED / HISTORICAL REFERENCE — Wave 30 backup snapshot. See [`docs/reviews/iter3/README.md`](../../../reviews/iter3/README.md) for the active Iteration 3 review suite.
+
 This folder contains the regenerated, discoverable iteration-3 review set for InstaCommerce.
 
 ## Top-level documents

@@ -8,7 +8,7 @@ The rider-fleet-service manages the complete lifecycle of delivery rider availab
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8093
 **Status**: Tier 1 Critical (Delivery Path Authority)
-**Database**: PostgreSQL 15+ (rider state, location index, assignment history)
+**Database**: PostgreSQL 16 (rider state, location index, assignment history)
 
 ## SLOs & Availability
 
@@ -42,7 +42,7 @@ The rider-fleet-service manages the complete lifecycle of delivery rider availab
 - **Startup Probe**: 20s initial delay
 
 ### Database
-- **Name**: `rider_fleet` (PostgreSQL 15+)
+- **Name**: `rider_fleet` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V11)
 - **Connection Pool**: HikariCP 40 connections
 - **Idle Timeout**: 5 minutes
@@ -115,8 +115,8 @@ Zone (SF Downtown)
 | Service | Endpoint | Timeout | Purpose | SLA |
 |---------|----------|---------|---------|-----|
 | dispatch-optimizer | http://dispatch-optimizer-service:8102/optimize | 500ms | Route optimization for assignment | P99 < 200ms |
-| routing-eta | http://routing-eta-service:8101/eta | 300ms | ETA calculation for rider | P99 < 100ms |
-| location-ingestion | http://location-ingestion-service:8093/subscribe | 5s | Subscribe to rider location stream | Async |
+| routing-eta | http://routing-eta-service:8094/eta | 300ms | ETA calculation for rider | P99 < 100ms |
+| location-ingestion | http://location-ingestion-service:8105/subscribe | 5s | Subscribe to rider location stream | Async |
 
 ### Asynchronous Events
 | Topic | Direction | Events |
@@ -126,7 +126,7 @@ Zone (SF Downtown)
 | dispatch.events | Consume | AssignmentRejected (recovery trigger) |
 
 ### WebSocket Connections
-- **Endpoint**: ws://rider-fleet-service:8097/ws/riders
+- **Endpoint**: ws://rider-fleet-service:8093/ws/riders
 - **Purpose**: Real-time availability & skill updates to dispatch console
 - **Heartbeat**: 30s ping/pong
 - **Max Connections**: 1000 concurrent
@@ -159,7 +159,7 @@ Zone (SF Downtown)
 
 ```bash
 # Assign rider to order
-curl -X POST http://rider-fleet-service:8097/riders/assign \
+curl -X POST http://rider-fleet-service:8093/riders/assign \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -172,7 +172,7 @@ curl -X POST http://rider-fleet-service:8097/riders/assign \
   }'
 
 # Update rider location
-curl -X POST http://rider-fleet-service:8097/riders/rider-123/location \
+curl -X POST http://rider-fleet-service:8093/riders/rider-123/location \
   -H "Content-Type: application/json" \
   -d '{
     "latitude": 37.7849,
@@ -182,7 +182,7 @@ curl -X POST http://rider-fleet-service:8097/riders/rider-123/location \
   }'
 
 # Get available riders near coordinate
-curl -X GET "http://rider-fleet-service:8097/riders/available?lat=37.7749&lng=-122.4194&radius=5000" \
+curl -X GET "http://rider-fleet-service:8093/riders/available?lat=37.7749&lng=-122.4194&radius=5000" \
   -H "Authorization: Bearer $JWT_TOKEN"
 ```
 
@@ -192,7 +192,7 @@ Dispatch systems receive live updates on rider availability:
 
 ```javascript
 // Client-side
-const ws = new WebSocket('ws://rider-fleet-service:8097/ws/riders');
+const ws = new WebSocket('ws://rider-fleet-service:8093/ws/riders');
 ws.onmessage = (event) => {
   const update = JSON.parse(event.data);
   // update.type: 'RIDER_AVAILABLE', 'RIDER_ASSIGNED', 'LOCATION_UPDATE'
@@ -280,7 +280,7 @@ Outbox Table (CDC):
 
 ### Environment Variables
 ```env
-SERVER_PORT=8097
+SERVER_PORT=8093
 SPRING_PROFILES_ACTIVE=gcp
 
 SPRING_DATASOURCE_URL=jdbc:postgresql://cloudsql-proxy:5432/rider_fleet
@@ -456,7 +456,7 @@ alerts:
 curl http://dispatch-optimizer-service:8102/actuator/health
 
 # Check routing-eta latency
-curl http://routing-eta-service:8101/actuator/metrics/http_server_requests_seconds_max
+curl http://routing-eta-service:8094/actuator/metrics/http_server_requests_seconds_max
 
 # Analyze slow GIS queries
 SELECT query, calls, mean_time FROM pg_stat_statements
@@ -486,7 +486,7 @@ WHERE job_name = 'RecoveryStuckRiders'
 ORDER BY executed_at DESC LIMIT 5;
 
 # Manual recovery if needed
-curl -X POST http://rider-fleet-service:8097/admin/riders/recovery/stuck \
+curl -X POST http://rider-fleet-service:8093/admin/riders/recovery/stuck \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # Check for stuck riders
@@ -510,10 +510,10 @@ kafka-consumer-groups --bootstrap-server kafka-broker-1:9092 \
   --group rider-fleet-location-consumer --describe
 
 # Monitor message queue
-curl http://rider-fleet-service:8097/actuator/metrics/websocket_message_queue_depth
+curl http://rider-fleet-service:8093/actuator/metrics/websocket_message_queue_depth
 
 # Verify TLS certificate expiry
-openssl s_client -connect rider-fleet-service:8097 -tls1_2 < /dev/null | \
+openssl s_client -connect rider-fleet-service:8093 -tls1_2 < /dev/null | \
   openssl x509 -noout -dates
 ```
 
@@ -528,7 +528,7 @@ openssl s_client -connect rider-fleet-service:8097 -tls1_2 < /dev/null | \
 **Resolution**:
 ```bash
 # Check current zone utilization
-curl http://rider-fleet-service:8097/admin/analytics/capacity
+curl http://rider-fleet-service:8093/admin/analytics/capacity
 
 # Identify low-utilization zones
 SELECT zone_id, current_utilization, max_capacity,

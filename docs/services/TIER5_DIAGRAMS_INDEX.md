@@ -19,11 +19,11 @@ Tier 5 comprises 7 asynchronous, data-driven, ML, and event processing services 
 |---|---------|---------|------|---------|
 | 1 | **ai-inference-service** | Python 3.14 / FastAPI | 8101 | Online model serving (7 models: ETA, Fraud, Ranking, Demand, Personalization, CLV, Dynamic Pricing) |
 | 2 | **ai-orchestrator-service** | Python 3.14 / FastAPI + LangGraph | 8100 | Agentic LLM orchestration with read-only tool registry |
-| 3 | **cdc-consumer-service** | Go 1.24 | 8104 | Debezium CDC → BigQuery sink with dead-letter queue |
-| 4 | **location-ingestion-service** | Go 1.24 | 8105 | High-throughput GPS ingestion (HTTP + WebSocket) → Redis + Kafka |
-| 5 | **stream-processor-service** | Go 1.24 | 8108 | Real-time Kafka stream aggregations for operational metrics |
-| 6 | **fraud-detection-service** | Java 21 / Spring Boot 3 | 8090 | Multi-stage fraud scoring with 5 rule types + velocity tracking |
-| 7 | **audit-trail-service** | Java 21 / Spring Boot 3 | 8092 | Immutable append-only audit log (14 domain topics, monthly partitions) |
+| 3 | **cdc-consumer-service** | Go 1.25 | 8104 | Debezium CDC → BigQuery sink with dead-letter queue |
+| 4 | **location-ingestion-service** | Go 1.25 | 8105 | High-throughput GPS ingestion (HTTP + WebSocket) → Redis + Kafka |
+| 5 | **stream-processor-service** | Go 1.25 | 8108 | Real-time Kafka stream aggregations for operational metrics |
+| 6 | **fraud-detection-service** | Java 21 / Spring Boot 4.0.0 | 8090 | Multi-stage fraud scoring with 5 rule types + velocity tracking |
+| 7 | **audit-trail-service** | Java 21 / Spring Boot 4.0.0 | 8092 | Immutable append-only audit log (14 domain topics, monthly partitions) |
 
 ---
 
@@ -78,7 +78,7 @@ Tier 5 comprises 7 asynchronous, data-driven, ML, and event processing services 
 
 ## Diagram Set 3: CDC Consumer Service
 
-**Language**: Go 1.24
+**Language**: Go 1.25
 **Pattern**: Debezium CDC → BigQuery sink with deduplication
 
 | Diagram | File | Focus |
@@ -102,7 +102,7 @@ Tier 5 comprises 7 asynchronous, data-driven, ML, and event processing services 
 
 ## Diagram Set 4: Location Ingestion Service
 
-**Language**: Go 1.24
+**Language**: Go 1.25
 **Pattern**: High-throughput GPS ingestion → Redis cache + Kafka events
 
 | Diagram | File | Focus |
@@ -126,7 +126,7 @@ Tier 5 comprises 7 asynchronous, data-driven, ML, and event processing services 
 
 ## Diagram Set 5: Stream Processor Service
 
-**Language**: Go 1.24
+**Language**: Go 1.25
 **Pattern**: Real-time Kafka aggregations → Redis metrics + Prometheus
 
 | Diagram | File | Focus |
@@ -150,7 +150,7 @@ Tier 5 comprises 7 asynchronous, data-driven, ML, and event processing services 
 
 ## Diagram Set 6: Fraud Detection Service
 
-**Language**: Java 21 / Spring Boot 3
+**Language**: Java 21 / Spring Boot 4.0.0
 **Pattern**: Multi-stage fraud scoring with 5 rule types + velocity tracking
 
 | Diagram | File | Focus |
@@ -174,7 +174,7 @@ Tier 5 comprises 7 asynchronous, data-driven, ML, and event processing services 
 
 ## Diagram Set 7: Audit Trail Service
 
-**Language**: Java 21 / Spring Boot 3
+**Language**: Java 21 / Spring Boot 4.0.0
 **Pattern**: Immutable append-only audit log with monthly partitions
 
 | Diagram | File | Focus |

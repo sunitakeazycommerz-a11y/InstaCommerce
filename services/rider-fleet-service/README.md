@@ -660,7 +660,7 @@ The `FulfillmentEventConsumer` also has a try/catch that logs `error` on deseria
 | Dependency | Version/Source | Purpose |
 |------------|---------------|---------|
 | Java | 21 (Temurin JRE Alpine) | Runtime |
-| Spring Boot 3 | `spring-boot-starter-web`, `-data-jpa`, `-security`, `-validation`, `-actuator`, `-cache` | Application framework |
+| Spring Boot 4.0.0 | `spring-boot-starter-web`, `-data-jpa`, `-security`, `-validation`, `-actuator`, `-cache` | Application framework |
 | Spring Kafka | `spring-kafka` | Kafka consumer + producer |
 | PostgreSQL | `postgresql` (runtime) | Primary data store |
 | Flyway | `flyway-core`, `flyway-database-postgresql` | Schema migrations (V1–V8) |
@@ -782,7 +782,7 @@ docker-compose up -d  # starts pg, kafka, etc.
 # Docker build
 ./gradlew :services:rider-fleet-service:bootJar
 docker build -t rider-fleet-service services/rider-fleet-service/
-docker run -p 8091:8091 \
+docker run -p 8093:8093 \
   -e RIDER_DB_URL=jdbc:postgresql://host.docker.internal:5432/rider_fleet \
   -e KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092 \
   -e RIDER_JWT_PUBLIC_KEY="<base64-encoded-rsa-public-key>" \
