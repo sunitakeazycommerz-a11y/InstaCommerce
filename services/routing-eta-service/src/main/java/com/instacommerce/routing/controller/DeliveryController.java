@@ -6,8 +6,11 @@ import com.instacommerce.routing.dto.response.TrackingResponse;
 import com.instacommerce.routing.service.DeliveryService;
 import com.instacommerce.routing.service.ETAService;
 import com.instacommerce.routing.service.TrackingService;
-import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -63,7 +66,9 @@ public class DeliveryController {
     }
 
     @GetMapping("/{id}/tracking")
-    public ResponseEntity<List<TrackingResponse>> getTracking(@PathVariable UUID id) {
-        return ResponseEntity.ok(trackingService.getTrackingHistory(id));
+    public ResponseEntity<Page<TrackingResponse>> getTracking(
+            @PathVariable UUID id,
+            @PageableDefault(size = 50, sort = "recordedAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(trackingService.getTrackingHistory(id, pageable));
     }
 }

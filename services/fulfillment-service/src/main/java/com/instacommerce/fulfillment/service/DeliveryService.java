@@ -90,6 +90,91 @@ public class DeliveryService {
     }
 
     @Transactional
+    public DeliveryResponse syncRiderAssignment(UUID orderId,
+                                                UUID riderId,
+                                                UUID storeId,
+                                                String riderName,
+                                                Integer etaMinutes) {
+        if (orderId == null || riderId == null) {
+            throw new IllegalArgumentException("orderId and riderId are required to sync rider assignment");
+        }
+        PickTask task = pickTaskRepository.findByOrderId(orderId).orElse(null);
+        Delivery existing = deliveryRepository.findByOrderId(orderId).orElse(null);
+        if (task != null && task.getStatus() == PickTaskStatus.CANCELLED) {
+            logger.info("Skipping RiderAssigned sync for cancelled pick task order={}", orderId);
+            return existing != null ? FulfillmentMapper.toDeliveryResponse(existing) : null;
+        }
+        if (existing != null && (existing.getStatus().isTerminal()
+            || existing.getStatus() == DeliveryStatus.PICKED_UP
+            || existing.getStatus().isInTransit())) {
+            logger.debug("Ignoring RiderAssigned sync for order={} already in status={}",
+                orderId, existing.getStatus());
+            return FulfillmentMapper.toDeliveryResponse(existing);
+        }
+        if (existing != null && existing.getStatus() == DeliveryStatus.ASSIGNED
+            && existing.getRider() != null && existing.getRider().getId().equals(riderId)) {
+            if (existing.getDispatchOtp() == null) {
+                existing.setDispatchOtp(generateDispatchOtp());
+                existing = deliveryRepository.save(existing);
+            }
+            return FulfillmentMapper.toDeliveryResponse(existing);
+        }
+
+        UUID effectiveStoreId = storeId != null
+            ? storeId
+            : (task != null && task.getStoreId() != null ? task.getStoreId() : new UUID(0L, 0L));
+        String effectiveName = (riderName != null && !riderName.isBlank())
+            ? riderName.trim()
+            : "Rider-" + riderId.toString().substring(0, 8);
+
+        Rider rider = resolveOrProjectRider(riderId, effectiveName, effectiveStoreId);
+        if (rider.isAvailable()) {
+            rider.setAvailable(false);
+            riderRepository.save(rider);
+        }
+
+        Delivery delivery = existing != null ? existing : new Delivery();
+        delivery.setOrderId(orderId);
+        delivery.setRider(rider);
+        delivery.setStatus(DeliveryStatus.ASSIGNED);
+        int resolvedEta = etaMinutes != null && etaMinutes > 0
+            ? etaMinutes
+            : (existing != null && existing.getEstimatedMinutes() != null
+                ? existing.getEstimatedMinutes()
+                : fulfillmentProperties.getDelivery().getDefaultEtaMinutes());
+        delivery.setEstimatedMinutes(resolvedEta);
+        if (task != null) {
+            delivery.setColdChainRequired(task.isColdChainRequired());
+            delivery.setFragileRequired(task.isFragileRequired());
+            delivery.setOrderWeightGrams(task.getOrderWeightGrams());
+        }
+        if (delivery.getDispatchOtp() == null) {
+            delivery.setDispatchOtp(generateDispatchOtp());
+        }
+        Delivery saved = deliveryRepository.save(delivery);
+        logger.info("Synchronized RiderAssigned projection for order={} rider={}", orderId, riderId);
+        return FulfillmentMapper.toDeliveryResponse(saved);
+    }
+
+    private Rider resolveOrProjectRider(UUID riderId, String riderName, UUID storeId) {
+        return riderRepository.findById(riderId).orElseGet(() -> {
+            riderRepository.insertProjectionIfAbsent(riderId, riderName, storeId, false);
+            return riderRepository.findById(riderId).orElseGet(() -> {
+                Rider projection = new Rider();
+                projection.setId(riderId);
+                projection.setName(riderName);
+                projection.setStoreId(storeId);
+                projection.setAvailable(false);
+                return projection;
+            });
+        });
+    }
+
+    private String generateDispatchOtp() {
+        return String.format("%06d", SECURE_RANDOM.nextInt(100000, 1000000));
+    }
+
+    @Transactional
     public DeliveryResponse markDelivered(UUID orderId) {
         return markDelivered(orderId, null, true);
     }
@@ -332,8 +417,7 @@ public class DeliveryService {
         delivery.setFragileRequired(fragileRequired);
         delivery.setOrderWeightGrams(orderWeightGrams);
         if (delivery.getDispatchOtp() == null) {
-            String otp = String.format("%06d", SECURE_RANDOM.nextInt(100000, 1000000));
-            delivery.setDispatchOtp(otp);
+            delivery.setDispatchOtp(generateDispatchOtp());
         }
         delivery.setDispatchedAt(Instant.now());
         Delivery saved = deliveryRepository.save(delivery);

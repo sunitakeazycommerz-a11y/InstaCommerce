@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -119,7 +120,8 @@ class InboundReceivingServiceTest {
         existingStock.setProductId(productId);
         existingStock.setOnHand(10);
         existingStock.setReserved(0);
-        when(stockItemRepository.findByStoreIdAndProductId(storeId, productId)).thenReturn(Optional.of(existingStock));
+        when(stockItemRepository.findByProductIdAndStoreIdForUpdate(productId, storeId))
+            .thenReturn(Optional.of(existingStock));
         when(stockItemRepository.save(any(StockItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         when(batchRepository.findByStoreIdAndProductIdAndBatchNumber(storeId, productId, "BATCH-MAGGI-01"))
@@ -151,5 +153,44 @@ class InboundReceivingServiceTest {
             eq("InboundAsnReconciled"),
             anyMap()
         );
+    }
+
+    @Test
+    @DisplayName("Pallet receiving acquires PESSIMISTIC_WRITE StockItem locks sorted by productId")
+    void shouldAcquireStockItemLocksSortedByProductId() {
+        UUID storeId = UUID.randomUUID();
+        UUID smallerProductId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID largerProductId = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
+
+        InboundAsn asn = new InboundAsn();
+        asn.setId(UUID.randomUUID());
+        asn.setAsnNumber("ASN-SORT-1");
+        asn.setPurchaseOrderId("PO-SORT-1");
+        asn.setVendorId("V1");
+        asn.setStoreId(storeId);
+        asn.setPalletBarcode("PALLET-SORT");
+        asn.setStatus(AsnStatus.PENDING);
+
+        AsnLineItem secondItem = new AsnLineItem();
+        secondItem.setProductId(largerProductId);
+        secondItem.setExpectedQuantity(5);
+        asn.addLineItem(secondItem);
+
+        AsnLineItem firstItem = new AsnLineItem();
+        firstItem.setProductId(smallerProductId);
+        firstItem.setExpectedQuantity(10);
+        asn.addLineItem(firstItem);
+
+        when(asnRepository.findByPalletBarcode("PALLET-SORT")).thenReturn(Optional.of(asn));
+        when(asnRepository.save(any(InboundAsn.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(stockItemRepository.findByProductIdAndStoreIdForUpdate(any(), eq(storeId)))
+            .thenReturn(Optional.empty());
+        when(stockItemRepository.save(any(StockItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        receivingService.receiveByPalletBarcode("PALLET-SORT", "OP-1");
+
+        var lockOrder = inOrder(stockItemRepository);
+        lockOrder.verify(stockItemRepository).findByProductIdAndStoreIdForUpdate(smallerProductId, storeId);
+        lockOrder.verify(stockItemRepository).findByProductIdAndStoreIdForUpdate(largerProductId, storeId);
     }
 }

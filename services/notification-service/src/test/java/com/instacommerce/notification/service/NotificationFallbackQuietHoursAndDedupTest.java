@@ -223,7 +223,7 @@ class NotificationFallbackQuietHoursAndDedupTest {
             .thenReturn(Optional.of(new UserContact(userId, "asha@example.com", "+919876543210", "Asha", "en")));
 
         NotificationLog firstLog = new NotificationLog();
-        when(deduplicationService.createLog(any(NotificationRequest.class), anyString()))
+        when(deduplicationService.createLog(any(NotificationRequest.class), anyString(), any(), any()))
             .thenReturn(firstLog)
             .thenReturn(null);
 
@@ -264,7 +264,7 @@ class NotificationFallbackQuietHoursAndDedupTest {
         service.handleEvent(rec2, duplicateStatusEnvelope);
 
         ArgumentCaptor<NotificationRequest> reqCaptor = ArgumentCaptor.forClass(NotificationRequest.class);
-        verify(deduplicationService, times(2)).createLog(reqCaptor.capture(), anyString());
+        verify(deduplicationService, times(2)).createLog(reqCaptor.capture(), anyString(), any(), any());
         List<NotificationRequest> requests = reqCaptor.getAllValues();
         assertThat(requests.get(0).eventId()).isEqualTo("status:" + orderId + ":OrderPacked");
         assertThat(requests.get(1).eventId()).isEqualTo(requests.get(0).eventId());

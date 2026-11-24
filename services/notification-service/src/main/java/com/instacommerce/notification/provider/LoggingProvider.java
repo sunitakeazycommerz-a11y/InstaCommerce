@@ -22,7 +22,7 @@ public class LoggingProvider implements NotificationProvider {
 
     @Override
     public String send(NotificationSendRequest request) {
-        String masked = MaskingUtil.maskRecipient(request.recipient());
+        String masked = MaskingUtil.maskRecipient(request.recipient(), request.channel());
         logger.info("Notification [{}] to {}: {}", request.channel(), masked, summarize(request.body()));
         return "logged";
     }

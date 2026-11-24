@@ -47,7 +47,7 @@ public class NotificationProviderSender {
             return new DispatchResult(DispatchStatus.FALLBACK_REQUIRED, null);
         }
         NotificationProvider provider = providerOpt.get();
-        String masked = MaskingUtil.maskRecipient(recipient);
+        String masked = MaskingUtil.maskRecipient(recipient, log.getChannel());
         try {
             String providerRef = provider.send(new NotificationSendRequest(
                 log.getChannel(), recipient, log.getSubject(), log.getBody()));

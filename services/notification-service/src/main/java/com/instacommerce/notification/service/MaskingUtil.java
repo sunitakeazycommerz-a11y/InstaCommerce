@@ -1,11 +1,14 @@
 package com.instacommerce.notification.service;
 
+import com.instacommerce.notification.domain.model.NotificationChannel;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 public final class MaskingUtil {
+    private static final Pattern PHONE_PATTERN = Pattern.compile("^\\+?[0-9\\s().-]{7,20}$");
     private static final Set<String> PII_VARIABLE_KEYS = Set.of(
         "phone",
         "email",
@@ -37,10 +40,40 @@ public final class MaskingUtil {
         if (recipient == null || recipient.isBlank()) {
             return "";
         }
-        if (recipient.contains("@")) {
-            return maskEmail(recipient);
+        String trimmed = recipient.trim();
+        if (trimmed.contains("@")) {
+            return maskEmail(trimmed);
         }
-        return maskPhone(recipient);
+        if (PHONE_PATTERN.matcher(trimmed).matches()) {
+            return maskPhone(trimmed);
+        }
+        return maskToken(trimmed);
+    }
+
+    public static String maskRecipient(String recipient, NotificationChannel channel) {
+        if (recipient == null || recipient.isBlank()) {
+            return "";
+        }
+        if (channel == null) {
+            return maskRecipient(recipient);
+        }
+        String trimmed = recipient.trim();
+        return switch (channel) {
+            case EMAIL -> trimmed.contains("@") ? maskEmail(trimmed) : maskToken(trimmed);
+            case SMS -> maskPhone(trimmed);
+            case PUSH -> maskToken(trimmed);
+        };
+    }
+
+    public static String maskToken(String token) {
+        if (token == null || token.isBlank()) {
+            return "";
+        }
+        String trimmed = token.trim();
+        if (trimmed.length() <= 8) {
+            return "****";
+        }
+        return trimmed.substring(0, 4) + "****" + trimmed.substring(trimmed.length() - 4);
     }
 
     private static String maskEmail(String email) {

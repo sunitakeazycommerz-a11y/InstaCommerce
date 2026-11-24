@@ -6,6 +6,7 @@ import jakarta.validation.Valid;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping({"/riders", "/api/riders"})
+@PreAuthorize("hasAnyRole('INTERNAL', 'INTERNAL_SERVICE', 'ADMIN')")
 public class RiderAssignmentController {
     private final RiderAssignmentService assignmentService;
 
@@ -38,8 +40,13 @@ public class RiderAssignmentController {
     }
 
     @PostMapping("/assignments/{orderId}/complete")
-    public ResponseEntity<Void> completeDelivery(@PathVariable UUID orderId) {
-        assignmentService.completeDelivery(orderId);
+    public ResponseEntity<Void> completeDelivery(@PathVariable UUID orderId,
+                                                 @RequestParam(required = false, defaultValue = "0") long tipCents) {
+        if (tipCents > 0) {
+            assignmentService.completeDelivery(orderId, tipCents);
+        } else {
+            assignmentService.completeDelivery(orderId);
+        }
         return ResponseEntity.ok().build();
     }
 

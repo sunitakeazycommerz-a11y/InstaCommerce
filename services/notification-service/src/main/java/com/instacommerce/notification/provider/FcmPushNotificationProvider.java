@@ -2,6 +2,7 @@ package com.instacommerce.notification.provider;
 
 import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.notification.domain.model.NotificationChannel;
+import com.instacommerce.notification.service.MaskingUtil;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import java.time.Duration;
 import java.util.Map;
@@ -9,6 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -20,21 +23,30 @@ import org.springframework.web.client.RestClient;
 @Profile({"prod", "gcp"})
 public class FcmPushNotificationProvider implements NotificationProvider {
     private static final Logger logger = LoggerFactory.getLogger(FcmPushNotificationProvider.class);
+    private static final String LOCAL_PLACEHOLDER_PREFIX = "local_fcm_placeholder";
 
     private final RestClient restClient;
     private final NotificationProperties notificationProperties;
+    private final Environment environment;
 
     @Autowired
     public FcmPushNotificationProvider(RestClient.Builder builder,
-                                       NotificationProperties notificationProperties) {
+                                       NotificationProperties notificationProperties,
+                                       Environment environment) {
         this.restClient = builder
             .requestFactory(requestFactory())
             .build();
         this.notificationProperties = notificationProperties;
+        this.environment = environment;
+    }
+
+    public FcmPushNotificationProvider(RestClient.Builder builder,
+                                       NotificationProperties notificationProperties) {
+        this(builder, notificationProperties, null);
     }
 
     public FcmPushNotificationProvider(NotificationProperties notificationProperties) {
-        this(RestClient.builder(), notificationProperties);
+        this(RestClient.builder(), notificationProperties, null);
     }
 
     private static SimpleClientHttpRequestFactory requestFactory() {
@@ -53,6 +65,16 @@ public class FcmPushNotificationProvider implements NotificationProvider {
     @CircuitBreaker(name = "pushProvider", fallbackMethod = "pushFallback")
     public String send(NotificationSendRequest request) {
         NotificationProperties.Fcm fcm = notificationProperties.getProviders().getFcm();
+        boolean placeholder = fcm.getAccessToken() != null
+            && fcm.getAccessToken().trim().startsWith(LOCAL_PLACEHOLDER_PREFIX);
+        if (placeholder) {
+            if (isLocalNonProdProfile()) {
+                logger.info("Local noop PUSH dispatch to {} title={}",
+                    MaskingUtil.maskRecipient(request.recipient(), NotificationChannel.PUSH), request.subject());
+                return "local-noop:fcm";
+            }
+            throw new ProviderPermanentException("FCM local placeholder credentials cannot be used outside local profile");
+        }
         if (isBlank(fcm.getProjectId()) || isBlank(fcm.getAccessToken())) {
             throw new ProviderPermanentException("FCM push credentials are not configured");
         }
@@ -91,9 +113,16 @@ public class FcmPushNotificationProvider implements NotificationProvider {
         }
     }
 
+    private boolean isLocalNonProdProfile() {
+        return environment != null
+            && environment.acceptsProfiles(Profiles.of("local"))
+            && !environment.acceptsProfiles(Profiles.of("prod", "gcp"));
+    }
+
     @SuppressWarnings("unused")
     private String pushFallback(NotificationSendRequest request, Exception ex) {
-        logger.warn("notification.circuit_breaker_open provider=push recipient={}", request.recipient(), ex);
+        logger.warn("notification.circuit_breaker_open provider=push recipient={}",
+            MaskingUtil.maskRecipient(request.recipient(), NotificationChannel.PUSH), ex);
         throw new ProviderTemporaryException("Push provider circuit breaker open", ex);
     }
 

@@ -5,7 +5,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -165,5 +167,24 @@ class RoutingRemediationTest {
         ds.advanceOrderDispatched(delivery.orderId(), delivery.riderId());
         verify(outbox, Mockito.times(2)).publish(eq("Delivery"), eq(deliveryId.toString()),
             eq("DeliveryStatusUpdated"), any());
+    }
+
+    @Test
+    @WithMockUser(username = "customer-1", roles = {"USER"})
+    @DisplayName("GET /deliveries/{id}/tracking returns paginated tracking history")
+    void deliveryControllerTrackingHistoryIsPaginated() throws Exception {
+        UUID deliveryId = UUID.randomUUID();
+        var point = new com.instacommerce.routing.dto.response.TrackingResponse(
+            new BigDecimal("12.9716"), new BigDecimal("77.5946"),
+            new BigDecimal("24"), new BigDecimal("90"), java.time.Instant.now());
+        when(trackingService.getTrackingHistory(eq(deliveryId), any()))
+            .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(point)));
+
+        mockMvc.perform(get("/deliveries/{id}/tracking", deliveryId)
+                .param("page", "0")
+                .param("size", "20"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content[0].latitude").value(12.9716))
+            .andExpect(jsonPath("$.totalElements").value(1));
     }
 }

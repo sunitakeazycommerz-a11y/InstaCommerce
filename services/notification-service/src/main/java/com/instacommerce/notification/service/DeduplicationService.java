@@ -25,6 +25,13 @@ public class DeduplicationService {
     }
 
     public NotificationLog createLog(NotificationRequest request, String maskedRecipient) {
+        return createLog(request, maskedRecipient, null, null);
+    }
+
+    public NotificationLog createLog(NotificationRequest request,
+                                     String maskedRecipient,
+                                     String subject,
+                                     String body) {
         NotificationLog log = new NotificationLog();
         log.setUserId(request.userId());
         log.setEventId(request.eventId());
@@ -33,8 +40,14 @@ public class DeduplicationService {
         log.setTemplateId(request.templateId());
         String sanitizedRecipient = (maskedRecipient != null && !maskedRecipient.isBlank())
             ? maskedRecipient
-            : MaskingUtil.maskRecipient(request.recipient());
+            : MaskingUtil.maskRecipient(request.recipient(), request.channel());
         log.setRecipient(sanitizedRecipient);
+        if (subject != null) {
+            log.setSubject(subject);
+        }
+        if (body != null) {
+            log.setBody(body);
+        }
         log.setStatus(NotificationStatus.PENDING);
         Map<String, Object> safeVariables = MaskingUtil.stripPiiVariables(request.variables());
         if (!safeVariables.isEmpty()) {

@@ -41,6 +41,12 @@ public class RiderAssignment {
     @Column(name = "cancellation_reason", length = 255)
     private String cancellationReason;
 
+    @Column(name = "distance_km")
+    private Double distanceKm;
+
+    @Column(name = "order_weight_grams")
+    private Integer orderWeightGrams;
+
     @PrePersist
     void prePersist() {
         if (assignedAt == null) {
@@ -118,5 +124,21 @@ public class RiderAssignment {
 
     public void setCancellationReason(String cancellationReason) {
         this.cancellationReason = cancellationReason;
+    }
+
+    public Double getDistanceKm() {
+        return distanceKm;
+    }
+
+    public void setDistanceKm(Double distanceKm) {
+        this.distanceKm = distanceKm;
+    }
+
+    public Integer getOrderWeightGrams() {
+        return orderWeightGrams;
+    }
+
+    public void setOrderWeightGrams(Integer orderWeightGrams) {
+        this.orderWeightGrams = orderWeightGrams;
     }
 }

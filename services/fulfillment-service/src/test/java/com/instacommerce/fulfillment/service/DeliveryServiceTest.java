@@ -358,6 +358,64 @@ class DeliveryServiceTest {
         verify(eventPublisher, never()).publishEvent(any());
     }
 
+    @Test
+    void syncRiderAssignmentCreatesDeliveryProjectionWithOtpAndEnablesHandoff() {
+        UUID orderId = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        PickTask task = newPickTask(orderId, PickTaskStatus.COMPLETED);
+        task.setStoreId(storeId);
+        task.setColdChainRequired(true);
+
+        when(pickTaskRepository.findByOrderId(orderId)).thenReturn(Optional.of(task));
+        when(deliveryRepository.findByOrderId(orderId)).thenReturn(Optional.empty());
+        when(riderRepository.findById(riderId)).thenReturn(Optional.empty());
+        when(deliveryRepository.save(any(Delivery.class))).thenAnswer(inv -> {
+            Delivery saved = inv.getArgument(0);
+            if (saved.getId() == null) {
+                saved.setId(UUID.randomUUID());
+            }
+            return saved;
+        });
+
+        DeliveryResponse response = deliveryService.syncRiderAssignment(
+            orderId, riderId, storeId, "Kiran Rider", null);
+
+        assertThat(response.status()).isEqualTo(DeliveryStatus.ASSIGNED.name());
+        assertThat(response.riderId()).isEqualTo(riderId);
+        assertThat(response.estimatedMinutes()).isEqualTo(15);
+        assertThat(response.dispatchOtp()).matches("\\d{6}");
+        assertThat(response.coldChainRequired()).isTrue();
+        verify(riderRepository).insertProjectionIfAbsent(riderId, "Kiran Rider", storeId, false);
+        verify(outboxService, never()).publish(any(), any(), eq("OrderDispatched"), any());
+    }
+
+    @Test
+    void syncRiderAssignmentIsIdempotentAndDoesNotDowngradePickedUpDelivery() {
+        UUID orderId = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        Rider rider = newRider(riderId, false);
+
+        Delivery existingAssigned = newDelivery(orderId, DeliveryStatus.ASSIGNED, rider);
+        existingAssigned.setDispatchOtp("654321");
+        when(deliveryRepository.findByOrderId(orderId)).thenReturn(Optional.of(existingAssigned));
+
+        DeliveryResponse replay = deliveryService.syncRiderAssignment(orderId, riderId, storeId, "Vikram", 10);
+        assertThat(replay.dispatchOtp()).isEqualTo("654321");
+        verify(deliveryRepository, never()).save(any());
+
+        Delivery pickedUp = newDelivery(orderId, DeliveryStatus.PICKED_UP, rider);
+        pickedUp.setDispatchOtp("111222");
+        when(deliveryRepository.findByOrderId(orderId)).thenReturn(Optional.of(pickedUp));
+
+        DeliveryResponse active = deliveryService.syncRiderAssignment(
+            orderId, UUID.randomUUID(), storeId, "Other Rider", 12);
+        assertThat(active.status()).isEqualTo(DeliveryStatus.PICKED_UP.name());
+        assertThat(active.riderId()).isEqualTo(riderId);
+        verify(deliveryRepository, never()).save(any());
+    }
+
     private PickTask newPickTask(UUID orderId, PickTaskStatus status) {
         PickTask task = new PickTask();
         task.setId(UUID.randomUUID());

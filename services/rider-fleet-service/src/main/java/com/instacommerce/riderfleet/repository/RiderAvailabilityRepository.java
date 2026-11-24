@@ -30,6 +30,10 @@ public interface RiderAvailabilityRepository extends JpaRepository<RiderAvailabi
 
     List<RiderAvailability> findByIsAvailableTrueAndStoreId(UUID storeId);
 
+    List<RiderAvailability> findByStoreIdAndIsAvailableTrueAndRiderIdIn(UUID storeId, List<UUID> riderIds);
+
+    List<RiderAvailability> findByIsAvailableTrueAndRiderIdIn(List<UUID> riderIds);
+
     @Query(value = """
         SELECT ra.* FROM rider_availability ra
         JOIN riders r ON r.id = ra.rider_id

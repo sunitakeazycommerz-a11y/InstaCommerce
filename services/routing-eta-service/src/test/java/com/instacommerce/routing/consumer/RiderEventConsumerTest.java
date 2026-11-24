@@ -243,4 +243,58 @@ class RiderEventConsumerTest {
         assertDoesNotThrow(() -> consumer.handleRiderEvent(message));
         verifyNoInteractions(deliveryService);
     }
+
+    @Test
+    void propagatesVehicleTypeWhenPresentInCamelOrSnakeCase() {
+        UUID orderId1 = UUID.randomUUID();
+        UUID orderId2 = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+
+        String camelJson = """
+            {
+              "eventType": "RiderAssigned",
+              "payload": {
+                "orderId": "%s",
+                "riderId": "%s",
+                "storeId": "%s",
+                "vehicleType": "BICYCLE",
+                "pickupLat": 12.9716,
+                "pickupLng": 77.5946,
+                "dropoffLat": 12.9352,
+                "dropoffLng": 77.6245
+              }
+            }
+            """.formatted(orderId1, riderId, storeId);
+
+        String snakeJson = """
+            {
+              "event_type": "RiderAssigned",
+              "payload": {
+                "order_id": "%s",
+                "rider_id": "%s",
+                "store_id": "%s",
+                "vehicle_type": "CAR",
+                "pickup_lat": 12.9716,
+                "pickup_lng": 77.5946,
+                "dropoff_lat": 12.9352,
+                "dropoff_lng": 77.6245
+              }
+            }
+            """.formatted(orderId2, riderId, storeId);
+
+        assertDoesNotThrow(() -> consumer.handleRiderEvent(camelJson));
+        assertDoesNotThrow(() -> consumer.handleRiderEvent(snakeJson));
+
+        verify(deliveryService).createDelivery(
+            eq(orderId1), eq(riderId), eq(storeId),
+            eq(new BigDecimal("12.9716")), eq(new BigDecimal("77.5946")),
+            eq(new BigDecimal("12.9352")), eq(new BigDecimal("77.6245")),
+            eq("BICYCLE"));
+        verify(deliveryService).createDelivery(
+            eq(orderId2), eq(riderId), eq(storeId),
+            eq(new BigDecimal("12.9716")), eq(new BigDecimal("77.5946")),
+            eq(new BigDecimal("12.9352")), eq(new BigDecimal("77.6245")),
+            eq("CAR"));
+    }
 }

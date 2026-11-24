@@ -108,7 +108,7 @@ public class ChannelFallbackService {
                 effectiveVariables
             );
             NotificationLog fallbackLog = deduplicationService.createLog(
-                fallbackRequest, MaskingUtil.maskRecipient(recipient));
+                fallbackRequest, MaskingUtil.maskRecipient(recipient, fallbackChannel));
             if (fallbackLog == null) {
                 fallbackChannel = nextChannel(fallbackChannel);
                 continue;

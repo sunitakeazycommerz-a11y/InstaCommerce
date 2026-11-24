@@ -43,9 +43,12 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/error").permitAll()
                 .requestMatchers("/admin/**").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.POST, "/riders/assign", "/riders/assignments/**")
+                .requestMatchers(HttpMethod.POST,
+                        "/riders/assign", "/riders/assignments/**",
+                        "/api/riders/assign", "/api/riders/assignments/**")
                     .hasAnyRole("INTERNAL", "INTERNAL_SERVICE", "ADMIN")
-                .requestMatchers(HttpMethod.GET, "/riders/available").hasAnyRole("INTERNAL", "INTERNAL_SERVICE", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/riders/available", "/api/riders/available")
+                    .hasAnyRole("INTERNAL", "INTERNAL_SERVICE", "ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)
