@@ -8,6 +8,7 @@ import com.instacommerce.checkout.dto.PricingResult;
 import com.instacommerce.checkout.workflow.activity.CompensationDlqActivity;
 import com.instacommerce.checkout.workflow.activity.CouponActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
+import com.instacommerce.checkout.workflow.activity.PromotionActivity;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
 import io.temporal.workflow.Workflow;
@@ -27,6 +28,8 @@ final class CheckoutWorkflowSupport {
         "com.instacommerce.pricing.exception.InvalidCouponException";
     static final String COUPON_NOT_FOUND_EXCEPTION =
         "com.instacommerce.pricing.exception.CouponNotFoundException";
+    static final String CHECKOUT_EXCEPTION =
+        "com.instacommerce.checkout.exception.CheckoutException";
 
     private static final Map<String, String> FAILURE_MESSAGES = Map.of(
         "VALIDATING_CART", "Cart validation failed. Please retry.",
@@ -36,6 +39,7 @@ final class CheckoutWorkflowSupport {
         "AUTHORIZING_PAYMENT", "Payment authorization failed. Please retry.",
         "CREATING_ORDER", "Order creation failed. Please retry.",
         "REDEEMING_COUPON", "Coupon redemption failed. Please retry.",
+        "REDEEMING_PROMOTION", "Promotion redemption failed. Please retry.",
         "CONFIRMING", "Order confirmation failed. Please retry."
     );
 
@@ -176,6 +180,17 @@ final class CheckoutWorkflowSupport {
                 compensationCouponActivity.rollbackUsage(couponCode, userId);
             }
         });
+    }
+
+    static void safeRollbackPromotion(String workflowId,
+                                      CompensationDlqActivity dlqActivity,
+                                      PromotionActivity compensationPromotionActivity,
+                                      String promotionId,
+                                      String userId,
+                                      String orderId) {
+        String targetId = promotionId + ":" + userId + ":" + orderId;
+        runWithDlq(workflowId, dlqActivity, "rollbackPromotion", targetId, null, () ->
+            compensationPromotionActivity.rollbackPromotion(promotionId, userId, orderId));
     }
 
     static void runWithDlq(String workflowId,

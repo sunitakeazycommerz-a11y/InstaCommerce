@@ -1,0 +1,44 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  datasource:
+    password: ${CHECKOUT_DB_PASSWORD:devpass}
+
+checkout:
+  jwt:
+    public-key: ${CHECKOUT_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+  clients:
+    cart:
+      base-url: ${CART_SERVICE_URL:http://localhost:8090}
+    pricing:
+      base-url: ${PRICING_SERVICE_URL:http://localhost:8089}
+    inventory:
+      base-url: ${INVENTORY_SERVICE_URL:http://localhost:8083}
+    payment:
+      base-url: ${PAYMENT_SERVICE_URL:http://localhost:8085}
+    order:
+      base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
+    wallet:
+      base-url: ${WALLET_SERVICE_URL:http://localhost:8095}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:0.0}
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

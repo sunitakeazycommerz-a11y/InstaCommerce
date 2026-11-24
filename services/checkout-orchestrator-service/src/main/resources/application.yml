@@ -8,6 +8,8 @@ spring:
   http:
     converters:
       preferred-json-mapper: jackson2
+  config:
+    import: optional:sm://
   lifecycle:
     timeout-per-shutdown-phase: 30s
   datasource:

@@ -4,6 +4,7 @@ import com.instacommerce.wallet.exception.ApiException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Duration;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -82,12 +83,34 @@ public class PaymentClient {
     /**
      * Response model for the payment-service GET /api/v1/payments/{paymentReference} endpoint.
      */
-    public record PaymentResponse(String paymentReference, String status, long amountCents, String currency) {
+    public record PaymentResponse(
+            String paymentReference,
+            String status,
+            long amountCents,
+            String currency,
+            UUID userId,
+            String purpose) {
+
+        public PaymentResponse(String paymentReference, String status, long amountCents, String currency) {
+            this(paymentReference, status, amountCents, currency, null, null);
+        }
+
+        public PaymentResponse(String paymentReference, String status, long amountCents, String currency, UUID userId) {
+            this(paymentReference, status, amountCents, currency, userId, null);
+        }
 
         /** Returns true if the payment has been completed or captured successfully. */
         public boolean isCompleted() {
             return "CAPTURED".equalsIgnoreCase(status)
                     || "COMPLETED".equalsIgnoreCase(status);
+        }
+
+        /** Returns true if payment purpose is unset or explicitly scoped for wallet top-up. */
+        public boolean isTopUpEligiblePurpose() {
+            return purpose == null
+                    || purpose.isBlank()
+                    || "WALLET_TOPUP".equalsIgnoreCase(purpose)
+                    || "TOPUP".equalsIgnoreCase(purpose);
         }
     }
 }

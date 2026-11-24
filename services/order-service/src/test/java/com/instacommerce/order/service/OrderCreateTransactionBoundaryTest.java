@@ -178,7 +178,7 @@ class OrderCreateTransactionBoundaryTest {
         List<Boolean> txActiveStates = new ArrayList<>();
 
         when(orderRepository.findByIdempotencyKey("checkout-wf1:order:create")).thenReturn(Optional.empty());
-        when(pricingQuoteClient.validateQuote(quoteId, "token-1", 800L, 1000L, 200L))
+        when(pricingQuoteClient.validateQuote(any(UUID.class), eq(quoteId), eq("token-1"), eq(800L), eq(1000L), eq(200L)))
             .thenAnswer(inv -> {
                 txActiveStates.add(TransactionSynchronizationManager.isActualTransactionActive());
                 return true;
@@ -207,7 +207,7 @@ class OrderCreateTransactionBoundaryTest {
     void quoteFailureDoesNotOpenPersistenceTransaction() {
         UUID quoteId = UUID.randomUUID();
         when(orderRepository.findByIdempotencyKey("checkout-wf2:order:create")).thenReturn(Optional.empty());
-        when(pricingQuoteClient.validateQuote(quoteId, "bad-token", 800L, 1000L, 200L)).thenReturn(false);
+        when(pricingQuoteClient.validateQuote(any(UUID.class), eq(quoteId), eq("bad-token"), eq(800L), eq(1000L), eq(200L))).thenReturn(false);
 
         CreateOrderCommand command = commandBuilder("checkout-wf2:order:create", quoteId, "bad-token").build();
 

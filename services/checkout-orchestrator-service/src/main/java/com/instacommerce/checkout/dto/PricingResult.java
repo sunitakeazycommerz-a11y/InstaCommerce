@@ -16,9 +16,14 @@ public record PricingResult(
     String quoteToken,
     String appliedCoupon,
     long couponDiscountCents,
-    List<String> appliedPromotions
+    List<String> appliedPromotions,
+    List<AppliedPromotionDetail> appliedPromotionDetails
 ) {
     public static final String DEFAULT_CURRENCY = "INR";
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record AppliedPromotionDetail(String promotionId, String name, long discountCents) {
+    }
 
     public PricingResult(
         long subtotalCents,
@@ -30,7 +35,23 @@ public record PricingResult(
         String quoteToken
     ) {
         this(subtotalCents, discountCents, deliveryFeeCents, totalCents, currency, quoteId, quoteToken,
-            null, 0L, List.of());
+            null, 0L, List.of(), List.of());
+    }
+
+    public PricingResult(
+        long subtotalCents,
+        long discountCents,
+        long deliveryFeeCents,
+        long totalCents,
+        String currency,
+        String quoteId,
+        String quoteToken,
+        String appliedCoupon,
+        long couponDiscountCents,
+        List<String> appliedPromotions
+    ) {
+        this(subtotalCents, discountCents, deliveryFeeCents, totalCents, currency, quoteId, quoteToken,
+            appliedCoupon, couponDiscountCents, appliedPromotions, List.of());
     }
 
     @JsonCreator
@@ -44,7 +65,8 @@ public record PricingResult(
         @JsonProperty("quoteToken") String quoteToken,
         @JsonProperty("appliedCoupon") String appliedCoupon,
         @JsonProperty("couponDiscountCents") Long couponDiscountCents,
-        @JsonProperty("appliedPromotions") List<String> appliedPromotions
+        @JsonProperty("appliedPromotions") List<String> appliedPromotions,
+        @JsonProperty("appliedPromotionDetails") List<AppliedPromotionDetail> appliedPromotionDetails
     ) {
         this(
             subtotalCents,
@@ -56,7 +78,8 @@ public record PricingResult(
             quoteToken,
             (appliedCoupon != null && !appliedCoupon.isBlank()) ? appliedCoupon : null,
             resolveCouponDiscountCents(discountCents, appliedCoupon, couponDiscountCents, appliedPromotions),
-            appliedPromotions != null ? List.copyOf(appliedPromotions) : List.of()
+            appliedPromotions != null ? List.copyOf(appliedPromotions) : List.of(),
+            appliedPromotionDetails != null ? List.copyOf(appliedPromotionDetails) : List.of()
         );
     }
 

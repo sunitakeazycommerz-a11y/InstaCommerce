@@ -38,6 +38,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -77,7 +78,8 @@ public class CheckoutController {
             @AuthenticationPrincipal String principal,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "X-Tenant-Id", required = false) String tenantId,
-            @RequestHeader(value = "X-Store-Id", required = false) String storeId) {
+            @RequestHeader(value = "X-Store-Id", required = false) String storeId,
+            @RequestParam(value = "async", defaultValue = "false") boolean async) {
 
         if (!checkoutRateLimiter.tryAcquire()) {
             log.warn("Checkout request rate limit exceeded under flash sale traffic");
@@ -112,9 +114,14 @@ public class CheckoutController {
 
             CheckoutWorkflow workflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, options);
 
-            log.info("Starting checkout saga workflowId={} user={}", workflowId, principal);
+            log.info("Starting checkout saga workflowId={} user={} async={}", workflowId, principal, async);
             CheckoutResponse result;
             try {
+                if (async) {
+                    WorkflowClient.start(workflow::checkout, request);
+                    return ResponseEntity.accepted().body(
+                        new CheckoutResponse(null, "STARTED", 0, 0, workflowId));
+                }
                 result = workflow.checkout(request);
             } catch (WorkflowExecutionAlreadyStarted ex) {
                 return handleAlreadyStarted(workflowId, scopedIdempotencyKey);
@@ -142,12 +149,21 @@ public class CheckoutController {
     public ResponseEntity<CheckoutResponse> initiateCheckout(
             CheckoutRequest request,
             String principal,
+            String idempotencyKey,
+            String tenantId,
+            String storeId) {
+        return initiateCheckout(request, principal, idempotencyKey, tenantId, storeId, false);
+    }
+
+    public ResponseEntity<CheckoutResponse> initiateCheckout(
+            CheckoutRequest request,
+            String principal,
             String idempotencyKey) {
-        return initiateCheckout(request, principal, idempotencyKey, null, null);
+        return initiateCheckout(request, principal, idempotencyKey, null, null, false);
     }
 
     @GetMapping("/{workflowId}/status")
-    public ResponseEntity<Map<String, String>> getCheckoutStatus(
+    public ResponseEntity<Map<String, Object>> getCheckoutStatus(
             @PathVariable String workflowId,
             Authentication authentication) {
         if (!isAuthorizedForWorkflow(authentication, workflowId)) {
@@ -155,7 +171,19 @@ public class CheckoutController {
         }
         CheckoutWorkflow workflow = workflowClient.newWorkflowStub(CheckoutWorkflow.class, workflowId);
         String status = workflow.getStatus();
-        return ResponseEntity.ok(Map.of("workflowId", workflowId, "status", status));
+        CheckoutResponse snapshot = null;
+        try {
+            snapshot = workflow.getResultSnapshot();
+        } catch (WorkflowException ex) {
+            log.debug("Result snapshot unavailable for workflowId={}: {}", workflowId, ex.getMessage());
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("workflowId", workflowId);
+        body.put("status", status);
+        if (snapshot != null) {
+            body.put("result", snapshot.workflowId() != null ? snapshot : snapshot.withWorkflowId(workflowId));
+        }
+        return ResponseEntity.ok(body);
     }
 
     private boolean isAuthorizedForWorkflow(Authentication authentication, String workflowId) {
@@ -194,14 +222,14 @@ public class CheckoutController {
         }
         if ("COMPLETED".equalsIgnoreCase(existingStatus)) {
             return ResponseEntity.accepted().body(
-                new CheckoutResponse(null, "CHECKOUT_ALREADY_COMPLETED", 0, 0));
+                new CheckoutResponse(null, "CHECKOUT_ALREADY_COMPLETED", 0, 0, workflowId));
         }
         if ("FAILED".equalsIgnoreCase(existingStatus)) {
             return ResponseEntity.accepted().body(
-                new CheckoutResponse(null, "CHECKOUT_ALREADY_FAILED", 0, 0));
+                new CheckoutResponse(null, "CHECKOUT_ALREADY_FAILED", 0, 0, workflowId));
         }
         return ResponseEntity.accepted().body(
-            new CheckoutResponse(null, "CHECKOUT_ALREADY_IN_PROGRESS: " + existingStatus, 0, 0));
+            new CheckoutResponse(null, "CHECKOUT_ALREADY_IN_PROGRESS: " + existingStatus, 0, 0, workflowId));
     }
 
     @GetMapping("/dlq")

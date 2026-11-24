@@ -72,6 +72,20 @@ public class WalletController {
             throw ex;
         }
 
+        if (payment.userId() == null || !payment.userId().equals(userId)) {
+            log.warn("Top-up REJECTED for user={}, paymentRef={}: ownership mismatch (paymentUserId={})",
+                    userId, request.paymentReference(), payment.userId());
+            throw new ApiException(HttpStatus.FORBIDDEN, "PAYMENT_OWNERSHIP_MISMATCH",
+                    "Payment reference does not belong to the authenticated user");
+        }
+
+        if (!payment.isTopUpEligiblePurpose()) {
+            log.warn("Top-up REJECTED for user={}, paymentRef={}: invalid purpose '{}'",
+                    userId, request.paymentReference(), payment.purpose());
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PAYMENT_PURPOSE",
+                    "Payment is not eligible for wallet top-up. Purpose: " + payment.purpose());
+        }
+
         if (!payment.isCompleted()) {
             log.warn("Top-up REJECTED for user={}, paymentRef={}: payment status is '{}'",
                     userId, request.paymentReference(), payment.status());

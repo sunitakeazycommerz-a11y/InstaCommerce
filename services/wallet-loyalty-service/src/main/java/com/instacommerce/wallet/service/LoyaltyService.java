@@ -4,16 +4,19 @@ import com.instacommerce.wallet.config.WalletProperties;
 import com.instacommerce.wallet.domain.model.LoyaltyAccount;
 import com.instacommerce.wallet.domain.model.LoyaltyTier;
 import com.instacommerce.wallet.domain.model.LoyaltyTransaction;
+import com.instacommerce.wallet.domain.model.WalletTransaction;
 import com.instacommerce.wallet.dto.response.LoyaltyResponse;
 import com.instacommerce.wallet.exception.ApiException;
 import com.instacommerce.wallet.exception.DuplicateTransactionException;
 import com.instacommerce.wallet.repository.LoyaltyAccountRepository;
 import com.instacommerce.wallet.repository.LoyaltyTransactionRepository;
+import jakarta.annotation.Nullable;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -30,15 +33,26 @@ public class LoyaltyService {
     private final LoyaltyTransactionRepository transactionRepository;
     private final WalletProperties walletProperties;
     private final OutboxService outboxService;
+    private final WalletService walletService;
 
     public LoyaltyService(LoyaltyAccountRepository accountRepository,
                           LoyaltyTransactionRepository transactionRepository,
                           WalletProperties walletProperties,
                           OutboxService outboxService) {
+        this(accountRepository, transactionRepository, walletProperties, outboxService, null);
+    }
+
+    @Autowired
+    public LoyaltyService(LoyaltyAccountRepository accountRepository,
+                          LoyaltyTransactionRepository transactionRepository,
+                          WalletProperties walletProperties,
+                          OutboxService outboxService,
+                          @Nullable WalletService walletService) {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
         this.walletProperties = walletProperties;
         this.outboxService = outboxService;
+        this.walletService = walletService;
     }
 
     @Transactional(readOnly = true)
@@ -135,10 +149,31 @@ public class LoyaltyService {
             throw new DuplicateTransactionException("Transaction already exists for ref=REDEMPTION/" + normalizedOrderId);
         }
 
-        log.info("Redeemed {} points for user={}", points, userId);
-        outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed",
-            buildPointEventPayload(txn, account, userId, normalizedOrderId, points, "REDEMPTION"));
-        return toResponse(account);
+        long pointsToPaiseRate = walletProperties.getLoyalty().getPointsToPaiseRate();
+        long walletCreditCents = (walletService != null && pointsToPaiseRate > 0)
+            ? Math.multiplyExact((long) points, pointsToPaiseRate)
+            : 0L;
+        if (walletCreditCents > 0) {
+            walletService.credit(
+                userId,
+                walletCreditCents,
+                WalletTransaction.ReferenceType.PROMOTION,
+                "loyalty-redeem-" + normalizedOrderId,
+                "Loyalty points redemption (" + points + " pts)"
+            );
+        }
+
+        Map<String, Object> eventPayload = buildPointEventPayload(
+            txn, account, userId, normalizedOrderId, points, "REDEMPTION");
+        eventPayload.put("walletCreditCents", walletCreditCents);
+        log.info("Redeemed {} points for user={} walletCreditCents={}", points, userId, walletCreditCents);
+        outboxService.publish("Loyalty", account.getId().toString(), "PointsRedeemed", eventPayload);
+        return new LoyaltyResponse(
+            account.getPointsBalance(),
+            account.getTier().name(),
+            account.getLifetimePoints(),
+            walletCreditCents
+        );
     }
 
     private int computeCappedEarnedPoints(long orderTotalCents, int pointsPerRupee) {

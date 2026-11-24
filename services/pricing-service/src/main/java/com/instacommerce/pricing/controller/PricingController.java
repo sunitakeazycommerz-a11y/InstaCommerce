@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -71,8 +72,12 @@ public class PricingController {
 
     @GetMapping("/products/{id}")
     @RateLimiter(name = "pricingLimiter")
-    public ResponseEntity<PricedItem> getProductPrice(@PathVariable UUID id) {
-        long priceCents = pricingService.calculatePrice(id);
+    public ResponseEntity<PricedItem> getProductPrice(
+            @PathVariable UUID id,
+            @RequestParam(value = "storeId", required = false) UUID storeId) {
+        long priceCents = storeId != null
+                ? pricingService.calculatePrice(id, storeId)
+                : pricingService.calculatePrice(id);
         PricedItem item = new PricedItem(id, priceCents, 1, priceCents, "INR");
         return ResponseEntity.ok(item);
     }
@@ -133,12 +138,20 @@ public class PricingController {
     @RateLimiter(name = "pricingLimiter")
     public ResponseEntity<QuoteValidationResponse> validateQuote(
             @Valid @RequestBody QuoteValidationRequest request) {
-        QuoteTokenService.ValidationResult result = quoteTokenService.validate(
-                request.quoteId(),
-                request.quoteToken(),
-                request.totalCents(),
-                request.subtotalCents(),
-                request.discountCents());
+        QuoteTokenService.ValidationResult result = request.userId() != null
+                ? quoteTokenService.validate(
+                        request.quoteId(),
+                        request.quoteToken(),
+                        request.totalCents(),
+                        request.subtotalCents(),
+                        request.discountCents(),
+                        request.userId())
+                : quoteTokenService.validate(
+                        request.quoteId(),
+                        request.quoteToken(),
+                        request.totalCents(),
+                        request.subtotalCents(),
+                        request.discountCents());
 
         QuoteValidationResponse response = new QuoteValidationResponse(result.isValid(), result.reason());
 

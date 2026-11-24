@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -19,6 +20,7 @@ import com.instacommerce.pricing.domain.PromotionRedemption;
 import com.instacommerce.pricing.dto.request.CartItem;
 import com.instacommerce.pricing.dto.request.CreatePromotionRequest;
 import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
+import com.instacommerce.pricing.dto.request.UpdatePromotionRequest;
 import com.instacommerce.pricing.dto.response.BatchPriceResponse;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
 import com.instacommerce.pricing.dto.response.PricedItem;
@@ -97,6 +99,9 @@ class PromotionServiceAndStackingBehaviorTest {
 
         assertThat(response.discountCents()).isEqualTo(4000L);
         assertThat(response.appliedPromotions()).containsExactly("FLASH_EXCLUSIVE_4000");
+        assertThat(response.appliedPromotionDetails()).containsExactly(
+                new PriceCalculationResponse.AppliedPromotionDetail(
+                        exclusivePromo.getId(), "FLASH_EXCLUSIVE_4000", 4000L));
         assertThat(response.appliedCoupon()).isNull();
         assertThat(response.couponDiscountCents()).isZero();
     }
@@ -436,5 +441,142 @@ class PromotionServiceAndStackingBehaviorTest {
                 new ConsumerRecord<>("catalog.events", 0, 2L, productId.toString(), "{not-json")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Failed to deserialize");
+    }
+
+    @Test
+    @DisplayName("Single-item cart loads active PriceRule via batch query instead of skipping loadActiveRules")
+    void oneItemCartLoadsActiveRuleViaBatchQuery() {
+        PriceRuleRepository ruleRepo = mock(PriceRuleRepository.class);
+        PromotionRepository promoRepo = mock(PromotionRepository.class);
+        PromotionRedemptionRepository promoRedemptionRepo = mock(PromotionRedemptionRepository.class);
+        PromotionService promoService = new PromotionService(promoRepo, mock(OutboxService.class), promoRedemptionRepo);
+        PriceQuoteRepository quoteRepo = mock(PriceQuoteRepository.class);
+        QuoteTokenProperties quoteProps = new QuoteTokenProperties();
+        quoteProps.setHmacSecret("test-pricing-hmac-secret-32-bytes-minimum");
+        QuoteTokenService quoteTokenService = new QuoteTokenService(quoteRepo, quoteProps);
+
+        PricingService pricingService = new PricingService(
+                ruleRepo, new ProductPriceLookupService(ruleRepo), promoService, mock(CouponService.class),
+                quoteTokenService, new DiscountCalculator(), new TaxCalculationService(), null);
+
+        UUID productId = UUID.randomUUID();
+        PriceRule batchRule = new PriceRule();
+        batchRule.setProductId(productId);
+        batchRule.setBasePriceCents(3000L);
+        batchRule.setMultiplier(BigDecimal.ONE);
+        when(ruleRepo.findActiveRulesByProductIds(anyCollection(), any())).thenReturn(List.of(batchRule));
+        when(promoRepo.findActivePromotions(any())).thenReturn(List.of());
+        when(quoteRepo.save(any(PriceQuote.class))).thenAnswer(inv -> {
+            PriceQuote q = inv.getArgument(0);
+            q.setId(UUID.randomUUID());
+            return q;
+        });
+
+        PriceCalculationResponse response = pricingService.calculateCartPrice(
+                new PriceCalculationRequest(List.of(new CartItem(productId, 2)), UUID.randomUUID(), null));
+
+        assertThat(response.subtotalCents()).isEqualTo(6000L);
+        verify(ruleRepo).findActiveRulesByProductIds(anyCollection(), any());
+        verify(ruleRepo, never()).findActiveRuleByProductId(any(), any());
+    }
+
+    @Test
+    @DisplayName("PromotionService emits PromotionCreated, PromotionUpdated, and PromotionDeactivated outbox events")
+    @SuppressWarnings("unchecked")
+    void promotionServiceEmitsCanonicalContractOutboxEvents() {
+        PromotionRepository promoRepo = mock(PromotionRepository.class);
+        OutboxService outboxService = mock(OutboxService.class);
+        PromotionService service = new PromotionService(promoRepo, outboxService, mock(PromotionRedemptionRepository.class));
+
+        UUID promoId = UUID.randomUUID();
+        Instant now = Instant.now();
+        when(promoRepo.save(any(Promotion.class))).thenAnswer(inv -> {
+            Promotion p = inv.getArgument(0);
+            if (p.getId() == null) {
+                p.setId(promoId);
+            }
+            return p;
+        });
+
+        service.create(new CreatePromotionRequest(
+                "SAVE_NOW", "desc", "FIXED_AMOUNT", BigDecimal.valueOf(500), 1000L, null,
+                now.minusSeconds(60), now.plusSeconds(3600), 100));
+
+        ArgumentCaptor<Map<String, Object>> createdPayload = ArgumentCaptor.forClass(Map.class);
+        verify(outboxService).recordEvent(eq("pricing"), eq(promoId.toString()), eq("PromotionCreated"), createdPayload.capture());
+        assertThat(createdPayload.getValue()).containsKeys("id", "name", "discountType", "discountValue", "minOrderCents", "active", "createdAt");
+
+        Promotion existing = new Promotion();
+        existing.setId(promoId);
+        existing.setName("SAVE_NOW");
+        existing.setDiscountType("FIXED_AMOUNT");
+        existing.setDiscountValue(BigDecimal.valueOf(500));
+        existing.setMinOrderCents(1000L);
+        existing.setStartAt(now.minusSeconds(60));
+        existing.setEndAt(now.plusSeconds(3600));
+        existing.setActive(true);
+        when(promoRepo.findById(promoId)).thenReturn(Optional.of(existing));
+
+        service.update(promoId, new UpdatePromotionRequest(
+                "SAVE_MORE", null, null, null, null, null, null, null, null, null));
+        ArgumentCaptor<Map<String, Object>> updatedPayload = ArgumentCaptor.forClass(Map.class);
+        verify(outboxService).recordEvent(eq("pricing"), eq(promoId.toString()), eq("PromotionUpdated"), updatedPayload.capture());
+        assertThat(updatedPayload.getValue()).containsKeys("id", "name", "active", "updatedAt");
+
+        service.delete(promoId);
+        ArgumentCaptor<Map<String, Object>> deactivatedPayload = ArgumentCaptor.forClass(Map.class);
+        verify(outboxService).recordEvent(eq("pricing"), eq(promoId.toString()), eq("PromotionDeactivated"), deactivatedPayload.capture());
+        assertThat(deactivatedPayload.getValue()).containsEntry("active", false);
+        assertThat(deactivatedPayload.getValue()).containsKeys("id", "active", "deactivatedAt");
+    }
+
+    @Test
+    @DisplayName("QuoteTokenService guards null/blank tokens without NPE and enforces userId match")
+    void quoteTokenValidationGuardsNullTokenAndUserMismatch() {
+        PriceQuoteRepository quoteRepo = mock(PriceQuoteRepository.class);
+        QuoteTokenProperties props = new QuoteTokenProperties();
+        props.setHmacSecret("test-pricing-hmac-secret-32-bytes-minimum");
+        props.setValidationEnabled(true);
+        QuoteTokenService tokenService = new QuoteTokenService(quoteRepo, props);
+
+        UUID quoteOwner = UUID.randomUUID();
+        UUID otherUser = UUID.randomUUID();
+        UUID quoteId = UUID.randomUUID();
+
+        when(quoteRepo.save(any(PriceQuote.class))).thenAnswer(inv -> {
+            PriceQuote q = inv.getArgument(0);
+            q.setId(quoteId);
+            return q;
+        });
+
+        PriceCalculationResponse calc = new PriceCalculationResponse(
+                List.of(new PricedItem(UUID.randomUUID(), 1000L, 1, 1000L, "INR")),
+                1000L, 0L, 1000L, List.of(), null, null, null);
+        QuoteTokenService.QuoteResult issued = tokenService.issueQuote(quoteOwner, calc, null);
+
+        PriceQuote stored = new PriceQuote();
+        stored.setId(quoteId);
+        stored.setUserId(quoteOwner);
+        stored.setSubtotalCents(1000L);
+        stored.setDiscountCents(0L);
+        stored.setTotalCents(1000L);
+        stored.setExpiresAt(Instant.now().plusSeconds(120));
+        when(quoteRepo.findById(quoteId)).thenReturn(Optional.of(stored));
+
+        assertThat(tokenService.validate(quoteId, null, 1000L, 1000L, 0L, quoteOwner))
+                .satisfies(r -> {
+                    assertThat(r.isValid()).isFalse();
+                    assertThat(r.reason()).isEqualTo("MISSING_TOKEN");
+                });
+        assertThat(tokenService.validate(null, issued.quoteToken(), 1000L, 1000L, 0L, quoteOwner))
+                .satisfies(r -> {
+                    assertThat(r.isValid()).isFalse();
+                    assertThat(r.reason()).isEqualTo("MISSING_TOKEN");
+                });
+        assertThat(tokenService.validate(quoteId, issued.quoteToken(), 1000L, 1000L, 0L, otherUser))
+                .satisfies(r -> {
+                    assertThat(r.isValid()).isFalse();
+                    assertThat(r.reason()).isEqualTo("USER_MISMATCH");
+                });
     }
 }

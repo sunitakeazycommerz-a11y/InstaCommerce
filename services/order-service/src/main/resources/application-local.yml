@@ -1,0 +1,35 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  datasource:
+    password: ${ORDER_DB_PASSWORD:devpass}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+order:
+  jwt:
+    public-key: ${ORDER_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+  choreography:
+    fulfillment-consumer-enabled: ${ORDER_CHOREOGRAPHY_FULFILLMENT_CONSUMER_ENABLED:true}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:0.0}
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

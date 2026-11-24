@@ -2,8 +2,11 @@ package com.instacommerce.wallet.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -77,7 +80,8 @@ class WalletLoyaltyInternalAuthControllerTest {
         when(walletService.getTransactions(eq(shopperId), any(Pageable.class)))
             .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
         when(paymentClient.verifyPayment("pay-ref-1"))
-            .thenReturn(new PaymentClient.PaymentResponse("pay-ref-1", "CAPTURED", 1000L, "INR"));
+            .thenReturn(new PaymentClient.PaymentResponse(
+                "pay-ref-1", "CAPTURED", 1000L, "INR", shopperId, "WALLET_TOPUP"));
         when(walletService.credit(eq(shopperId), eq(1000L), eq(ReferenceType.TOPUP), any(), any()))
             .thenReturn(new WalletTransactionResponse(
                 "CREDIT", 1000L, 6000L, "TOPUP", "topup-pay-ref-1", "topup", Instant.now()));
@@ -233,5 +237,53 @@ class WalletLoyaltyInternalAuthControllerTest {
                 .principal(malformedAuth))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("INVALID_USER_ID"));
+    }
+
+    @Test
+    void topUpRejectsCrossUserMissingOwnerOrOrderPaymentBolaAttempts() throws Exception {
+        UUID callerId = UUID.randomUUID();
+        UUID victimOwnerId = UUID.randomUUID();
+        Authentication callerAuth = new UsernamePasswordAuthenticationToken(
+            callerId.toString(),
+            "jwt-token",
+            List.of(new SimpleGrantedAuthority("ROLE_USER")));
+
+        when(paymentClient.verifyPayment("victim-pay-ref"))
+            .thenReturn(new PaymentClient.PaymentResponse(
+                "victim-pay-ref", "CAPTURED", 5000L, "INR", victimOwnerId, "WALLET_TOPUP"));
+        mockMvc.perform(post("/wallet/topup")
+                .principal(callerAuth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"amountCents":5000,"paymentReference":"victim-pay-ref"}
+                    """))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("PAYMENT_OWNERSHIP_MISMATCH"));
+
+        when(paymentClient.verifyPayment("unowned-pay-ref"))
+            .thenReturn(new PaymentClient.PaymentResponse(
+                "unowned-pay-ref", "CAPTURED", 5000L, "INR", null, "WALLET_TOPUP"));
+        mockMvc.perform(post("/wallet/topup")
+                .principal(callerAuth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"amountCents":5000,"paymentReference":"unowned-pay-ref"}
+                    """))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("PAYMENT_OWNERSHIP_MISMATCH"));
+
+        when(paymentClient.verifyPayment("order-pay-ref"))
+            .thenReturn(new PaymentClient.PaymentResponse(
+                "order-pay-ref", "CAPTURED", 5000L, "INR", callerId, "ORDER_CHECKOUT"));
+        mockMvc.perform(post("/wallet/topup")
+                .principal(callerAuth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"amountCents":5000,"paymentReference":"order-pay-ref"}
+                    """))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_PAYMENT_PURPOSE"));
+
+        verify(walletService, never()).credit(any(), anyLong(), any(), anyString(), anyString());
     }
 }
