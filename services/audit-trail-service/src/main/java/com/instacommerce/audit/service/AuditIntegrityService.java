@@ -5,6 +5,7 @@ import com.instacommerce.audit.domain.model.AuditArchiveManifest;
 import com.instacommerce.audit.domain.model.AuditEvent;
 import com.instacommerce.audit.repository.AuditArchiveManifestRepository;
 import com.instacommerce.audit.repository.AuditEventRepository;
+import com.instacommerce.platform.web.PageableUtils;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
@@ -12,7 +13,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuditIntegrityService {
 
     private static final String VERIFIED_ARCHIVE_STATUS = "VERIFIED";
+    private static final int DEFAULT_BATCH_SIZE = 1000;
+    private static final int MAX_BATCH_SIZE = 5000;
     private static final Logger log = LoggerFactory.getLogger(AuditIntegrityService.class);
     private final AuditEventRepository repository;
     private final HashChainService hashChainService;
@@ -39,17 +41,19 @@ public class AuditIntegrityService {
 
     @Transactional(readOnly = true)
     public IntegrityReport verifyChain(Instant from, Instant to, int batchSize) {
+        int boundedBatchSize = PageableUtils.sanitize(
+                PageRequest.of(0, Math.max(1, batchSize)), DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE).getPageSize();
         long eventsVerified = 0;
         long chainBreaks = 0;
         String firstBreakSequence = null;
         String expectedPreviousHash = null;
         boolean initialAnchorValid = true;
 
-        int page = 0;
+        Long afterSequence = null;
         while (true) {
-            var pageRequest = PageRequest.of(page, batchSize, Sort.by("sequenceNumber"));
-            var events = repository.findChainedEvents(from, to, pageRequest);
-            if (events.isEmpty()) {
+            var pageRequest = PageRequest.of(0, boundedBatchSize);
+            var events = repository.findChainedEventsAfter(afterSequence, from, to, pageRequest);
+            if (events == null || events.isEmpty()) {
                 break;
             }
 
@@ -79,9 +83,12 @@ public class AuditIntegrityService {
                             recomputed, event.getEventHash(), anchorOk);
                 }
                 expectedPreviousHash = event.getEventHash();
+                afterSequence = event.getSequenceNumber();
                 eventsVerified++;
             }
-            page++;
+            if (events.size() < boundedBatchSize) {
+                break;
+            }
         }
 
         return new IntegrityReport(eventsVerified, chainBreaks, chainBreaks == 0, firstBreakSequence, Instant.now());

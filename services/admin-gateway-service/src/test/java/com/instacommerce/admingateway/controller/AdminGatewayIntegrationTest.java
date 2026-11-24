@@ -99,6 +99,8 @@ class AdminGatewayIntegrationTest {
     String closedUrl = "http://127.0.0.1:" + unreachablePort;
     registry.add("admin-gateway.upstream.feature-flag-url", () -> baseUrl);
     registry.add("admin-gateway.upstream.reconciliation-url", () -> baseUrl);
+    registry.add("admin-gateway.upstream.fraud-url", () -> baseUrl);
+    registry.add("admin-gateway.upstream.audit-url", () -> baseUrl);
     registry.add("audit-trail.base-url", () -> baseUrl);
     registry.add("admin-gateway.dashboard.services[0].name", () -> "config-feature-flag-service");
     registry.add("admin-gateway.dashboard.services[0].base-url", () -> baseUrl);
@@ -137,8 +139,14 @@ class AdminGatewayIntegrationTest {
     } else if ("/metrics".equals(path)) {
       contentType = "text/plain; version=0.0.4";
       response = "http_requests_total 10\ngo_goroutines 14\n";
-    } else if ("/flags".equals(path)) {
+    } else if ("/admin/flags".equals(path)) {
       response = "{\"canary\":true}";
+    } else if ("/admin/audit/events".equals(path)) {
+      response = "{\"content\":[{\"eventType\":\"FLAG_TOGGLED\"}]}";
+    } else if ("/admin/audit/integrity/verify".equals(path)) {
+      response = "{\"eventsVerified\":5,\"chainBreaks\":0,\"intact\":true}";
+    } else if ("/admin/fraud/allowlist".equals(path)) {
+      response = "[{\"entityType\":\"USER\",\"entityValue\":\"vip-user\"}]";
     } else if ("/reconciliation/runs".equals(path)) {
       response = "{\"count\":1,\"runs\":[{\"id\":\"run-1\",\"status\":\"COMPLETED\"}]}";
     } else if ("/audit/events".equals(path)) {
@@ -347,11 +355,22 @@ class AdminGatewayIntegrationTest {
         .andExpect(jsonPath("$.count").value(1));
 
     RecordedRequest flagsCall = recordedRequests.stream()
-        .filter(r -> "/flags".equals(r.path()))
+        .filter(r -> "/admin/flags".equals(r.path()))
         .findFirst()
         .orElseThrow();
     assertThat(flagsCall.internalService()).isEqualTo("admin-gateway-service");
     assertThat(flagsCall.internalToken()).isEqualTo("test-internal-service-token");
+
+    mvc.perform(get("/admin/v1/fraud/allowlist")
+        .header("Authorization", "Bearer " + apiAudAdminToken))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items[0].entityValue").value("vip-user"))
+        .andExpect(jsonPath("$.count").value(1));
+
+    mvc.perform(get("/admin/v1/audit/integrity/verify")
+        .header("Authorization", "Bearer " + apiAudAdminToken))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.intact").value(true));
 
     RecordedRequest summaryCall = recordedRequests.stream()
         .filter(r -> "/reconciliation/runs".equals(r.path()))

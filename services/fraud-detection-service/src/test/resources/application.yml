@@ -1,0 +1,9 @@
+spring:
+  config:
+    import: "optional:classpath:application-test-noop.properties"
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false

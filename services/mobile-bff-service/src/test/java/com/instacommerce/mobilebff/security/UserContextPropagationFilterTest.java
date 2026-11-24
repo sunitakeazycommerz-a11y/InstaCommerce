@@ -44,6 +44,9 @@ class UserContextPropagationFilterTest {
             .header("X-User-Roles", "ROLE_ADMIN")
             .header("X-Internal-Service", "spoofed-svc")
             .header("X-Internal-Token", "spoofed-secret")
+            .header("X-Customer-Tier", "VIP")
+            .header("X-Order-Value-Bracket", "HIGH")
+            .header("baggage", "customer_tier=VIP,order_value_bracket=HIGH")
             .build();
         MockServerWebExchange exchange = MockServerWebExchange.from(request);
         WebFilterChain chain = ex -> {
@@ -51,6 +54,9 @@ class UserContextPropagationFilterTest {
             assertThat(ex.getRequest().getHeaders().getFirst("X-User-Roles")).isNull();
             assertThat(ex.getRequest().getHeaders().getFirst("X-Internal-Service")).isNull();
             assertThat(ex.getRequest().getHeaders().getFirst("X-Internal-Token")).isNull();
+            assertThat(ex.getRequest().getHeaders().getFirst("X-Customer-Tier")).isNull();
+            assertThat(ex.getRequest().getHeaders().getFirst("X-Order-Value-Bracket")).isNull();
+            assertThat(ex.getRequest().getHeaders().getFirst("baggage")).isNull();
             return Mono.empty();
         };
 
@@ -69,6 +75,9 @@ class UserContextPropagationFilterTest {
             .header("X-User-Roles", "ROLE_ADMIN")
             .header("X-Internal-Service", "spoofed-svc")
             .header("X-Internal-Token", "spoofed-secret")
+            .header("X-Customer-Tier", "PLATINUM")
+            .header("X-Order-Value-Bracket", "ULTRA")
+            .header("baggage", "customer_tier=PLATINUM")
             .build();
         MockServerWebExchange exchange = MockServerWebExchange.from(request);
         WebFilterChain chain = ex -> {
@@ -76,6 +85,9 @@ class UserContextPropagationFilterTest {
             assertThat(ex.getRequest().getHeaders().getFirst("X-User-Roles")).isNull();
             assertThat(ex.getRequest().getHeaders().getFirst("X-Internal-Service")).isNull();
             assertThat(ex.getRequest().getHeaders().getFirst("X-Internal-Token")).isNull();
+            assertThat(ex.getRequest().getHeaders().getFirst("X-Customer-Tier")).isNull();
+            assertThat(ex.getRequest().getHeaders().getFirst("X-Order-Value-Bracket")).isNull();
+            assertThat(ex.getRequest().getHeaders().getFirst("baggage")).isNull();
             return Mono.empty();
         };
 
@@ -102,6 +114,9 @@ class UserContextPropagationFilterTest {
             .header(HttpHeaders.AUTHORIZATION, "Bearer valid-test-token")
             .header("X-Internal-Service", "spoofed-svc")
             .header("X-Internal-Token", "spoofed-secret")
+            .header("X-Customer-Tier", "SPOOFED_TIER")
+            .header("X-Order-Value-Bracket", "SPOOFED_BRACKET")
+            .header("baggage", "customer_tier=SPOOFED")
             .build();
         MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
@@ -109,7 +124,8 @@ class UserContextPropagationFilterTest {
             assertThat(ex.getRequest().getHeaders().getFirst("X-User-Id")).isEqualTo("usr_test_999");
             assertThat(ex.getRequest().getHeaders().getFirst("X-User-Roles")).isEqualTo("ROLE_CUSTOMER,ROLE_VIP");
             assertThat(ex.getRequest().getHeaders().getFirst("X-Customer-Tier")).isEqualTo("VIP");
-            assertThat(ex.getRequest().getHeaders().getFirst("baggage")).contains("customer_tier=VIP");
+            assertThat(ex.getRequest().getHeaders().getFirst("X-Order-Value-Bracket")).isEqualTo("STANDARD");
+            assertThat(ex.getRequest().getHeaders().getFirst("baggage")).isEqualTo("customer_tier=VIP,order_value_bracket=STANDARD");
             assertThat(ex.getRequest().getHeaders().getFirst("X-Internal-Service")).isNull();
             assertThat(ex.getRequest().getHeaders().getFirst("X-Internal-Token")).isNull();
             return Mono.empty();

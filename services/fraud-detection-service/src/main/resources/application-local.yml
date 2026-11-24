@@ -1,0 +1,30 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  datasource:
+    password: ${FRAUD_DB_PASSWORD:devpass}
+
+fraud:
+  order:
+    base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
+  jwt:
+    public-key: ${FRAUD_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

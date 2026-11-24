@@ -3,10 +3,13 @@ package com.instacommerce.fraud.config;
 import com.instacommerce.fraud.security.JwtAuthenticationFilter;
 import com.instacommerce.fraud.security.RestAccessDeniedHandler;
 import com.instacommerce.fraud.security.RestAuthenticationEntryPoint;
+import com.instacommerce.platform.security.InternalServiceSecurityConfiguration;
+import com.instacommerce.platform.security.SharedInternalServiceAuthFilter;
 import java.util.Arrays;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -20,6 +23,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@Import(InternalServiceSecurityConfiguration.class)
 public class SecurityConfig {
 
     private final FraudProperties fraudProperties;
@@ -45,6 +49,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
+                                                   SharedInternalServiceAuthFilter internalServiceAuthFilter,
                                                    RestAuthenticationEntryPoint authenticationEntryPoint,
                                                    RestAccessDeniedHandler accessDeniedHandler,
                                                    CorsConfigurationSource corsConfigurationSource) throws Exception {
@@ -53,11 +58,15 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/**", "/error").permitAll()
-                        .requestMatchers("/admin/**", "/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/fraud/score", "/api/v1/fraud/score")
+                        .hasAnyRole("INTERNAL_SERVICE", "ADMIN", "SUPER_ADMIN")
+                        .requestMatchers("/admin/**", "/api/v1/admin/**")
+                        .hasAnyRole("ADMIN", "SUPER_ADMIN", "SERVICE_ADMIN_GATEWAY_SERVICE")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler))
+                .addFilterBefore(internalServiceAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

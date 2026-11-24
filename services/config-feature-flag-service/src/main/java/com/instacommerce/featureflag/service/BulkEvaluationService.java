@@ -59,7 +59,10 @@ public class BulkEvaluationService {
 
     public Map<String, Object> evaluateAllActiveFlags(String rawUserId, Map<String, Object> context) {
         UUID userId = parseUserId(rawUserId);
-        List<FeatureFlag> flags = flagRepository.findAll();
+        List<FeatureFlag> flags = flagEvaluationService.loadAllFlags();
+        if (flags == null || flags.isEmpty()) {
+            return Map.of();
+        }
         List<UUID> flagIds = flags.stream().map(FeatureFlag::getId).toList();
         Map<UUID, FlagOverride> overridesByFlagId = Map.of();
         if (userId != null && !flagIds.isEmpty()) {

@@ -68,6 +68,11 @@ mobile-bff:
     order-url: ${ORDER_SERVICE_URL:http://order-service:8084}
     identity-url: ${IDENTITY_SERVICE_URL:http://identity-service:8081}
     wallet-url: ${WALLET_LOYALTY_SERVICE_URL:http://wallet-loyalty-service:8095}
+    pricing-url: ${PRICING_SERVICE_URL:http://pricing-service:8089}
+    inventory-url: ${INVENTORY_SERVICE_URL:http://inventory-service:8083}
+    fulfillment-url: ${FULFILLMENT_SERVICE_URL:http://fulfillment-service:8086}
+    routing-eta-url: ${ROUTING_ETA_SERVICE_URL:http://routing-eta-service:8094}
+    checkout-url: ${CHECKOUT_ORCHESTRATOR_SERVICE_URL:http://checkout-orchestrator-service:8091}
     timeout-ms: ${UPSTREAM_TIMEOUT_MS:2000}
 
 resilience4j:
@@ -91,4 +96,18 @@ resilience4j:
       identityService:
         baseConfig: default
       walletLoyaltyService:
+        baseConfig: default
+      pricingService:
+        baseConfig: default
+      inventoryService:
+        baseConfig: default
+      cartService:
+        baseConfig: default
+      orderService:
+        baseConfig: default
+      fulfillmentService:
+        baseConfig: default
+      routingEtaService:
+        baseConfig: default
+      checkoutService:
         baseConfig: default

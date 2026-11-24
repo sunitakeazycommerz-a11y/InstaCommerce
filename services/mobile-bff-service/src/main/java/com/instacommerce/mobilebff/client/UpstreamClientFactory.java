@@ -28,6 +28,11 @@ public class UpstreamClientFactory {
     private final WebClient orderClient;
     private final WebClient identityClient;
     private final WebClient walletLoyaltyClient;
+    private final WebClient pricingClient;
+    private final WebClient inventoryClient;
+    private final WebClient fulfillmentClient;
+    private final WebClient routingEtaClient;
+    private final WebClient checkoutClient;
     private final String internalServiceName;
     private final String internalServiceToken;
 
@@ -67,6 +72,11 @@ public class UpstreamClientFactory {
         this.orderClient = buildClient(webClientBuilder, connector, upstream.getOrderUrl());
         this.identityClient = buildClient(webClientBuilder, connector, upstream.getIdentityUrl());
         this.walletLoyaltyClient = buildClient(webClientBuilder, connector, upstream.getWalletUrl());
+        this.pricingClient = buildClient(webClientBuilder, connector, upstream.getPricingUrl());
+        this.inventoryClient = buildClient(webClientBuilder, connector, upstream.getInventoryUrl());
+        this.fulfillmentClient = buildClient(webClientBuilder, connector, upstream.getFulfillmentUrl());
+        this.routingEtaClient = buildClient(webClientBuilder, connector, upstream.getRoutingEtaUrl());
+        this.checkoutClient = buildClient(webClientBuilder, connector, upstream.getCheckoutUrl());
     }
 
     private WebClient buildClient(
@@ -115,5 +125,25 @@ public class UpstreamClientFactory {
 
     public WebClient walletLoyaltyClient() {
         return walletLoyaltyClient;
+    }
+
+    public WebClient pricingClient() {
+        return pricingClient;
+    }
+
+    public WebClient inventoryClient() {
+        return inventoryClient;
+    }
+
+    public WebClient fulfillmentClient() {
+        return fulfillmentClient;
+    }
+
+    public WebClient routingEtaClient() {
+        return routingEtaClient;
+    }
+
+    public WebClient checkoutClient() {
+        return checkoutClient;
     }
 }

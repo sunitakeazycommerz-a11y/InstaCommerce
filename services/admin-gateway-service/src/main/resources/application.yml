@@ -51,7 +51,7 @@ management:
 
 admin-gateway:
   jwt:
-    public-key: ${JWT_PUBLIC_KEY:#{null}}
+    public-key: ${sm://jwt-rsa-public-key:${ADMIN_GATEWAY_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:#{null}}}}
     issuer: ${JWT_ISSUER:instacommerce-identity}
     aud: ${JWT_AUD:instacommerce-admin}
     accepted-audiences: ${JWT_ACCEPTED_AUDIENCES:instacommerce-admin,instacommerce-api}
@@ -64,6 +64,8 @@ admin-gateway:
   upstream:
     feature-flag-url: ${FEATURE_FLAG_SERVICE_URL:http://config-feature-flag-service:8098}
     reconciliation-url: ${RECONCILIATION_ENGINE_URL:http://reconciliation-engine:8107}
+    fraud-url: ${FRAUD_DETECTION_SERVICE_URL:http://fraud-detection-service:8097}
+    audit-url: ${AUDIT_TRAIL_BASE_URL:${AUDIT_TRAIL_SERVICE_URL:http://audit-trail-service:8096}}
   dashboard:
     timeout-ms: ${DASHBOARD_TIMEOUT_MS:2000}
     per-service-timeout-ms: ${DASHBOARD_PER_SERVICE_TIMEOUT_MS:1000}
@@ -97,3 +99,7 @@ internal:
   service:
     name: ${spring.application.name}
     token: ${INTERNAL_SERVICE_TOKEN}
+
+audit-trail:
+  base-url: ${AUDIT_TRAIL_BASE_URL:${AUDIT_TRAIL_SERVICE_URL:http://audit-trail-service:8096}}
+  enabled: ${AUDIT_TRAIL_ENABLED:true}

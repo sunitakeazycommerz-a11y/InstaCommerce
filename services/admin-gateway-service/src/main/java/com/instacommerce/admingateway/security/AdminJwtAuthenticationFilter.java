@@ -1,6 +1,7 @@
 package com.instacommerce.admingateway.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.platform.security.SecurityRoleUtils;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;
@@ -19,6 +20,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -30,14 +33,26 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
 public class AdminJwtAuthenticationFilter extends OncePerRequestFilter {
-    private static final String ADMIN_AUDIENCE = "instacommerce-admin";
+    private static final String DEFAULT_ADMIN_AUDIENCE = "instacommerce-admin";
 
     private final JwtService jwtService;
     private final ObjectMapper objectMapper;
+    private final String adminAudience;
 
     public AdminJwtAuthenticationFilter(JwtService jwtService, ObjectMapper objectMapper) {
+        this(jwtService, objectMapper, DEFAULT_ADMIN_AUDIENCE);
+    }
+
+    @Autowired
+    public AdminJwtAuthenticationFilter(
+            JwtService jwtService,
+            ObjectMapper objectMapper,
+            @Value("${admin-gateway.jwt.aud:" + DEFAULT_ADMIN_AUDIENCE + "}") String adminAudience) {
         this.jwtService = jwtService;
         this.objectMapper = objectMapper;
+        this.adminAudience = (adminAudience == null || adminAudience.isBlank())
+            ? DEFAULT_ADMIN_AUDIENCE
+            : adminAudience.trim();
     }
 
     @Override
@@ -65,7 +80,8 @@ public class AdminJwtAuthenticationFilter extends OncePerRequestFilter {
             Claims claims = jws.getPayload();
             Collection<? extends GrantedAuthority> authorities = jwtService.extractAuthorities(claims);
             Set<String> audiences = claims.getAudience();
-            if (audiences != null && !audiences.isEmpty() && !audiences.contains(ADMIN_AUDIENCE)) {
+            if (audiences != null && !audiences.isEmpty()
+                    && !SecurityRoleUtils.hasAcceptedAudience(audiences, Set.of(adminAudience))) {
                 boolean hasAdminRole = authorities.stream()
                     .map(GrantedAuthority::getAuthority)
                     .anyMatch(role -> "ROLE_ADMIN".equals(role) || "ROLE_SUPER_ADMIN".equals(role));

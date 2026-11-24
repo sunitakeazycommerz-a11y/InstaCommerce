@@ -1,0 +1,56 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+
+admin-gateway:
+  jwt:
+    public-key: ${ADMIN_GATEWAY_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+  upstream:
+    feature-flag-url: ${FEATURE_FLAG_SERVICE_URL:http://localhost:8098}
+    reconciliation-url: ${RECONCILIATION_ENGINE_URL:http://localhost:8107}
+    fraud-url: ${FRAUD_DETECTION_SERVICE_URL:http://localhost:8097}
+    audit-url: ${AUDIT_TRAIL_BASE_URL:${AUDIT_TRAIL_SERVICE_URL:http://localhost:8096}}
+  dashboard:
+    services:
+      - name: config-feature-flag-service
+        base-url: ${FEATURE_FLAG_SERVICE_URL:http://localhost:8098}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+      - name: reconciliation-engine
+        base-url: ${RECONCILIATION_ENGINE_URL:http://localhost:8107}
+        health-path: /ready
+        metrics-path: /metrics
+      - name: audit-trail-service
+        base-url: ${AUDIT_TRAIL_SERVICE_URL:http://localhost:8096}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+      - name: order-service
+        base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+      - name: payment-service
+        base-url: ${PAYMENT_SERVICE_URL:http://localhost:8085}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+      - name: fulfillment-service
+        base-url: ${FULFILLMENT_SERVICE_URL:http://localhost:8086}
+        health-path: /actuator/health
+        metrics-path: /actuator/metrics/http.server.requests
+
+audit-trail:
+  base-url: ${AUDIT_TRAIL_BASE_URL:${AUDIT_TRAIL_SERVICE_URL:http://localhost:8096}}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

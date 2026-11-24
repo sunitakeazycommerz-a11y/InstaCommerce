@@ -1,6 +1,10 @@
 package com.instacommerce.audit.consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -10,6 +14,7 @@ import com.instacommerce.audit.service.AuditIngestionService;
 import com.instacommerce.contracts.topics.TopicNames;
 import java.lang.reflect.Method;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -87,6 +92,19 @@ class DomainEventConsumerTest {
         AuditEventRequest request = captor.getValue();
         assertThat(request.actorId()).isNull();
         assertThat(request.details()).containsEntry("sku", "MILK-1L");
+    }
+
+    @Test
+    void onDomainEvent_rethrowsWhenDltSendFailsSoKafkaDoesNotCommitOffset() {
+        doThrow(new RuntimeException("DB unavailable"))
+                .when(ingestionService).ingest(any(AuditEventRequest.class));
+        when(kafkaTemplate.send(eq("audit.DLT"), eq("ord-1"), any()))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("DLT broker unavailable")));
+
+        assertThatThrownBy(() -> consumer.onDomainEvent(
+                new ConsumerRecord<>("orders.events", 0, 9L, "ord-1", "{\"eventType\":\"OrderCreated\"}")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("DLT");
     }
 
     @Test

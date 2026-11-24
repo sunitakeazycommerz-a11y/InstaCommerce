@@ -219,6 +219,36 @@ class AuditSecurityConfigTest {
     }
 
     @Test
+    @DisplayName("Normalizes ROLE_ADMIN and comma-separated string roles claims without double prefix")
+    void rolePrefixedAndStringRolesClaims_allowAdminRoute() throws Exception {
+        String prePrefixedJwt = Jwts.builder()
+                .issuer("instacommerce-identity")
+                .subject("admin-prefixed")
+                .claim("roles", List.of("ROLE_ADMIN"))
+                .issuedAt(new Date())
+                .expiration(Date.from(Instant.now().plusSeconds(300)))
+                .signWith(rsaKeyPair.getPrivate())
+                .compact();
+
+        mockMvc.perform(get("/admin/audit/events")
+                        .header("Authorization", "Bearer " + prePrefixedJwt))
+                .andExpect(status().isOk());
+
+        String commaSeparatedJwt = Jwts.builder()
+                .issuer("instacommerce-identity")
+                .subject("admin-string")
+                .claim("roles", "ROLE_ADMIN,USER")
+                .issuedAt(new Date())
+                .expiration(Date.from(Instant.now().plusSeconds(300)))
+                .signWith(rsaKeyPair.getPrivate())
+                .compact();
+
+        mockMvc.perform(get("/admin/audit/events")
+                        .header("Authorization", "Bearer " + commaSeparatedJwt))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     @DisplayName("Keeps /actuator/** and /error routes permitted without auth")
     void actuatorAndErrorRoutes_remainPermitAll() throws Exception {
         mockMvc.perform(get("/actuator/health"))

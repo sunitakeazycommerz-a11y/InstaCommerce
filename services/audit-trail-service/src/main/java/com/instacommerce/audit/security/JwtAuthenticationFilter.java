@@ -1,6 +1,8 @@
 package com.instacommerce.audit.security;
 
 import com.instacommerce.audit.config.AuditProperties;
+import com.instacommerce.platform.security.JwtKeyLoader;
+import com.instacommerce.platform.security.SecurityRoleUtils;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import jakarta.servlet.FilterChain;
@@ -8,16 +10,15 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.security.KeyFactory;
-import java.security.PublicKey;
-import java.security.spec.X509EncodedKeySpec;
-import java.util.Base64;
+import java.security.interfaces.RSAPublicKey;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -27,7 +28,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
     private final AuditProperties auditProperties;
-    private volatile PublicKey cachedPublicKey;
+    private volatile RSAPublicKey cachedPublicKey;
 
     public JwtAuthenticationFilter(AuditProperties auditProperties) {
         this.auditProperties = auditProperties;
@@ -38,7 +39,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         String header = request.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
-            String token = header.substring(7);
+            String token = header.substring(7).trim();
             try {
                 Claims claims = Jwts.parser()
                         .requireIssuer(auditProperties.getJwt().getIssuer())
@@ -48,43 +49,55 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         .getPayload();
 
                 String subject = claims.getSubject();
-                @SuppressWarnings("unchecked")
-                List<String> roles = claims.get("roles", List.class);
+                List<GrantedAuthority> authorities = SecurityRoleUtils.extractAuthorities(claims.get("roles"));
 
-                if (subject != null && roles != null) {
-                    var authorities = roles.stream()
-                            .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
-                            .collect(Collectors.toList());
-
-                    var authentication = new UsernamePasswordAuthenticationToken(subject, null, authorities);
+                if (subject != null && !subject.isBlank()) {
+                    List<GrantedAuthority> merged = mergeInternalAuthorities(
+                            SecurityContextHolder.getContext().getAuthentication(),
+                            authorities);
+                    var authentication = new UsernamePasswordAuthenticationToken(subject, token, merged);
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 }
             } catch (Exception ex) {
+                SecurityContextHolder.clearContext();
                 log.debug("JWT validation failed: {}", ex.getMessage());
             }
         }
         filterChain.doFilter(request, response);
     }
 
-    private PublicKey loadPublicKey() throws Exception {
-        PublicKey key = cachedPublicKey;
+    private RSAPublicKey loadPublicKey() {
+        RSAPublicKey key = cachedPublicKey;
         if (key != null) {
             return key;
         }
         synchronized (this) {
             if (cachedPublicKey == null) {
-                cachedPublicKey = parsePublicKey();
+                cachedPublicKey = JwtKeyLoader.parsePublicKey(auditProperties.getJwt().getPublicKey());
             }
             return cachedPublicKey;
         }
     }
 
-    private PublicKey parsePublicKey() throws Exception {
-        String pem = auditProperties.getJwt().getPublicKey()
-                .replace("-----BEGIN PUBLIC KEY-----", "")
-                .replace("-----END PUBLIC KEY-----", "")
-                .replaceAll("\\s+", "");
-        byte[] decoded = Base64.getDecoder().decode(pem);
-        return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(decoded));
+    private static List<GrantedAuthority> mergeInternalAuthorities(
+            Authentication existingAuth,
+            List<GrantedAuthority> jwtAuthorities) {
+        if (existingAuth == null || !existingAuth.isAuthenticated()) {
+            return jwtAuthorities;
+        }
+        boolean hasInternalRole = existingAuth.getAuthorities().stream()
+                .anyMatch(a -> SecurityRoleUtils.ROLE_INTERNAL_SERVICE.equals(a.getAuthority()));
+        if (!hasInternalRole) {
+            return jwtAuthorities;
+        }
+        Set<GrantedAuthority> merged = new LinkedHashSet<>(jwtAuthorities);
+        for (GrantedAuthority authority : existingAuth.getAuthorities()) {
+            String role = authority.getAuthority();
+            if (SecurityRoleUtils.ROLE_INTERNAL_SERVICE.equals(role)
+                    || (role != null && role.startsWith("ROLE_SERVICE_"))) {
+                merged.add(authority);
+            }
+        }
+        return List.copyOf(merged);
     }
 }

@@ -1,11 +1,11 @@
 package com.instacommerce.catalog.controller;
 
 import com.instacommerce.catalog.dto.response.CategoryResponse;
+import com.instacommerce.catalog.dto.response.PageResponse;
 import com.instacommerce.catalog.dto.response.ProductResponse;
 import com.instacommerce.catalog.service.CategoryService;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -33,7 +33,7 @@ public class CategoryController {
     }
 
     @GetMapping("/{id}/products")
-    public Page<ProductResponse> getCategoryProducts(@PathVariable UUID id, Pageable pageable) {
+    public PageResponse<ProductResponse> getCategoryProducts(@PathVariable UUID id, Pageable pageable) {
         return categoryService.getProductsByCategory(id, pageable);
     }
 }

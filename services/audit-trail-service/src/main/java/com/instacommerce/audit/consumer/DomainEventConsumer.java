@@ -8,6 +8,8 @@ import com.instacommerce.audit.service.AuditIngestionService;
 import com.instacommerce.contracts.topics.TopicNames;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -169,12 +171,22 @@ public class DomainEventConsumer {
         return service + "-service";
     }
 
+    private static final long DLT_SEND_TIMEOUT_SECONDS = 10L;
+
     private void sendToDlt(ConsumerRecord<String, String> record) {
         try {
-            kafkaTemplate.send(dltTopic, record.key(), record.value());
+            CompletableFuture<?> sendFuture = kafkaTemplate.send(dltTopic, record.key(), record.value());
+            if (sendFuture != null) {
+                sendFuture.get(DLT_SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            }
             log.warn("Sent failed event to DLT: topic={} offset={}", record.topic(), record.offset());
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            log.error("Interrupted while sending event to DLT: topic={} offset={}", record.topic(), record.offset(), ex);
+            throw new IllegalStateException("Interrupted sending audit event to DLT", ex);
         } catch (Exception ex) {
             log.error("Failed to send event to DLT: topic={} offset={}", record.topic(), record.offset(), ex);
+            throw new IllegalStateException("Failed sending audit event to DLT", ex);
         }
     }
 }

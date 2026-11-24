@@ -31,6 +31,23 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, UUID>,
 
     List<AuditEvent> findByCreatedAtBetweenOrderByCreatedAt(Instant from, Instant to);
 
+    @Query("SELECT a FROM AuditEvent a WHERE a.createdAt >= :from AND a.createdAt < :to " +
+           "ORDER BY a.createdAt ASC, a.sequenceNumber ASC, a.id ASC")
+    List<AuditEvent> findForArchiveWindow(
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            Pageable pageable);
+
+    @Query("SELECT a FROM AuditEvent a WHERE a.sequenceNumber IS NOT NULL " +
+           "AND (:afterSeq IS NULL OR a.sequenceNumber > :afterSeq) " +
+           "AND (:from IS NULL OR a.createdAt >= :from) " +
+           "AND (:to IS NULL OR a.createdAt < :to) ORDER BY a.sequenceNumber ASC")
+    List<AuditEvent> findChainedEventsAfter(
+            @Param("afterSeq") Long afterSeq,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            Pageable pageable);
+
     @Query("SELECT a FROM AuditEvent a WHERE a.sequenceNumber IS NOT NULL " +
            "AND (:from IS NULL OR a.createdAt >= :from) " +
            "AND (:to IS NULL OR a.createdAt < :to) ORDER BY a.sequenceNumber ASC")

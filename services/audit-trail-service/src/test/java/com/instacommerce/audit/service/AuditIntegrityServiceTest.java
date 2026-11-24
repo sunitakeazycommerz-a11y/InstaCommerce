@@ -52,7 +52,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e2 = buildChainedEvent(2L, e1.getEventHash(), BASE_TIME.plusSeconds(1));
         AuditEvent e3 = buildChainedEvent(3L, e2.getEventHash(), BASE_TIME.plusSeconds(2));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e1, e2, e3))
                 .thenReturn(List.of());
 
@@ -71,9 +71,11 @@ class AuditIntegrityServiceTest {
         AuditEvent e3 = buildChainedEvent(3L, e2.getEventHash(), BASE_TIME.plusSeconds(2));
         AuditEvent e4 = buildChainedEvent(4L, e3.getEventHash(), BASE_TIME.plusSeconds(3));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
-                .thenReturn(List.of(e1, e2))
-                .thenReturn(List.of(e3, e4))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(e1, e2));
+        when(repository.findChainedEventsAfter(eq(2L), isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(e3, e4));
+        when(repository.findChainedEventsAfter(eq(4L), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of());
 
         IntegrityReport report = integrityService.verifyChain(null, null, 2);
@@ -90,7 +92,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e2 = buildEventWithExplicitHash(2L, e1.getEventHash(), "tampered-event-hash", BASE_TIME.plusSeconds(1));
         AuditEvent e3 = buildChainedEvent(3L, e2.getEventHash(), BASE_TIME.plusSeconds(2));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e1, e2, e3))
                 .thenReturn(List.of());
 
@@ -108,7 +110,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e2 = buildChainedEvent(2L, "tampered-previous-hash", BASE_TIME.plusSeconds(1));
         AuditEvent e3 = buildChainedEvent(3L, e2.getEventHash(), BASE_TIME.plusSeconds(2));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e1, e2, e3))
                 .thenReturn(List.of());
 
@@ -126,7 +128,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e2 = buildChainedEvent(2L, e1.getEventHash(), BASE_TIME.plusSeconds(1));
         AuditEvent e3 = buildChainedEvent(3L, e2.getEventHash(), BASE_TIME.plusSeconds(2));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e1, e3))
                 .thenReturn(List.of());
 
@@ -143,7 +145,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e1 = buildChainedEvent(1L, "wrong-genesis-hash", BASE_TIME);
         AuditEvent e2 = buildChainedEvent(2L, e1.getEventHash(), BASE_TIME.plusSeconds(1));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e1, e2))
                 .thenReturn(List.of());
 
@@ -162,10 +164,10 @@ class AuditIntegrityServiceTest {
         AuditEvent e3 = buildChainedEvent(3L, e2.getEventHash(), BASE_TIME.plusSeconds(2));
         AuditEvent e4 = buildChainedEvent(4L, e3.getEventHash(), BASE_TIME.plusSeconds(3));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
-                .thenReturn(List.of(e1, e2))
-                .thenReturn(List.of(e4))
-                .thenReturn(List.of());
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(e1, e2));
+        when(repository.findChainedEventsAfter(eq(2L), isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(List.of(e4));
 
         IntegrityReport report = integrityService.verifyChain(null, null, 2);
 
@@ -180,7 +182,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e1 = buildChainedEvent(1L, hashChainService.genesisHash(), BASE_TIME);
         AuditEvent e3 = buildChainedEvent(3L, e1.getEventHash(), BASE_TIME.plusSeconds(2));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e1, e3))
                 .thenReturn(List.of());
 
@@ -193,7 +195,7 @@ class AuditIntegrityServiceTest {
 
     @Test
     void verifyChain_emptyResult_returnsIntactZeroEvents() {
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of());
 
         IntegrityReport report = integrityService.verifyChain(null, null, 10);
@@ -212,7 +214,7 @@ class AuditIntegrityServiceTest {
 
         Instant from = BASE_TIME.plusSeconds(10);
         Instant to = BASE_TIME.plusSeconds(30);
-        when(repository.findChainedEvents(eq(from), eq(to), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), eq(from), eq(to), any(Pageable.class)))
                 .thenReturn(List.of(e2, e3))
                 .thenReturn(List.of());
         when(repository.findFirstBySequenceNumberLessThanOrderBySequenceNumberDesc(2L))
@@ -232,7 +234,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e3 = buildChainedEvent(3L, e2.getEventHash(), BASE_TIME.plusSeconds(20));
 
         Instant from = BASE_TIME.plusSeconds(10);
-        when(repository.findChainedEvents(eq(from), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), eq(from), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e2, e3))
                 .thenReturn(List.of());
         when(repository.findFirstBySequenceNumberLessThanOrderBySequenceNumberDesc(2L))
@@ -252,7 +254,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e11 = buildChainedEvent(11L, e10.getEventHash(), BASE_TIME.plusSeconds(10));
 
         Instant from = BASE_TIME;
-        when(repository.findChainedEvents(eq(from), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), eq(from), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e10, e11))
                 .thenReturn(List.of());
         when(repository.findFirstBySequenceNumberLessThanOrderBySequenceNumberDesc(10L))
@@ -270,7 +272,7 @@ class AuditIntegrityServiceTest {
         AuditEvent e10 = buildChainedEvent(10L, "missing-prefix-hash", BASE_TIME);
         AuditEvent e11 = buildChainedEvent(11L, e10.getEventHash(), BASE_TIME.plusSeconds(10));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e10, e11))
                 .thenReturn(List.of());
         when(manifestRepository.findByVerificationStatusOrderByDateRangeStartAsc("VERIFIED"))
@@ -301,7 +303,7 @@ class AuditIntegrityServiceTest {
                 .verificationStatus("VERIFIED")
                 .build();
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e10, e11))
                 .thenReturn(List.of());
         when(manifestRepository.findByVerificationStatusOrderByDateRangeStartAsc("VERIFIED"))
@@ -330,7 +332,7 @@ class AuditIntegrityServiceTest {
                 .verificationStatus("VERIFIED")
                 .build();
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(e10))
                 .thenReturn(List.of());
         when(manifestRepository.findByVerificationStatusOrderByDateRangeStartAsc("VERIFIED"))
@@ -349,7 +351,7 @@ class AuditIntegrityServiceTest {
         AuditEvent v1Event2 = buildLegacyV1ChainedEvent(2L, v1Event1.getEventHash(), BASE_TIME.plusSeconds(1));
         AuditEvent v2Event3 = buildChainedEvent(3L, v1Event2.getEventHash(), BASE_TIME.plusSeconds(2));
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(v1Event1, v1Event2, v2Event3))
                 .thenReturn(List.of());
 
@@ -380,7 +382,7 @@ class AuditIntegrityServiceTest {
                 .createdAt(BASE_TIME.plusSeconds(1))
                 .build();
 
-        when(repository.findChainedEvents(isNull(), isNull(), any(Pageable.class)))
+        when(repository.findChainedEventsAfter(isNull(), isNull(), isNull(), any(Pageable.class)))
                 .thenReturn(List.of(v1Event1, tamperedV1))
                 .thenReturn(List.of());
 

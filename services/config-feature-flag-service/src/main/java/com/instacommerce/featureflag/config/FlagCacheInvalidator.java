@@ -1,12 +1,17 @@
 package com.instacommerce.featureflag.config;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.featureflag.controller.FlagChangeStreamController;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.Nullable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.cache.CacheManager;
@@ -26,6 +31,7 @@ public class FlagCacheInvalidator implements MessageListener {
     private final RedisMessageListenerContainer listenerContainer;
     private final CacheManager cacheManager;
     private final ObjectMapper objectMapper;
+    private final FlagChangeStreamController streamController;
     private final Counter invalidationCounter;
     private final Counter redisFailureCounter;
     private final AtomicLong maxStalenessMs;
@@ -35,13 +41,34 @@ public class FlagCacheInvalidator implements MessageListener {
             RedisMessageListenerContainer listenerContainer,
             CacheManager cacheManager,
             MeterRegistry meterRegistry) {
+        this(listenerContainer, cacheManager, meterRegistry, (FlagChangeStreamController) null);
+    }
+
+    @Autowired
+    public FlagCacheInvalidator(
+            RedisMessageListenerContainer listenerContainer,
+            CacheManager cacheManager,
+            MeterRegistry meterRegistry,
+            ObjectProvider<FlagChangeStreamController> streamControllerProvider) {
+        this(
+                listenerContainer,
+                cacheManager,
+                meterRegistry,
+                streamControllerProvider != null ? streamControllerProvider.getIfAvailable() : null);
+    }
+
+    public FlagCacheInvalidator(
+            RedisMessageListenerContainer listenerContainer,
+            CacheManager cacheManager,
+            MeterRegistry meterRegistry,
+            @Nullable FlagChangeStreamController streamController) {
         this.listenerContainer = listenerContainer;
         this.cacheManager = cacheManager;
+        this.streamController = streamController;
         this.objectMapper = new ObjectMapper();
         this.circuitBreakerOpen = new AtomicBoolean(false);
         this.maxStalenessMs = new AtomicLong(0);
 
-        // Metrics
         this.invalidationCounter = Counter.builder("feature_flag.cache.invalidations")
                 .description("Total cache invalidations received from Redis")
                 .register(meterRegistry);
@@ -94,13 +121,21 @@ public class FlagCacheInvalidator implements MessageListener {
 
     private void handleCacheInvalidation(String channel, String payload) {
         try {
-            var json = objectMapper.readTree(payload);
+            JsonNode json = objectMapper.readTree(payload);
 
             if (json.has("bulkUpdate") && json.get("bulkUpdate").asBoolean()) {
-                invalidateBulkCaches(json.get("reason").asText());
+                String reason = json.hasNonNull("reason") ? json.get("reason").asText() : "bulk_update";
+                invalidateBulkCaches(reason);
+                if (streamController != null) {
+                    streamController.broadcast("__bulk__", reason);
+                }
             } else {
                 String flagKey = json.get("flagKey").asText();
                 invalidateFlagCache(flagKey);
+                if (streamController != null) {
+                    Object value = json.has("value") ? json.get("value").asText(null) : null;
+                    streamController.broadcast(flagKey, value);
+                }
             }
 
             invalidationCounter.increment();
@@ -117,16 +152,9 @@ public class FlagCacheInvalidator implements MessageListener {
             if (flagsCache != null) {
                 flagsCache.evict(flagKey);
             }
-
-            var overridesCache = cacheManager.getCache("flag-overrides");
-            if (overridesCache != null) {
-                overridesCache.clear();
-            }
-
-            var bulkCache = cacheManager.getCache("flag-overrides-bulk");
-            if (bulkCache != null) {
-                bulkCache.clear();
-            }
+            clearNamedCache("flags-all");
+            clearNamedCache("flag-overrides");
+            clearNamedCache("flag-overrides-bulk");
 
             log.trace("Invalidated flag cache: key={}", flagKey);
         } catch (Exception e) {
@@ -136,24 +164,21 @@ public class FlagCacheInvalidator implements MessageListener {
 
     private void invalidateBulkCaches(String reason) {
         try {
-            var flagsCache = cacheManager.getCache("flags");
-            if (flagsCache != null) {
-                flagsCache.clear();
-            }
-
-            var overridesCache = cacheManager.getCache("flag-overrides");
-            if (overridesCache != null) {
-                overridesCache.clear();
-            }
-
-            var bulkCache = cacheManager.getCache("flag-overrides-bulk");
-            if (bulkCache != null) {
-                bulkCache.clear();
-            }
+            clearNamedCache("flags");
+            clearNamedCache("flags-all");
+            clearNamedCache("flag-overrides");
+            clearNamedCache("flag-overrides-bulk");
 
             log.debug("Invalidated bulk flag caches: reason={}", reason);
         } catch (Exception e) {
             log.warn("Error invalidating bulk flag caches", e);
+        }
+    }
+
+    private void clearNamedCache(String cacheName) {
+        var cache = cacheManager.getCache(cacheName);
+        if (cache != null) {
+            cache.clear();
         }
     }
 
@@ -173,5 +198,10 @@ public class FlagCacheInvalidator implements MessageListener {
 
     public boolean isCircuitBreakerOpen() {
         return circuitBreakerOpen.get();
+    }
+
+    public void resetCircuitBreaker() {
+        circuitBreakerOpen.set(false);
+        subscribeToRedisUpdates();
     }
 }

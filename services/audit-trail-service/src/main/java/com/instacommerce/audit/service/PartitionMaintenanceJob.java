@@ -122,9 +122,9 @@ public class PartitionMaintenanceJob {
                 return;
             }
 
-            log.info("Detaching archived partition: {}", partitionName);
-            jdbcTemplate.execute("ALTER TABLE audit_events DETACH PARTITION " + partitionName);
-            log.info("Detached partition {} after verified archive export", partitionName);
+            log.info("Detaching archived partition concurrently: {}", partitionName);
+            jdbcTemplate.execute("ALTER TABLE audit_events DETACH PARTITION " + partitionName + " CONCURRENTLY");
+            log.info("Detached partition {} concurrently after verified archive export", partitionName);
         } catch (Exception e) {
             log.error("Archive export failed for partition {}, deferring detach: {}",
                     partitionName, e.getMessage(), e);

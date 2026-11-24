@@ -6,6 +6,7 @@ import com.instacommerce.catalog.dto.mapper.ProductMapper;
 import com.instacommerce.catalog.dto.request.CreateCategoryRequest;
 import com.instacommerce.catalog.dto.request.UpdateCategoryRequest;
 import com.instacommerce.catalog.dto.response.CategoryResponse;
+import com.instacommerce.catalog.dto.response.PageResponse;
 import com.instacommerce.catalog.dto.response.ProductResponse;
 import com.instacommerce.catalog.exception.CategoryNotFoundException;
 import com.instacommerce.catalog.exception.DuplicateCategoryException;
@@ -79,14 +80,18 @@ public class CategoryService {
     }
 
     @Transactional(readOnly = true)
-    @Cacheable(value = "categories", key = "#categoryId + '-' + #pageable.pageNumber + '-' + #pageable.pageSize")
-    public Page<ProductResponse> getProductsByCategory(UUID categoryId, Pageable pageable) {
+    @Cacheable(
+        value = "categories",
+        key = "#categoryId + '-' + T(com.instacommerce.platform.web.PageableUtils).sanitize(#pageable).getPageNumber()"
+            + " + '-' + T(com.instacommerce.platform.web.PageableUtils).sanitize(#pageable).getPageSize()"
+    )
+    public PageResponse<ProductResponse> getProductsByCategory(UUID categoryId, Pageable pageable) {
         if (!categoryRepository.existsById(categoryId)) {
             throw new CategoryNotFoundException(categoryId);
         }
         Pageable sanitized = PageableUtils.sanitize(pageable);
         Page<Product> products = productRepository.findByCategory_IdAndIsActiveTrue(categoryId, sanitized);
-        return products.map(ProductMapper::toResponse);
+        return PageResponse.from(products.map(ProductMapper::toResponse));
     }
 
     @Transactional

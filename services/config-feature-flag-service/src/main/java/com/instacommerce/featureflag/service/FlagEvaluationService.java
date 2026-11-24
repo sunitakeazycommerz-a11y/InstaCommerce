@@ -78,6 +78,11 @@ public class FlagEvaluationService {
         return flagRepository.findByKey(key).orElse(null);
     }
 
+    @Cacheable(value = "flags-all", key = "'all'")
+    public List<FeatureFlag> loadAllFlags() {
+        return flagRepository.findAll();
+    }
+
     FlagEvaluationResponse evaluate(FeatureFlag flag, String key, UUID userId, Map<String, Object> context,
                                     FlagOverride override) {
         if (flag == null) {

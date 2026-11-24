@@ -1,0 +1,26 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+  datasource:
+    url: ${SEARCH_DB_URL:jdbc:postgresql://localhost:5432/search}
+    username: ${SEARCH_DB_USER:postgres}
+    password: ${SEARCH_DB_PASSWORD:devpass}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+search:
+  jwt:
+    public-key: ${SEARCH_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+
+management:
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

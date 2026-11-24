@@ -51,8 +51,8 @@ public class SecurityConfig {
                                 "/admin/users/*/notification-preferences",
                                 "/users/*",
                                 "/api/v1/users/*",
-                                "/admin/users/*").hasAnyRole("ADMIN", "INTERNAL_SERVICE")
-                        .requestMatchers("/admin/**", "/api/v1/admin/**").hasRole("ADMIN")
+                                "/admin/users/*").hasAnyRole("ADMIN", "SUPER_ADMIN", "INTERNAL_SERVICE")
+                        .requestMatchers("/admin/**", "/api/v1/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                     .authenticationEntryPoint(authenticationEntryPoint)

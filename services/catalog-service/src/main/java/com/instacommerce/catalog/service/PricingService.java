@@ -51,7 +51,7 @@ public class PricingService {
                 .toList();
         Map<UUID, Product> productMap = productRepository.findAllById(productIds).stream()
                 .filter(Product::isActive)
-                .collect(Collectors.toMap(Product::getId, Function.identity()));
+                .collect(Collectors.toMap(Product::getId, Function.identity(), (existing, duplicate) -> existing));
         Map<UUID, List<PricingRule>> rulesByProduct = pricingRuleRepository
             .findApplicableForProducts(productIds, request.storeId(), null, Instant.now())
             .stream()

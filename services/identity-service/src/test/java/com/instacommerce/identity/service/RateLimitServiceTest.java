@@ -14,6 +14,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -117,5 +118,17 @@ class RateLimitServiceTest {
 
         assertThatThrownBy(() -> service.checkRegister("10.0.0.2"))
             .isInstanceOf(RequestNotPermitted.class);
+    }
+
+    @Test
+    @DisplayName("Removes RateLimiterRegistry entry when local Caffeine cache evicts limiter")
+    void shouldRemoveLimiterFromRegistryOnCaffeineEviction() {
+        RateLimitService service = new RateLimitService(registry, (StringRedisTemplate) null);
+
+        service.checkLogin("10.9.8.7");
+        assertThat(registry.find("loginLimiter:10.9.8.7")).isPresent();
+
+        service.cleanUpLocalLimiters();
+        assertThat(registry.find("loginLimiter:10.9.8.7")).isEmpty();
     }
 }
