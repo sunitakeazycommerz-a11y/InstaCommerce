@@ -470,7 +470,7 @@ jobs:
           python3 -m pip install --upgrade pip
           pip install -r data-platform-jobs/requirements.txt
           pip install -r services/${{ matrix.service }}/requirements.txt
-          pip install pytest httpx pytest-asyncio ruff pyright pyyaml pandas requests
+          pip install pytest httpx pytest-asyncio ruff pyright pyyaml pandas requests scikit-learn lightgbm
       - name: Lint with ruff
         run: |
           ruff check .
