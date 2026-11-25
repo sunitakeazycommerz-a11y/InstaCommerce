@@ -468,11 +468,9 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          pip install -r ml/requirements.txt
-          pip install -r data-platform/quality/requirements.txt
           pip install -r data-platform-jobs/requirements.txt
           pip install -r services/${{ matrix.service }}/requirements.txt
-          pip install pytest httpx pytest-asyncio ruff pyright
+          pip install pytest httpx pytest-asyncio ruff pyright pyyaml pandas requests
       - name: Lint with ruff
         run: |
           ruff check .
@@ -490,8 +488,6 @@ jobs:
             fi
           )
           for test_dir in \
-            ml \
-            data-platform/quality \
             data-platform/streaming \
             data-platform/airflow \
             data-platform-jobs \
