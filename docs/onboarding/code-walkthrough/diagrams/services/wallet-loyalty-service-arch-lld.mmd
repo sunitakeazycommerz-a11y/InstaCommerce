@@ -1,0 +1,60 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef sec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph CALLERS["Inbound Callers & Kafka Streams"]
+        direction LR
+        BFF["mobile-bff / checkout-orchestrator<br/>JWT or X-Internal-Service + X-User-Id"]:::caller
+        ORD_K["Kafka: orders.events<br/>OrderDelivered / Cancelled / Failed / Refunded"]:::caller
+        PAY_K["Kafka: payments.events<br/>PaymentRefunded (flag-gated!)"]:::caller
+    end
+
+    subgraph WALLET["wallet-loyalty-service :8095 (Java 21 · Spring Boot 4.0.0 · Hikari max=20)"]
+        direction TB
+        SEC["SecurityConfig (@Import InternalServiceSecurityConfiguration)<br/>JwtAuthenticationFilter + SharedInternalServiceAuthFilter<br/>AuthenticatedUserResolver (X-User-Id for privileged callers)"]:::sec
+
+        subgraph CTRLS["Controllers & Error Handling"]
+            direction LR
+            WC["WalletController<br/>GET /balance · POST /topup<br/>POST /debit /credit (ADMIN|INTERNAL_SERVICE)<br/>GET /transactions"]:::ctrl
+            LC["LoyaltyController<br/>GET /loyalty/points<br/>POST /loyalty/redeem"]:::ctrl
+            RC["ReferralController<br/>GET /referral/code<br/>POST /referral/redeem"]:::ctrl
+            GEH["GlobalExceptionHandler<br/>RFC 7807 ProblemDetailFactory"]:::ctrl
+        end
+
+        subgraph SERVICES["Core Services, Ledger & Cache"]
+            direction LR
+            WS["WalletService + CacheConfig<br/>Caffeine walletBalance (10K, 60s)<br/>findByUserIdForUpdate (3s lock timeout)"]:::svc
+            WLS["WalletLedgerService (MANDATORY)<br/>user_wallet:{userId} &lt;-&gt; platform_float /<br/>merchant_settlement / marketing_budget"]:::svc
+            LS["LoyaltyService (@Retryable 3x OCC)<br/>BRONZE(0) SILVER(5K) GOLD(25K) PLATINUM(100K)<br/>1 pt/rupee · 100 paise/pt"]:::svc
+            RS["ReferralService<br/>8-char code (31-char alphabet)<br/>5000c reward, max 10 uses / 50 cap"]:::svc
+        end
+
+        subgraph ASYNC["Consumers, HTTP Clients & Jobs"]
+            direction LR
+            OEC["OrderEventConsumer<br/>skips CHECKOUT_SAGA_ROLLBACK<br/>2% cashback (50K/order, 200K/UTC mo)"]:::svc
+            PEC["PaymentEventConsumer (flag-gated)<br/>enabled in prod &amp; dev, OFF in staging!<br/>double-credit risk on card refunds"]:::warn
+            CLIENTS["PaymentClient (:8085 /api/v1/payments/{ref})<br/>RestOrderLookupClient (:8084 /admin/orders/{id})<br/>Resilience4j Retry(3x 500ms) + CB(20, 50%, 30s)"]:::sec
+            JOBS["ShedLock: PointsExpiryJob (02:00 daily)<br/>500/slice REQUIRES_NEW, 30d*months<br/>OutboxCleanupJob (6h, 7d retention)<br/>KafkaErrorConfig (3x 1s -&gt; {topic}.DLT)"]:::svc
+        end
+    end
+
+    subgraph DATA["PostgreSQL wallets DB (V1..V13) & Outbox"]
+        direction LR
+        PG["PostgreSQL Tables:<br/>wallets (balance_cents &gt;= 0, @Version)<br/>wallet_transactions (V2/V11 uq ref_type, ref_id)<br/>wallet_ledger_entries (V7/V13)<br/>loyalty_accounts (@Version) · loyalty_transactions (V8 uq)<br/>referral_codes · referral_redemptions (referred_user_id uq)<br/>outbox_events (V9 v1) · shedlock"]:::db
+        RELAY["outbox-relay-wallet-loyalty :8103 (Go)<br/>polls outbox_events -&gt; wallet.events"]:::db
+    end
+
+    BFF --> SEC --> CTRLS
+    WC --> WS & CLIENTS
+    LC --> LS --> WS
+    RC --> RS --> WS
+    WS --> WLS --> PG
+    WS & LS --> PG
+    ORD_K --> OEC --> LS & WS & CLIENTS
+    PAY_K --> PEC --> WS & CLIENTS
+    JOBS --> PG
+    PG --> RELAY

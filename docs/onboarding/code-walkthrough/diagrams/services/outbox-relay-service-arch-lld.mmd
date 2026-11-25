@@ -1,0 +1,69 @@
+flowchart TB
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef broker fill:#F8FAFC,stroke:#475569,stroke-width:2px,color:#0F172A
+    classDef shared fill:#F5F3FF,stroke:#6D28D9,stroke-width:1.8px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2.2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph UPSTREAM["1. Producer Services &amp; Outbox Tables"]
+        direction TB
+        JavaProducers["13 Java Services w/ outbox_events<br/>OutboxService (@Transactional MANDATORY)<br/>order · payment · cart · fulfillment · inventory<br/>identity · catalog · rider-fleet · warehouse<br/>pricing · wallet-loyalty · fraud · routing-eta"]:::prod
+        PGOutbox[("Per-Domain PostgreSQL<br/>Table: outbox_events (configurable)<br/>Partial idx_outbox_unsent (sent = false)<br/>Composite (sent, created_at)")]:::store
+        ReconDrift["reconciliation-engine (separate)<br/>Uses reconciliation_outbox (published)<br/>Not polled by outbox-relay-service"]:::warn
+        JavaProducers -->|"ACID commit"| PGOutbox
+    end
+
+    subgraph HELM["2. Helm Deployment Topology (deploy/helm/values.yaml)"]
+        direction TB
+        Generic["Generic: outbox-relay (:8103 ×2, HPA 2..6)<br/>OUTBOX_TOPIC=orders.events · POLL=500ms<br/>ci.yml deploy-dev bumps only this key"]:::prod
+        PerDomain["13 Per-Domain Deployments (:8103 ×1 each)<br/>outbox-relay-{order,payment,cart,fulfillment,<br/>inventory,identity,catalog,rider-fleet,warehouse,<br/>pricing,wallet-loyalty,fraud-detection,routing-eta}<br/>Secret: outbox-relay-db-secrets"]:::prod
+        HelmDrift["Helm Overlay &amp; Missing Domain Drift<br/>values-dev &amp; values-prod omit all 13 keys<br/>No outbox-relay-notification deployment"]:::broken
+    end
+
+    subgraph BIN["3. outbox-relay-service (Go 1.25 · package main · :8103)"]
+        direction TB
+        subgraph HTTP_STACK["HTTP Goroutine &amp; go-shared Middleware Stack"]
+            direction TB
+            CorrMW["correlation.Middleware<br/>X-Correlation-ID header/ctx"]:::shared
+            Mux["newHTTPMux (main.go:156)<br/>/health &amp; /health/live (health.Handler)<br/>/health/ready &amp; /ready (readyFn)<br/>/metrics (promhttp.Handler)"]:::prod
+            Probes["health.BrokerAttemptContext<br/>contextProxyDialer + deadlineConn<br/>(kafka.go:12-136, READY_TIMEOUT=2s)"]:::shared
+            CorrMW --> Mux --> Probes
+        end
+
+        subgraph CORE["Worker Goroutine &amp; Core Interfaces (relay.go / envelope.go / kafka.go)"]
+            direction TB
+            Cfg["Config (config.go:22-38)<br/>isSafeIdentifier(OUTBOX_TABLE)<br/>pgx.Identifier.Sanitize()"]:::prod
+            RelaySvc["relayService (relay.go:25-38)<br/>db: outboxDB (Begin, Ping)<br/>producer: sarama.SyncProducer<br/>shuttingDown: atomic.Bool<br/>retryMu + retryCounts map[string]int"]:::prod
+            PollLoop["1× pollLoop(pollCtx) Goroutine<br/>Ticker (1s default / 500ms Helm)<br/>Calls relayBatch(ctx)"]:::prod
+            EnvFn["envelope.go Functions<br/>validateOutboxEvent() · resolveKafkaTopic()<br/>buildEventMessage() · buildSaramaHeaders()<br/>buildEnrichedDLQMessage() · buildDLQHeaders()"]:::prod
+            KafkaCfg["newKafkaProducer (kafka.go:138-161)<br/>sarama.V2_5_0_0 · WaitForAll (-1)<br/>Idempotent=true · MaxOpenRequests=1<br/>Retry.Max=10 · Return.Successes=true"]:::prod
+            Cfg --> RelaySvc
+            PollLoop --> RelaySvc --> EnvFn --> KafkaCfg
+        end
+
+        subgraph OBS["Dual Telemetry (telemetry.go &amp; go-shared)"]
+            direction TB
+            Tel["observability.InitOTel (OTLP HTTP, 15s)<br/>relayMetrics: OTel (outbox.relay.*)<br/>+ Prometheus (outbox_relay_*)"]:::shared
+        end
+    end
+
+    subgraph SINKS["4. Kafka Sinks &amp; Verified Contract / Monitoring Drift"]
+        direction TB
+        Topics["Canonical Domain Topics<br/>orders.events · payments.events · etc.<br/>Key = trimmed AggregateID"]:::broker
+        NotifDrift["Topic Drift (envelope.go:62)<br/>'notification' &rarr; notifications.events<br/>vs TopicNames.NOTIFICATION_EVENTS<br/>('notification.events' singular)"]:::broken
+        EnvDrift["ADR-004 Envelope Drift (envelope.go:211)<br/>Dual camelCase + snake_case keys<br/>AND hoists payload fields to root JSON"]:::warn
+        DLQ["Kafka DLQ: outbox.relay.dlq<br/>DRIFT vs ADR-003 ({topic}.DLT)<br/>512B truncated dlq_reason"]:::warn
+        MonDrift["Monitoring &amp; NetworkPolicy Drift<br/>wave-40 alert: http_server_requests_*<br/>Grafana: outbox_events_relayed_total<br/>network-policy: port metrics vs http"]:::broken
+    end
+
+    PGOutbox -->|"pgxpool.Pool (outboxDB)"| RelaySvc
+    PGOutbox -.->|"db.Ping() readiness"| Probes
+    Generic -.-> BIN
+    PerDomain -.-> BIN
+    KafkaCfg -->|"SendMessage()"| Topics
+    KafkaCfg -.->|"fallback map"| NotifDrift
+    KafkaCfg -->|"quarantineEvent()"| DLQ
+    EnvFn -.- EnvDrift
+    Tel -.- MonDrift
+    HelmDrift ~~~ MonDrift

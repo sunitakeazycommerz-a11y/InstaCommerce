@@ -10,6 +10,9 @@
 > [Known Limitations & Current-State Gaps](#known-limitations--current-state-gaps)
 > for the honest delta between target and actual.
 
+> [!TIP]
+> **New to InstaCommerce?** Start with the **[Engineering Onboarding Hub](docs/onboarding/README.md)** (Day-1 setup, 30-service port & Helm key card, Week-1 curriculum, hands-on labs, role tracks, domain/event catalog, incident drills, and **[service dependency & CLI cheatsheet](docs/onboarding/07-service-dependency-and-command-cheatsheet.md)**) and the **[Whole-System Code Walkthrough Atlas](docs/onboarding/code-walkthrough/README.md)** (HLD/LLD/E2E flows, `7` shared components, and `30` per-service code guides).
+
 ---
 
 ## Table of Contents
@@ -638,6 +641,7 @@ Instamart:
 | Document | Path | Description |
 |----------|------|-------------|
 | Documentation hub | [`docs/README.md`](docs/README.md) | Central navigation for all architecture, review, and iter3 materials |
+| Engineering onboarding | [`docs/onboarding/README.md`](docs/onboarding/README.md) | Day-1 setup, `01`–`07` onboarding guides (curriculum, labs, tracks, first-PR, domain/events, drills, dependency/CLI cheatsheet), and `code-walkthrough/` |
 | High-Level Design | [`docs/architecture/HLD.md`](docs/architecture/HLD.md) | C4 system context, container view, domain boundaries, NFRs |
 | Low-Level Design | [`docs/architecture/LLD.md`](docs/architecture/LLD.md) | State machines, sagas, class diagrams, database schemas |
 | Data Flow | [`docs/architecture/DATA-FLOW.md`](docs/architecture/DATA-FLOW.md) | Event-driven flows, outbox, CDC, streaming, GDPR erasure |

@@ -1,0 +1,42 @@
+flowchart TD
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2.2px,stroke-dasharray:6 4,color:#7F1D1D
+    classDef client fill:#F5F3FF,stroke:#6D28D9,stroke-width:1.6px,color:#1E1B4B
+
+    subgraph P1["1. Feature Refresh Flow (ml_feature_refresh.py — Broken Schema Seams)"]
+        direction LR
+        BQSrc[("BigQuery analytics.*<br/>(not produced by dbt)")]:::warn --> RunSQL["compute_{feature_name}<br/>ml/feature_store/sql/*.sql<br/>WRITE_TRUNCATE -&gt; features.{name}"]:::prod
+        RunSQL --> PushVtx["push_to_online_store<br/>EntityType(entity_type_name='*_features')<br/>entity_id_field='entity_id'<br/>MISMATCH: YAML uses user/store; SQL emits *_id"]:::broken
+        PushVtx --> FreshCheck["validate_feature_freshness<br/>SELECT MAX(_updated_at)<br/>MISMATCH: SQL emits feature_timestamp"]:::broken
+    end
+
+    subgraph P2["2. Offline Training &amp; Fail-Closed Evaluation Flow (ml/train/ + ml/eval/)"]
+        direction TB
+        LoadCfg["load_training_config(config.yaml)<br/>+ BigQuery training_* table"]:::prod --> SplitData{"Train / Test Split"}
+        SplitData -->|"personalization: strict ts cutoff<br/>assert_zero_data_leakage()"| TrainPers["PersonalizationTrainer.train()<br/>NumPy dot-product SGD (20 epochs)"]:::warn
+        SplitData -->|"fraud: stratified 80/20<br/>eta/rank: GroupKFold/KFold<br/>demand/clv: time cutoff"| TrainTree["Train XGB / LGB / Prophet / BG-NBD"]:::prod
+        TrainTree -->|"fraud_detection ONLY"| FraudLeak["BUG: calibrate(test_df)<br/>+ tune_threshold(test_df)<br/>+ evaluate(test_df) on SAME test set"]:::broken
+        TrainPers --> EvalGates
+        TrainTree --> EvalGates
+        FraudLeak --> EvalGates["Fail-Closed Promotion Gates<br/>check_metric_gates() / evaluate_promotion_gates()<br/>+ compute_fairness_metrics() (DI &ge; 0.8)"]:::prod
+        EvalGates -->|"NaN / Inf / missing metric -&gt; False"| GateFail["gate_passed = False<br/>(search_ranking logs alert,<br/>still exports &amp; logs MLflow)"]:::warn
+        EvalGates -->|"All gates pass"| GatePass["gate_passed = True<br/>search_ranking calls promote_in_mlflow_registry<br/>(passes 'v1' before export)"]:::warn
+        GatePass --> ExportArt["Export Native Artifacts<br/>model.lgb | model.xgb + metadata.json<br/>models/*.pkl | model_params.json | model.pt + .npy"]:::prod
+        GateFail --> ExportArt
+        ExportArt --> MlflowLog["log_mlflow_run(mlflow)<br/>Safe no-op when mlflow is None"]:::prod
+    end
+
+    subgraph P3["3. Serving Disconnect: ml/serving/ vs Live ai-inference-service (:8101)"]
+        direction LR
+        ArtOut[("Trained Artifacts<br/>model.lgb / model.xgb /<br/>model_params.json / model.pt")]:::warn
+        MLServing["ml/serving/ (UNUSED)<br/>BasePredictor.load() -&gt; verify_model_integrity()<br/>Predictors want model.onnx or model.txt/model.json<br/>ModelRegistry.get() / rollback() / ShadowRunner"]:::broken
+        LiveFastAPI["Live ai-inference-service (:8101)<br/>DEFAULT: linear weights (eta/rank/fraud)<br/>or _rule_based_fallback() (demand/pers/clv/pricing)<br/>Reads Redis user:features:{user_id} via Go ETL"]:::client
+        ArtOut -. "Filename/format mismatch<br/>(.lgb vs .txt, no ONNX export)" .-> MLServing
+        ArtOut -. "Mounted only if<br/>AI_INFERENCE_MODEL_ARTIFACT_DIR set" .-> LiveFastAPI
+        MLServing -. "Never imported<br/>at runtime" .-> LiveFastAPI
+    end
+
+    P1 ~~~ P2
+    P2 --> ArtOut

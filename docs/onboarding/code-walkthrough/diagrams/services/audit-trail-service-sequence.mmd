@@ -1,0 +1,43 @@
+sequenceDiagram
+    autonumber
+    participant Kafka as Kafka (21 Topics)
+    participant Cons as DomainEventConsumer
+    participant Ingest as AuditIngestionService
+    participant Chain as HashChainService
+    participant PG as PostgreSQL audit_db
+    participant PartJob as PartitionMaintenanceJob
+    participant ArchSvc as ArchiveExportPipelineService
+    participant GCS as GCS Bucket
+
+    Note over Kafka,PG: Path 1: Kafka Event Hash-Chained Ingestion (@Transactional)
+    Kafka->>Cons: ConsumerRecord (topic, value, ack-mode=record)
+    Cons->>Cons: objectMapper.readTree() + transformToAuditEvent()
+    alt Parse or Transform Fails
+        Cons->>Kafka: sendToDlt(record) -> audit.DLT (.get(10s))
+    else Valid Request
+        Cons->>Ingest: ingest(AuditEventRequest)
+        Ingest->>Chain: acquireChainLock() -> SELECT pg_advisory_xact_lock(key)
+        Chain->>PG: SELECT event_hash ... ORDER BY sequence_number DESC LIMIT 1
+        PG-->>Chain: previousHash (or SHA256("INSTACOMMERCE_AUDIT_GENESIS"))
+        Chain->>PG: SELECT nextval('audit_chain_seq')
+        PG-->>Chain: seqNum
+        Ingest->>Chain: computeEventHash(event) [SHA-256 v2, sorted details, MICROS]
+        Ingest->>PG: INSERT INTO audit_events (routed to audit_events_YYYY_MM)
+        PG-->>Cons: Commit (releases pg_advisory_xact_lock)
+    end
+
+    Note over PG,GCS: Path 2: Monthly Partition Archival & Safe Detach (ShedLock)
+    PartJob->>PG: SELECT ensure_future_audit_partitions(3)
+    PartJob->>PG: SELECT inhrelid::regclass FROM pg_inherits WHERE inhparent='audit_events'
+    PartJob->>ArchSvc: exportPartition(partitionName, start, end) [@Transactional]
+    ArchSvc->>PG: Paginated findForArchiveWindow(1000/page) -> temp .ndjson.gz + SHA-256
+    ArchSvc->>ArchSvc: validateEncryptionConfig() [throws if enableEncryption=true & kmsKeyId=""]
+    ArchSvc->>GCS: createFrom(blobInfo, tempFile, kmsKeyName?) [up to 3 retries]
+    ArchSvc->>PG: INSERT audit_archive_manifests (verification_status='PENDING')
+    ArchSvc->>GCS: blob.reader() -> stream back & recompute SHA-256
+    alt SHA-256 Matches
+        ArchSvc->>PG: UPDATE manifest verification_status='VERIFIED'
+        PartJob->>PG: ALTER TABLE audit_events DETACH PARTITION {part} CONCURRENTLY
+    else Mismatch / Error
+        ArchSvc->>PG: UPDATE manifest verification_status='FAILED' (throws, partition kept)
+    end

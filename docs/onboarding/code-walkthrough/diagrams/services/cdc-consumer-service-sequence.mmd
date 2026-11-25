@@ -1,0 +1,66 @@
+sequenceDiagram
+    autonumber
+    participant Main as main / HTTP (:8104)
+    participant K as Kafka Broker
+    participant Cons as runConsumer (N goroutines)
+    participant SE as SchemaEvolutionHandler
+    participant Ch as batchCh (cap 2*BatchSize)
+    participant Batch as runBatcherWithDeps (1 goroutine)
+    participant BQ as BigQuery Inserter / Table
+    participant DLQ as Kafka DLQ (cdc.dlq)
+
+    rect rgb(239, 246, 255)
+        Note over Main,BQ: 1. Startup and Fan-Out Wiring
+        Note right of Main: loadConfig() [exits(1) if 5 required vars missing]<br/>initMetrics() + setupTracing(OTLP gRPC)<br/>bigquery.NewClient (or noop) + startHTTPServerWithErr(:8104)
+        Main->>Cons: spawn N runConsumer goroutines (1/topic, CommitInterval=0)
+        Main->>Batch: spawn 1 runBatcherWithDeps goroutine + SetReady(true)
+    end
+
+    rect rgb(240, 253, 244)
+        Note over K,DLQ: 2. Consume, Schema Evolution and Batch Flush
+        Cons->>K: reader.FetchMessage(ctx)
+        K-->>Cons: msg (topic, partition, offset, headers, value)
+        Cons->>Cons: Update cdc_consumer_lag and<br/>extract traceparent via HeaderCarrier
+        Cons->>SE: processMessageForConsumer() -><br/>DetectAndEvolveSchema()
+        opt Unseen fields and outside 30s failureTTL cooldown
+            SE->>BQ: table.Metadata(ctx) + table.Update(nullable cols, AutoDetect)
+            Note over SE,BQ: Errors set 30s failureTTL and inc cdc_schema_evolution_errors_total (non-fatal)
+        end
+        Cons->>Ch: Send batchItem{row or transformErr} (blocks if batchCh full!)
+
+        Note over Ch,Batch: Flush on len(items) >= 500 OR 5s ticker.C OR !ok
+        opt len(transformFailedItems) > 0
+            Batch->>DLQ: sendToDLQWithWriter(ctx=Background(), transformFailedItems, 10s)
+        end
+        opt len(rows) > 0
+            Batch->>BQ: insertWithRetryDeps(rows, BQInsertTimeout=30s)
+            alt All rows OK
+                BQ-->>Batch: nil
+            else bigquery.PutMultiError
+                BQ-->>Batch: failedIndices[]
+                Batch->>DLQ: sendToDLQWithWriter(validItems[failedIndices])
+            else Retryable error (429 / >=500 / timeout)
+                loop Up to BQMaxRetries (5): 1s..30s exp backoff + 20% jitter
+                    Batch->>BQ: Retry inserter.Put(insertCtx 30s, rows)
+                end
+                opt Retries exhausted or permanent 4xx
+                    Batch->>DLQ: sendToDLQWithWriter(validItems)
+                end
+            end
+        end
+        alt All DLQ writes (if any) succeeded
+            Batch->>K: commitMessages(ctx, KafkaCommitTimeout=10s) grouped by *kafka.Reader
+        else DLQ write or commit failed
+            Batch-->>Main: reportErr(err) -> triggers shutdown (uncommitted offsets replay)
+        end
+    end
+
+    rect rgb(254, 242, 242)
+        Note over Main,Batch: 3. Graceful Shutdown Drain Order (SIGINT / SIGTERM / errCh)
+        Note right of Main: healthHandler.SetReady(false) + cancel()
+        Main->>Cons: consumerWg.Wait() (exits on ctx.Done)
+        Main->>Ch: close(batchCh)
+        Batch->>BQ: Final flushBatchWithDeps(ctx=Background())<br/>completes in-flight retries!
+        Batch-->>Main: batchWg.Wait() returns
+        Note right of Main: server.Shutdown(15s)<br/>+ tracerProvider.Shutdown(10s)
+    end

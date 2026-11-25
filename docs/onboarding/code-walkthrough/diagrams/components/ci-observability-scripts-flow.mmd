@@ -1,0 +1,59 @@
+flowchart TB
+    classDef dev fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef ci fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef ops fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef slo fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph ROW1["1. Local Dev Loop -> CI Matrix Execution -> GitOps Dev Promotion"]
+        direction LR
+        subgraph LOCAL_FLOW["A. Local Bootstrap & Pre-Push Validation"]
+            direction TB
+            L1["./scripts/dev-local.sh up<br/>RSA-2048 keys -> .local-dev/.env.local<br/>Compose PG16/Redis7/Kafka/Debezium/Temporal"]:::dev
+            L2["ensure_postgres_roles_and_dbs (39 DBs)<br/>Apply Go SQL + Temporal namespaces<br/>start-core boots 10 Java svcs + smoke"]:::dev
+            L3["Pre-PR Checks<br/>check-monorepo-consistency.sh (422 checks)<br/>lsp-walkthrough check (gopls/pyright/gradle/protolint)"]:::dev
+            L1 --> L2 --> L3
+        end
+
+        subgraph CI_FLOW["B. GitHub Actions CI & Deploy Flow (.github/workflows/ci.yml)"]
+            direction TB
+            C1["detect-changes (paths-filter@v4)<br/>Set Java/Go/Py matrices + cloud_publish_configured"]:::ci
+            C2["Parallel Quality Gates<br/>Java build/spotless · Go build/lint/-race · Py ruff/pyright/pytest<br/>contract-validation · helm-validation · repo-governance-lint<br/>data-platform-quality · ml-validation · e2e-synthetic-test · security-scan"]:::ci
+            C3{"main/master push &<br/>cloud_publish_configured?"}:::ci
+            C4["Build & Push Docker Images + Trivy<br/>Java/Py: google-github-actions/auth@v3 (Py lacks id-token)<br/>Go: docker/login-action w/ GCP_SA_KEY (no WIF)"]:::gap
+            C5["deploy-dev<br/>yq updates deploy/helm/values-dev.yaml tags<br/>git commit & push '[skip ci]' -> ArgoCD sync"]:::ci
+            C1 --> C2 --> C3
+            C3 -- "Yes" --> C4 --> C5
+            C3 -- "No / PR" --> C_STOP["PR Gate Complete<br/>(+ dependency-review on PRs)"]:::ops
+        end
+
+        L3 -->|"git push"| C1
+    end
+
+    subgraph ROW2["2. Runtime Telemetry -> Burn-Rate Alerting -> Error-Budget Gate & Incident Ops"]
+        direction LR
+        subgraph OBS_FLOW["C. Telemetry, Burn-Rate Evaluation & Budget Gate"]
+            direction TB
+            O1["Signals & Probes<br/>Java Actuator · Go/Py /metrics · Beyla eBPF<br/>checkout_canary.py (60s -> :9102) · blackbox-http (9 targets)"]:::ops
+            O2["OTel Collector + Prometheus<br/>6-policy tail_sampling (10s) -> Tempo/Jaeger<br/>prometheus-rules.yaml: 18 SLI rules (30s) + 28 alerts"]:::slo
+            O3["Alertmanager Routing<br/>severity=page|critical -> PagerDuty + #incidents<br/>inhibits warning for same service"]:::slo
+            O4["check-error-budget-gate.sh --service {svc}<br/>Queries 30d HTTP availability vs Tier 0/1/2 target"]:::slo
+            O5{"remaining &lt; 0%?"}:::slo
+            O6["Freeze Deployment (exit 1)<br/>Unless --emergency-override + VP token"]:::gap
+            O7["Gate Passed (exit 0)<br/>Promotion Allowed"]:::dev
+            O1 --> O2 --> O3
+            O2 --> O4 --> O5
+            O5 -- "Yes" --> O6
+            O5 -- "No" --> O7
+        end
+
+        subgraph OPS_FLOW["D. Contract Sync, Chaos/E2E & Remediation CLIs"]
+            direction TB
+            K1["Contract Sync (generate-proto.sh)<br/>protolint -> :contracts:build -> Go pb stubs<br/>CI fails if git status dirty or breaking diff"]:::ci
+            K2["DLQ & Failover Operations<br/>saga-dlq-retry.sh: /checkout/dlq (missing auth!) or Kafka DLT<br/>dr-database-failover-drill.sh: promote replica + Cloud DNS (&lt;60s RTO)<br/>phase-2-sf-*.sh: SF canary deploy/verify/rollback"]:::ops
+            K3["Chaos & E2E Verification<br/>run_chaos_suite.sh -> PodChaos (staging) + pytest mocks (100 runs)<br/>e2e-synthetic-test -> tsc + Playwright Chromium (mock-routes.ts)"]:::ops
+            K1 --- K2 --- K3
+        end
+    end
+
+    ROW1 ~~~ ROW2

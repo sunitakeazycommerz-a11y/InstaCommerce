@@ -1,0 +1,38 @@
+flowchart LR
+    subgraph Sources["Upstream Inputs & Drift Seams"]
+        CDC_IN[("Kafka CDC Topics<br/>payments.cdc (NO Terraform connector!)<br/>reconciliation.cdc (ExtractNewRecordState)")]
+        API_IN["HTTP Operators<br/>admin-gateway / payment / order<br/>(X-Internal-Service/Token)"]
+    end
+
+    subgraph Runtime["reconciliation-engine :8107 (main.go)"]
+        direction TB
+        CONS["pkg/cdc.CDCConsumer<br/>kafka.Reader (group: reconciliation-cdc-consumer)<br/>processMessageCtx -> parsePaymentLedgerRecord<br/>+ in-mem dailySnapshots + DLT writer"]
+        SCHED["pkg/reconciliation.DailyScheduler<br/>5m / HH:MM / cron<br/>(RunOnStartup=true UNWIRED!)<br/>pg_try_advisory_lock(7283910451)"]
+        REC["pkg/reconciliation.DBReconciler<br/>ReconcileRange (SAVEPOINT mismatch_sp)<br/>ApplyFix (FOR UPDATE + ADJUSTED)<br/>GetPendingMismatches / ListRuns"]
+        HTTP["HTTP Mux (correlation.Middleware)<br/>Open: /health, /health/live, /health/ready, /ready, /metrics<br/>Auth: /reconciliation/* & /pending"]
+        PUB["EventPublisher (sync RequireAll, 5s)<br/>Post-commit best-effort (NO outbox)"]
+        HTTP --> REC
+        SCHED --> REC
+        REC --> PUB
+    end
+
+    subgraph Storage["PostgreSQL: reconciliation DB (schema_init.go + V1..V5)"]
+        T_RUN[("reconciliation_runs<br/>reconciliation_mismatches<br/>reconciliation_fixes")]
+        T_LED[("payment_ledger<br/>source_lsn monotonic upsert")]
+        T_PSP[("psp_export_snapshot<br/>ZERO prod writers!")]
+        T_DEAD[("reconciliation_fix_registry (V2)<br/>reconciliation_outbox (V3)<br/>UNUSED by Go runtime")]
+    end
+
+    subgraph KafkaOut["Kafka Outputs"]
+        T_EVT[("reconciliation.events<br/>MismatchFound / DiscrepancyAlert<br/>ReconciliationCompleted")]
+        T_DLT[("reconciliation.events.DLT<br/>Permanent / >3x retry CDC msgs")]
+    end
+
+    CDC_IN --> CONS
+    API_IN --> HTTP
+    CONS --> T_LED
+    CONS --> T_DLT
+    REC --> T_RUN
+    REC --> T_LED
+    REC --> T_PSP
+    PUB --> T_EVT

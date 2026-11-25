@@ -1,0 +1,76 @@
+flowchart TB
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef broker fill:#F8FAFC,stroke:#475569,stroke-width:2px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2.2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph BACKBONE["A. Dual-Lane Event Backbone, Lakehouse, ML & GenAI Runtime"]
+        direction TB
+        SvcPG["Java Service Postgres<br/>Domain rows + outbox_events<br/>(same local ACID transaction)"]:::store
+        DebeziumPG["Reconciliation Postgres WAL<br/>pgoutput logical replication"]:::store
+        OutboxRelay["outbox-relay-service (Go :8103 ×13)<br/>FOR UPDATE SKIP LOCKED (500ms/1s)<br/>WaitForAll; 3× → outbox.relay.dlq<br/>DRIFT: dual keys + flat payload"]:::warn
+        Debezium["Debezium Connect (TF)<br/>debezium_reconciliation_* →<br/>reconciliation.cdc (no payments.cdc<br/>connector defined in repo)"]:::warn
+        KafkaEvents["Kafka Domain &amp; CDC Topics<br/>orders/payments/fulfillment.events<br/>reconciliation.cdc (+ payments.cdc)"]:::broker
+
+        StreamProc["stream-processor (Go :8108)<br/>8 topics (singular+plural), Bloom+<br/>Redis dedup; 800/300 watermarks →<br/>Redis/Prom ONLY (no BQ, .DLT)"]:::prod
+        ReconEng["reconciliation-engine (Go :8107)<br/>Tails CDC → T+1 matcher<br/>GAP: 0 psp_export_snapshot writers;<br/>dead outbox; auth amt; 'INR'"]:::broken
+        CDCConsumer["cdc-consumer-service (Go :8104)<br/>Kafka → BigQuery insertID + cdc.dlq<br/>BROKEN HELM: missing KAFKA_* &amp;<br/>BQ_* env vars → startup crash"]:::broken
+
+        Lakehouse["BigQuery Lakehouse (asia-south1)<br/>DRIFT: cdc-consumer → 1 BQ_TABLE<br/>Beam (6 jobs) → analytics.*; raw.*<br/>vs dbt expecting 8 raw_cdc.* tables"]:::broken
+        DbtAirflow["dbt (8→3→10) &amp; Airflow (8 DAGs)<br/>ExternalTask + KafkaLag (≤100)<br/>BROKEN GE: payments/inventory/<br/>users mismatch stg_*.sql cols"]:::warn
+        OfflineML["Offline ML (ml/) &amp; Feature Store<br/>[T-30d, T-1d]; 6 trainers + ≥0.8 eval<br/>BROKEN: ml_feature_refresh needs<br/>entity_id/_updated_at; fraud leaks"]:::broken
+
+        RevETL["reverse-etl-orchestrator (:8109)<br/>STUBBED: Kafka/Temporal UNCONFIGURED<br/>No BQ reader (HTTP POST push only)<br/>Lua atomic RENAME + PEXPIRE swap"]:::broken
+        RedisFeat["Redis Operational Feature Store<br/>user:features:{id} (36h)<br/>fraud:score:{id} (36h)<br/>store:inventory:{id} (24h)"]:::store
+        AIInfer["ai-inference-service (Py :8101)<br/>ml/serving/ unused; empty model dirs<br/>SCAFFOLDED: linear_score() &amp;<br/>_rule_based_fallback (mock ONNX)"]:::warn
+        AIOrch["ai-orchestrator-service (Py :8100)<br/>LangGraph + PIIVault + $0.50 cap<br/>BROKEN AUTH: tools.py reads<br/>AI_ORCHESTRATOR_INTERNAL_<br/>SERVICE_TOKEN vs Helm; no LLM URL"]:::broken
+        CoreTools["6 Core Java Svcs (HTTP Tools)<br/>search, catalog, pricing,<br/>inventory, cart, order"]:::prod
+    end
+
+    subgraph GITOPS["B. Developer-to-GKE GitOps Loop, Mesh & SLOs"]
+        direction TB
+        LocalDev["Local Dev &amp; Consistency Gate<br/>./scripts/dev-local.sh up/start-core<br/>39 PG DBs, Redis, Kafka, Temporal<br/>Ephemeral RSA-2048 + sm:// bypass<br/>consistency.sh --strict-docs (422/422)"]:::prod
+        CICheck["GitHub Actions (ci.yml)<br/>paths-filter@v4 → build/test/scan<br/>Push SHA → Artifact Registry<br/>GAP: go-build-test lacks WIF<br/>(requires GCP_SA_KEY)"]:::warn
+        GitOpsRepo["GitOps Config Mutation<br/>yq updates values-dev.yaml<br/>with github.sha [skip ci]<br/>(no staging/prod auto-promote)"]:::prod
+        ArgoCD["ArgoCD Sync<br/>argocd/app-of-apps.yaml (1 App)<br/>syncs values.yaml + values-dev.yaml<br/>(canary YAMLs ref missing VS)"]:::warn
+        GKEHelm["GKE + Helm + Istio Mesh<br/>STRICT mTLS, EnvoyFilter, JWKS,<br/>43 servicePolicies + 6 authz<br/>BROKEN: NetPol port:metrics vs<br/>name:http blocks Prom scrapes;<br/>13 outbox-relay-* omitted; TF 17 DBs"]:::broken
+        SLOGate["SLOs &amp; Release Gate (ADR-015)<br/>Tier 0 99.9% / T1 99.5% / T2 99.0%<br/>Burn 14.4×/6×/3× + budget-gate.sh<br/>DRIFT: wave-40 queries Spring/ES<br/>on Go/Py/PG; 0 Grafana JSONs"]:::warn
+    end
+
+    subgraph LEGEND["Legend"]
+        L1["Active / Production-Ready"]:::prod
+        L2["Storage / Feature Store"]:::store
+        L3["Kafka Topic / Broker"]:::broker
+        L4["Scaffolded / Fallback / Drift"]:::warn
+        L5["Broken / Unwired / Blocked"]:::broken
+    end
+
+    SvcPG -->|"Poll SKIP LOCKED"| OutboxRelay
+    OutboxRelay -->|"Domain topics"| KafkaEvents
+    DebeziumPG -->|"WAL pgoutput"| Debezium
+    Debezium -->|"reconciliation.cdc"| KafkaEvents
+
+    KafkaEvents -->|"8 topics"| StreamProc
+    StreamProc -->|"Metrics + geo/SLA"| RedisFeat
+    KafkaEvents -->|"CDC stream"| ReconEng
+    KafkaEvents -. "Crashes under Helm" .-> CDCConsumer
+
+    CDCConsumer -. "1 table vs dbt" .-> Lakehouse
+    Lakehouse -->|"Broken GE / raw_cdc*"| DbtAirflow
+    DbtAirflow -. "Missing cols" .-> OfflineML
+    OfflineML -. "No BQ→RevETL wire" .-> RevETL
+    RevETL -->|"HTTP push → Lua"| RedisFeat
+
+    RedisFeat -->|"Batch (default none)"| AIInfer
+    OfflineML -. "Unused ml/serving/" .- AIInfer
+    RedisFeat -->|"LangGraph checkpoints"| AIOrch
+    AIOrch -. "8 tools: omits X-Internal-Token" .-> CoreTools
+
+    LocalDev -->|"git push"| CICheck
+    CICheck -->|"SHA + yq"| GitOpsRepo
+    GitOpsRepo -->|"Auto-sync"| ArgoCD
+    ArgoCD -->|"Helm apply"| GKEHelm
+    GKEHelm -. "Scrapes blocked" .-> SLOGate
+    SLOGate -->|"Blocks &lt;0% budget"| CICheck
+    SLOGate ~~~ LEGEND

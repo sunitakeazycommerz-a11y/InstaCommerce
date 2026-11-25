@@ -1,0 +1,36 @@
+flowchart TD
+    classDef start fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef step fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.5px,color:#0F172A
+
+    subgraph PICK_WAVE["1. S-Curve Routing &amp; 4-Tote Wave Batching"]
+        direction TB
+        OP(["OrderPlaced -&gt; createPickTask"]):::start --> SCURVE["AisleRoutingOptimizer.optimizePickPath:<br/>TreeMap by aisle (fallback SKU hash A01..A10)<br/>even aisle: shelf ASC, bin ASC<br/>odd aisle: shelf DESC, bin DESC<br/>move fragile=true to tail; assign pickSequence"]:::step
+        WAVE(["POST /fulfillment/batches"]):::start --> SKIPLOCK["SELECT ... FOR UPDATE SKIP LOCKED (-2)<br/>LIMIT min(maxOrders, 4) PENDING unbatched"]:::step
+        SKIPLOCK --> TOTES["Assign TOTE-RED/BLUE/GREEN/YELLOW-{ORDER8}<br/>Re-run S-curve optimizer across batch items"]:::ok
+    end
+
+    subgraph SCAN_PACK["2. Item Scan, Missing/Sub &amp; Auto-Pack"]
+        direction TB
+        SCAN(["markItem(orderId, productId)"]):::start --> DEB{"Caffeine debounce<br/>&lt; 1000ms?"}:::dec
+        DEB -->|Yes| DUP_ERR["Throw DuplicateScanException"]:::err
+        DEB -->|No| WT_CHK["Check measuredWeightGrams vs tare*qty (+/-5%)<br/>log WEIGHT_DISCREPANCY_DETECTED"]:::step
+        WT_CHK --> DELTA{"missingQtyDelta &gt; 0 or<br/>substitutedQtyDelta &gt; 0?"}:::dec
+        DELTA -->|Yes| SUB["SubstitutionService.handleMissingItem:<br/>TX: OrderModified + ItemSubstituted outbox<br/>AFTER_COMMIT: RestInventoryClient /adjust<br/>(RestPaymentClient UNUSED - defers to OrderModified)"]:::step
+        DELTA -->|No| PEND_CHK{"PENDING items == 0<br/>&amp;&amp; (PICKED+SUB &gt; 0)?"}:::dec
+        SUB --> PEND_CHK
+        PEND_CHK -->|Yes| PACK["completeTask -&gt; COMPLETED<br/>WarehouseClient.getStoreCoordinates<br/>outbox OrderPacked + HTTP callback PACKED"]:::ok
+    end
+
+    subgraph HANDOFF_POD["3. OTP Handoff &amp; Masked WEBP POD"]
+        direction TB
+        RA(["RiderAssigned -&gt; syncRiderAssignment"]):::start --> OTP["Upsert riders projection + Delivery(ASSIGNED)<br/>generate 6-digit SecureRandom dispatchOtp"]:::step
+        OTP --> HO{"verifyRiderHandoff:<br/>riderId &amp; OTP match?"}:::dec
+        HO -->|No| HO_ERR["Throw InvalidRiderHandoffException"]:::err
+        HO -->|Yes| PICKUP["Status=PICKED_UP + RiderHandoffCompleted<br/>+ HTTP callback OUT_FOR_DELIVERY"]:::step
+        PICKUP --> POD{"recordProofOfDelivery:<br/>WEBP &amp;&amp; &lt;=200KB &amp;&amp; masked?"}:::dec
+        POD -->|No| POD_ERR["Throw InvalidProofOfDeliveryException"]:::err
+        POD -->|Yes| DEL["markDelivered -&gt; DELIVERED + rider available<br/>outbox OrderDelivered + HTTP DELIVERED"]:::ok
+    end

@@ -1,0 +1,61 @@
+flowchart TB
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2.2px,stroke-dasharray:6 4,color:#7F1D1D
+    classDef client fill:#F5F3FF,stroke:#6D28D9,stroke-width:1.6px,color:#1E1B4B
+
+    subgraph FEATURES["Feature Definitions &amp; Store Contracts (ml/features/, ml/feature_store/)"]
+        direction LR
+        FeatDefs["feature_definitions.py<br/>FeatureWindow(30d, exclude_current_day=True)<br/>compute_user_conversion_rate_30d()<br/>verify_feature_parity() (&lt; 1% drift)"]:::prod
+        FSRegistry["YAML Registry (entities/ groups/ views/ ingestion/)<br/>5 entities: user, product, store, rider, search_query<br/>5 feature_groups (53 feats) + 5 feature_views<br/>user_features_job.yaml (batch 4h + Kafka order.events)"]:::prod
+        FSSql["BigQuery SQL (5 feature_store/sql/*.sql)<br/>Reads analytics.fact_* &amp; dim_* (non-dbt schema)<br/>3 placeholder tables; 2 SQL alias bugs;<br/>omits embedding_vector; emits feature_timestamp"]:::warn
+    end
+
+    subgraph ORCH["Airflow Orchestration (data-platform/airflow/dags/)"]
+        direction LR
+        RefreshDag["ml_feature_refresh.py (0 */4 * * *)<br/>Runs 5 sql/*.sql -&gt; BQ features.{name}<br/>BROKEN: entity_id_field='entity_id',<br/>EntityType='*_features' (vs user/store), _updated_at"]:::broken
+        TrainDag["ml_training.py (0 4 * * *)<br/>Vertex AI CustomJob (us-central1) for 4 models<br/>GCS metrics.json -&gt; MLflow -&gt; Vertex Endpoint<br/>Shared evaluate_promotion_gates() + fallback"]:::warn
+        RankDag["search_ranking_retraining.py (0 2 * * 0)<br/>In-DAG LightGBM or _LinearFallbackRanker<br/>_check_promotion_gates -&gt; MLflow +<br/>shadow_deployment.json manifest"]:::prod
+    end
+
+    subgraph TRAIN["Training, Evaluation &amp; Experiments (ml/train/, ml/eval/, ml/experiments/)"]
+        direction TB
+        CommonPy["ml/train/common.py: GateRule, check_metric_gates() (fail-closed), build_training_parser(), log_mlflow_run()"]:::prod
+        EvalPy["ml/eval/evaluate.py &amp; metrics.py: ModelEvaluator, METRIC_ALIASES, evaluate_promotion_gates(), compute_fairness_metrics() (DI &ge; 0.8)"]:::prod
+        ExpPy["ml/experiments/experiment_client.py: murmur3_32() (Java Guava bucket 27 parity) + ExperimentClient (experiment.exposure.events)"]:::prod
+        subgraph TRAINERS["6 Trainers (ml/train/{model}/train.py + config.yaml)"]
+            direction LR
+            T_Rank["search_ranking<br/>LGBMRanker (GroupKFold)<br/>model.lgb; dead SHAP call"]:::prod
+            T_Eta["eta_prediction<br/>LGBMRegressor (KFold, stage)<br/>model.lgb"]:::prod
+            T_Demand["demand_forecast<br/>Prophet + INDIAN_HOLIDAYS<br/>models/{store}__{sku}.pkl"]:::prod
+            T_Clv["clv_prediction<br/>BG/NBD + Gamma-Gamma MLE<br/>model_params.json"]:::prod
+            T_Fraud["fraud_detection<br/>XGBoost + isotonic + thresh<br/>LEAK: calibrates/tunes on test_df;<br/>exports uncalibrated model.xgb"]:::broken
+            T_Pers["personalization<br/>Doc says Two-Tower NCF;<br/>runs NumPy dot-product SGD;<br/>features.py unused; model.pt"]:::warn
+        end
+    end
+
+    subgraph SERVING_ML["ml/serving/ &amp; ml/mlops/ — Standalone Library (DISCONNECTED from Runtime)"]
+        direction LR
+        BasePred["BasePredictor + 6 Predictors<br/>(ETA, Fraud, Ranking, Demand, Pers, CLV)<br/>Expect model.onnx / model.txt / model.json;<br/>ETAPredictor never calls self._model"]:::broken
+        RegMod["ModelRegistry + ABTestRouter<br/>verify_model_integrity() (CHECKSUMS.sha256,<br/>strict=False default), rollback(), kill()"]:::warn
+        ShadowMon["ShadowRunner (ml.shadow.events, 10% rel tol)<br/>ModelMonitor (PSI 0.1/0.2, KS alpha=0.01, 5% BQ)<br/>mlops/: model_card_template + shadow JSON"]:::warn
+    end
+
+    subgraph RUNTIME["Live Production Runtime (services/)"]
+        direction LR
+        AiInf["ai-inference-service (:8101, FastAPI)<br/>Own ModelRegistry (DEFAULT_WEIGHTS linear),<br/>own 7 app/models/* + ManagedOnnxSession<br/>Imports ONLY ml.experiments.experiment_client"]:::client
+        RevETL[("Redis Online Store<br/>user:features:{user_id}<br/>Synced by reverse-etl-orchestrator")]:::store
+    end
+
+    FSRegistry --> FSSql --> RefreshDag
+    TrainDag -. "CustomJob images<br/>(no ml/train wiring)" .-> TRAINERS
+    RankDag --> T_Rank
+    CommonPy --> TRAINERS
+    TRAINERS --> EvalPy
+    TRAINERS -. "Artifact format mismatch<br/>(.lgb/.xgb/params.json vs .txt/.onnx)" .-> BasePred
+    ExpPy -->|"ONLY runtime import from ml/"| AiInf
+    FeatDefs -. "Test parity check only" .-> AiInf
+    RevETL -->|"HGETALL user:features:{id}"| AiInf
+    BasePred --- RegMod --- ShadowMon
+    SERVING_ML -. "ZERO imports in services/*" .-> AiInf

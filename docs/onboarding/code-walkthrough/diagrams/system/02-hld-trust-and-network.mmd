@@ -1,0 +1,43 @@
+flowchart TB
+    classDef client fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef mesh fill:#EEF2FF,stroke:#4338CA,stroke-width:1.6px,color:#1E1B4B
+    classDef auth fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef internal fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.7px,color:#7F1D1D
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:1.5px,color:#78350F
+
+    EXT(["Untrusted Internet Clients<br/>Mobile App · Admin Console · Rider App · PSP Webhooks"]):::client
+
+    subgraph L1["Layer 1: Istio Zero-Trust Service Mesh & K8s NetworkPolicy"]
+        direction LR
+        ENVOY["EnvoyFilter: strip-internal-headers<br/>Unconditionally removes x-internal-token,<br/>x-internal-service, x-user-id, x-user-roles"]:::mesh
+        REQAUTH["RequestAuthentication (7 policies)<br/>Validates JWT via JWKS at<br/>identity-service:8081/.well-known/jwks.json"]:::mesh
+        AUTHPOL["PeerAuthentication: STRICT mTLS<br/>AuthorizationPolicy: deny-default + 43 allow-{svc}<br/>+ 6 custom rules · K8s NetworkPolicy default-deny"]:::mesh
+        NP_GAP["TRAP: NetworkPolicy allows Prometheus<br/>on port: metrics, while deployment.yaml<br/>exposes only name: http (blocks scrape!)"]:::gap
+        ENVOY --> REQAUTH --> AUTHPOL
+    end
+
+    subgraph L2_EDGE["Layer 2a: Identity & Edge Gateways"]
+        direction LR
+        ID["identity-service :8081<br/>RS256 mint (900s access / 604800s refresh)<br/>Hardcodes aud='instacommerce-api'<br/>Redis TokenBlocklist (fail-closed)"]:::auth
+        MBFF["mobile-bff-service :8080<br/>UserContextPropagationFilter:<br/>strips internal/user hdrs, sets X-User-Id,<br/>X-User-Roles, X-Customer-Tier, baggage"]:::auth
+        AGW["admin-gateway-service :8099<br/>AdminJwtAuthenticationFilter:<br/>bridges aud='instacommerce-api' w/ ADMIN<br/>AdminSecurityAuditFilter -> audit-trail"]:::auth
+        EDGE_GAP["EDGE GAPS:<br/>1. Single static RSA key (no JWKS/blocklist)<br/>2. identity unknown kid falls back to default key<br/>3. ROLE_ADMIN can assign ROLE_SUPER_ADMIN"]:::gap
+    end
+
+    subgraph L2_INT["Layer 2b: East-West Internal Token Perimeter (ADR-006 / 010 / 012)"]
+        direction LR
+        JAVA_FILTER["SharedInternalServiceAuthFilter (11 Java svcs)<br/>+ go-shared/pkg/auth (8 Go) + auth.py (2 Py)<br/>Constant-time X-Internal-Service + X-Internal-Token<br/>Grants ROLE_INTERNAL_SERVICE + ROLE_SERVICE_{CALLER}"]:::internal
+        LOCAL_FILTER["5 Local InternalServiceAuthFilter Svcs:<br/>audit-trail :8096 (supports strict mode) +<br/>catalog, feature-flag, order, payment (no strict)<br/>Grant ROLE_INTERNAL_SERVICE only · 4 omit filter"]:::warn
+        INT_GAP["ROLLOUT & AUTH GAPS:<br/>1. Only identity-service sets allowed-callers (30)<br/>2. strictPerServiceTokens=false everywhere else<br/>3. checkout-orchestrator omits InternalFilter<br/>4. ai-orchestrator tools.py token env mismatch<br/>5. platform-common JwtTokenVerifier: 0 callers"]:::gap
+    end
+
+    EXT -->|"HTTPS (TLS 443)"| ENVOY
+    AUTHPOL -->|"Auth / Refresh"| ID
+    ID -. "JWKS" .-> REQAUTH
+    AUTHPOL -->|"Mobile API"| MBFF
+    AUTHPOL -->|"Admin API"| AGW
+    MBFF -->|"X-Internal-* + X-User-*"| JAVA_FILTER
+    AGW -->|"X-Internal-*"| JAVA_FILTER
+    AGW -->|"Sync ADMIN_MUTATION"| LOCAL_FILTER
+    JAVA_FILTER -. "Blocked unless JWT ADMIN" .-> INT_GAP

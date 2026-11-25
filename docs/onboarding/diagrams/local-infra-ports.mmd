@@ -1,0 +1,99 @@
+flowchart TB
+    classDef infra fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef ui fill:#F5F3FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef core fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef domain fill:#E0F2FE,stroke:#0284C7,stroke-width:1.6px,color:#0F172A
+    classDef py fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#0F172A
+    classDef go fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+
+    subgraph DC["Docker Compose Local Infrastructure (docker-compose.yml)"]
+        direction LR
+        PG["PostgreSQL 16<br/>:5432 (39 DBs/aliases)"]:::infra
+        RED["Redis 7<br/>:6379"]:::infra
+        KAF["Kafka KRaft<br/>:9092 (ext) / :29092 (int)"]:::infra
+        DEB["Debezium Connect<br/>:18083 -> :8083"]:::infra
+        TMP["Temporal Server<br/>:7233 (instacommerce / reverse-etl)"]:::infra
+        TUI["Temporal UI<br/>:8233 -> :8080"]:::ui
+        KUI["Kafka UI<br/>:8070 -> :8080"]:::ui
+        PG ~~~ RED ~~~ KAF ~~~ DEB ~~~ TMP
+        KAF --- KUI
+        TMP --- TUI
+    end
+
+    subgraph HOST["Host-Run Microservices (30 Services across 3 Runtimes)"]
+        direction LR
+        subgraph JAVA_CORE["Java 21: start-core Defaults (:8080-8099)"]
+            direction LR
+            subgraph JC1["Edge & Discovery Core"]
+                direction TB
+                MBFF["mobile-bff-service :8080"]:::core
+                ID["identity-service :8081"]:::core
+                CAT["catalog-service :8082"]:::core
+                PRC["pricing-service :8089"]:::core
+                AGW["admin-gateway-service :8099"]:::core
+                MBFF ~~~ ID ~~~ CAT ~~~ PRC ~~~ AGW
+            end
+            subgraph JC2["Cart, Stock, Order & Saga Core"]
+                direction TB
+                CART["cart-service :8090"]:::core
+                INV["inventory-service :8083"]:::core
+                ORD["order-service :8084"]:::core
+                PAY["payment-service :8085"]:::core
+                CHK["checkout-orchestrator :8091"]:::core
+                CART ~~~ INV ~~~ ORD ~~~ PAY ~~~ CHK
+            end
+            JC1 ~~~ JC2
+        end
+
+        subgraph JAVA_DOM["Java 21: Domain & Platform (:8086-8098)"]
+            direction LR
+            subgraph JD1["Fulfillment, Search & Notify"]
+                direction TB
+                FUL["fulfillment-service :8086"]:::domain
+                NTF["notification-service :8087"]:::domain
+                SRCH["search-service :8088"]:::domain
+                WH["warehouse-service :8092"]:::domain
+                RDR["rider-fleet-service :8093"]:::domain
+                FUL ~~~ NTF ~~~ SRCH ~~~ WH ~~~ RDR
+            end
+            subgraph JD2["ETA, Wallet, Risk & Flags"]
+                direction TB
+                ETA["routing-eta-service :8094"]:::domain
+                WAL["wallet-loyalty-service :8095"]:::domain
+                AUD["audit-trail-service :8096"]:::domain
+                FRD["fraud-detection-service :8097"]:::domain
+                FLG["config-feature-flag :8098"]:::domain
+                ETA ~~~ WAL ~~~ AUD ~~~ FRD ~~~ FLG
+            end
+            JD1 ~~~ JD2
+        end
+
+        subgraph PY_GO["Python (:8100-8101) & Go (:8102-8109)"]
+            direction LR
+            subgraph PY["Python 3.12 FastAPI"]
+                direction TB
+                AIO["ai-orchestrator-service :8100"]:::py
+                AII["ai-inference-service :8101"]:::py
+                AIO ~~~ AII
+            end
+            subgraph GO1["Go 1.25 Solvers & Ingestion"]
+                direction TB
+                DOPT["dispatch-optimizer :8102"]:::go
+                LOC["location-ingestion :8105"]:::go
+                PWH["payment-webhook :8106"]:::go
+                RECON["reconciliation-engine :8107"]:::go
+                DOPT ~~~ LOC ~~~ PWH ~~~ RECON
+            end
+            subgraph GO2["Go 1.25 Event & Data Daemons"]
+                direction TB
+                OBR["outbox-relay-service :8103"]:::go
+                CDC["cdc-consumer-service :8104"]:::go
+                STR["stream-processor-service :8108"]:::go
+                RETL["reverse-etl-orchestrator :8109"]:::go
+                OBR ~~~ CDC ~~~ STR ~~~ RETL
+            end
+            PY ~~~ GO1 ~~~ GO2
+        end
+    end
+
+    DC <-->|"JDBC :5432 · Redis :6379 · Kafka :9092 · Temporal :7233"| HOST

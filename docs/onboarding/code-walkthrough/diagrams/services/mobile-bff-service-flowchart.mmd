@@ -1,0 +1,32 @@
+flowchart TD
+    Req["Incoming HTTP Request<br/>/bff/mobile/v1/* or /m/v1/*"] --> Corr["CorrelationIdWebFilter<br/>Validate SAFE_ID or generate UUID<br/>Set X-Correlation-Id + Reactor ctx"]
+    Corr --> HasBearer{"Authorization: Bearer ...<br/>AND keyLoader.hasKey()?"}
+
+    HasBearer -- "No" --> StripAnon["stripUntrustedHeaders()<br/>Remove X-User-*, X-Internal-*, baggage"]
+    HasBearer -- "Yes" --> ParseJwt["DefaultJwtService.validateAccessToken()<br/>Verify static RSA + issuer"]
+
+    ParseJwt -- "JwtException / IllegalArgument" --> StripAnon
+    ParseJwt -- "Valid JWT" --> InjectCtx["Strip X-Internal-*<br/>Set X-User-Id, X-User-Roles, X-Customer-Tier,<br/>X-Order-Value-Bracket, baggage + Auth ctx"]
+
+    StripAnon --> AuthZ{"Route requires<br/>authenticated()?"}
+    AuthZ -- "Yes (unauthenticated)" --> E401["401 Unauthorized"]
+    AuthZ -- "No (permitAll)" --> InputChk
+    InjectCtx --> InputChk
+
+    InputChk{"SAFE_STORE_ID /<br/>SAFE_ID regex valid?"}
+    InputChk -- "No" --> E400["400 VALIDATION_ERROR<br/>RFC 7807 ProblemDetail"]
+    InputChk -- "Yes" --> BolaChk{"BOLA owner check passes<br/>or ADMIN / SUPER_ADMIN?"}
+
+    BolaChk -- "No" --> E403["403 ACCESS_DENIED<br/>MobileBffAccessDeniedHandler"]
+    BolaChk -- "Yes" --> FanOut["Fan out via UpstreamClientFactory<br/>with X-Internal-Service + X-Internal-Token"]
+
+    FanOut --> CbCheck{"CB.tryAcquirePermission()"}
+    CbCheck -- "OPEN + Critical call<br/>(catalog / order / checkout)" --> E503["503 SERVICE_UNAVAILABLE"]
+    CbCheck -- "OPEN + Soft call<br/>(pricing / inventory / cart / wallet / eta)" --> SoftDegrade["Add service to degradedServices<br/>Return fallback ({} or empty items)"]
+
+    CbCheck -- "Permitted" --> HttpExec["WebClient call .timeout(2000ms)"]
+    HttpExec -- "2xx" --> RecordOk["CB.onResult()"]
+    HttpExec -- "4xx on Critical" --> RelPerm["isClientError() -> CB.releasePermission()<br/>(No CB failure recorded)"]
+    RelPerm --> Prop4xx["Propagate 404 / 4xx ResponseStatusException"]
+    HttpExec -- "5xx / Timeout on Critical" --> TripCrit["CB.onError() -> 502 BAD_GATEWAY"]
+    HttpExec -- "Error / Timeout on Soft" --> TripSoft["CB.onError() -> SoftDegrade<br/>Attach degraded: true"]

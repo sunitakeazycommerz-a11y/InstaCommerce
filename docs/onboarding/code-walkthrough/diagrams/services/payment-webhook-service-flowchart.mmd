@@ -1,0 +1,21 @@
+flowchart TD
+    REQ(["HTTP Request to /payments/webhook or /webhooks/{psp}"]) --> MCHECK{"r.Method == POST?"}
+    MCHECK -->|No| E405["405 Method Not Allowed<br/>Allow: POST"]
+    MCHECK -->|Yes| CFG{"Verifier configured<br/>AND Producer != Unconfigured?"}
+    CFG -->|No| E503A["503 Service Unavailable<br/>unconfigured_verifier or unconfigured_kafka"]
+    CFG -->|Yes| BODY["MaxBytesReader(1 MiB) + io.ReadAll"]
+    BODY -->|"> 1 MiB"| E413["413 Request Entity Too Large"]
+    BODY -->|"empty / read err"| E400A["400 Bad Request"]
+    BODY -->|OK| SIG{"verifier.Verify(payload, sig)<br/>Stripe: t=.payload HMAC-SHA256<br/>Razorpay: 64-hex HMAC-SHA256<br/>PhonePe: SHA256(body+key+idx)"}
+    SIG -->|Invalid| E401A["401 Invalid Signature"]
+    SIG -->|Valid| REPLAY{"enforceReplayWindow (300s)<br/>Stripe: t= header<br/>Razorpay: created_at / X-*-Timestamp<br/>PhonePe: X-Webhook-Timestamp"}
+    REPLAY -->|"missing / stale"| E401B["401 Outside Replay Window"]
+    REPLAY -->|OK| PARSE{"ParseEventWithHeaderID<br/>Stripe: raw.id<br/>RZP: X-Razorpay-Event-Id or composite<br/>PhonePe: composite only"}
+    PARSE -->|"missing event.ID / bad JSON"| E400B["400 Bad Request"]
+    PARSE -->|OK| MARSHAL["json.Marshal(WebhookEvent v2)"]
+    MARSHAL --> DEDUP{"deduper.CheckAndMark(ctx, event.ID)"}
+    DEDUP -->|"Redis / store error"| E503B["503 Dedupe Unavailable (fail-closed)"]
+    DEDUP -->|"isDuplicate == true"| E200["200 OK<br/>{status: duplicate, duplicate: true}"]
+    DEDUP -->|"fresh event"| PUB{"publishEvent(ctx, event, encoded)<br/>sync Kafka WriteMessages (5s timeout)"}
+    PUB -->|Error| ROLLBACK["deduper.Remove(bgCtx 5s, event.ID)<br/>compensate so PSP can retry"] --> E503C["503 Failed to Publish Event"]
+    PUB -->|Ack| E202["EventsProcessed++<br/>202 Accepted {status: accepted}"]

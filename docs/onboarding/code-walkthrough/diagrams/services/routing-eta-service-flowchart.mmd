@@ -1,0 +1,48 @@
+flowchart TB
+    classDef step fill:#EFF6FF,stroke:#2563EB,stroke-width:1.8px,color:#0F172A
+    classDef dec fill:#F8FAFC,stroke:#475569,stroke-width:1.8px,color:#0F172A
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.8px,color:#064E3B
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph INGEST["1. Dual-Schema GPS Ingestion & 0.2km Geofence"]
+        direction TB
+        L1["LocationUpdateConsumer (concurrency=3)<br/>Parse latitude/lat, longitude/lng, speed, heading<br/>Resolve deliveryId OR active deliveries by riderId"]:::step
+        L2["TrackingService.recordLocation()<br/>INSERT delivery_tracking (monthly range partition)<br/>STOMP -> /topic/tracking/{deliveryId}"]:::step
+        L3{"status in {EN_ROUTE, IN_TRANSIT}<br/>AND haversine &le; 0.2 km?"}:::dec
+        L4["updateStatus(NEAR_DESTINATION)<br/>Outbox: DeliveryStatusUpdated"]:::ok
+        L5{"recalc-on-location-update-enabled<br/>== true?"}:::dec
+
+        L1 --> L2 --> L3
+        L3 -->|"Yes"| L4 --> L5
+        L3 -->|"No"| L5
+    end
+
+    subgraph ETA_MATH["2. Local Multi-Factor ETA Calculation (ETAService.calculateETAWithConfidence)"]
+        direction TB
+        E1["straightKm = GeoUtils.haversineKm(from, to)<br/>roadKm = straightKm * 1.4 (roadDistanceMultiplier)"]:::step
+        E2["Barrier Check (RoutingBarrier.intersects):<br/>Active &amp; unexpired bbox overlaps endpoint/segment<br/>-> add detourPenaltyKm (3.5) + detourPenaltyMin (12)"]:::step
+        E3["IST Speed Adjustment (Asia/Kolkata):<br/>base=25 km/h · 0.6x peak (7-10, 17-20) · 1.2x night (22-5)<br/>div by traffic_congestion_feeds.congestion_factor<br/>clamp &ge; minSpeedKmh (5.0 km/h)"]:::step
+        E4["Weather &amp; Incline Penalties:<br/>travelMin = (roadKm / speed) * 60 * weatherMult<br/>(rainy &le;1.0 defaults to 1.35x; banner if &ge;1.3)<br/>if BICYCLE &amp; incline &gt; 4%: *(1 + (incline-0.04)*12), suggest EV_2W if &ge;6%"]:::step
+        E5["Batch Dwell + Bounds + Breach Sigmoid:<br/>rawTotal = travelMin + 3m prep + barrierMin + (batchStops * 3m)<br/>eta = ceil(rawTotal) · low = 0.8x · high = 1.3x (*1.1 uncertainty)<br/>breachProb = 1 / (1 + exp(-5 * (rawTotal - 30) / 30))"]:::step
+
+        E1 --> E2 --> E3 --> E4 --> E5
+    end
+
+    subgraph BREACH["3. Delta Gate, STOMP Push & Idempotent Compensation"]
+        direction TB
+        G1{"|eta - currentEta| &ge; 2 min<br/>OR (!compTriggered &amp;&amp; (prob &gt; 0.7 || eta &gt; 30m))?"}:::dec
+        G2["Skip DB/STOMP/Outbox update (jitter suppression)"]:::warn
+        G3["DeliveryService.updateETA():<br/>Update delivery · Outbox: EtaUpdated<br/>STOMP -> /topic/deliveries/{id}/eta &amp; /topic/orders/{orderId}/eta"]:::step
+        G4{"prob &gt; 0.7 OR<br/>eta &gt; 30 min?"}:::dec
+        G5{"compensationTriggered<br/>already true?"}:::dec
+        G6["Set isBreachRisk=true, compensationTriggered=true, amt=5000 INR<br/>Outbox: ETABreachRisk -> delivery.events<br/>STOMP -> /topic/deliveries/{id}/breach-risk"]:::err
+
+        G1 -->|"No"| G2
+        G1 -->|"Yes"| G3 --> G4
+        G4 -->|"Yes"| G5
+        G5 -->|"No (first breach)"| G6
+    end
+
+    L5 -->|"true"| E1
+    E5 --> G1

@@ -1,0 +1,39 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Caller (routing-eta / fraud / orchestrator)
+    participant MW as TraceContext + Auth Middleware<br/>(telemetry.py, auth.py)
+    participant API as FastAPI Route<br/>(app/main.py)
+    participant Serve as serve_inference_request<br/>(core/inference.py)
+    participant Cache as InferenceCache + FeatureStore<br/>(config.py, redis_client.py)
+    participant Engine as Linear / Domain / ONNX<br/>(models/*.py, onnx_runner.py)
+    participant Shadow as ShadowRunner<br/>(core/shadow.py)
+
+    Note over Caller,Shadow: Single Prediction Flow (/inference/{model})
+    Caller->>MW: POST /inference/eta (traceparent, X-Internal-Service/Token)
+    MW->>MW: create_child_trace_context (contextvars) -> verify token (401/403 traced)
+    MW->>API: eta_inference(request)
+    API->>Serve: serve_inference_request("eta", request, version)
+    Serve->>Serve: resolve_model_config -> extract_numeric_features
+    Serve->>Cache: cache.get(sha256_key)
+    alt Cache Hit
+        Cache-->>Serve: cached dict
+        Serve->>Shadow: maybe_run_shadow (non-blocking)
+        Serve-->>API: cached output
+    else Cache Miss
+        Serve->>Engine: enforce_sync_sla -> perform_inference OR _predict_with_domain_model
+        Engine->>Engine: assess_feature_health (Z-score & missingness)
+        Engine-->>Serve: prediction + CI + method (linear / rule_based / onnx_fallback)
+        Serve->>Cache: cache.set(key, output)
+        Serve->>Shadow: dispatch_shadow_prediction(perform_inference, shadow_cfg)
+        Shadow-->>Shadow: Async 250ms compare -> ai_inference_shadow_{agreement,divergence}_total
+        Serve-->>API: output + version
+    end
+    API-->>Caller: 200 JSON + response traceparent / X-Trace-Id
+
+    Note over Caller,Cache: Batch Prediction with Feature Store (/inference/batch)
+    Caller->>API: POST /inference/batch (use_feature_store=True, entity_id)
+    API->>Serve: process_batch_item(item)
+    Serve->>Cache: fetch_feature_store_features -> HGETALL user:features:{id} (feature_span)
+    Cache-->>Serve: store_features merged with {**store_features, **payload}
+    Serve->>Serve: execute_inference() -> BatchInferenceResult
+    API-->>Caller: 200 BatchInferenceResponse

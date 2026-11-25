@@ -1,0 +1,39 @@
+flowchart TB
+    subgraph PlatformCommon["libs/platform-common (20/20 Java build.gradle.kts declare dependency)"]
+        direction TB
+        subgraph SecPkg["security/"]
+            S1["SharedInternalServiceAuthFilter\nInternalServiceSecurityConfiguration\nInternalServiceProperties"]
+            S2["JwtKeyLoader\nX.509/PKCS#8 PEM+Base64, kid SHA-256"]
+            S3["JwtTokenVerifier\nRS256 kid+iss+aud fail-closed"]
+            S4["SecurityRoleUtils\nROLE_ normalization, aud & role checks"]
+        end
+        subgraph CachePkg["cache/"]
+            C1["TwoLevelCacheManager + TwoLevelCache\nCaffeineL1Cache + CacheJsonSerializer"]
+        end
+        subgraph WebPkg["web/"]
+            W1["ProblemDetailFactory\nRFC 7807 application/problem+json + traceId"]
+            W2["PageableUtils\ndefaultSize=20, maxSize=100 clamp"]
+        end
+        subgraph GeoPkg["geo/"]
+            G1["GeoUtils\nhaversineKm + coordinate bounds"]
+        end
+    end
+
+    subgraph Matrix["Exact 20-Service Code Adoption Reality"]
+        direction TB
+        M1["11/20 Internal Auth Filter\ncart, fraud, fulfillment, identity,\ninventory, notification, pricing,\nrider-fleet, routing-eta, wallet, warehouse"]
+        M2["5/20 Local Duplicate Auth Filter\naudit-trail, catalog, config-feature-flag,\norder, payment"]
+        M3["4/20 No Internal Service Filter\nadmin-gateway, mobile-bff,\ncheckout-orchestrator, search"]
+        M4["JwtKeyLoader: 1/20 (audit-trail only)\nJwtTokenVerifier: 0/20 (UNUSED)\nSecurityRoleUtils: 9/20"]
+        M5["TwoLevelCacheManager: 4/20\n(cart, catalog, pricing, search)\nProblemDetailFactory: 3/20 (admin, catalog, wallet)\nPageableUtils: 7/20 | GeoUtils: 3/20"]
+        M6["0/20 classes imported in:\nconfig-feature-flag-service, payment-service\n(Observability/OTel lives in service POM/YAML, not here)"]
+    end
+
+    S1 --> M1
+    S2 --> M4
+    S3 -. "0 callers" .-> M4
+    S4 --> M4
+    C1 --> M5
+    W1 --> M5
+    W2 --> M5
+    G1 --> M5

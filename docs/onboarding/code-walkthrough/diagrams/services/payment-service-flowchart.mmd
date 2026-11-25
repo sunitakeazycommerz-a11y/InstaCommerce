@@ -1,0 +1,32 @@
+flowchart TD
+    classDef start fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef step fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.5px,color:#0F172A
+
+    REQ(["Authorize / Capture / Void / Refund Request"]):::start --> NORM["IdempotencyKeys.normalize(key)<br/>trim; if len &gt; 64 -&gt; SHA-256 64 hex"]:::step
+    NORM --> TX1{"TX1 (REQUIRES_NEW)<br/>Idempotency / State Check"}:::dec
+
+    TX1 -->|Existing non-pending row| RET_IDEM["Verify orderId &amp; amountCents match<br/>else DuplicatePaymentException -&gt; return cached"]:::ok
+    TX1 -->|Existing AUTHORIZE_PENDING<br/>with pspReference| RECON["reconcilePendingAuthorization:<br/>poll Stripe getStatus(pspRef)"]:::step
+    TX1 -->|New or retryable| SAVE_P["Commit *_PENDING row<br/>(or Refund PENDING under Payment FOR UPDATE)<br/>Release Hikari connection"]:::step
+
+    RECON -->|REQUIRES_CAPTURE| TX2_AUTH
+    RECON -->|SUCCEEDED| DIRECT_CAP["reconcileDirectToCaptured<br/>AUTHORIZATION + CAPTURE +<br/>PARTIAL_CAPTURE_RELEASE"]:::ok
+    RECON -->|CANCELED / failed| FAIL_STALE["resolveStaleAuthorizationFailed<br/>publish PaymentFailed"]:::err
+
+    SAVE_P --> PSP["Call PaymentGateway outside DB TX<br/>Retry(3x 1s, skip CardException)<br/>inside CB(20 calls, 50%, 30s)<br/>Stripe timeouts: 5s conn / 15s read"]:::step
+
+    PSP -->|Succeeded| TX2_AUTH["TX2 (REQUIRES_NEW): complete*<br/>Lock Payment FOR UPDATE (or Refund CAS)<br/>Update terminal status + outbox + audit"]:::step
+    PSP -->|CardException / Non-transient| TX2_FAIL["TX2 (REQUIRES_NEW):<br/>AUTHORIZE_PENDING -&gt; FAILED<br/>CAPTURE/VOID_PENDING -&gt; AUTHORIZED + *Reverted"]:::err
+    PSP -->|PaymentGatewayTransientException<br/>or Pod Crash| STUCK["Row remains *_PENDING / Refund PENDING<br/>Awaits retry, webhook, or RecoveryJob<br/>(NOTE: StalePendingPaymentRecoveryJob OFF in prod!)"]:::err
+
+    TX2_AUTH --> LEDGER["LedgerService.recordDoubleEntry<br/>(MANDATORY + inner REQUIRES_NEW + V14 dedup)<br/>Auth: DR customer_receivable / CR authorization_hold<br/>Capture: DR authorization_hold / CR merchant_payable<br/>Partial Rem: DR authorization_hold / CR customer_receivable<br/>Void/Fail: DR authorization_hold / CR customer_receivable<br/>Refund: DR merchant_payable / CR customer_receivable"]:::ok
+
+    subgraph JOB["LedgerIntegrityVerificationJob (15m, max 50x100 payments)"]
+        direction LR
+        J1["1. SUM(DEBIT) == SUM(CREDIT)<br/>2. REFUND credits == refundedCents<br/>3. CAPTURE credits == capturedCents"]:::step
+        J2["4. FAILED has 0 unreleased auth<br/>5. Partial capture released residue<br/>6. VOIDED has 0 unreleased auth"]:::step
+    end
+    LEDGER -.-> JOB

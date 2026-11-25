@@ -1,0 +1,78 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Mobile BFF / Checkout
+    participant Auth as Security Chain<br/>(CorrelationId + Internal/JWT)
+    participant Ctrl as CartController
+    participant Svc as CartService
+    participant Price as PricingClient<br/>(-> pricing :8089)
+    participant Store as JpaCartStore
+    participant PG as PostgreSQL (carts)
+    participant Cache as TwoLevelCacheManager<br/>(Caffeine + Redis)
+    participant Sync as CartSyncPublisher<br/>(Redis Pub/Sub)
+
+    rect rgb(239, 246, 255)
+        Note over Caller,Sync: Flow A: Add Item (Cold Cart Retry + Fail-Closed Pricing + Outbox + Sync)
+        Caller->>Auth: POST /cart/items {productId, productName, unitPriceCents, qty, storeId}
+        Auth->>Ctrl: Authenticated principal UUID -> CartController.addItem
+        Ctrl->>Svc: addItem(userId, request)
+        Note over Svc: validateStoreServiceabilityIfPresent() + validateRequestQuantity()
+        Svc->>Price: getPrice(productId) [OUTSIDE DB TX, CB+3x Retry, omits storeId]
+        alt pricing-service 404 or CB open / timeout
+            Price-->>Svc: 404 PRODUCT_UNAVAILABLE or 503 PRICING_UNAVAILABLE
+            Svc-->>Caller: Fail closed (no DB write, no cache evict)
+        end
+        Price-->>Svc: PriceResponse(unitPriceCents) [overrides client unitPriceCents]
+        loop Attempt 1..3 (executeAddWithRetry on uq_cart_user / @Version conflict)
+            Svc->>Store: addItem(userId, validatedRequest) [@Transactional]
+            Store->>PG: SELECT ... FOR UPDATE carts WHERE user_id = ?
+            opt Cart row absent
+                Store->>PG: INSERT carts + saveAndFlush (expiresAt = now + 24h)
+            end
+            Note over Store: applyOrVerifyStoreId() -> 409 STORE_MISMATCH if non-empty & store differs
+            Store->>PG: UPSERT cart_items + saveAndFlush(cart) + INSERT outbox_events (CartItemAdded)
+        end
+        Store-->>Svc: savedCart (version++)
+        Svc->>Cache: @CacheEvict("carts", key=userId) -> evict L1 + L2 + PubSub cart:cache:invalidate
+        Svc->>Sync: publishCartUpdated -> convertAndSend(cart:updated:{userId} & cart:events)
+        Svc-->>Ctrl: CartResponse (null storeId -> DEFAULT_STORE_ID)
+        Ctrl-->>Caller: 201 Created + ETag: "{version}"
+    end
+
+    rect rgb(236, 253, 245)
+        Note over Caller,PG: Flow B: Optimistic Concurrency Update via ETag If-Match
+        Caller->>Ctrl: PATCH /cart/items/{productId} (If-Match: W/"3", qty)
+        Note over Ctrl: parseIfMatchVersion("W/\"3\"") -> expectedVersion = 3
+        Ctrl->>Svc: updateQuantity(userId, productId, qty, 3)
+        Svc->>Store: updateQuantity [@Transactional]
+        Store->>PG: findByUserIdForUpdate(userId) [SELECT ... FOR UPDATE]
+        alt cart.version != 3
+            Store-->>Caller: 412 PRECONDITION_FAILED
+        else version matches
+            Store->>PG: UPDATE cart_items + saveAndFlush + INSERT outbox_events (CartUpdated)
+            Store-->>Svc: savedCart (version = 4)
+            Svc->>Cache: @CacheEvict("carts", key=userId)
+            Svc->>Sync: publishCartUpdated -> Redis Pub/Sub
+            Ctrl-->>Caller: 200 OK + ETag: "4"
+        end
+    end
+
+    rect rgb(254, 249, 195)
+        Note over Caller,Sync: Flow C: Checkout Step 1 Cart Validation (Before-Invocation Cache Evict)
+        Caller->>Ctrl: GET /api/carts/{userId}/validate (Internal Auth)
+        Note over Ctrl: authorizeUserAccess -> privileged ROLE_INTERNAL_SERVICE OK
+        Ctrl->>Svc: validateCart(userId) [@CacheEvict(beforeInvocation=true)]
+        Svc->>Cache: Evict L1 + L2 BEFORE reading DB
+        Svc->>Store: validateCart(userId) [readOnly TX]
+        Store->>PG: findByUserId (EntityGraph items) -> exists, non-empty, !expired
+        Note over Svc: validateStoreServiceabilityForCheckout(cart.getStoreId())
+        Svc->>Price: getPricesBatch(productIds) (>1 item) or getPrice(id) (1 item)
+        opt Batch returns 404
+            Note over Price: findPriceIfAvailable() per product -> missing IDs go to unavailableProductIds
+        end
+        Price-->>Svc: live unitPrices + unavailableProductIds
+        opt Any live price != stored unitPriceCents
+            Svc->>Store: updateItemPrices(userId, updatedPrices) [@Transactional]
+            Store->>PG: findByUserIdForUpdate -> update cart_items + INSERT CartPriceRefreshed
+        end
+        Svc-->>Caller: 200 CartResponse(valid, priceChanged, priceChanges, unavailableProductIds)
+    end

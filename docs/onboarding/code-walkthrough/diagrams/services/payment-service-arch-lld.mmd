@@ -1,0 +1,66 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef sec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph CALLERS["Inbound Callers & Event Ingress"]
+        direction LR
+        CO["checkout-orchestrator :8091<br/>authorize / capture / void / refund"]:::caller
+        WAL["wallet-loyalty :8095<br/>GET /api/v1/payments/{id}"]:::caller
+        STRIPE_IN["Stripe Direct HTTP<br/>POST /payments/webhook"]:::caller
+        K_IN["Kafka Consumers<br/>fulfillment.events · orders.events · payment.webhooks"]:::caller
+    end
+
+    subgraph PAY["payment-service :8085 (Java 21 · Spring Boot 4.0.0 · Hikari max=50 · lock.timeout=5s)"]
+        direction TB
+        SEC["SecurityConfig (securityFilterChain)<br/>JwtAuthenticationFilter + local InternalServiceAuthFilter<br/>ROLE_ADMIN | ROLE_INTERNAL_SERVICE · webhook permitAll"]:::sec
+
+        subgraph CTRLS["controller/ & exception/"]
+            direction LR
+            PC["PaymentController<br/>/payments · /api/payments · /api/v1/payments<br/>authorize / capture / void / GET {id}"]:::ctrl
+            RC["RefundController<br/>POST /{id}/refund"]:::ctrl
+            WC["WebhookController<br/>WebhookSignatureVerifier (HMAC-SHA256, 300s)<br/>returns 409 lock conflict / 503 transient"]:::ctrl
+            GEH["GlobalExceptionHandler<br/>custom ErrorResponse(code, message, traceId)"]:::ctrl
+        end
+
+        subgraph CORE["service/ & gateway/"]
+            direction LR
+            PS["PaymentService + RefundService<br/>IdempotencyKeys.normalize (&gt;64c SHA-256)<br/>Micrometer payment.operation / payment.refund"]:::svc
+            PTH["PaymentTransactionHelper + RefundTransactionHelper<br/>REQUIRES_NEW TX1 &amp; TX2 boundaries<br/>PaymentOutboxFactory + AuditLogService"]:::svc
+            LS["LedgerService.recordDoubleEntry<br/>PROPAGATION_MANDATORY + inner REQUIRES_NEW<br/>catches V14 DataIntegrityViolationException"]:::svc
+            GW["ResilientPaymentGatewayDecorator (!test &amp; !local)<br/>Retry(order 1: 3x 1s) -&gt; CB(order 2: 20, 50%, 30s)<br/>StripePaymentGateway (5s/15s, MANUAL) | MockPaymentGateway"]:::sec
+        end
+
+        subgraph ASYNC["consumer/, webhook/ & Scheduled Jobs"]
+            direction LR
+            OPE["OrderPackedEventConsumer (ON by default)<br/>fulfillment.events -&gt; findByOrderIdForUpdate<br/>holds outer @Transactional across REQUIRES_NEW!"]:::warn
+            OCE["OrderCancelledEventConsumer (OFF)<br/>WebhookKafkaBridge (OFF, Stripe-only v&gt;=2)<br/>KafkaConfig DLT only wired if either ON"]:::warn
+            WEP["WebhookEventProcessor (@Transactional)<br/>dedup -> lock Payment FOR UPDATE -> Handlers<br/>WebhookCapture / WebhookRefund / WebhookDispute"]:::svc
+            JOBS["ShedLock Jobs: StalePendingPaymentRecoveryJob (5m/30m)<br/>StalePendingRefundRecoveryJob (10m/60m)<br/>LedgerIntegrityVerificationJob (15m, 6 rules)<br/>OutboxCleanupJob (30d) · AuditLogCleanupJob (730d)"]:::svc
+        end
+    end
+
+    subgraph DATA["PostgreSQL payments DB (V1..V20), Outbox & Helm Overrides"]
+        direction LR
+        PG["PostgreSQL Tables:<br/>payments (10-state ENUM, @Version, chk_refund_le_captured)<br/>refunds (@Version, psp_refund_id unique, PENDING idx)<br/>ledger_entries (V14 dedup idx) · processed_webhook_events (V19)<br/>outbox_events (schema_version=v1) · audit_log · shedlock"]:::db
+        RELAY["outbox-relay-payment :8103 (Go)<br/>polls outbox_events -&gt; payments.events"]:::db
+        HELM["HELM PROD/STAGING DRIFT (values.yaml:682-686, values-prod:27-29):<br/>PAYMENT_STALE_PENDING_RECOVERY_ENABLED = false<br/>PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED = false<br/>PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED = false"]:::warn
+    end
+
+    CO & WAL & STRIPE_IN --> SEC --> CTRLS
+    PC & RC --> PS --> PTH
+    PS --> GW
+    PTH --> LS --> PG
+    PTH --> PG
+    WC --> WEP --> LS
+    WEP --> PG
+    K_IN --> OPE & OCE
+    OPE --> PS
+    OCE --> PS & WEP
+    JOBS --> PG & GW
+    PG --> RELAY
+    JOBS -.- HELM
+    OCE -.- HELM

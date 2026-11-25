@@ -1,0 +1,32 @@
+flowchart LR
+    subgraph Ingress["Istio allowFrom Callers & Probes"]
+        BFF["mobile-bff-service<br/>admin-gateway-service"]
+        PROBES["GET /health, /health/ready, /health/live<br/>GET /v2/agent/health (NO /metrics route!)"]
+    end
+
+    subgraph ASGI["ai-orchestrator-service :8100 (app/main.py)"]
+        direction TB
+        AUTH["Outer: InternalServiceAuthMiddleware<br/>(auth.py: reads INTERNAL_SERVICE_TOKEN / ALLOWED_CALLERS)"]
+        GUARD["Inner: enforce_agent_guardrails (middleware.py)<br/>IP TokenBucket (120/m, burst 180, 50/day default!)<br/>User TokenBucket (30/m, burst 45, 50/day default!)<br/>asyncio.Semaphore(200) 150ms -> 503"]
+        V2["v2 Router: POST /v2/agent/invoke, /v2/assist"]
+        V1["v1 Router: POST /agent/assist (_AssistGraphAdapter)<br/>/agent/substitute & /agent/recommend (_noop_graph_provider)"]
+        EXEC["ExecutionService.execute (execution.py)<br/>InjectionDetector -> PIIVault.redact -> Runner -> OutputPolicy -> PIIVault.restore"]
+        RUNNER["AgentExecutionRunner (runner.py)<br/>BudgetTracker ($0.50, 25 tool calls/session)<br/>RedisSessionBudgetStore + RedisCheckpointSaver"]
+        GRAPH["7-Node LangGraph StateGraph (graph.py)<br/>classify_intent -> check_policy -> escalate |<br/>retrieve_context -> execute_tools -> respond -> validate_output"]
+        TOOLS["ToolRegistry (tools.py + tool_validation.py)<br/>8 read-only tools, SSRF/traversal checks,<br/>CircuitBreaker(3/30s), pre+post BOLA,<br/>reads AI_ORCHESTRATOR_INTERNAL_SERVICE_TOKEN!"]
+        AUTH --> GUARD --> V2 & V1 --> EXEC --> RUNNER --> GRAPH --> TOOLS
+    end
+
+    subgraph StateExt["State, LLM & Downstream Seams"]
+        REDIS[("Redis (localhost:6379 default)<br/>instacommerce:agent:checkpoint:{id} (3600s)<br/>instacommerce:agent:budget:{id} (3600s)<br/>faq:* (reads REDIS_URL, unconfigured default)")]
+        KAFKA[("Kafka: ai-orchestrator.events<br/>AuditEventPublisher (aiokafka acks=1)<br/>dual camelCase + snake_case envelope")]
+        LLM["External LLM / RAG (DEFAULT STUBBED)<br/>llm_api_url=None -> templates + 3 _KB docs<br/>CachedRetrievalProvider._fetch returns []"]
+        JAVA["Downstream Java Services<br/>search:8088, catalog:8082, pricing:8089<br/>inventory:8083, cart:8090, order:8084<br/>(WARN: Helm omits AI_ORCHESTRATOR_* token!)"]
+    end
+
+    BFF --> AUTH
+    PROBES --> AUTH
+    RUNNER -.->|"silent in-mem fallback"| REDIS
+    EXEC --> KAFKA
+    GRAPH -.->|"when llm_api_url set"| LLM
+    TOOLS -->|"httpx (follow_redirects=False)"| JAVA

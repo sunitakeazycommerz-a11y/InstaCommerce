@@ -1,0 +1,30 @@
+flowchart TD
+    classDef start fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef step fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.5px,color:#0F172A
+
+    subgraph WALLET_TX["1. Wallet Credit / Debit & Double-Entry Routing"]
+        direction TB
+        W_IN(["WalletService.credit / debit"]):::start --> IDEM{"findByReferenceTypeAndReferenceId<br/>match?"}:::dec
+        IDEM -->|Exact match user/type/amt| IDEM_OK["Return cached WalletTransactionResponse"]:::ok
+        IDEM -->|Param mismatch| IDEM_ERR["Throw DuplicateTransactionException (409)"]:::err
+        IDEM -->|New| LOCK_W["SELECT w FROM wallets FOR UPDATE (3s timeout)<br/>(debit checks balanceCents &gt;= amountCents)"]:::step
+        LOCK_W --> LED_MAP{"WalletLedgerService.mapReferenceType"}:::dec
+        LED_MAP -->|TOPUP / ADMIN_ADJ| ACC1["Counterparty: platform_float"]:::ok
+        LED_MAP -->|ORDER / REFUND| ACC2["Counterparty: merchant_settlement"]:::ok
+        LED_MAP -->|CASHBACK / REFERRAL / PROMO| ACC3["Counterparty: marketing_budget"]:::ok
+        ACC1 & ACC2 & ACC3 --> EVICT["INSERT wallet_transactions + ledger + outbox<br/>@CacheEvict walletBalance"]:::ok
+    end
+
+    subgraph KAFKA_FLOW["2. OrderEventConsumer & PaymentEventConsumer Decisions"]
+        direction TB
+        K_IN(["orders.events / payments.events"]):::start --> EV_TYPE{"eventType?"}:::dec
+        EV_TYPE -->|OrderDelivered| EARN["LoyaltyService.earnPoints (1 pt/rupee, cap 100K)<br/>+ checkTierUpgrade() -&gt; TierUpgraded"]:::step
+        EARN --> CB["computeEligibleCashbackCents:<br/>200 bps, max 50K/order, max 200K UTC month"]:::step
+        EV_TYPE -->|OrderCancelled / Failed / Refunded| SAGA{"reason ==<br/>CHECKOUT_SAGA_ROLLBACK?"}:::dec
+        SAGA -->|Yes| SKIP_ROLL["Skip! Temporal Step 4 already<br/>called POST /wallet/credit"]:::ok
+        SAGA -->|No| REF_CR["Credit min(walletRefundCents, walletAmountCents)<br/>refId = wallet-refund-{orderId}"]:::step
+        EV_TYPE -->|PaymentRefunded<br/>WALLET_CONSUMER_PAYMENT_REFUND_ENABLED| PEC_CR["PROD/DEV TRAP: credits full PSP<br/>amountCents to wallet under refId=refundId!"]:::err
+    end

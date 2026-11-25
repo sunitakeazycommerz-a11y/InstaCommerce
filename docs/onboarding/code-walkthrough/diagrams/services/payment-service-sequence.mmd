@@ -1,0 +1,53 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Caller / Checkout
+    participant PS as PaymentService /<br/>RefundService
+    participant Helper as PaymentTransactionHelper /<br/>RefundTransactionHelper
+    participant PG as PostgreSQL<br/>(payments / refunds)
+    participant GW as ResilientPaymentGateway<br/>(StripePaymentGateway)
+    participant Ledger as LedgerService<br/>(inner REQUIRES_NEW)
+    participant Outbox as OutboxService<br/>(outbox_events)
+
+    Note over Caller,Outbox: 1. Synchronous 2-TX Authorize / Capture / Refund Lifecycle
+    Caller->>PS: authorize / capture / refund(req)
+    PS->>PS: IdempotencyKeys.normalize(key)
+    PS->>Helper: TX1 [REQUIRES_NEW]: savePendingAuthorization / saveCapturePending / savePendingRefund
+    Helper->>PG: INSERT AUTHORIZE_PENDING OR SELECT Payment FOR UPDATE → CAPTURE_PENDING / INSERT Refund(PENDING)
+    PG-->>Helper: committed (Hikari conn released)
+    Helper-->>PS: pending entity
+
+    PS->>GW: authorize / capture / refund (no DB TX held, 5s conn / 15s read)
+    alt PSP Success
+        GW-->>PS: pspReference / pspRefundId
+        opt Refund only: close webhook race window
+            PS->>Helper: TX [REQUIRES_NEW]: persistPspRefundId(refundId, pspRefundId)
+        end
+        PS->>Helper: TX2 [REQUIRES_NEW]: completeAuthorization / completeCaptured / completeRefund
+        Helper->>PG: SELECT Payment FOR UPDATE + Refund CAS (compareAndSetPendingToCompletedWithPspRefundId)
+        Helper->>Ledger: recordDoubleEntry() [MANDATORY → inner REQUIRES_NEW]
+        Ledger->>PG: INSERT DEBIT & CREDIT ledger_entries (V14 idx_ledger_entries_dedup)
+        Helper->>Outbox: publishAuthorized / publishCaptured / publishRefunded [MANDATORY]
+        Outbox->>PG: INSERT outbox_events (schema_version='v1')
+        Helper-->>PS: saved entity
+        PS-->>Caller: 200 PaymentResponse / RefundResponse
+    else PaymentDeclinedException / Non-transient error
+        GW-->>PS: CardException / PaymentGatewayException
+        PS->>Helper: TX2 [REQUIRES_NEW]: markAuthorizationFailed / revertToAuthorized / markRefundFailed
+        Helper->>PG: update status + PaymentFailed / *Reverted / PaymentRefundFailed outbox
+        PS-->>Caller: 402 / 502 ErrorResponse
+    else PaymentGatewayTransientException / Timeout
+        GW--xPS: transient error (*_PENDING preserved!)
+        PS-->>Caller: 503 / 504 (safe retry or StalePendingRecoveryJob)
+    end
+
+    Note over Caller,Outbox: 2. Async Stripe Webhook & Dispute Flow (WebhookController → WebhookEventProcessor)
+    Caller->>PG: POST /payments/webhook (HMAC-SHA256 verified) → INSERT processed_webhook_events (V19 unique)
+    PG-->>Caller: SELECT Payment FOR UPDATE (same lock order as Refund!)
+    alt charge.refunded
+        Caller->>PG: WebhookRefundHandler: CAS Refund PENDING→COMPLETED + Ledger REFUND + (if flag ON) PaymentRefunded
+    else charge.dispute.created / closed
+        Caller->>Ledger: DISPUTE (merchant→dispute_hold) | won: DISPUTE_REVERSAL | lost: DISPUTE_LOSS
+        Caller->>Outbox: PaymentDisputed / PaymentDisputeWon / PaymentDisputeLost
+    else Lock contention / AUTHORIZE_PENDING
+        Caller-->>Caller: HTTP 409 Conflict (lock) / HTTP 503 (transient) → Stripe retry
+    end

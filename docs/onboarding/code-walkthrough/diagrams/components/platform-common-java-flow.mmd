@@ -1,0 +1,40 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Caller Pod
+    participant AuthF as SharedInternalServiceAuthFilter
+    participant Svc as Service (@Cacheable)
+    participant Cache as TwoLevelCache (Pod A)
+    participant L1A as Caffeine L1 (Pod A)
+    participant Redis as Redis L2 + Pub/Sub
+    participant MgrB as TwoLevelCacheManager (Pod B)
+
+    Note over Caller,AuthF: 1. Internal Service Authentication Chain (OncePerRequestFilter)
+    Caller->>AuthF: HTTP + X-Internal-Service + X-Internal-Token
+    AuthF->>AuthF: isValidToken(serviceName, token)
+    alt allowedCallers contains serviceName
+        AuthF->>AuthF: MessageDigest.isEqual(perServiceToken, token)
+    else strictPerServiceTokens == true
+        AuthF-->>AuthF: Reject (do not populate SecurityContext)
+    else sharedToken non-blank
+        AuthF->>AuthF: MessageDigest.isEqual(sharedToken, token)
+    end
+    AuthF->>Svc: SecurityContext = [ROLE_INTERNAL_SERVICE, ROLE_SERVICE_{CALLER}]
+
+    Note over Svc,MgrB: 2. TwoLevelCache Read-Through & Cross-Pod Pub/Sub Eviction
+    Svc->>Cache: get(key)
+    Cache->>L1A: getIfPresent(key)
+    alt L1 Hit
+        L1A-->>Svc: Cached value
+    else L1 Miss -> L2 Fallback
+        Cache->>Redis: GET cacheName:key (CacheJsonSerializer)
+        Redis-->>Cache: ValueWrapper (swallows Redis exception)
+        Cache->>L1A: Backfill L1 (no Pub/Sub echo)
+        Cache-->>Svc: Value
+    end
+
+    Svc->>Cache: evict(key)
+    Cache->>L1A: invalidate(key)
+    Cache->>Redis: DEL cacheName:key
+    Cache->>Redis: PUBLISH channel "{instanceId}#124;{cacheName}:{key}"
+    Redis-->>MgrB: onMessage(message)
+    MgrB->>MgrB: Skip if originId == instanceId, else evictLocal(keyPattern)

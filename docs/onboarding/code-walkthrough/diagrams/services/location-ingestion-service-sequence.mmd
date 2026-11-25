@@ -1,0 +1,61 @@
+sequenceDiagram
+    autonumber
+    participant C as Rider / BFF / WS Client
+    participant MW as otelhttp + correlation<br/>+ InternalAuth (:8105)
+    participant H as LocationHandler<br/>(http.go / ws.go / ingest.go)
+    participant S as RiderTelemetrySmoother<br/>(50k LRU, kalman.go)
+    participant B as LocationBatcher<br/>(cap 2000, batcher.go)
+    participant R as LatestPositionStore<br/>(Redis Lua CAS)
+    participant G as GeofenceChecker +<br/>geofenceWorker (1024)
+    participant K as Kafka (location.updates /<br/>geofence.events)
+
+    alt WebSocket stream
+        C->>MW: GET /ingest/ws (X-Internal-Service/Token)
+        MW->>H: HandleWebSocket() → rateLimiter.Allow() (100/s, 200 burst, 20k max)
+        H-->>C: 101 Switching Protocols (25s ping ticker, 60s pong deadline)
+        C->>H: JSON frame (LocationInput)
+    else HTTP POST
+        C->>MW: POST /ingest/location (X-Internal-Service/Token)
+        MW->>H: HandleIngest() (1 MiB cap, DisallowUnknownFields + EOF)
+    end
+
+    Note over H: ProcessInput() → NormalizeLocation()<br/>(acc <= 50m, ts <= now+1m, ClassifyTelemetryFlags)
+    H->>S: Preview(update) under RLock (non-mutating)
+    alt Out-of-order (< lastTs) or Outlier (>80 / >150 km/h)
+        S-->>H: ErrOutOfOrderPing (200) or ErrVelocityOutlier / ErrTeleportAnomaly (422)
+        H-->>C: 200 {status: "ignored"} or 422 error
+    else Valid or Clamped (stationary_drift)
+        S-->>H: smoothed LocationUpdate + candidate RiderKalmanState
+    end
+
+    Note over H: Default H3_RESOLUTION=0 skips update.H3Index here,<br/>starts processCtx (3s) + OTel span "ingest.process"
+    H->>B: kafkaRes, err = Reserve() (checks len(buffer)+reserved < 2000)
+    Note over H,B: defer kafkaRes.Abort() frees slot on any failure below
+
+    H->>R: Update(processCtx, update) → EVAL updatePositionScript
+    Note over R: Computes latLngToH3Res8 locally if H3Index empty,<br/>checks HGET timestamp_ms vs incoming_ms
+
+    alt incoming_ms <= existing timestamp_ms
+        R-->>H: {0, existing} → ErrOutOfOrderPing
+        H->>B: defer kafkaRes.Abort()
+        H-->>C: 200 {status: "ignored", reason: "out_of_order_timestamp"}
+    else Redis error
+        R-->>H: error → UpdatesDropped{source, "redis"}
+        H->>B: defer kafkaRes.Abort()
+        H-->>C: 503 Service Unavailable
+    else Lua CAS {1} committed in Redis
+        Note over R: HSET rider:location:{id} (PEXPIRE 10m)<br/>+ SREM/SADD riders:h3:{idx} (PEXPIRE 20m)
+        R-->>H: nil
+        H->>G: Check(update) (zones map empty in main.go → returns nil)
+        opt If zones configured (tests only)
+            G->>K: geofenceQueue (1024) → geofenceWorker → rider.geofence.events
+        end
+        H->>B: kafkaRes.Commit(update) (notifies flusher if len(buffer) >= 200)
+        H->>S: Commit(riderID, candidateState) under write Lock
+        H-->>C: 202 {status: "accepted"}
+    end
+
+    loop LocationBatcher.Start() (200 msgs or 1s ticker)
+        B->>K: PublishBatch(rider.location.updates, key=rider_id, RequireAll, 3 retries)
+        Note over B,K: 50ms*(attempt+1) backoff, exhausted retries → UpdatesDropped{kafka, write}
+    end

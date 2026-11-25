@@ -1,0 +1,53 @@
+sequenceDiagram
+    autonumber
+    participant KR as kafka.Reader<br/>(CommitInterval=0)
+    participant Dedup as dedup.Checker<br/>(Bloom + Redis)
+    participant SD as StreamDispatcher<br/>(ch cap 1000)
+    participant OT as offsetTracker<br/>(per topic:partition)
+    participant W as Worker Pool (10)<br/>+ WatermarkTracker
+    participant Proc as Domain Processor<br/>(+ SLAMonitor)
+    participant Ext as Redis / Prom /<br/>{topic}.DLT
+
+    KR->>Dedup: FetchMessage(ctx) → CheckDuplicatePayload(msg)
+    Dedup->>Ext: EXISTS dedup:{topic}:event:{id} (or {topic}:{part}:{off})
+    Note over Dedup: On Redis err: dedup_errors_total++<br/>and FAIL OPEN (process message)
+
+    alt Duplicate found (count > 0)
+        Dedup->>SD: Bloom.Add(key) → dispatcher.Skip(ctx, msg)
+        SD->>OT: skip(msg) → append offsetCompleted (unless > failedOffset)
+        OT->>KR: flushCommits() only if contiguous head completed
+    else New event
+        Dedup->>SD: dispatcher.Submit(ctx, msg)
+        loop Backpressure gate while len(ch) >= 800
+            Note over SD: paused=true, poll PauseCheckWait (10ms) until len(ch) <= 300
+        end
+        SD->>OT: enqueue(msg) → trackedOffset(Pending)
+        SD->>W: push queuedMessage into ch
+
+        Note over W: ExtractMessageEventTime() →<br/>ObserveWithAction("{topic}:{part}", DropLateEvents=false)
+        W->>Proc: wrapHandlerWithDedup → unwrapEnvelope → Process()
+        Proc->>Ext: labelCardinalityGuard(1000) Prom metrics<br/>+ Redis Pipeline.Exec()
+        opt OrderDelivered in OrderProcessor
+            Note over Proc: SLAMonitor.RecordDelivery(zoneId, mins)<br/>30m window (<90% & >=5) → alertCh (cap 100)
+        end
+
+        alt Handler succeeds (nil)
+            Proc-->>W: nil
+            W->>Dedup: MarkProcessedPayload() → Bloom.Add + SETNX (24h TTL)
+            W->>OT: resolve(succeeded=true) → advanceLocked()
+            OT->>KR: CommitMessages(highest contiguous completed offset)
+        else Permanent error (SyntaxError / UnmarshalTypeError / "unmarshal " / panic)
+            Proc-->>W: error (or recover() panic)
+            W->>Ext: newDLQHandler → WriteMessages({topic}.DLT, RequireAll, dlt_* headers)
+            alt DLT write succeeds
+                W->>OT: resolve(succeeded=true) → advance past poison offset
+                OT->>KR: CommitMessages(msg)
+            else DLT write fails
+                W->>OT: resolve(succeeded=false) → failedSeen=true, halt commits
+            end
+        else Transient error (e.g. Redis Pipeline failure)
+            Proc-->>W: transient error
+            W->>OT: resolve(succeeded=false) → failedSeen=true, failedOffset=msg.Offset
+            Note over OT: Discards queued entries > failedOffset and<br/>blocks commits until replay or AckFailedOffset()
+        end
+    end

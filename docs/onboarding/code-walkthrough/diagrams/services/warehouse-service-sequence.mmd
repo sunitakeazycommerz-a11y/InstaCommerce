@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Checkout / Fulfillment / Sensor
+    participant Ctrl as StoreController /<br/>StagingTelemetryController
+    participant CS as CapacityService /<br/>StoreService
+    participant CAP as CapacityAlertPublisher<br/>(REQUIRES_NEW)
+    participant PG as PostgreSQL<br/>(warehouse DB)
+    participant Outbox as OutboxService<br/>(MANDATORY)
+
+    Note over Caller,Outbox: 1. Two-Layer Capacity Slot Acquisition (POST /stores/{id}/capacity/acquire)
+    Caller->>Ctrl: acquireOrderSlot(storeId)
+    Ctrl->>CS: acquireOrderSlot(storeId, LocalDateTime.now())
+    CS->>PG: SELECT * FROM stores WHERE id = :id FOR UPDATE
+    CS->>PG: SELECT EXISTS blackout window at storeNow
+    alt Store inactive or in blackout window
+        CS-->>Caller: 423 / 409 StoreClosedException
+    else currentPendingOrders ≥ maxConcurrentOrders
+        CS->>CAP: publishCapacityPaused(storeId, payload) [REQUIRES_NEW]
+        CAP->>Outbox: INSERT outbox_events (StoreCapacityPaused)
+        CAP-->>CS: committed independently!
+        CS-->>Caller: 429 CapacityExceededException
+    else Concurrent slot available
+        opt surgeModeEnabled OR (pending + 1) ≥ throttleThreshold
+            CS->>Outbox: INSERT outbox_events (StoreCapacityThrottled) [same TX]
+        end
+        CS->>PG: UPDATE stores SET current_pending_orders = pending + 1
+        CS->>PG: INSERT INTO store_capacity ... ON CONFLICT (store_id,date,hour) DO UPDATE WHERE current_orders < max_orders
+        alt Updated rows == 0 (hourly cap full)
+            CS->>CAP: publishCapacityPaused(storeId, payload) [REQUIRES_NEW]
+            CAP->>PG: INSERT outbox_events (StoreCapacityPaused)
+            CS-->>Caller: 429 CapacityExceededException (outer pending++ rolled back!)
+        else Updated rows == 1
+            CS-->>Caller: 200 true
+        end
+    end
+
+    Note over Caller,Outbox: 2. Cold-Chain Staging Breach & Dispatch Gate
+    Caller->>Ctrl: POST /stores/{storeId}/staging/telemetry
+    Ctrl->>CS: recordTelemetry(storeId, req)
+    CS->>PG: COUNT breached=true for (storeId, bayId) in last 5m
+    opt breached && priorBreaches ≥ 1
+        CS->>Outbox: INSERT outbox_events (ColdChainBreachAlert)
+    end
+    CS->>PG: INSERT staging_temperature_telemetry
+    CS-->>Caller: 201 StagingTelemetryResponse

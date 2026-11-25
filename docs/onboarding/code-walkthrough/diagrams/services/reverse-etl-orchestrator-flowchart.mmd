@@ -1,0 +1,18 @@
+flowchart TD
+    TRIG(["POST /api/v1/subscriptions/{id}/sync<br/>Handler.TriggerSync"]) --> LOAD{"subscriptionSvc.Get(id)"}
+    LOAD -->|"not found"| E404["404 not_found"]
+    LOAD -->|"state != ACTIVE"| E409["409 subscription_not_active"]
+    LOAD -->|ACTIVE| DECODE["Decode SyncRequest (4 MiB cap)<br/>resolveSyncType(req.SyncType, sub.SourceDomain)"]
+    DECODE -->|"unsupported"| E400["400 unsupported_sync_type"]
+    DECODE --> RCHK{"wp.redisClient != nil?"}
+    RCHK -->|"nil (REDIS_ADDR empty)"| E503["503 redis client not configured"]
+    RCHK -->|OK| ROUTE{"syncType dispatch"}
+    ROUTE -->|"user_features / fraud_risk_scores"| SEQ["Sequential loop over records<br/>rateLimiter.Acquire(ctx) per item"]
+    ROUTE -->|"dark_store_inventory"| PAR["SyncDarkStoreInventoryParallel<br/>min(10, len(storeIDs)) workers<br/>rateLimiter.Acquire(ctx) per SKU"]
+    SEQ --> WRITE["Write temp key<br/>Hashes: writeTempHashLua (chunks 1000, PEXPIRE)<br/>Fraud: SET fraud:score:temp:{job}:{uid} 36h"]
+    PAR --> WRITE
+    WRITE --> SWAP["swapTempKeyWithTTL: atomicSwapTTLLua<br/>EXISTS temp -> RENAME + PEXPIRE<br/>else EXISTS target -> PEXPIRE"]
+    SWAP -->|OK| AUDIT["recordAudit (5s detached ctx)<br/>UPSERT reverse_etl_sync_audit"] --> E202["202 Accepted"]
+    SWAP -->|Error| RETRY{"ClassifyError<br/>Transient (429/5xx/timeout/EOF/ECONN)<br/>& attempts < 3?"}
+    RETRY -->|Yes| BACK["Backoff 50ms..2s -> rateLimiter.Acquire"] --> WRITE
+    RETRY -->|No| CLEAN["Detached 2s DEL tempKey<br/>recordAudit(FAILED/CANCELLED)"] --> E5XX["500 sync_failed"]

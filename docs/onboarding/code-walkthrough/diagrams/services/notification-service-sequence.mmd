@@ -1,0 +1,39 @@
+sequenceDiagram
+    autonumber
+    participant Kafka as Kafka Topic
+    participant Cons as NotificationEventConsumer
+    participant NS as NotificationService
+    participant Pref as UserPreferenceService /<br/>UserDirectoryClient
+    participant Dedup as DeduplicationService<br/>(notification_log)
+    participant Exec as RetryableNotificationSender<br/>(@Async notificationExecutor)
+    participant Prov as FcmPush / Twilio / SendGrid<br/>(CB 50%, 10 calls, 60s)
+    participant FB as ChannelFallbackService /<br/>NotificationRetryJob
+
+    Note over Kafka,FB: 1. Event Intake, Dedup & Async Provider Dispatch
+    Kafka->>Cons: ConsumerRecord (orders/payments/fulfillment/delivery/rider/wallet)
+    Cons->>NS: handleEvent(record, envelope)
+    NS->>NS: NotificationPayloadSupport.resolveEventId (status:{orderId}:{eventType})
+    NS->>Pref: findUser(userId) + getPreferences(userId) [Caffeine → :8081]
+    loop For each channel in TemplateDefinition.channels()
+        NS->>Dedup: createLog(req, maskedRecipient, subject, body)
+        Dedup->>Dedup: stripPiiVariables + INSERT notification_log (PENDING, uq_notification_dedup)
+        NS->>Exec: send(req, log, subject, body) [@Async returns immediately to Kafka!]
+    end
+    Note right of Exec: Pod crash before send() completes<br/>strands PENDING row forever (retry job only polls RETRY_PENDING)
+
+    Exec->>Prov: dispatch(log, recipient)
+    alt Success
+        Prov-->>Exec: providerRef
+        Exec->>Dedup: UPDATE status=SENT
+    else ProviderTemporaryException (retry < 3)
+        Prov-->>Exec: temporary error / CB open
+        Exec->>Dedup: UPDATE status=RETRY_PENDING, next_retry_at = now + {5s|30s|5m}
+        Note over FB: NotificationRetryJob (5s ShedLock) claims via FOR UPDATE SKIP LOCKED<br/>with 5m lease → resolves live contact → retries dispatch
+    else ProviderPermanentException (e.g. prod FCM missing creds) or Retries ≥ 3
+        Prov-->>Exec: FALLBACK_REQUIRED
+        Exec->>FB: tryFallback(PUSH → SMS → EMAIL)
+        FB->>Dedup: createLog(fallbackChannel) + dispatch via Twilio / SendGrid
+        opt Fallback exhausted
+            FB->>Kafka: NotificationDlqPublisher → notification.events.DLT (masked)
+        end
+    end

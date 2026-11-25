@@ -1,0 +1,111 @@
+flowchart TB
+    classDef client fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef java fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef go fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef py fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#0F172A
+    classDef infra fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph ROW1["Ingress, Edge Gateways & Core Discovery / Checkout"]
+        direction LR
+        subgraph COL_L["Clients & Perimeter"]
+            direction TB
+            CLI(["Mobile · Web · Admin · Rider · PSP"]):::client
+            ISTIO["Istio Ingress Gateway<br/>STRICT mTLS · EnvoyFilter · 43 SPIFFE"]:::infra
+            PHYS["10-Min SLA Physics<br/>25 km/h (~417 m/min) + ~3m pick<br/>Partitions state by store_id"]:::warn
+            CLI --> ISTIO ~~~ PHYS
+        end
+
+        subgraph BC_EDGE["1. Edge & Governance (Java 21 · 5)"]
+            direction TB
+            MBFF["mobile-bff :8080 (WebFlux · SSE)"]:::java
+            ID["identity :8081 (RS256/JWKS · Redis)"]:::java
+            AGW["admin-gateway :8099 (MVC · Audit)"]:::java
+            FLAGS["config-feature-flag :8098 (Murmur3 · SSE)"]:::java
+            AUDIT["audit-trail :8096 (21 Topics · PG + GCS)"]:::java
+            MBFF ~~~ ID ~~~ AGW ~~~ FLAGS ~~~ AUDIT
+        end
+
+        subgraph BC_CORE["2. Discovery & Checkout Saga (Java 21 · 6)"]
+            direction LR
+            subgraph CORE_A["Discovery & Cart"]
+                direction TB
+                CAT["catalog :8082 (Tree · In-Proc Outbox)"]:::java
+                SRCH["search :8088 (PG tsvector GIN + Fuzzy)"]:::java
+                PRC["pricing :8089 (Promos · HMAC Quote)"]:::java
+                CAT ~~~ SRCH ~~~ PRC
+            end
+            subgraph CORE_B["Cart, Stock & Saga"]
+                direction TB
+                CART["cart :8090 (PG JpaCartStore · Redis L2)"]:::java
+                INV["inventory :8083 (Sorted FOR UPDATE · FEFO)"]:::java
+                CHK["checkout-orchestrator :8091<br/>Temporal 10-Step Saga · DLQ (Not 2PC)"]:::java
+                CART ~~~ INV ~~~ CHK
+            end
+        end
+    end
+
+    subgraph ROW2["Execution, Money, Real-Time Go Backbone, AI & Shared Persistence"]
+        direction LR
+        subgraph BC_EXEC["3. Money, Fulfillment & Logistics (Java 9 + Go 3)"]
+            direction LR
+            subgraph EXEC_M["Orders, Money & Risk"]
+                direction TB
+                ORD["order :8084 (9-State FSM · 410 Legacy)"]:::java
+                PAY["payment :8085 (2-TX PSP · Ledger)"]:::java
+                WAL["wallet-loyalty :8095 (FOR UPDATE · Cashback)"]:::java
+                FRD["fraud-detection :8097 (AUTO_BLOCK)"]:::java
+                ORD ~~~ PAY ~~~ WAL ~~~ FRD
+            end
+            subgraph EXEC_F["Dark Store & Delivery"]
+                direction TB
+                WH["warehouse :8092 (15km · Dijkstra · Cold)"]:::java
+                FUL["fulfillment :8086 (S-Curve · 4-Tote · OTP)"]:::java
+                RDR["rider-fleet :8093 (GEORADIUS + SKIP LOCKED)"]:::java
+                ETA["routing-eta :8094 (Haversine x1.4 · STOMP)"]:::java
+                WH ~~~ FUL ~~~ RDR ~~~ ETA
+            end
+            subgraph EXEC_G["Comms, Webhooks & Go Solvers"]
+                direction TB
+                NTF["notification :8087 (7 Topics · Fallback)"]:::java
+                PWH["payment-webhook :8106 (Go · 3 PSPs)"]:::go
+                RECON["reconciliation-engine :8107 (Go · T+1)"]:::go
+                DOPT["dispatch-optimizer :8102 (Go · Greedy+1-opt)"]:::go
+                NTF ~~~ PWH ~~~ RECON ~~~ DOPT
+            end
+        end
+
+        subgraph BC_DATA_AI["4. Event Backbone, Lakehouse & AI (Go 5 + Py 2)"]
+            direction LR
+            subgraph DA_GO["Go Pipelines & Telemetry"]
+                direction TB
+                OBR["outbox-relay :8103 (Go · x13 · SKIP LOCKED)"]:::go
+                LOC["location-ingestion :8105 (Go · Kalman · H3)"]:::go
+                STR["stream-processor :8108 (Go · Redis/Prom)"]:::go
+                CDC["cdc-consumer :8104 (Go · Kafka -> BQ)"]:::go
+                OBR ~~~ LOC ~~~ STR ~~~ CDC
+            end
+            subgraph DA_AI["Reverse ETL & Python AI"]
+                direction TB
+                RETL["reverse-etl :8109 (Go · HTTP -> Redis Lua)"]:::go
+                AIO["ai-orchestrator :8100 (Py · LangGraph)"]:::py
+                AII["ai-inference :8101 (Py · Fallback Default)"]:::py
+                RETL ~~~ AIO ~~~ AII
+            end
+        end
+
+        subgraph INFRA_CAP["5. Shared Persistence & Pool Ceiling"]
+            direction TB
+            PG["Cloud SQL PostgreSQL 16<br/>PgBouncer: 200 pods x 20 Hikari<br/>= 4,000 logical -> ~400 PG (500 max)"]:::infra
+            CACHE["Redis 7 / Memorystore<br/>L2 Caches · Pub/Sub · GEO · H3"]:::infra
+            BUS["Kafka KRaft + Temporal :7233<br/>20 Domain + 3 Non-Domain + 1 .dlq + WAL"]:::infra
+            PG ~~~ CACHE ~~~ BUS
+        end
+    end
+
+    ISTIO -->|"External HTTPS"| BC_EDGE
+    BC_EDGE -->|"REST + Internal Auth"| BC_CORE
+    BC_CORE -->|"Temporal Activities"| BC_EXEC
+    BC_EXEC -. "outbox_events + WAL" .-> BC_DATA_AI
+    BC_CORE & BC_EXEC -->|"PgBouncer + Redis"| INFRA_CAP
+    BC_DATA_AI -->|"Kafka / Redis / BQ"| INFRA_CAP

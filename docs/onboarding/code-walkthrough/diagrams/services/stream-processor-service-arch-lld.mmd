@@ -1,0 +1,45 @@
+flowchart TB
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef broker fill:#F8FAFC,stroke:#475569,stroke-width:2px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2.2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph KAFKA_IN["1. 8 Kafka Input Topics &amp; Readers (main.go:178-224, 285-352)"]
+        direction LR
+        T_ORD["order.events &amp; orders.events<br/>fulfillment.events (Order* prefix)<br/>handleOrderEvent"]:::broker
+        T_PAY["payment.events &amp; payments.events<br/>handlePaymentEvent"]:::broker
+        T_INV["inventory.events<br/>InventoryProcessor.Process"]:::broker
+        T_RID["rider.events &amp; rider.location.updates<br/>ProcessRiderEvent / ProcessLocationUpdate"]:::broker
+    end
+
+    subgraph CORE["2. Deduplication, Backpressure &amp; Monotonic Commit Engine (dedup/, processor/)"]
+        direction TB
+        KR["8x kafka.Reader Goroutines (Group: stream-processor)<br/>CommitInterval=0, StartOffset=FirstOffset, MinBytes=1KB, MaxBytes=10MB<br/>SessionTimeout=45s, Heartbeat=3s, Balancers=[Range, RoundRobin]"]:::prod
+        DEDUP["dedup.Checker (dedup.go + bloom.go)<br/>RedisClient (Exists, SetNX 24h) + BloomFilter(100k, 1% FP, xxhash)<br/>Key: dedup:{topic}:event:{event_id} or dedup:{topic}:{part}:{off}<br/>Fail-open on Redis error (dedup_errors_total++)"]:::prod
+        SD["8x StreamDispatcher (stream.go + offset_tracker.go + watermark.go)<br/>ch cap 1000 · High=800 / Low=300 (PauseCheckWait=10ms) · 10 Workers<br/>WatermarkTracker (5m lateness, 5m future skew, DropLateEvents=false)<br/>Per-partition offsetTracker (monotonic advanceLocked, failedSeen)<br/>newDLQHandler -&gt; dltWriter (RequireAll, 5s timeout)"]:::prod
+        KR --> DEDUP --> SD
+    end
+
+    subgraph PROCS["3. Domain Processors, In-Memory Windows &amp; Cardinality Guards (processor/)"]
+        direction LR
+        OP["OrderProcessor + SLAMonitor<br/>orders_total, gmv_total_cents,<br/>delivery_duration_minutes<br/>30m wall-clock window (&lt;90% &amp; &ge;5)<br/>alertCh (cap 100) -&gt; drainAlerts()<br/>Unused: sla_compliance_ratio"]:::warn
+        PP["PaymentProcessor<br/>5m wall-clock windows[method]<br/>(uses time.Now(), not event time!)<br/>payment_success_rate, revenue,<br/>payments_total, failures_by_code"]:::warn
+        IP["InventoryProcessor<br/>1h velocity[store:sku] (sweep at 1000)<br/>stockouts[store][sku] (&gt;10 -&gt; cascade)<br/>No WatermarkTracker (uses time.Now)"]:::warn
+        RP["RiderProcessor + LRU Cache<br/>states[riderId] staleState guard<br/>lastLocationAt LRU (50k, 24h TTL)<br/>riders_by_status, earnings, deliveries"]:::prod
+    end
+
+    subgraph EDGE_SINKS["4. Edge HTTP (:8108), Redis Sinks &amp; Verified Helm/Monitoring Drift"]
+        direction LR
+        HTTP["go-shared HTTP Server (:8108)<br/>correlation.Middleware -&gt; ServeMux<br/>/health (rdb.Ping), /health/ready &amp; /ready (2s),<br/>/health/live, /metrics (promhttp)<br/>NO InternalAuth / NO otelhttp wrapper"]:::prod
+        REDIS[("Redis Operational Store (DB 0)<br/>dedup:* (24h) · orders:* (24h)<br/>gmv:total:* (48h) · delivery:time:* (24h)<br/>revenue:total:* (48h) · payments/refunds:* (24h)<br/>inventory/low_stock/stockout:* (24h)<br/>rider:status/zone/geo:* (24h) · location:* (10m)")]:::store
+        DLT["Kafka {topic}.DLT<br/>Permanent JSON / Unmarshal / Panic<br/>Headers: dlt_original_*, dlt_error, dlt_failed_at"]:::broker
+        DRIFT["VERIFIED DRIFT &amp; BLIND SPOTS<br/>1. ZERO BigQuery sink (stale main.go:5)<br/>2. Helm stream-processor REDIS_ADDR=dev<br/>   missing in values-prod.yaml (replicas=2)<br/>3. NetPol scrapes port:metrics (svc is port:http)<br/>4. wave-40 &amp; Grafana query unregistered metrics"]:::broken
+    end
+
+    T_ORD & T_PAY & T_INV & T_RID --> KR
+    SD --> OP & PP & IP & RP
+    SD -->|"isPermanentStreamError"| DLT
+    OP & PP & IP & RP --> REDIS
+    OP & PP & IP & RP -.-> HTTP
+    HTTP -.- DRIFT

@@ -1,0 +1,62 @@
+flowchart TB
+    classDef olp fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef go fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef py fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#0F172A
+    classDef infra fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph TOP["Data Motion & Lakehouse Pipeline"]
+        direction LR
+        subgraph OLTP["1. Transactional Sources"]
+            direction TB
+            SVC_PG["Java Service Postgres<br/>domain rows + outbox_events"]:::olp
+            REC_PG["Reconciliation Postgres WAL<br/>Debezium pgoutput -> reconciliation.cdc<br/>(Missing payments.cdc TF manifest!)"]:::gap
+        end
+
+        subgraph STREAM["2. Event Backbone & Real-Time"]
+            direction TB
+            OBR["outbox-relay-service :8103 (x13)<br/>SKIP LOCKED -> Sarama WaitForAll"]:::go
+            KAFKA["Kafka KRaft<br/>20 Domain + 3 Non-Domain + 1 .dlq"]:::infra
+            STR["stream-processor :8108<br/>Bloom+Redis -> Redis + Prom ONLY<br/>(No BigQuery sink)"]:::go
+            OBR --> KAFKA --> STR
+        end
+
+        subgraph LAKE["3. Lakehouse & Batch/Stream ETL"]
+            direction TB
+            CDC["cdc-consumer :8104<br/>Kafka -> BQ insertID<br/>(Missing Helm env vars!)"]:::gap
+            BEAM["Dataflow / Beam (6)<br/>Writes analytics.*"]:::infra
+            BQ["BigQuery asia-south1<br/>dbt: 8 staging -> 3 int -> 10 marts<br/>Airflow: 8 DAGs + GE Quality"]:::infra
+            SCH_GAP["Schema Drift:<br/>dbt reads raw_cdc.*, GE suites mismatch<br/>stg_*.sql, ml_feature_refresh fails"]:::gap
+            CDC & BEAM --> BQ
+            BQ --- SCH_GAP
+        end
+
+        SVC_PG --> OBR
+        REC_PG --> KAFKA
+        KAFKA --> CDC & BEAM
+    end
+
+    subgraph BOT["ML / GenAI Serving & GitOps Delivery"]
+        direction LR
+        subgraph ML_AI["4. ML, Reverse ETL & GenAI"]
+            direction LR
+            ML_OFF["Offline ML (ml/)<br/>6 Trainers · Fail-Closed Eval<br/>Fairness >= 0.8 (ml/serving unused)"]:::py
+            RETL["reverse-etl :8109<br/>HTTP Push ONLY -> Redis Lua Swap<br/>(Kafka/Temporal/BQ UNCONFIGURED)"]:::gap
+            REDIS_FS["Redis Feature Store<br/>user:features:{id} · fraud:score:{id}"]:::infra
+            AII["ai-inference :8101<br/>7 Routes (Linear / Fallback Default)"]:::py
+            AIO["ai-orchestrator :8100<br/>7-Node LangGraph + Guardrails"]:::py
+            RETL --> REDIS_FS --> AII
+            ML_OFF -. "Artifacts (empty default)" .-> AII
+            AIO -. "8 Tools" .-> AII
+        end
+
+        subgraph GITOPS["5. CI/CD, GitOps & ADR-015 SLOs"]
+            direction TB
+            CI["GitHub Actions ci.yml<br/>paths-filter -> Build/Test/Trivy<br/>Go lacks WIF -> deploy-dev yq bump"]:::infra
+            ARGO["ArgoCD + Helm (43 Policies)<br/>Istio + Rollouts<br/>(17 DB / 7 SA / 0 IAM TF gaps)"]:::gap
+            SLO["ADR-015 Burn-Rate Gates<br/>Tier 0: 99.9% · Tier 1: 99.5% · Tier 2: 99.0%<br/>14.4x / 6x / 3x -> PagerDuty/Freeze"]:::infra
+            CI --> ARGO --> SLO
+        end
+    end
+
+    TOP ~~~ BOT

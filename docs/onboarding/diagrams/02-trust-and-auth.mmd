@@ -1,0 +1,63 @@
+flowchart TB
+    %% InstaCommerce Zero-Trust Security & Auth Architecture
+    classDef client fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef mesh fill:#EEF2FF,stroke:#4338CA,stroke-width:1.6px,color:#1E1B4B
+    classDef auth fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef internal fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef note fill:#FFFBEB,stroke:#D97706,stroke-width:1.5px,color:#78350F
+
+    EXT(["Mobile App · Web Storefront · Admin Console<br/>(Untrusted External Clients)"]):::client
+
+    subgraph L1["Layer 1: Istio Zero-Trust Mesh & Ingress Perimeter"]
+        direction LR
+        ENVOY["EnvoyFilter: strip-internal-headers<br/>Unconditionally removes x-internal-token,<br/>x-internal-service, x-user-id, x-user-roles"]:::mesh
+        REQAUTH["RequestAuthentication (7 JWT Policies)<br/>Validates JWT via JWKS against<br/>identity-service:8081/.well-known/jwks.json"]:::mesh
+        AUTHPOL["PeerAuthentication: STRICT mTLS<br/>AuthorizationPolicy: 1 deny-default + 43 SPIFFE allow-svc<br/>+ 6 custom rules (admin aud=instacommerce-admin) + NetworkPolicy"]:::mesh
+        ENVOY --> REQAUTH --> AUTHPOL
+    end
+
+    subgraph L2["Layer 2a: Identity Authority (identity-service :8081)"]
+        direction LR
+        ID_JWT["DefaultJwtService & AuthService<br/>Mints RS256 (900s access / 604800s refresh, max 5)<br/>kid = Base64URL(SHA-256(mod||exp)) · iss='instacommerce-identity'<br/>Hardcodes aud='instacommerce-api' · 5-attempt/15m lockout"]:::auth
+        ID_BLK["JwksController & TokenBlocklistService (Redis)<br/>GET /.well-known/jwks.json · Refresh reuse revokes all<br/>Redis identity:revoked_jti:* (fail-closed on read error)"]:::auth
+        ID_GAP["GAP: Unknown kid falls back to single keyLoader.getPublicKey();<br/>AdminController.updateUserRoles lets ROLE_ADMIN grant SUPER_ADMIN"]:::gap
+    end
+
+    subgraph MBFF["Layer 2b-1: mobile-bff-service (:8080 · WebFlux)"]
+        direction LR
+        MBFF_F["UserContextPropagationFilter<br/>1. Strips inbound X-Internal-*, X-User-*, X-Customer-Tier, baggage<br/>2. Verifies JWT via single static RSA key (no JWKS/aud/blocklist)<br/>3. Injects X-User-Id, X-User-Roles, X-Customer-Tier,<br/>   X-Order-Value-Bracket, OTel baggage"]:::auth
+        MBFF_GAP["GAP: internal.service.token defaults to empty string;<br/>no Redis config in application.yml for CartSyncService;<br/>README stale (claims JWKS & missing RequestAuth;<br/>Helm defines mobile-bff-service-jwt)"]:::gap
+    end
+
+    subgraph AGW["Layer 2b-2: admin-gateway-service (:8099 · MVC)"]
+        direction LR
+        AGW_F["AdminJwtAuthenticationFilter + AdminSecurityAuditFilter<br/>1. Strips x-admin-* & x-internal-* headers<br/>2. Accepts aud='instacommerce-api' fallback if ROLE_ADMIN/SUPER_ADMIN<br/>3. Requires ROLE_SUPER_ADMIN for flag override & emergency-stop<br/>4. Sync ADMIN_MUTATION -> audit-trail-service (:8096)"]:::auth
+        AGW_NOTE["NOTE: Single static RSA key (no JWKS/kid or Redis blocklist);<br/>AdminRateLimitFilter is pod-local (4096 keys)"]:::note
+    end
+
+    subgraph AUTH_MECH["Layer 2c: Internal Service-to-Service Auth (ADR-006 / ADR-010)"]
+        direction LR
+        JAVA_INT["SharedInternalServiceAuthFilter (11 Java svcs)<br/>& go-shared/pkg/auth/middleware.go (Go)<br/>Reads X-Internal-Service + X-Internal-Token<br/>Constant-time compare (MessageDigest.isEqual / subtle)<br/>Grants ROLE_INTERNAL_SERVICE + ROLE_SERVICE_{CALLER}"]:::internal
+        CALLER_MAP["Token Validation Precedence:<br/>1. Check allowedCallers[caller] map first<br/>2. If absent & strictPerServiceTokens=true -> DENY<br/>3. Else fallback to shared INTERNAL_SERVICE_TOKEN"]:::note
+    end
+
+    subgraph INT_GAPS["Rollout Reality & Verified Auth Gaps"]
+        direction LR
+        G_FLAT["Per-Caller Rollout Incomplete<br/>ONLY identity-service sets allowed-callers (30 callers);<br/>other svcs use flat shared token (strictPerServiceTokens=false);<br/>platform-common JwtTokenVerifier has 0 service consumers"]:::gap
+        G_CHK["checkout-orchestrator-service (:8091)<br/>SecurityConfig omits InternalServiceAuthFilter<br/>(uses JwtAuthenticationFilter only;<br/>/checkout/dlq/** checks ADMIN or INTERNAL_SERVICE)"]:::gap
+        G_AI["ai-orchestrator-service (:8100)<br/>tools.py reads AI_ORCHESTRATOR_INTERNAL_SERVICE_TOKEN,<br/>while auth.py & Helm set INTERNAL_SERVICE_TOKEN -> outbound<br/>tool calls omit X-Internal-Token under default Helm"]:::gap
+    end
+
+    %% Clean Top-to-Bottom Flow
+    EXT -->|"API + Auth Requests"| ENVOY
+    AUTHPOL -->|"Login / Refresh"| ID_JWT
+    ID_BLK -. "JWKS Fetch" .-> REQAUTH
+    AUTHPOL -->|"Customer Traffic"| MBFF_F
+    AUTHPOL -->|"Admin Traffic"| AGW_F
+    MBFF_F -->|"X-Internal-Service + X-Internal-Token<br/>+ X-User-Id / X-User-Roles"| JAVA_INT
+    AGW_F -->|"X-Internal-Service + X-Internal-Token"| JAVA_INT
+    JAVA_INT -. "Calls to checkout-orchestrator<br/>(No Internal Filter)" .-> G_CHK
+    G_AI -. "ai-orchestrator 8 Tools<br/>(Omits X-Internal-Token)" .-> JAVA_INT
+    JAVA_INT --- CALLER_MAP
+    CALLER_MAP -. "Fallback Reality" .-> G_FLAT

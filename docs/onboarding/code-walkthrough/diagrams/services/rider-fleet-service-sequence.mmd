@@ -1,0 +1,65 @@
+sequenceDiagram
+    autonumber
+    participant Kafka as Kafka<br/>(fulfillment.events)
+    participant FEC as FulfillmentEventConsumer
+    participant RAS as RiderAssignmentService<br/>(@Retryable 3x · @Transactional)
+    participant Redis as Redis<br/>(riders:active)
+    participant Optim as dispatch-optimizer<br/>(:8102, opt-in)
+    participant PG as PostgreSQL<br/>(rider_fleet)
+    participant Outbox as OutboxService<br/>(MANDATORY)
+    participant Relay as outbox-relay-rider-fleet<br/>(:8103)
+
+    Kafka->>FEC: ConsumerRecord (OrderPacked, pickupLat/Lng, weight)
+    FEC->>RAS: assignRider(orderId, storeId, pickupLat, pickupLng, dropoff, weight)
+
+    Note over RAS,PG: @Transactional begins (Hikari connection acquired)
+    RAS->>PG: SELECT EXISTS(... rider_assignments WHERE order_id = ? AND status = 'ACTIVE')
+    alt Active assignment exists
+        PG-->>RAS: true
+        RAS-->>FEC: throw DuplicateAssignmentException
+        FEC-->>Kafka: KafkaErrorConfig -> immediate fulfillment.events.DLT
+    end
+
+    opt optimizer-enabled is true (default false)
+        RAS->>PG: SELECT available riders for storeId
+        RAS->>Redis: HGET rider:location:{id} lat, lng
+        RAS->>Optim: POST /v2/optimize/assign (2s connect / 5s read)
+        Note over RAS,Optim: DispatchOptimizerClient catches Exception internally -> @CircuitBreaker never trips
+        Optim-->>RAS: candidate riderId (or empty on error/fallback)
+        RAS->>PG: SELECT * FROM rider_availability WHERE rider_id=? AND is_available=true FOR UPDATE SKIP LOCKED
+    end
+
+    alt Optimizer disabled or returned no eligible locked rider
+        RAS->>Redis: GEORADIUS riders:active (lng, lat, 5.0 km, ASC, LIMIT 100)
+        alt Redis returned candidate UUIDs
+            Redis-->>RAS: orderedIds
+            RAS->>PG: SELECT rider_availability + riders (storeId, ACTIVE, capacity, fatigue, shift)
+            loop First eligible rider in distance order
+                RAS->>PG: SELECT * FROM rider_availability WHERE rider_id=? AND is_available=true FOR UPDATE SKIP LOCKED
+            end
+        end
+        alt Redis empty/unavailable or no locked candidate
+            RAS->>PG: Native SQL Haversine (findEligibleNearestCandidates LIMIT 20)
+            Note over RAS,PG: Requires current_lat/lng NOT NULL (never updated by updateLocation!)
+            loop First eligible SQL candidate
+                RAS->>PG: SELECT * FROM rider_availability ... FOR UPDATE SKIP LOCKED
+            end
+        end
+    end
+
+    alt No eligible rider locked
+        RAS-->>FEC: throw NoAvailableRiderException
+        FEC-->>Kafka: DefaultErrorHandler retries 3x (1s FixedBackOff) -> fulfillment.events.DLT
+    else RiderAvailability row locked
+        RAS->>PG: UPDATE riders SET status='ON_DELIVERY', UPDATE rider_availability SET is_available=false
+        RAS->>PG: INSERT INTO rider_assignments (status='ACTIVE', uk_rider_assignments_active_order)
+        Note over RAS,PG: DataIntegrityViolationException on race -> DuplicateAssignmentException
+        RAS->>Outbox: publish("Rider", riderId, "RiderAssigned", payload)
+        Outbox->>PG: INSERT INTO outbox_events (sent=false)
+        Note over RAS,PG: @Transactional commits (OptimisticLockingFailure retries up to 3x)
+        RAS-->>FEC: riderId
+    end
+
+    Relay->>PG: Poll outbox_events FOR UPDATE SKIP LOCKED (500ms)
+    Relay->>Kafka: Produce RiderAssigned to rider.events (key=riderId)
+    Relay->>PG: UPDATE outbox_events SET sent=true

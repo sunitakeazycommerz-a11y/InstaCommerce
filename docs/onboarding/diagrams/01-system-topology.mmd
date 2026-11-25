@@ -1,0 +1,117 @@
+flowchart LR
+    %% InstaCommerce 30-Service System Topology (Landscape Architecture Map)
+    classDef client fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef java fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef go fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef python fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#0F172A
+    classDef infra fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+
+    subgraph COL0["Ingress & Stack Legend"]
+        direction TB
+        C_ALL(["Mobile · Web · Admin<br/>External PSP Webhooks"]):::client
+        ISTIO["Istio Ingress Gateway<br/>STRICT mTLS · EnvoyFilter<br/>RequestAuth JWKS<br/>43 SPIFFE Policies"]:::infra
+        subgraph LEGEND["Stack Legend (30 Svcs)"]
+            direction TB
+            L_JAVA["Java 21 / Boot 4 (20)<br/>Ports :8080–:8099"]:::java
+            L_GO["Go 1.25 + go-shared (8)<br/>Ports :8102–:8109"]:::go
+            L_PY["Python 3.12 / FastAPI (2)<br/>Ports :8100–:8101"]:::python
+        end
+    end
+
+    subgraph EDGE["1. Edge, Auth & Governance (Java 21 · 5)"]
+        direction TB
+        MBFF["mobile-bff-service :8080<br/>WebFlux · SSE /cart/stream<br/>Proxies AI Assist → :8100"]:::java
+        AGW["admin-gateway-service :8099<br/>MVC · RBAC + Sync Audit"]:::java
+        ID["identity-service :8081<br/>RS256/JWKS · Redis Blocklist"]:::java
+        FLAGS["config-feature-flag-service :8098<br/>Murmur3 Flags · SSE /flags/stream"]:::java
+        AUDIT["audit-trail-service :8096<br/>Hash-Chained PG + GCS<br/>(21 Kafka Topics)"]:::java
+    end
+
+    subgraph COMMERCE["2. Core Commerce & Saga (Java 21 · 6)"]
+        direction TB
+        CAT["catalog-service :8082<br/>SKUs · In-Process Outbox"]:::java
+        SEARCH["search-service :8088<br/>PG tsvector GIN + Fuzzy"]:::java
+        PRICE["pricing-service :8089<br/>HMAC PriceQuote · Redis NX"]:::java
+        CART["cart-service :8090<br/>PG JpaCartStore · L2 Cache"]:::java
+        INV["inventory-service :8083<br/>Sorted FOR UPDATE · FEFO"]:::java
+        CHK["checkout-orchestrator-service :8091<br/>Temporal 10-Step Saga · DLQ"]:::java
+    end
+
+    subgraph FULFILL["3. Money, Risk & Fulfillment (Java 21 · 9)"]
+        direction TB
+        subgraph FUL_MONEY["Orders, Money & Risk (4)"]
+            direction TB
+            ORD["order-service :8084<br/>9-State FSM · Outbox"]:::java
+            PAY["payment-service :8085<br/>2-TX Saga · Double-Entry Ledger"]:::java
+            WAL["wallet-loyalty-service :8095<br/>Double-Entry Wallet · Points"]:::java
+            FRAUD["fraud-detection-service :8097<br/>Fail-Closed Rules · Velocity"]:::java
+        end
+        subgraph FUL_PHYS["Dark Store, Delivery & Comms (5)"]
+            direction TB
+            WH["warehouse-service :8092<br/>Dark Store Cap · Cold Chain"]:::java
+            FUL["fulfillment-service :8086<br/>S-Curve Pick · 4-Tote · OTP/POD"]:::java
+            RIDER["rider-fleet-service :8093<br/>Redis GEO · SKIP LOCKED"]:::java
+            ETA["routing-eta-service :8094<br/>Haversine×1.4 · STOMP WS"]:::java
+            NOTIF["notification-service :8087<br/>7 Topics · PUSH→SMS→EMAIL"]:::java
+        end
+    end
+
+    subgraph BACKBONE["Shared State & Event Backbone"]
+        direction TB
+        PG[("PostgreSQL 16 (39 Local DBs)<br/>Domain Truth + outbox_events")]:::infra
+        TEMPORAL[("Temporal :7233<br/>Durable Saga History")]:::infra
+        REDIS[("Redis 7 :6379<br/>L2 Cache · Pub/Sub<br/>GEO · Features")]:::infra
+        KAFKA["Kafka KRaft :9092<br/>+ Debezium WAL :18083<br/>20+ Topics · CDC · DLTs"]:::infra
+    end
+
+    subgraph GODAEMONS["4. Go Async Daemons & Solvers (Go 1.25 · 8)"]
+        direction TB
+        subgraph GO_PIPE["Relay, CDC, Streams & Reverse ETL (4)"]
+            direction TB
+            OUTBOX["outbox-relay-service :8103<br/>SKIP LOCKED → Kafka (+13 domain)"]:::go
+            CDCC["cdc-consumer-service :8104<br/>Kafka → BigQuery Sink"]:::go
+            STREAM["stream-processor-service :8108<br/>Bloom/Redis Dedup · SLA Alerts"]:::go
+            REV["reverse-etl-orchestrator :8109<br/>HTTP Push → Redis Lua Swap"]:::go
+        end
+        subgraph GO_OPS["Webhooks, Recon, GPS & Dispatch (4)"]
+            direction TB
+            PWH["payment-webhook-service :8106<br/>Stripe/Razorpay/PhonePe + Dedup"]:::go
+            RECON["reconciliation-engine :8107<br/>CDC → T+1 Matcher<br/>(no payments.cdc TF connector)"]:::go
+            LOC["location-ingestion-service :8105<br/>Kalman · Lua CAS · Axial Hex"]:::go
+            DISP["dispatch-optimizer-service :8102<br/>Greedy+1-opt (Flagged Off)"]:::go
+        end
+    end
+
+    subgraph AILAKE["5. GenAI (Python 3.12 · 2) & Lakehouse"]
+        direction TB
+        AIORCH["ai-orchestrator-service :8100<br/>Python 3.12 · LangGraph<br/>Guardrails · 8 Commerce Tools"]:::python
+        AIINF["ai-inference-service :8101<br/>Python 3.12 · 7 ML Routes<br/>(Linear/Fallback Defaults)"]:::python
+        LAKE["BigQuery Lakehouse & Offline ML<br/>dbt (Staging→Int→Marts)<br/>8 Airflow DAGs · 6 Beam Pipelines<br/>Great Expectations · 6 ML Trainers"]:::infra
+    end
+
+    %% Clean Single-Direction Left-to-Right Connections (wrapped short labels)
+    C_ALL -->|"HTTPS / JWT"| ISTIO
+    ISTIO -->|"Customer JWT"| MBFF
+    ISTIO -->|"Admin JWT"| AGW
+    ISTIO -->|"Auth / Tokens"| ID
+    C_ALL -. "PSP Webhooks<br/>(:8106)" .-> PWH
+
+    MBFF -->|"Browse / Quote<br/>& Cart"| CART
+    MBFF -->|"POST /checkout"| CHK
+    COMMERCE -->|"Saga: Order<br/>Pay · Wallet"| FULFILL
+
+    COMMERCE -->|"Workflow<br/>History"| TEMPORAL
+    FULFILL -->|"ACID +<br/>outbox_events"| PG
+    FULFILL -->|"GEO & State"| REDIS
+    FULFILL <-->|"Domain<br/>Events"| KAFKA
+
+    PG -->|"Poll SKIP LOCKED"| OUTBOX
+    KAFKA <-->|"Domain Topics<br/>& Webhooks"| PWH
+    KAFKA <-->|"CDC Topics &<br/>rider.location"| RECON
+    KAFKA -->|"8 Topics /<br/>Streaming Sink"| CDCC
+    REDIS <-->|"Lua Features<br/>& Metrics"| REV
+
+    CDCC -->|"Streaming<br/>Insert"| LAKE
+    LAKE -. "HTTP Push Only<br/>(BQ/Kafka Unconfigured)" .-> REV
+    REDIS -. "Features<br/>(default: none)" .-> AIINF
+    MBFF -. "AI Assist<br/>(via Edge)" .-> AIORCH

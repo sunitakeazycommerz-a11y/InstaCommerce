@@ -1,0 +1,60 @@
+flowchart TB
+    classDef entry fill:#EFF6FF,stroke:#2563EB,stroke-width:1.8px,color:#0F172A
+    classDef path fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef gate fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:1.7px,color:#78350F
+    classDef trap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+
+    START(["Plan Your First PR<br/>Identify Blast Radius Before Editing"]):::entry
+
+    START --> P1["1. Existing Service / Flyway<br/>services/&lt;svc&gt;/ or libs/"]:::path
+    START --> P2["2. Kafka Topic / Contract / Proto<br/>contracts/ (+ outbox-relay)"]:::path
+    START --> P3["3. Brand-New Microservice<br/>services/&lt;new-svc&gt;/"]:::path
+    START --> P4["4. Helm / Istio / TF / SLOs<br/>deploy/ · infra/ · monitoring/"]:::path
+
+    subgraph S1["Track 1: Service & Schema Edits"]
+        direction TB
+        S1A["DB Migrations: sequential V&lt;n&gt;__<br/>Keep ddl-auto: validate<br/>No clean-on-validation-error: true"]:::path
+        S1B["Outbox Rule (10 TX Java svcs):<br/>Write domain + outbox_events in 1 TX<br/>Go SQL: init-dbs.sql + _dev_local_migrations"]:::warn
+        S1C["Narrow Local Test:<br/>./gradlew :services:&lt;svc&gt;:test :spotlessCheck<br/>cd services/&lt;svc&gt; && go test -race ./...<br/>PYTHONPATH=../..:. .venv/bin/pytest tests/"]:::gate
+        S1A --> S1B --> S1C
+    end
+
+    subgraph S2["Track 2: Contracts & Event Evolution"]
+        direction TB
+        S2A["TopicNames.java: add .events + .DLT<br/>(only OUTBOX_RELAY_DLQ uses .dlq)<br/>Schemas: Draft-07, unique title, FULL compat"]:::path
+        S2B["Run ./scripts/generate-proto.sh<br/>Commit services/go-shared/pkg/proto/<br/>Match protoc 4.32.0 == protobuf-java"]:::warn
+        S2C["Check outbox-relay/envelope.go:<br/>topicMappings ('notifications.events' drift)<br/>Note: contracts/** builds ALL 20 Java svcs"]:::trap
+        S2A --> S2B --> S2C
+    end
+
+    subgraph S3["Track 3: New Service Governance Chain"]
+        direction TB
+        S3A["1. Register port &amp; Helm key in GLOSSARY.md<br/>2. Add README.md (with port) + std Dockerfile<br/>(Java 21 / Go 1.25 / Py 3.12 + USER app)"]:::path
+        S3B["3. Wire settings.gradle.kts or go.work<br/>4. Add ci.yml filter + matrix + go_service_to_helm<br/>5. Add CODEOWNERS + dependabot.yml group"]:::path
+        S3C["6. Add deploy/helm/values.yaml service +<br/>istio.servicePolicies (1:1) + helm/README.md<br/>+ helm_pairs[] in check-monorepo-consistency.sh"]:::warn
+        S3A --> S3B --> S3C
+    end
+
+    subgraph S4["Track 4: Infra, Mesh & SLO Pitfalls"]
+        direction TB
+        S4A["Helm Traps:<br/>NetworkPolicy scrapes port: metrics (pods: http)<br/>18 DB URLs use literal PROJECT:REGION:INSTANCE<br/>cdc-consumer omits 5 required env vars"]:::trap
+        S4B["Prod/CI Traps:<br/>PAYMENT_* recovery/outbox flags false in prod<br/>values-prod.yaml overwrites Istio lists (7-&gt;3)<br/>go-build-test uses GCP_SA_KEY (no WIF)"]:::trap
+        S4C["Run helm lint + helm template per overlay<br/>+ python3 scripts/verify-istio-mesh-policies.py<br/>Use hikaricp_connections_* in Prom rules"]:::gate
+        S4A --> S4B --> S4C
+    end
+
+    P1 --> S1A
+    P2 --> S2A
+    P3 --> S3A
+    P4 --> S4A
+
+    PRE["Pre-Push Gate (Local)<br/>bash scripts/check-monorepo-consistency.sh --strict-docs<br/>ruff check . · pyright scripts/<br/>git diff --check"]:::gate
+    CI["GitHub Actions PR Gates (.github/workflows/ci.yml)<br/>detect-changes -&gt; language matrices + contract-validation<br/>+ always-on security-scan · helm-validation<br/>repo-governance-lint · e2e-synthetic-test"]:::entry
+    MERGE["CODEOWNERS Review -&gt; Merge to main/master<br/>deploy-dev bumps values-dev.yaml [skip ci] -&gt; ArgoCD Sync"]:::gate
+
+    S1C --> PRE
+    S2C --> PRE
+    S3C --> PRE
+    S4C --> PRE
+    PRE --> CI --> MERGE

@@ -1,0 +1,38 @@
+flowchart TB
+    classDef java fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef go fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef ext fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph TOP["1. payment-service (:8085, Java 21 / PG payments) &amp; Multi-PSP Webhooks (:8106)"]
+        direction TB
+        Triggers["Capture Triggers:<br/>Checkout Step 9a (POST /payments/{id}/capture)<br/>OR OrderPackedEventConsumer (fulfillment.events)"]:::java
+        WHGo["payment-webhook-service :8106 (Go)<br/>Verifies Stripe (300s), Razorpay, PhonePe<br/>Redis SETNX payment-webhook:event:{id} EX 24h<br/>(rollback on Kafka fail) &rarr; payment.webhooks (v2)"]:::go
+
+        TX1["TX1 (REQUIRES_NEW)<br/>Lock findByIdForUpdate / insert<br/>Mark *_PENDING (AUTHORIZE / CAPTURE / VOID)"]:::java
+        PayFlags["CRITICAL HELM PROD/STAGING RISK (values*.yaml):<br/>PAYMENT_STALE_PENDING_RECOVERY_ENABLED = false (30m/60m jobs OFF!)<br/>PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED = false<br/>PAYMENT_WEBHOOK_REFUND_OUTBOX_ENABLED = false"]:::warn
+        WHBridge["payment-service Webhook Handling<br/>PaymentWebhookEventConsumer: DISABLED by default<br/>WebhookKafkaBridge: schema &ge; 2 &amp; STRIPE ONLY<br/>(Razorpay / PhonePe &rarr; SKIPPED_UNSUPPORTED_PSP)<br/>Direct POST /payments/webhook: Stripe-only"]:::warn
+
+        PSP["External PSP (NO DB Conn Held)<br/>ResilientPaymentGatewayDecorator (3x Retry + CB)<br/>StripePaymentGateway (30s, CaptureMethod.MANUAL)"]:::ext
+        TX2["TX2 (REQUIRES_NEW) — PG payments DB<br/>Finalize AUTHORIZED / CAPTURED / VOIDED / REFUNDED<br/>Insert outbox_events &rarr; payments.events"]:::java
+        Ledger["LedgerService (inner REQUIRES_NEW, V14 dedup)<br/>Auth: DR customer_receivable / CR authorization_hold<br/>Capture: DR authorization_hold / CR merchant_payable<br/>Void/Fail: DR authorization_hold / CR customer_receivable<br/>Dispute: merchant_payable &rarr; dispute_hold &rarr; customer_receivable<br/>LedgerIntegrityVerificationJob (15m: 6 invariants)"]:::java
+
+        Triggers --> TX1
+        TX1 -.- PayFlags
+        TX1 --> PSP --> TX2 --> Ledger
+        WHGo -->|"payment.webhooks<br/>(consumer disabled)"| WHBridge
+        WHBridge -->|"Settlement / Dispute<br/>(processed_webhook_events)"| TX2
+    end
+
+    subgraph BOT["2. reconciliation-engine (:8107, Go / PG reconciliation) — Debezium CDC &amp; T+1 Matcher"]
+        direction TB
+        Deb["Debezium WAL (pgoutput) &amp; CDC_TOPICS<br/>reconciliation-engine defaults CDC_TOPICS='payments.cdc,reconciliation.cdc'<br/>Seam: Terraform only defines reconciliation.cdc (no payments.cdc manifest in repo!)"]:::warn
+        CDCCons["CDCConsumer (:8107 Go)<br/>Upserts payment_ledger<br/>Guard: EXCLUDED.source_lsn &ge; payment_ledger.source_lsn"]:::go
+        Matcher["DailyScheduler (advisory lock 7283910451)<br/>T+1 Matcher (per-row SAVEPOINT mismatch_sp):<br/>AutoFixed: &le; 2c rounding OR (&le; 100c &amp; &le; 5%) &rarr; reconciliation_fixes<br/>ManualReview: missing_ledger_entry, missing_psp_export, drift<br/>Best-effort post-commit &rarr; reconciliation.events"]:::go
+        ReconGaps["CRITICAL RECONCILIATION GAPS:<br/>1. ZERO production writers for psp_export_snapshot (no PSP loader)<br/>2. Compares authorized amount_cents (created_at) vs captured_cents<br/>3. reconciliation_outbox (V3) &amp; fix_registry (V2) unused<br/>4. ApplyFix hardcodes currency='INR'; currency_mismatch never emitted"]:::warn
+
+        Deb --> CDCCons --> Matcher
+        CDCCons -.- ReconGaps
+    end
+
+    TX2 -.->|"PG WAL (pgoutput)"| Deb

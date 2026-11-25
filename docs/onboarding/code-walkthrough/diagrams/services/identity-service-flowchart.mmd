@@ -1,0 +1,30 @@
+flowchart TD
+    Start["POST /auth/login or /auth/refresh"] --> Op{"Endpoint"}
+
+    Op -- "Login" --> RateChk["RateLimitService.checkLogin(ip)<br/>Redis Lua INCR+EXPIRE (5/60s)<br/>Fallback: Caffeine Resilience4j"]
+    RateChk -- "Exceeded" --> E429["429 RATE_LIMIT_EXCEEDED<br/>Retry-After: 60"]
+    RateChk -- "Allowed" --> RedisLock{"Redis failed_logins<br/>{email}:{ip} >= 5?"}
+
+    RedisLock -- "Yes" --> E403Lock["403 UserInactiveException<br/>Audit: USER_LOGIN_LOCKED_REDIS"]
+    RedisLock -- "No / Redis down" --> DbUser["Load User by email<br/>Check lockedUntil > now"]
+    DbUser -- "Locked in DB" --> E403Db["403 UserInactiveException<br/>Audit: USER_LOGIN_LOCKED"]
+    DbUser -- "Not locked" --> PwChk{"BCrypt(12)<br/>password matches?"}
+
+    PwChk -- "No" --> IncFail["Redis INCR (15m TTL)<br/>DB failedAttempts++ (noRollbackFor)"]
+    IncFail --> LockThresh{"failedAttempts >= 5?"}
+    LockThresh -- "Yes" --> EmitLock["Set lockedUntil = +15m<br/>Outbox: AccountLocked"]
+    LockThresh -- "No" --> E401Cred["401 InvalidCredentialsException"]
+    EmitLock --> E401Cred
+
+    PwChk -- "Yes" --> StatusChk{"status == ACTIVE?"}
+    StatusChk -- "No" --> E403Status["403 UserInactiveException"]
+    StatusChk -- "Yes" --> Mint["Reset DB+Redis counters<br/>Mint JWT (aud=instacommerce-api)<br/>Save hashed RefreshToken (cap 5)"]
+
+    Op -- "Refresh" --> HashTok["SHA-256 hash refreshToken<br/>findByTokenHash()"]
+    HashTok -- "Not found" --> E401Inv["401 TokenInvalidException"]
+    HashTok -- "Found" --> RevChk{"existing.isRevoked()<br/>or revokeIfNotRevoked == 0?"}
+    RevChk -- "Yes (Replay Reuse!)" --> Cascade["handleTokenReuseDetected()<br/>revokeAllByUserId + blocklist user<br/>Outbox: TokenReuseDetected (noRollbackFor)"]
+    Cascade --> E401Rev["401 TokenRevokedException"]
+    RevChk -- "No" --> ExpChk{"Expired or<br/>User inactive?"}
+    ExpChk -- "Yes" --> E401Exp["401/403 Expired or Inactive"]
+    ExpChk -- "No" --> Rotate["Save rotated RefreshToken (cap 5)<br/>Mint new access JWT -> 200 AuthResponse"]

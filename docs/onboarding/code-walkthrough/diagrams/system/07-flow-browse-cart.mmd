@@ -1,0 +1,44 @@
+sequenceDiagram
+    autonumber
+    participant App as Mobile Client
+    participant BFF as mobile-bff-service :8080<br/>UserContextPropagationFilter
+    participant Cat as catalog-service :8082<br/>ProductService + OutboxPublishJob
+    participant Srch as search-service :8088<br/>SearchService (PG tsvector)
+    participant Prc as pricing-service :8089<br/>PricingService + QuoteTokenService
+    participant Cart as cart-service :8090<br/>CartService + JpaCartStore
+    participant Inv as inventory-service :8083<br/>InventoryController (/inventory/check)
+
+    Note over App,BFF: Istio strips x-internal-*, x-user-* at ingress · BFF checks static RSA key (no JWKS/blocklist)<br/>and injects X-User-Id, X-User-Roles, X-Customer-Tier, baggage
+
+    App->>BFF: GET /bff/mobile/v1/home?storeId={storeId}
+    BFF->>Cat: GET /categories + /products (TwoLevelCacheManager L1+L2)
+    Cat-->>BFF: Active store/global SKUs (p.storeId = storeId OR NULL)
+
+    App->>Srch: GET /search?q=milk&storeId={storeId}
+    Srch->>Srch: SearchQueryCacheService -> TwoLevelCacheManager<br/>PG plainto_tsquery('english') + GIN search_vector (A/B/C)
+    alt 0 FTS hits
+        Srch->>Srch: runFuzzyFallbackWithTokenRetry<br/>lower(name) LIKE '%token%' (score 0.5) + didYouMean
+    end
+    Note right of Srch: Caveat: search_documents.product_id is UNIQUE ·<br/>InventoryEventConsumer ignores storeId · /autocomplete omits storeId
+    Srch-->>App: SearchResponse
+
+    App->>BFF: GET /bff/mobile/v1/products/{id}?storeId={storeId}
+    par ScreenAggregator.aggregateProduct
+        BFF->>Cat: GET /products/{id} (critical CB)
+    and
+        BFF->>Prc: GET /pricing/products/{id} (degradable CB)
+    and
+        BFF->>Inv: POST /inventory/check {storeId, items} (degradable CB)
+    end
+    BFF-->>App: Aggregated product + pricing + stock (+ degradedServices)
+
+    App->>Cart: POST /cart/items {productId, quantity, storeId}
+    Cart->>Cart: CartService.addItem -> validateStoreServiceabilityIfPresent
+    Cart->>Prc: PricingClient.getPrice(productId) [omits storeId! fail-closed]
+    Prc-->>Cart: ProductPriceLookupService.calculateBasePrice (HALF_UP)
+    Cart->>Cart: JpaCartStore.addItem -> findByUserIdForUpdate (PESSIMISTIC_WRITE)<br/>verify storeId (409 STORE_MISMATCH) + save PG + evict carts L1/L2<br/>CartSyncPublisher -> Redis cart:events -> BFF SSE /cart/stream/{userId}
+    Cart-->>App: 200 CartResponse (authoritative server unitPriceCents)
+
+    App->>Prc: POST /pricing/calculate {userId, items, storeId, couponCode}
+    Prc->>Prc: PriceRule + active promos + CouponService (Redis NX EX 300)<br/>DiscountCalculator (max exclusive vs stackable+coupon) + surge fee<br/>QuoteTokenService.issueQuote -> HmacSHA256 PriceQuote (300s TTL)
+    Prc-->>App: PriceCalculationResponse {quoteId, quoteToken, totalCents}

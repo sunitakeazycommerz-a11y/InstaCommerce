@@ -1,0 +1,36 @@
+flowchart TB
+    subgraph ContractsModule["contracts/ (Gradle :contracts, Java 21, no runtime)"]
+        direction TB
+        subgraph EventContracts["Async Kafka Event Contracts"]
+            TN["TopicNames.java\n20 domain .events (+3 aliases) + 3 non-domain\n(21 distinct .events) + 1 .dlq + 23 *_DLT (22 .DLT)"]
+            EEJ["EventEnvelope.v1.json\ndraft-07 canonical envelope\nrequired: id, eventType, aggregate*,\neventTime, schemaVersion, payload\nanyOf: source_service | sourceService"]
+            EEJava["EventEnvelope.java (record)\n@JsonAlias camel/snake normalization\n+ CancellationReason enum"]
+            Schemas["91 JSON Schemas (21 dirs)\ne.g. orders (7), payments (12),\ninventory (12), fulfillment (12)"]
+            Compat["SchemaCompatibilityValidator\nFULL compat: 6 ViolationTypes\n+ 6 JUnit suites (46 tests)"]
+        end
+
+        subgraph ProtoContracts["Sync gRPC / Protobuf Definitions"]
+            Protos["10 .proto files (proto3)\ncommon/v1/money.proto +\n9 domain Service definitions"]
+            JavaGen["Java gRPC / Protobuf Codegen\nprotoc:4.32.0 + grpc-java:1.75.0\n-> build/generated/sources/proto"]
+            GoScript["./scripts/generate-proto.sh\nGradle :contracts:generateGoProto\nprotoc + protoc-gen-go(-grpc)"]
+            GoStubs["services/go-shared/pkg/proto/\n10 .pb.go + 9 _grpc.pb.go\n(checked-in protoc v4.25.3)"]
+        end
+    end
+
+    subgraph RuntimeAdoption["Actual Repository Runtime Adoption"]
+        direction TB
+        JavaAdopters["14/20 Java services declare :contracts\n12 import TopicNames / EventEnvelope / CancellationReason\n2 (cart, warehouse) declare dep with 0 imports"]
+        JavaGrpc["0/20 Java services implement gRPC servers\nor import com.instacommerce.contracts.*.v1"]
+        GoKafka["Go Services (outbox-relay, cdc-consumer,\npayment-webhook, reconciliation-engine)\nUse go-shared/pkg/kafka envelope & helpers"]
+        GoProtoReality["0/8 Go services import go-shared/pkg/proto\nAll sync S2S calls use HTTP/REST JSON"]
+    end
+
+    EEJ -. validated by .-> Compat
+    Schemas -. validated by .-> Compat
+    TN -. tested by TopicSchemaAlignmentTest .-> Schemas
+    Protos --> JavaGen
+    Protos --> GoScript --> GoStubs
+    EventContracts --> JavaAdopters
+    EventContracts --> GoKafka
+    JavaGen -. "0 callers (dormant)" .-> JavaGrpc
+    GoStubs -. "0 callers (CI drift-checked)" .-> GoProtoReality

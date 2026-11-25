@@ -1,0 +1,72 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef filter fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph UPSTREAM["Upstream Callers & Event Brokers"]
+        direction LR
+        BFF["mobile-bff-service :8080<br/>User JWT (RS256)"]:::caller
+        CO["checkout-orchestrator :8091<br/>X-Internal-Service + X-Internal-Token"]:::caller
+        ADMGW["admin-gateway :8099<br/>ROLE_ADMIN JWT"]:::caller
+        KAFKA_IN["Kafka Inbound<br/>fulfillment.events · identity.events"]:::caller
+    end
+
+    subgraph APP["order-service :8084 (Java 21 / Spring Boot 4.0.0)"]
+        direction TB
+        subgraph CHAIN["Servlet Filter & Security Chain (SecurityConfig)"]
+            direction LR
+            CORR["CorrelationIdFilter<br/>@Order(HIGHEST_PRECEDENCE)<br/>MDC correlationId, storeId, userId, tenantId"]:::filter
+            VEGAS["AdaptiveConcurrencyFilter<br/>@Order(HIGHEST_PRECEDENCE+50)<br/>VegasConcurrencyLimiter (init=50, min=10, max=500 -> 429)"]:::filter
+            ISAF["InternalServiceAuthFilter (local)<br/>X-Internal-Service + X-Internal-Token<br/>MessageDigest.isEqual -> ROLE_INTERNAL_SERVICE"]:::filter
+            JWT["JwtAuthenticationFilter<br/>DefaultJwtService (RS256) -> ROLE_*<br/>skips /actuator, /error"]:::filter
+            EX["GlobalExceptionHandler<br/>Custom ErrorResponse(code, traceId)<br/>(not RFC 7807 ProblemDetail)"]:::filter
+        end
+
+        subgraph CTRL["REST Controllers"]
+            direction LR
+            OC["OrderController<br/>/orders, /api/orders, /api/v1/orders<br/>POST, GET, /{id}, /{id}/status, /{id}/cancel, /{id}/amend"]:::ctrl
+            AC["AdminOrderController<br/>/admin/orders/{id}<br/>GET, POST /cancel, POST /status (@PreAuthorize)<br/>ignores Idempotency-Key hdr"]:::ctrl
+            LC["LegacyCheckoutController<br/>POST /checkout, /api/checkout (permitAll)<br/>410 GONE CHECKOUT_MOVED"]:::warn
+        end
+
+        subgraph SERVICES["Application Services, Domain FSM & Clients"]
+            direction LR
+            OCR["OrderCreationService<br/>normalizeIdempotencyKey (>64c SHA-256)<br/>sum & quote invariants · TransactionTemplate"]:::svc
+            OLIC["OrderLifecycleService<br/>OrderStateMachine (9 states) · findByIdForUpdate<br/>@Retryable(3x) · SLA & fulfillmentProgressionFor"]:::svc
+            OMOD["OrderModificationService<br/>OrderRefundCalculator (proportional discount)<br/>computeWalletPartialRefund (PSP-first)"]:::svc
+            PCLI["RestPricingQuoteClient<br/>RestClient + InternalServiceAuthInterceptor<br/>Resilience4j CB(50) + Retry(3x) + Bulkhead(20)"]:::svc
+            OUTBOX["OrderOutboxPublisher + OutboxService<br/>Propagation.MANDATORY + AuditLogService<br/>CHECKOUT_SAGA_ROLLBACK suppresses refund"]:::svc
+        end
+
+        subgraph JOBS["Kafka Consumers, Cleanup & Dead Code"]
+            direction LR
+            FCON["FulfillmentEventConsumer<br/>fulfillment.events (group: order-service-fulfillment)<br/>ConditionalOnProperty DEFAULT FALSE"]:::warn
+            ICON["IdentityEventConsumer<br/>identity.events (UserErased) -> UserErasureService<br/>catches Exception internally (no .DLT)"]:::filter
+            KCFG["KafkaConfig<br/>DefaultErrorHandler 3x 1000ms -> {topic}.DLT<br/>non-retryable: JsonProcessing, IllegalArg"]:::svc
+            OCJ["OutboxCleanupJob<br/>@Scheduled 03:00 ShedLock (7d, batch 1000)<br/>checkAndRecordSlaBreaches(): ZERO caller!"]:::warn
+            RLS["RateLimitService (unused)<br/>Caffeine 10k / checkoutLimiter<br/>resilience4j.ratelimiter.instances: {}"]:::warn
+        end
+    end
+
+    subgraph DATA["PostgreSQL (orders DB, V1..V15), Pricing & Outbox Relay"]
+        direction LR
+        PG["PostgreSQL orders DB (Hikari max=20, open-in-view=false)<br/>orders (order_status ENUM 9 states, uq_order_idempotency, @Version)<br/>order_items · order_status_history · outbox_events (idx_outbox_unsent)<br/>audit_log · shedlock"]:::db
+        PRICING["pricing-service :8089<br/>POST /pricing/quotes/validate"]:::caller
+        RELAY["outbox-relay-order :8103 (Go)<br/>SELECT FOR UPDATE SKIP LOCKED -> orders.events"]:::db
+    end
+
+    BFF & CO & ADMGW --> CORR --> VEGAS --> ISAF --> JWT --> CTRL
+    CTRL -.-> EX
+    OC --> OCR & OLIC & OMOD
+    AC --> OLIC
+    OCR -->|"outside TX"| PCLI --> PRICING
+    OCR & OLIC & OMOD --> OUTBOX --> PG
+    KAFKA_IN --> FCON & ICON
+    FCON & ICON -.-> KCFG
+    FCON --> OLIC & OMOD
+    ICON --> PG
+    OCJ --> PG
+    PG -->|"outbox_events (sent=false)"| RELAY

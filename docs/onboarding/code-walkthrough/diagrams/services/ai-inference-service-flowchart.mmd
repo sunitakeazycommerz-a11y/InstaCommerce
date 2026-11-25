@@ -1,0 +1,24 @@
+flowchart TD
+    START(["POST /inference/{model}"]) --> RES["resolve_model_config(registry, model, version)<br/>404 if unknown; extract_numeric_features"]
+    RES --> LIN{"model in {eta,ranking,fraud}<br/>AND version in _LINEAR_VERSIONS?"}
+    LIN -->|Yes| LCACHE{"InferenceCache.get(sha256)?"}
+    LCACHE -->|Hit| LRET(["Return cached + shadow"])
+    LCACHE -->|Miss| LSLA["enforce_sync_sla -> perform_inference"]
+    LSLA --> LHLTH["assess_feature_health (Z>4.0, miss>0.35)"]
+    LHLTH --> LCOLD{"is_cold_start_context?"}
+    LCOLD -->|Yes| LPRIOR["build_cold_start_output (COLD_START_PRIORS)"] --> LSET
+    LCOLD -->|No| LMATH["linear_score(bias + sum x*w) + safe_sigmoid + 90% CI<br/>method='linear'"] --> LSET["cache.set if not sla_breached"] --> SHADOW
+
+    LIN -->|No: domain or -lgb/-xgb/-onnx| DHLTH["assess_feature_health (skips cold_start check!)"]
+    DHLTH --> DCACHE{"InferenceCache.get(request_hash)?"}
+    DCACHE -->|Hit| DRET(["Return cached + shadow"])
+    DCACHE -->|Miss| DSLA["enforce_sync_sla -> _predict_with_domain_model"]
+    DSLA --> ONNXCHK{"version ends with -onnx-v1?"}
+    ONNXCHK -->|Yes| ORUN["ManagedOnnxSession.run<br/>if _is_mock=True: method='onnx_fallback', scalar=None"] --> DOM
+    ONNXCHK -->|No| DOM{"model_instance.predict()<br/>self._model != None?"}
+    DOM -->|Yes| MLOUT["ML Booster / Pickle inference (method='ml')"]
+    DOM -->|"No (default)"| RULEOUT["_rule_based_fallback (method='rule_based')"]
+    MLOUT & RULEOUT --> SLACHECK{"strict_sla_timeout=True<br/>AND timed out?"}
+    SLACHECK -->|Yes| COERCE["_coerce_sla_fallback (method='sla_timeout_fallback')"]
+    SLACHECK -->|No| DSET["cache.set(output)"]
+    COERCE & DSET --> SHADOW["maybe_run_shadow -> ShadowRunner<br/>(250ms async linear perform_inference)"]

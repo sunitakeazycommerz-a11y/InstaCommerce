@@ -1,0 +1,59 @@
+sequenceDiagram
+    autonumber
+    participant Cli as Client / BFF
+    participant Ctrl as CheckoutController :8091<br/>Semaphore(1500) + PG Idem
+    participant WF as CheckoutWorkflowImpl<br/>Temporal (10m timeout)
+    participant CartPrc as cart :8090 / pricing :8089
+    participant Inv as inventory :8083
+    participant Wal as wallet-loyalty :8095
+    participant Pay as payment :8085
+    participant Ord as order :8084
+
+    Cli->>Ctrl: POST /checkout (Idempotency-Key hdr)
+    Ctrl->>Ctrl: tryAcquire(1500) -> check principal == userId<br/>CheckoutIdempotencyService (checkout_idempotency_keys, 30m TTL)
+    Ctrl->>WF: start workflowId = checkout-{principal}-{idempotencyKey}
+
+    rect rgb(239, 246, 255)
+        WF->>CartPrc: 1. VALIDATING_CART: GET /api/carts/{userId}/validate
+        WF->>CartPrc: 2. CALCULATING_PRICES: POST /pricing/calculate<br/>PriceDriftEvaluator (maxPriceDriftCents=0) + expectedOrderId UUID
+        WF->>Inv: 3. RESERVING_INVENTORY: POST /api/inventory/reservations<br/>key = workflowId:inventory:reserve (~100c vs VARCHAR(64)!) [reg: releaseStock]
+        opt requestedWalletCents greater than 0
+            WF->>Wal: 4. DEBITING_WALLET: POST /wallet/debit ({workflowId}:wallet:debit)<br/>[reg: refundWallet] (on fail: saga.compensate() immediately)
+        end
+        opt paymentAmountCents greater than 0
+            WF->>Pay: 5. AUTHORIZING_PAYMENT: POST /payments/authorize<br/>CaptureMethod.MANUAL, {workflowId}:pay:auth (30s/45s)
+        end
+        WF->>Ord: 6. CREATING_ORDER: POST /api/orders (PENDING, expectedOrderId)<br/>body idempotencyKey = {workflowId}:order:create [reg: cancelOrder]
+        opt appliedCoupon != null
+            WF->>CartPrc: 7. REDEEMING_COUPON: POST /pricing/coupons/redeem [reg: rollbackCoupon]
+        end
+        opt appliedPromotionDetails non-empty
+            WF->>CartPrc: 8. REDEEMING_PROMOTION: POST /pricing/promotions/redeem [reg: rollbackPromo]
+        end
+        WF->>Pay: 9a. CONFIRMING: paymentCaptureAttempted=true -> POST /payments/{id}/capture<br/>{workflowId}:pay:{id}:capture -> paymentCaptured=true
+        WF->>Inv: 9b. CONFIRMING: POST /api/inventory/reservations/{id}/confirm (FEFO)
+        WF->>Ord: 9c. CONFIRMING: POST /admin/orders/{id}/status -> PLACED<br/>(sends Idempotency-Key hdr, ignored by AdminOrderController)
+        WF-->>CartPrc: 10. CLEARING_CART: DELETE /api/carts/{userId} (best-effort)
+        WF-->>Ctrl: COMPLETED -> recordResponse (30m) -> 200 CheckoutResponse
+    end
+
+    rect rgb(254, 242, 242)
+        opt Exception in Steps 1..9 -> COMPENSATING
+            Note over WF,Pay: 3-Tier Payment Compensation (CheckoutWorkflowSupport.compensatePayment)
+            alt paymentCaptured == true
+                WF->>Pay: refundPayment ({workflowId}:pay:{id}:refund, 5x)
+            else paymentAuthorized == true
+                WF->>Pay: voidPayment ({workflowId}:pay:{id}:void, 5x)
+                Note over WF,Pay: If void fails AND paymentCaptureAttempted == true -> fallback refundPayment!
+            end
+            Note over WF,Inv: LIFO saga.compensate() (parallel=false, continueWithError=true, 5x)
+            WF->>CartPrc: L1-L2. rollbackPromotion -> unredeemCoupon / rollbackUsage
+            WF->>Ord: L3. cancelOrder (reason=CHECKOUT_SAGA_ROLLBACK -> blocks duplicate wallet refund)
+            WF->>Wal: L4. refundWallet ({workflowId}:wallet:refund)
+            WF->>Inv: L5. releaseStock (DELETE /api/inventory/reservations/{id})
+            opt Exhausted 5 retries
+                WF->>Ctrl: CompensationDlqActivityImpl -> PG compensation_dlq (FAILED)
+            end
+            Ctrl-->>Cli: FAILED (cached 30m in checkout_idempotency_keys · blocks same-key retry!)
+        end
+    end

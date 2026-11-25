@@ -1,0 +1,63 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef sec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph CALLERS["Inbound Callers (Zero Kafka Consumption)"]
+        direction LR
+        BFF["mobile-bff :8080 / checkout :8091<br/>resolve · capacity/acquire · release"]:::caller
+        FUL["fulfillment-service :8086<br/>GET /stores/{storeId} coords"]:::caller
+        ADM["admin-gateway :8099<br/>/admin/stores/** · surge · blackouts"]:::caller
+    end
+
+    subgraph WH["warehouse-service :8092 (Java 21 · Spring Boot 4.0.0 · Hikari max=20)"]
+        direction TB
+        SEC["SecurityConfig (@Import InternalServiceSecurityConfiguration)<br/>permitAll: /stores/nearest, /{id}, /open, /zones, /by-city, /by-pincode<br/>authenticated: /stores/resolve (!), /capacity, /bins, /layout<br/>ADMIN | INTERNAL_SERVICE: /admin/**"]:::sec
+
+        subgraph CTRLS["controller/ (5 Controllers)"]
+            direction LR
+            SC["StoreController<br/>/stores/{nearest,resolve,by-pincode,capacity}"]:::ctrl
+            ASC["AdminStoreController<br/>/admin/stores CRUD, zones, hours, surge, blackouts"]:::ctrl
+            BC["BinController<br/>/stores/{storeId}/bins/{assign,by-sku}"]:::ctrl
+            STC["StagingTelemetryController<br/>/staging/{telemetry,validate-dispatch}"]:::ctrl
+            SLC["StoreLayoutController<br/>POST /layout/optimize-path"]:::ctrl
+        end
+
+        subgraph SERVICES["service/, domain/layout/ & Caching"]
+            direction LR
+            SS["StoreService (selfProvider proxy)<br/>timezone-aware isStoreOpen + readiness check<br/>soft-delete -&gt; INACTIVE"]:::svc
+            ZS["ZoneService<br/>PRIMARY_PINCODE -&gt; FALLBACK_NEAREST (15km)"]:::svc
+            CS["CapacityService + CapacityAlertPublisher<br/>FOR UPDATE + hourly ON CONFLICT<br/>REQUIRES_NEW StoreCapacityPaused"]:::svc
+            BS_TS["BinService (FOR UPDATE bin lock)<br/>StagingTelemetryService (CHILLED 4C / FROZEN -18C)<br/>StoreLayoutService (static 10-aisle Dijkstra)"]:::svc
+            CAF["Caffeine CacheConfig (2000, 300s)<br/>stores · store-zones · store-hours"]:::svc
+        end
+
+        subgraph JOBS["Outbox & ShedLock Jobs"]
+            direction LR
+            OB["OutboxService (MANDATORY)<br/>Store* · StoreCapacity* · BinAssigned · ColdChainBreachAlert"]:::svc
+            CRON["CapacityService.cleanupOldCapacityData (00:00, 7d)<br/>OutboxCleanupJob (03:00, 1000/batch, 7d)"]:::svc
+        end
+    end
+
+    subgraph DATA["PostgreSQL warehouse DB (V1..V11) & Outbox"]
+        direction LR
+        PG["PostgreSQL Tables:<br/>stores (@Version, max_concurrent=100, surge_*)<br/>store_zones · store_hours · store_capacity<br/>store_blackout_windows (V11)<br/>warehouse_bins (V9) · staging_temperature_telemetry (V9)<br/>outbox_events (V8 v1) · shedlock"]:::db
+        RELAY["outbox-relay-warehouse :8103 (Go)<br/>polls outbox_events -&gt; warehouse.events"]:::db
+        DRIFT["Code Notes:<br/>Static A1..A10 graph ignores warehouse_bins<br/>StoreController passes LocalDateTime.now()"]:::warn
+    end
+
+    BFF & FUL & ADM --> SEC --> CTRLS
+    SC --> SS & ZS & CS
+    ASC --> SS & ZS & CS
+    BC --> BS_TS
+    STC --> BS_TS
+    SLC --> BS_TS
+    SS & ZS & CS & BS_TS --> OB --> PG
+    SS & ZS --> CAF
+    CS & OB --> PG
+    CRON --> PG
+    PG --> RELAY
+    BS_TS -.- DRIFT

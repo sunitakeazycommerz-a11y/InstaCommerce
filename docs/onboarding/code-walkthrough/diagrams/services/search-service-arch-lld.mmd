@@ -1,0 +1,79 @@
+flowchart TB
+    classDef svc fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef cache fill:#FFF7ED,stroke:#EA580C,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef broker fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef ext fill:#F0FDF4,stroke:#16A34A,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph Callers["Upstream Callers"]
+        direction LR
+        BFF["mobile-bff-service :8080<br/>HomeAggregator GET /search/trending"]:::ext
+        AI["ai-orchestrator-service :8100<br/>catalog.search GET /search"]:::ext
+        AGW["admin-gateway-service :8099<br/>POST/PATCH/DELETE /admin/search/**"]:::ext
+    end
+
+    subgraph Svc["search-service :8088 (Java 21 / Spring Boot 4.0.0)"]
+        direction TB
+        Sec["SecurityConfig + security/*<br/>JwtAuthenticationFilter (RS256) + CORS<br/>GET /search/**, /autocomplete/**, /actuator/** permitAll<br/>/admin/** -> ROLE_ADMIN (NO InternalAuthFilter, NO Resilience4j)"]:::warn
+
+        subgraph Ctrls["Controllers (controller/*)"]
+            direction LR
+            SC["SearchController (@Validated)<br/>GET /search, /autocomplete, /search/trending<br/>+ /api/v1/* aliases (Size/Min/Max)"]:::svc
+            ASC["AdminSearchController<br/>@PreAuthorize hasRole('ADMIN')<br/>upsert, stock patch, delete"]:::svc
+        end
+
+        subgraph Svcs["Domain Services (service/*)"]
+            direction LR
+            SS["SearchService<br/>normalizeQuery + price range check"]:::svc
+            SQC["SearchQueryCacheService<br/>@Cacheable searchResults / autocomplete<br/>FTS + 2-stage fuzzy + PageableUtils (max 50)"]:::svc
+            FS["FacetedSearchService<br/>@Transactional(readOnly=true)<br/>search.facets.compute.failures counter"]:::svc
+            TS["TrendingService<br/>@Async recordQuery · @Cacheable trending<br/>@Scheduled 03:00 @SchedulerLock cleanup"]:::svc
+            SIS["SearchIndexService<br/>@Transactional + @CacheEvict(allEntries=true)<br/>upsertDocument / updateStockStatus / delete"]:::svc
+        end
+
+        subgraph Repos["Repositories & Kafka Consumers"]
+            direction LR
+            SDR["SearchDocumentRepository<br/>Native SQL: plainto_tsquery, ts_rank,<br/>LIKE '%token%', GROUP BY facets"]:::svc
+            TQR["TrendingQueryRepository<br/>upsertHit ON CONFLICT DO UPDATE"]:::svc
+            CEC["CatalogEventConsumer<br/>@KafkaListener catalog.events<br/>group: search-service"]:::svc
+            IEC["InventoryEventConsumer<br/>@KafkaListener inventory.events<br/>6 event types + explicit .clear()"]:::svc
+            KC["KafkaConfig<br/>ErrorHandlingDeserializer (Map)<br/>DefaultErrorHandler 3x 1000ms -> .DLT"]:::svc
+        end
+
+        Sec --> Ctrls
+        SC --> SS --> SQC --> FS
+        SS --> TS
+        ASC --> SIS
+        SQC --> SDR
+        FS --> SDR
+        TS --> TQR
+        SIS --> SDR
+        CEC --> SIS
+        IEC --> SIS
+        KC -.-> CEC
+        KC -.-> IEC
+    end
+
+    subgraph Infra["Persistence, Two-Level Cache & Kafka"]
+        direction LR
+        PG[("PostgreSQL (search / search_db)<br/>Hikari 50/20 · statement_timeout=5000ms<br/>search_documents (V1,V4,V5,V6): product_id UNIQUE,<br/>store_id, tsvector GIN + trigger, lower(name) idx<br/>trending_queries (V2) · shedlock (V3)")]:::db
+        Cache["TwoLevelCacheManager (CacheConfig)<br/>L1 Caffeine: 10k max (15s search/trend, 20s auto)<br/>L2 Redis search: (5m search, 2m auto, 1m trend)<br/>Pub/Sub search:cache:invalidate (auto-start)"]:::cache
+        Kafka["Kafka Topics<br/>Consumes: catalog.events, inventory.events<br/>Publishes: *.DLT only (NO search.events)"]:::broker
+    end
+
+    Seams["Verified Bugs & Drift:<br/>1. NO Elasticsearch dep (product-mapping.json &amp; wave-40 ES alert dead)<br/>2. product_id UNIQUE + InventoryEventConsumer ignores storeId<br/>3. upsertDocument drops inStock; StockReleased forces inStock=true<br/>4. autocomplete ignores storeId; SecurityConfig omits SharedInternalServiceAuthFilter"]:::warn
+
+    BFF --> SC
+    AI --> SC
+    AGW --> ASC
+    SDR --> PG
+    TQR --> PG
+    SQC --> Cache
+    TS --> Cache
+    CEC -->|"explicit .clear()"| Cache
+    IEC -->|"explicit .clear()"| Cache
+    SIS -->|"@CacheEvict allEntries=true"| Cache
+    Kafka --> CEC
+    Kafka --> IEC
+    PG -.- Seams

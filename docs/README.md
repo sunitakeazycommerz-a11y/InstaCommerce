@@ -15,6 +15,7 @@
 
 ## Table of Contents
 
+0. [New Engineer Onboarding](#new-engineer-onboarding)
 1. [Recommended Reading Order](#1-recommended-reading-order)
 2. [Documentation Flow — How This Hub Connects](#2-documentation-flow--how-this-hub-connects)
 3. [Architecture Documents (HLD / LLD)](#3-architecture-documents-hld--lld)
@@ -24,9 +25,24 @@
 7. [Service Review Reports](#7-service-review-reports)
 8. [Infrastructure & Cross-Cutting Reviews](#8-infrastructure--cross-cutting-reviews)
 9. [Related Documentation (Repo-Wide)](#9-related-documentation-repo-wide)
-10. [Rollout & Ownership Guidance](#10-rollout--ownership-guidance)
-11. [Known Limitations](#11-known-limitations)
-12. [Comparison Note — Q-Commerce Documentation Programs](#12-comparison-note--q-commerce-documentation-programs)
+10. [Validation & Maintenance Workflow](#10-validation--maintenance-workflow)
+11. [Rollout & Ownership Guidance](#11-rollout--ownership-guidance)
+12. [Known Limitations](#12-known-limitations)
+13. [Comparison Note — Q-Commerce Documentation Programs](#13-comparison-note--q-commerce-documentation-programs)
+14. [Documentation Archive](#14-documentation-archive)
+
+---
+
+## New Engineer Onboarding
+
+> [!TIP]
+> **Joining InstaCommerce?** Start with the structured onboarding suite before diving into historical architecture reviews:
+> - **[Engineering Onboarding Hub](onboarding/README.md)** — Day-1 jump table, 30-service port & Helm key card, local Docker Compose bootstrap (`dev-local.sh`), and repo-truth warnings (plus **[Day 0–5 Curriculum](onboarding/01-day0-to-day5-curriculum.md)**, **[Hands-On Labs](onboarding/02-hands-on-labs.md)**, and **[Role Learning Tracks](onboarding/03-role-learning-tracks.md)**).
+> - **[Whole-System Code Walkthrough Atlas](onboarding/code-walkthrough/README.md)** — Ground-truth HLD/LLD/E2E walkthroughs, `7` shared component guides, and `30` per-service code walkthroughs with rendered diagrams.
+> - **[First-PR Playbook & Troubleshooting](onboarding/04-first-pr-and-troubleshooting.md)** — Step-by-step safe change checklists (Flyway, contracts/proto, new service onboarding, Helm/Istio/SLO traps) and local/CI debugging FAQ.
+> - **[Domain Model, Event & Redis Catalog](onboarding/05-domain-model-and-event-catalog.md)** — Cross-service ER diagram, Flyway schemas, canonical Kafka `TopicNames.java` / `.DLT` / `.dlq` topology, and Redis keyspace/TTL/Lua inventory.
+> - **[Incident Drills & Readiness Exam](onboarding/06-incident-drills-and-readiness-exam.md)** — `5` code-grounded on-call incident drills (`CheckoutBurnRate_Critical`, stuck payments, outbox/stream lag, dark-store/dispatch split-brain, DB failover/JWKS) and `10`-question Day-5 readiness exam.
+> - **[30-Service Dependency & CLI Cheatsheet](onboarding/07-service-dependency-and-command-cheatsheet.md)** — Complete `30`-service inbound/outbound runtime dependency matrix, "Where Does This Change Go?" ownership map, and daily `scripts/` / `psql` / `redis-cli` / Kafka / Gradle / Go / pytest commands.
 
 ---
 
@@ -55,6 +71,8 @@ flowchart LR
 
 | Step | Document | Why Read It |
 |------|----------|-------------|
+| 0 | [`onboarding/README.md`](onboarding/README.md) | New-engineer Day-1 hub, Week-1 curriculum (`01`–`07`), labs, role tracks, domain catalog, incident drills, and dependency/CLI cheatsheet |
+| 0b | [`onboarding/code-walkthrough/README.md`](onboarding/code-walkthrough/README.md) | Code-verified walkthrough atlas across whole-system flows, `7` platform components, and `30` services |
 | 1 | [`../README.md`](../README.md) | Service inventory, tech stack, quick-start commands, top-level architecture diagram |
 | 2 | **This file** | Navigation hub — you are here |
 | 2b | [`repo-truth/README.md`](repo-truth/README.md) | Ground truth reality audit — implemented runtime truth vs aspirational target design |
@@ -84,6 +102,13 @@ flowchart TB
 
     subgraph hub["docs/ — This Hub"]
         this["docs/README.md ★"]
+    end
+
+    subgraph onboarding["docs/onboarding/"]
+        onb_hub["README.md\n(Onboarding Hub)"]
+        onb_01_04["01–04: Curriculum, Labs,\nRole Tracks, First-PR"]
+        onb_05_07["05–07: Domain Catalog, Drills/Exam\n& Service Dependency Cheatsheet"]
+        onb_cw["code-walkthrough/\n(HLD/LLD/Flows, 7 comp, 30 svcs)"]
     end
 
     subgraph arch["docs/architecture/"]
@@ -122,6 +147,8 @@ flowchart TB
     contracts_readme --> this
     monitoring_readme --> this
 
+    this --> onb_hub
+    onb_hub --> onb_01_04 & onb_05_07 & onb_cw
     this --> hld & lld & dataflow & infra_doc & iter3_hld & wave2 & future
     this --> service_reviews & infra_review & contracts_review & api_bff & data_ml_design
     this --> master & svc_guide & plat_guide & impl_program

@@ -1,0 +1,52 @@
+flowchart TB
+    %% InstaCommerce Engineering Onboarding Journey (Day 0 to Readiness Exam)
+    classDef entry fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.8px,color:#1E1B4B
+    classDef core fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef ops fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef data fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef gate fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.8px,color:#1E1B4B
+    classDef ref fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+
+    ENTRY(["Day-1 Onboarding Hub — docs/onboarding/README.md<br/>Quick-Jump Table · 30 Service Ports<br/>Inner-Loop Commands · Repo-Truth Posture"]):::entry
+
+    subgraph DAYS02["Days 0–2 · 01-day0-to-day5-curriculum.md"]
+        direction TB
+        D0["Day 0: First Principles &amp; Topology<br/>10-Min SLA · Dark Stores · Temporal<br/>30 Services · ADRs 001–015"]:::core
+        D1["Day 1: Local Stack &amp; Trust Perimeter<br/>dev-local.sh up/start-core · 39 PG DBs<br/>Istio mTLS · RSA-2048 JWT · Auth"]:::core
+        D2["Day 2: Core Commerce &amp; Saga<br/>Catalog · PG FTS · Cart · FEFO Stock<br/>10-Step Temporal Checkout + DLQ"]:::core
+        D0 --> D1 --> D2
+    end
+
+    subgraph DAYS35["Days 3–5 · 01-day0-to-day5-curriculum.md"]
+        direction TB
+        D3["Day 3: Money, Risk &amp; Logistics<br/>2-TX Ledger · Recon · S-Curve Pick<br/>GPS &amp; Dispatch Split-Brain · ETA"]:::ops
+        D4["Day 4: Events, Lakehouse, ML &amp; AI<br/>Outbox · Stream · dbt/Airflow/Beam<br/>LangGraph · Live vs. Broken Seams"]:::data
+        D5["Day 5: Testing, GitOps &amp; SLOs<br/>Narrow Tests · lsp-walkthrough<br/>ArgoCD/Helm · Error-Budget Policy"]:::data
+        D3 --> D4 --> D5
+    end
+
+    subgraph COMPANIONS["Companion Playbooks, Catalogs &amp; Code Atlas"]
+        direction TB
+        LABS["Hands-On Labs (02-hands-on-labs.md)<br/>Boot Stack · Trace Saga · Run Checks"]:::ops
+        TRACKS["Role Learning Tracks<br/>03-role-learning-tracks.md<br/>Java · Go · Python AI/ML · Data · SRE"]:::data
+        CATALOG["Domain Model &amp; Event Catalog<br/>05-domain-model-and-event-catalog.md<br/>ER Map · Kafka Topics &amp; DLTs · Redis Keys"]:::ref
+        CHEATSHEET["Service Dependency &amp; CLI Cheatsheet<br/>07-service-dependency-and-command-cheatsheet.md<br/>30-Service Matrix · File Ownership · scripts/"]:::ref
+        ATLAS["Code Walkthrough Atlas<br/>code-walkthrough/README.md<br/>HLD/LLD/Flows · 7 Comp · 30 Services"]:::ref
+        LABS ~~~ TRACKS
+        TRACKS ~~~ CATALOG
+        CATALOG ~~~ CHEATSHEET
+        CHEATSHEET ~~~ ATLAS
+    end
+
+    FIRSTPR(["Ship Your First PR — 04-first-pr-and-troubleshooting.md<br/>Targeted Tests · check-monorepo-consistency.sh --strict-docs (422)<br/>Error-Budget Gate · Gotcha Runbooks"]):::gate
+    DRILLS(["Incident Drills &amp; Readiness Exam — 06-incident-drills-and-readiness-exam.md<br/>5 Code-Grounded On-Call Drills · Runbooks<br/>10-Question Day-5 Readiness Exam"]):::gate
+
+    ENTRY -->|"Start Week 1 (Days 0–2)"| D0
+    ENTRY -->|"Continue Week 1 (Days 3–5)"| D3
+    ENTRY -->|"Jump to Labs, Catalog &amp; Cheatsheet"| LABS
+
+    D2 -->|"Checkpoints 1–2"| FIRSTPR
+    D5 -->|"Day 4–5 Self-Test"| FIRSTPR
+    CHEATSHEET -->|"Ownership &amp; CLI"| FIRSTPR
+    ATLAS -->|"Schema, Code &amp; Topics"| FIRSTPR
+    FIRSTPR -->|"Day-5 Sign-Off &amp; On-Call Readiness"| DRILLS

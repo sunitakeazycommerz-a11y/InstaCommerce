@@ -1,0 +1,54 @@
+flowchart TB
+    classDef svc fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef cache fill:#FFF7ED,stroke:#EA580C,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef broker fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    BFF["mobile-bff-service :8080 (WebFlux)<br/>Injects X-Internal-Service + X-User-Id · SSE /cart/stream/{userId} subscribes to Redis cart:events"]:::svc
+
+    subgraph COL1["1. Discovery: Catalog & PostgreSQL FTS"]
+        direction TB
+        Catalog["catalog-service :8082 (Java 21 / PG)<br/>categories (materialized path, depth &le; 5)<br/>products (store_id = :storeId OR NULL)<br/>In-process OutboxPublishJob (ShedLock 1s)"]:::svc
+        Search["search-service :8088 (Java 21 / PG FTS ONLY)<br/>trg_search_documents_vector &rarr; TSVECTOR (A/B/C) + GIN<br/>plainto_tsquery + ts_rank &rarr; fuzzy LIKE (0.5) + didYouMean<br/>Consumes catalog.events &amp; inventory.events"]:::svc
+        SearchGap["Known Search Seams:<br/>search_documents.product_id UNIQUE blocks multi-store<br/>InventoryEventConsumer ignores storeId on stock toggle<br/>autocomplete endpoint lacks storeId filter"]:::warn
+
+        Catalog -->|"catalog.events"| Search
+        Search -.- SearchGap
+    end
+
+    subgraph COL2["2. Dynamic Pricing & Durable Cart"]
+        direction TB
+        Cart["cart-service :8090 (Java 21 / PG Sole Truth)<br/>CartStore = JpaCartStore ONLY (NO Redis CartStore)<br/>PESSIMISTIC_WRITE · If-Match ETag (412) · 409 STORE_MISMATCH<br/>GET /api/carts/{userId}/validate · fail-closed PricingClient"]:::svc
+        Pricing["pricing-service :8089 (Java 21 / PG + Redis)<br/>POST /pricing/calculate: rules + max(excl, stack+coupon)<br/>Surge fee: 3000 * mult (cap 2.00x) via warehouse.events<br/>Issues PriceQuote (300s TTL) + HmacSHA256 quoteToken"]:::svc
+        CouponLock["Coupon Concurrency Lock<br/>Redis SET promo:{code}:{userId} 1 NX EX 300<br/>+ PG PESSIMISTIC_WRITE + @Retryable (coupons.version)<br/>Seam: validate never marks price_quotes consumed"]:::cache
+
+        Cart -->|"PricingClient fail-closed<br/>(getPrice omits storeId)"| Pricing
+        Pricing --- CouponLock
+    end
+
+    subgraph COL3["3. Inventory Concurrency (inventory-service :8083)"]
+        direction TB
+        InvLock["PostgreSQL Only (NO Redis) · stock_items CHECK (on_hand &ge; 0, reserved &le; on_hand)<br/>Deadlock-Free Reserve: sort items by productId ASC &rarr; SELECT FOR UPDATE (2000ms)"]:::svc
+        FEFO["FEFO Perishable Batches (stock_batches)<br/>Sellable = min(onHand, sum(nonExpired)) - reserved<br/>confirm locks ORDER BY expiry_date ASC, created_at ASC"]:::svc
+        Resv["Reservations &amp; Outbox (5m TTL)<br/>ShedLock 30s ReservationExpiryJob · reservation_release_logs<br/>Outbox: StockReserved / StockConfirmed / StockReleased"]:::svc
+        InvGap["Inventory Concurrency Seams:<br/>idempotency_key VARCHAR(64) vs ~100-char Temporal key<br/>reserve lacks DataIntegrityViolationException catch<br/>restoreOnConfirmedCancel no-ops without active batch"]:::warn
+
+        InvLock --> FEFO --> Resv
+        Resv -.- InvGap
+    end
+
+    L2Cache["Shared Redis L2 + Pub/Sub (TwoLevelCacheManager)<br/>Caffeine L1 + Redis L2 + invalidation Pub/Sub wired in catalog, search, pricing, cart<br/>CartSyncPublisher emits cart:events &rarr; mobile-bff SSE /cart/stream/{userId}"]:::cache
+    KafkaBus["Kafka Domain Topics (via outbox-relay-service :8103)<br/>catalog.events · inventory.events &rarr; Search index · warehouse.events &rarr; Pricing surge"]:::broker
+
+    BFF --> Catalog
+    BFF --> Search
+    BFF --> Cart
+    BFF -->|"POST /inventory/check<br/>(Reserve via checkout :8091)"| InvLock
+
+    Catalog -->|"TwoLevelCache"| L2Cache
+    Search -->|"TwoLevelCache"| L2Cache
+    Pricing -->|"TwoLevelCache"| L2Cache
+    Cart -->|"TwoLevelCache + cart:events"| L2Cache
+    Catalog -.->|"OutboxPublishJob"| KafkaBus
+    Resv -.->|"outbox_events"| KafkaBus

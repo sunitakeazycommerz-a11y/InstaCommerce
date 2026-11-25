@@ -1,0 +1,17 @@
+flowchart TD
+    REQ(["POST /v2/agent/invoke, /v2/assist, /agent/*"]) --> AUTH{"InternalServiceAuthMiddleware<br/>(skip /health*, /v2/agent/health)"}
+    AUTH -->|"missing / bad token"| E401["401 UNAUTHORIZED / 403 FORBIDDEN"]
+    AUTH -->|Valid| RL{"enforce_agent_guardrails<br/>IP Bucket (50/day default!) -> User Bucket<br/>-> Semaphore(200) 150ms"}
+    RL -->|"429 / 503"| E429["429 Retry-After / 503 Backpressure"]
+    RL -->|Admitted| INJ{"InjectionDetector.check(query)<br/>KNOWN_PATTERNS + Entropy>4.5 + Role Tags<br/>(NOTE: blocks 'issue full refund'!)"}
+    INJ -->|"detected / error"| ESC_INJ["PolicyViolationOutcome (stage=injection)<br/>Critical Escalate Response"]
+    INJ -->|Clean| PII["PIIVault.redact(query, context, history)<br/>[EMAIL/SSN/CARD/OTP/PHONE/ADDRESS]<br/>(NOTE: 5-6 digit PIN regex masks IDs)"]
+    PII --> BUD{"AgentExecutionRunner.run<br/>Load RedisSessionBudgetStore<br/>Check cost<=$0.50, tools<=25, latency"}
+    BUD -->|Exceeded| ESC_BUD["BudgetExceededOutcome -> Escalate"]
+    BUD -->|OK| LG["LangGraph: classify_intent (SemanticCache>=0.95 or keyword)<br/>-> check_policy (CRITICAL / EscalationPolicy)"]
+    LG -->|"needs_escalation"| ESC_NODE["escalate node -> Specialist Handoff"]
+    LG -->|Pass| RAG["retrieve_context (_KB 3 docs)<br/>-> execute_tools (6s total, 2.5s/tool)"]
+    RAG --> TOOL_SEC{"_validate_and_build_url + CircuitBreaker + BOLA<br/>SSRF/metadata IP/traversal/prefix whitelist<br/>Pre & post userId == caller check"}
+    TOOL_SEC -->|"resp / respond_with_llm"| OUT{"validate_output (OutputPolicy)<br/>1500p refund, 30% discount, blocked phrases, UUID citations"}
+    OUT -->|"violation"| ESC_OUT["PolicyViolationOutcome (stage=output_policy)"]
+    OUT -->|Valid| REST["PIIVault.restore (EMAIL, PHONE, ADDRESS only;<br/>CARD, SSN, OTP stay masked) -> Kafka Audit"]

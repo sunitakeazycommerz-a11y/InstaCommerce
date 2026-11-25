@@ -1,0 +1,35 @@
+flowchart TD
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+
+    IN(["HTTP POST /ingest*, /batch* or WS /ingest/ws"]):::prod --> AUTH{"InternalAuthMiddleware<br/>X-Internal-Service +<br/>X-Internal-Token valid?"}
+    AUTH -->|"Missing / Invalid"| REJ_AUTH["401 Unauthorized or 403 Forbidden"]:::err
+    AUTH -->|"WS Upgrade"| RL{"ConnectionRateLimiter.Allow()<br/>(100/s, 200 burst, 20k max)"}
+    RL -->|"Denied"| REJ_429["429 Too Many Requests<br/>Retry-After: 5 · UpdatesDropped{rate_limit}"]:::err
+    RL -->|"Allowed"| DEC["Decode LocationInput<br/>(DisallowUnknownFields + EOF; 1 MiB cap)"]:::prod
+    AUTH -->|"HTTP POST"| DEC
+
+    DEC -->|"Decode / &gt;1 MiB err"| REJ_DEC["400 Bad Request / 413 Payload Too Large"]:::err
+    DEC -->|"OK"| NORM["NormalizeLocation + ClassifyTelemetryFlags<br/>acc &le; 50m, ts &le; now+1m, battery [0,100], heading [0,360)<br/>Flags: low_battery (&lt;15%), weak_accuracy (&gt;25m)"]:::prod
+    NORM -->|"ErrInvalidPayload"| REJ_400["400 Bad Request (HTTP) / skip frame (WS)"]:::err
+    NORM -->|"OK"| PREVIEW["RiderTelemetrySmoother.Preview(update)<br/>(RLock on 50k / 1h LRU; non-mutating)"]:::prod
+
+    PREVIEW -->|"ts &lt; state.Timestamp"| IGN_1["ErrOutOfOrderPing -&gt; 200 {status: ignored}"]:::warn
+    PREVIEW -->|"dist &gt; 50m &amp;&amp; (dt&le;0 or &gt;150 km/h)"| REJ_422["422 Unprocessable Entity<br/>ErrTeleportAnomaly / ErrVelocityOutlier"]:::err
+    PREVIEW -->|"dist &gt; 50m &amp;&amp; &gt;80 km/h"| REJ_422
+    PREVIEW -->|"dist &le; 15m &amp;&amp; speed &le; 1.5 km/h"| CLAMP["Clamp lat/lng to prev state, speed=0<br/>Append flag: stationary_drift"]:::warn --> H3_OPT
+    PREVIEW -->|"First ping or moving"| KAL["Kalman Smooth<br/>coordGain = max(0.5, 1 - min(0.5, acc/100))<br/>speed gain 0.7 · wrap-safe angle gain 0.8"]:::prod --> H3_OPT
+
+    H3_OPT{"cfg.H3Resolution &gt; 0?<br/>(Default is 0!)"} -->|"No (0)"| RES["kafkaBatcher.Reserve()<br/>Check len(buffer)+reserved &lt; 2000<br/>defer kafkaRes.Abort()"]:::prod
+    H3_OPT -->|"Yes (&gt;0)"| SET_H3["Set update.H3Index via LatLngToH3Res8<br/>(or res{N}:{idx})"]:::prod --> RES
+
+    RES -->|"ErrKafkaDisabled / Full"| REJ_503["503 Service Unavailable · UpdatesDropped{enqueue}"]:::err
+    RES -->|"Reserved"| LUA["LatestPositionStore.Update (Lua CAS)<br/>HGET timestamp_ms; fill latLngToH3Res8 if empty"]:::store
+    LUA -->|"ts_ms &le; existing"| IGN_2["{0, existing} -&gt; ErrOutOfOrderPing<br/>defer Abort() -&gt; 200 {status: ignored}"]:::warn
+    LUA -->|"Redis err"| FAIL_R["defer Abort() -&gt; UpdatesDropped{redis} -&gt; 503"]:::err
+    LUA -->|"Accepted {1}"| GEO["GeofenceChecker.Check(update)<br/>Empty zones map in main.go -&gt; returns nil!<br/>(If zones loaded: debounce + 3m hysteresis -&gt; queue 1024)"]:::warn
+
+    GEO --> COMMIT["kafkaRes.Commit(update) + smoother.Commit()<br/>Record process_latency_seconds -&gt; 202 Accepted"]:::prod
+    COMMIT -.->|"Async flusher (200 msgs or 1s)"| FLUSH["LocationBatcher.flush: marshal LocationEvent<br/>PublishBatch(key=rider_id, RequireAll, 3 retries)"]:::store

@@ -1,0 +1,26 @@
+flowchart TD
+    subgraph HTTPFlow["pkg/httpclient.Client.Do(ctx, req) Resilience Pipeline"]
+        H1["Start Do(ctx, req)\ncheck ctx.Err()"] --> H2{"circuitBreaker.allow()\nClosed | Open elapsed > 30s | 1 HalfOpen probe"}
+        H2 -- false --> HFailOpen["Return circuit breaker open error"]
+        H2 -- true --> H3["Buffer body + injectHeaders:\nOTel traceparent/baggage, X-Correlation-ID,\nX-Internal-Service / X-Internal-Token"]
+        H3 --> H4["DNSCache.DialContext (5s TTL, 1024 cap)\nfallback to stale cached IPs on DNS error"]
+        H4 --> H5["otelhttp.Transport round-trip (30s timeout)"]
+        H5 --> H6{"Status / Err?"}
+        H6 -- "2xx-4xx (except 429)" --> HOk["recordSuccess() -> Closed\nreturn response"]
+        H6 -- "net err / 429 / 5xx & attempts left" --> HBack["Wait Retry-After (<=30s)\nor baseDelay * 2^(n-1) + 20% jitter"]
+        HBack --> H4
+        H6 -- "Exhausted / Deadline" --> HFail["recordFailure() once per logical call\n(defer abortProbe if panic/cancel)"]
+    end
+
+    subgraph AuthKafkaFlow["pkg/auth + pkg/kafka Consumer & Envelope Flow"]
+        A1["HTTP Request -> correlation.Middleware -> InternalAuthMiddleware.Wrap"] --> A2{"Path in skipPaths?\n/health*, /metrics"}
+        A2 -- yes --> ANext["Forward to app handler"]
+        A2 -- no --> A3["subtle.ConstantTimeCompare:\n1. allowedCallers{caller}\n2. reject if strictPerService\n3. shared expectedToken"]
+        A3 -- valid --> ANext
+        A3 -- "missing / bad" --> A40x["401 missing headers / 403 forbidden"]
+
+        K1["kafka.Consumer.Start (CommitInterval=0)"] --> K2["FetchMessage -> ContextWithMessageHeaders"]
+        K2 --> K3{"handler(msgCtx, msg)"}
+        K3 -- nil --> K4["CommitMessages(ctx, msg)"]
+        K3 -- err --> K5["Skip commit + ErrorBackoff (250ms) -> redeliver"]
+    end

@@ -1,0 +1,35 @@
+flowchart LR
+    subgraph Callers["Istio allowFrom Callers & Unwired Seams"]
+        ADMIN["admin-gateway-service"]
+        AI["ai-orchestrator-service"]
+        UNWIRED["UNWIRED at runtime:<br/>KAFKA_BROKERS / TEMPORAL_HOST<br/>WAREHOUSE_SOURCE_MODE (Helm)<br/>BigQuery reader (absent)"]
+    end
+
+    subgraph Bin["reverse-etl-orchestrator (3 HTTP Servers, main.go)"]
+        direction TB
+        S_API["API Server :8109<br/>correlation.Middleware -> mux.Router<br/>/api/v1/* + auth.InternalAuthMiddleware<br/>(open /health* & /metrics)"]
+        S_HLTH["Health Server :8110<br/>health.Checker: database, redis (if addr),<br/>kafka=UNCONFIGURED, temporal=UNCONFIGURED"]
+        S_MET["Metrics Server :9090<br/>promhttp.Handler() /metrics"]
+        SUB["subscription.Service (pgx/v5)<br/>EnsureSchema (embed V1)<br/>CAS State Machine"]
+        WP["subscription.WorkerPool<br/>concurrency=10, RateLimiter(1000/s)<br/>RetryPolicy(3 attempts, 50ms..2s)<br/>Lua temp-hash + atomic RENAME"]
+        S_API --> SUB
+        S_API --> WP
+    end
+
+    subgraph Storage["PostgreSQL & Redis Sinks"]
+        PG[("PostgreSQL: reverse_etl<br/>subscriptions<br/>reverse_etl_sync_audit")]
+        REDIS[("Redis Operational Sink<br/>(REDIS_ADDR='' in base Helm -> 503!)<br/>user:features:{id} Hash 36h<br/>fraud:score:{id} String 36h<br/>store:inventory:{id} Hash 24h")]
+    end
+
+    subgraph Readers["Downstream Cache Readers"]
+        INF["ai-inference-service :8101<br/>RedisFeatureStoreClient<br/>(HGETALL user:features:{id})"]
+        FRD["fraud-detection-service :8097<br/>FraudScoringService<br/>(reads fraud:score:{id})"]
+    end
+
+    ADMIN --> S_API
+    AI --> S_API
+    SUB --> PG
+    WP -->|"recordAudit (5s detached ctx)"| PG
+    WP -->|"Lua HSET + RENAME/PEXPIRE"| REDIS
+    REDIS -.-> INF
+    REDIS -.-> FRD

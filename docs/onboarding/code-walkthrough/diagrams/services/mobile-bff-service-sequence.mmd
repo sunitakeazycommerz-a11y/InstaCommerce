@@ -1,0 +1,43 @@
+sequenceDiagram
+    autonumber
+    actor Client as Mobile Client
+    participant Corr as CorrelationIdWebFilter
+    participant Auth as UserContextPropagationFilter
+    participant Ctrl as MobileBffController
+    participant Agg as ScreenAggregator
+    participant OrderSvc as order-service (:8084)
+    participant FulfillSvc as fulfillment-service (:8086)
+    participant RoutingSvc as routing-eta-service (:8094)
+
+    Client->>Corr: GET /bff/mobile/v1/orders/{id}/tracking (Bearer JWT)
+    Corr->>Auth: Mutated request + Reactor ctx(correlationId)
+    Auth->>Auth: validateAccessToken(token) + strip X-Internal-* + inject X-User-*
+    Auth->>Ctrl: orderTracking(id, Authentication)
+    Ctrl->>Agg: aggregateOrderTracking(id, callerUserId, bearerToken, isPrivileged)
+    Agg->>Agg: requireSafeId(orderId) + normalizeUserId(callerUserId)
+
+    Note over Agg,OrderSvc: Critical read via executeCriticalWithCircuitBreaker(orderCircuitBreaker)
+    Agg->>OrderSvc: GET /orders/{id} (X-Internal-*, X-User-Id, Bearer, X-Correlation-Id)
+    alt Order 404 or 5xx/Timeout
+        OrderSvc-->>Agg: 404 Not Found / Error
+        Agg-->>Client: 404 (releasePermission) or 502/503 ProblemDetail
+    else Order 200 OK
+        OrderSvc-->>Agg: order JSON {userId, status, ...}
+        Agg->>Agg: BOLA check: privileged || resolvedUserId == order.userId
+        alt Owner mismatch
+            Agg-->>Client: 403 ACCESS_DENIED
+        else Owner verified
+            par Parallel Soft-Degraded Enrichments (2000ms timeout each)
+                Agg->>FulfillSvc: GET /orders/{orderId}/tracking
+                FulfillSvc-->>Agg: fulfillment JSON (or fallback {})
+            and
+                Agg->>RoutingSvc: GET /deliveries/{orderId}
+                RoutingSvc-->>Agg: delivery JSON (or fallback {})
+            and
+                Note right of Agg: BUG: passes orderId to delivery-PK /deliveries/{id}/eta!
+                Agg->>RoutingSvc: GET /deliveries/{id}/eta (with validOrderId)
+                RoutingSvc-->>Agg: 404 -> onErrorResume -> degradedServices += routingEtaService
+            end
+            Agg-->>Client: 200 OK {orderId, order, fulfillment, delivery, eta, degraded: true}
+        end
+    end

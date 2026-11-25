@@ -1,0 +1,50 @@
+flowchart TB
+    classDef root fill:#EFF6FF,stroke:#2563EB,stroke-width:1.8px,color:#0F172A
+    classDef symp fill:#FFFBEB,stroke:#D97706,stroke-width:1.7px,color:#78350F
+    classDef cause fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef fix fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+
+    ROOT(["Production Incident — Symptom-to-Root-Cause Debug Matrix"]):::root
+
+    subgraph D1["1. CheckoutBurnRate_Critical (checkout-orchestrator :8091 &amp; inventory :8083)"]
+        direction LR
+        S1["Symptom &amp; Alert<br/>CheckoutBurnRate_Critical (14.4x)<br/>429 bursts · cached FAILED on retry<br/>HikariPoolDeadlock (&gt;5) · ReserveStock 5xx"]:::symp
+        C1["Code Root Cause<br/>Per-pod Semaphore(1500) 429s · 30m FAILED<br/>cache in checkout_idempotency_keys<br/>4xx -&gt; CB 3x retry · reservations<br/>VARCHAR(64) &lt; ~100-char workflowId key"]:::cause
+        F1["Mitigation &amp; Permanent Fix<br/>Skip caching FAILED; fix doNotRetry<br/>&amp; catch HttpClientErrorException<br/>SHA-256 key or widen VARCHAR(128)<br/>Replay DLQ via saga-dlq-retry.sh + JWT"]:::fix
+        S1 --> C1 --> F1
+    end
+
+    subgraph D2["2. PaymentStuckPending &amp; ReconciliationMismatch (:8085, :8106, :8107)"]
+        direction LR
+        S2["Symptom &amp; Alert<br/>AUTHORIZE/CAPTURE_PENDING stuck<br/>Razorpay webhooks ignored<br/>100% missing_psp_export in T+1 recon"]:::symp
+        C2["Code Root Cause<br/>STALE_PENDING_RECOVERY=false in prod<br/>OrderPacked REQUIRES_NEW self-deadlock<br/>WebhookKafkaBridge drops non-Stripe<br/>Empty psp_export_snapshot &amp; no payments.cdc"]:::cause
+        F2["Mitigation &amp; Permanent Fix<br/>Enable recovery &amp; refund-outbox flags<br/>Drop outer TX in OrderPackedEventConsumer<br/>Add Razorpay handler, PSP snapshot<br/>loader &amp; payments.cdc Debezium TF"]:::fix
+        S2 --> C2 --> F2
+    end
+
+    subgraph D3["3. OutboxRelayBacklog &amp; StreamConsumerLag (:8103 &amp; :8108)"]
+        direction LR
+        S3["Symptom &amp; Alert<br/>KafkaLagBurnRate_Critical (&gt;10k, 5m)<br/>outbox_events sent=false pileup<br/>stream-processor offsets frozen"]:::symp
+        C3["Code Root Cause<br/>outbox-relay holds pgx.Tx across SyncProducer<br/>Volatile retryCounts map · notifications.events<br/>drift · stream-processor HighWatermark=800<br/>offsetTracker.failedSeen &amp; dev REDIS_ADDR"]:::cause
+        F3["Mitigation &amp; Permanent Fix<br/>Release pgx.Tx around Kafka send<br/>Persist retry_count · fix prod REDIS_ADDR<br/>Replay offset &lt;= failedOffset or<br/>AckFailedOffset() · align topic name"]:::fix
+        S3 --> C3 --> F3
+    end
+
+    subgraph D4["4. DarkStoreSaturation &amp; DispatchNoAvailableRider (:8092, :8089, :8093, :8105)"]
+        direction LR
+        S4["Symptom &amp; Alert<br/>429 CapacityExceededException<br/>1.60x pricing surge · NoAvailableRider<br/>despite live rider GPS pings"]:::symp
+        C4["Code Root Cause<br/>maxConcurrentOrders=100 emits REQUIRES_NEW<br/>StoreCapacityPaused -&gt; Pricing 1.60x map<br/>location-ingestion writes riders:h3:*<br/>rider-fleet reads riders:active (opt=false)"]:::cause
+        F4["Mitigation &amp; Permanent Fix<br/>Tune store cap/surge mode; bridge<br/>GEOADD riders:active or enable optimizer<br/>Fix DispatchOptimizerClient exception<br/>swallow blocking @CircuitBreaker"]:::fix
+        S4 --> C4 --> F4
+    end
+
+    subgraph D5["5. DatabaseFailover &amp; JWKSKeyRotation (Cloud SQL &amp; :8081 / :8080 / :8099)"]
+        direction LR
+        S5["Symptom &amp; Alert<br/>SQLTransientConnectionException<br/>401 TOKEN_INVALID burst across<br/>mobile-bff / admin-gateway / identity"]:::symp
+        C5["Code Root Cause<br/>Helm PROJECT:REGION:INSTANCE · checkout<br/>missing db probe · identity unknown kid<br/>falls back to active key · edge static 1-key<br/>JwtKeyLoader &amp; prod Istio 7-&gt;3 overwrite"]:::cause
+        F5["Mitigation &amp; Permanent Fix<br/>Run dr-database-failover-drill.sh (&lt;60s)<br/>Fix DSN &amp; readiness; 7d dual-key JWKS<br/>Upgrade edge JwtKeyLoader to multi-key<br/>Restore prod Istio RequestAuth rules"]:::fix
+        S5 --> C5 --> F5
+    end
+
+    ROOT --> D1
+    D1 ~~~ D2 ~~~ D3 ~~~ D4 ~~~ D5

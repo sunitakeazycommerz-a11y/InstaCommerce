@@ -1,0 +1,63 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef sec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph CALLERS["Callers, Event Streams & Unwired Seam"]
+        direction LR
+        CHK["checkout / order-service<br/>NOT calling /fraud/score today!"]:::warn
+        ADM["admin-gateway-service :8099<br/>CRUD rules / blocklist / allowlist"]:::caller
+        K_IN["Kafka: orders.events (OrderPlaced)<br/>payments.events (PaymentFailed/Disputed/RefundFailed)"]:::caller
+    end
+
+    subgraph FRAUD["fraud-detection-service :8097 (Java 21 · Spring Boot 4.0.0 · Hikari max=20)"]
+        direction TB
+        SEC["SecurityConfig (@Import InternalServiceSecurityConfiguration)<br/>/fraud/score: INTERNAL_SERVICE | ADMIN | SUPER_ADMIN<br/>/admin/**: ADMIN | SUPER_ADMIN | SERVICE_ADMIN_GATEWAY_SERVICE"]:::sec
+
+        subgraph CTRLS["controller/ & exception/"]
+            direction LR
+            FC["FraudController<br/>POST /fraud/score<br/>POST /fraud/report (self or privileged)"]:::ctrl
+            AFC["AdminFraudController<br/>/admin/fraud/{rules,blocklist,allowlist}<br/>RuleConditionValidator + @CacheEvict(fraudRules)"]:::ctrl
+            GEH["GlobalExceptionHandler<br/>custom ErrorResponse"]:::ctrl
+        end
+
+        subgraph ENGINE["service/ & Caching"]
+            direction LR
+            FSS["FraudScoringService (fail-closed)<br/>FraudOperationalMode (@Value at startup)<br/>TransactionTemplate REQUIRES_NEW signal persist"]:::svc
+            RES["RuleEvaluationService<br/>VELOCITY · AMOUNT · DEVICE · GEO · PATTERN · COMBINATION<br/>+ evaluateDefaultCombinationScore"]:::svc
+            BL_AL["BlocklistService (@Cacheable 60s)<br/>AllowlistService (uncached 3x DB reads!)<br/>VelocityService (UPSERT aligned buckets)"]:::svc
+            CAF["CacheConfig (pod-local Caffeine!)<br/>fraudRules (1K, 300s) · blocklist (5K, 60s)<br/>no Redis Pub/Sub cross-pod invalidation"]:::warn
+        end
+
+        subgraph ASYNC["consumer/, client/ & Jobs"]
+            direction LR
+            OEC["OrderEventConsumer (fraud-detection-orders)<br/>OrderPlaced -> velocity buckets"]:::svc
+            PEC["PaymentEventConsumer (fraud-detection-payments)<br/>KafkaConfig DLT (3x 1s; JsonProcessingEx wrapped!)"]:::svc
+            ORD_CL["RestOrderLookupClient<br/>GET order-service:8084/admin/orders/{id}<br/>3s conn / 5s read (no CB/Retry)"]:::sec
+            JOBS["ShedLock Jobs:<br/>VelocityCounterCleanupJob (:15 hourly, 2d retention)<br/>OutboxCleanupJob (03:30 daily, 30d retention)"]:::svc
+        end
+    end
+
+    subgraph DATA["PostgreSQL fraud DB (V1..V11), Redis & Outbox"]
+        direction LR
+        PG["PostgreSQL Tables:<br/>fraud_rules (V1/V7/V10) · fraud_signals (V2)<br/>velocity_counters (V3/V10/V11 uq_velocity_window)<br/>blocked_entities (V4/V7 partial uq)<br/>allowlisted_entities (V10 partial uq)<br/>outbox_events (V8 v1) · shedlock"]:::db
+        REDIS["Redis fraud:score:{userId}<br/>HELM OMISSION: REDIS_HOST missing in K8s!<br/>Pods hit localhost:6379 -&gt; FALLBACK_RULES"]:::warn
+        RELAY["outbox-relay-fraud-detection :8103 (Go)<br/>polls outbox_events -&gt; fraud.events (FraudDetected)"]:::db
+    end
+
+    CHK -.-> SEC
+    ADM --> SEC --> CTRLS
+    FC --> FSS --> RES & BL_AL & REDIS
+    FSS --> CAF
+    AFC --> BL_AL & PG
+    AFC --> CAF
+    FSS --> PG
+    BL_AL --> PG
+    K_IN --> OEC & PEC
+    OEC --> BL_AL
+    PEC --> BL_AL & ORD_CL
+    JOBS --> PG
+    PG --> RELAY

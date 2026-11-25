@@ -1,0 +1,47 @@
+flowchart TB
+    classDef java fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef go fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef bus fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:1.5px,color:#78350F
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    ORD_PLACED(["OrderPlaced (orders.events)"]):::bus
+
+    subgraph PICK_PACK["1. Dark-Store Warehouse & Pick-Pack"]
+        direction LR
+        WH["warehouse-service :8092<br/>CapacityService FOR UPDATE (max 100)<br/>Cold chain: <=4C / <=-18C"]:::java
+        FUL["fulfillment-service :8086<br/>PickService + AisleRoutingOptimizer (S-curve)<br/>BatchPickingService (4 totes) · SubstitutionService"]:::java
+        ORD_PACKED(["OrderPacked (fulfillment.events)"]):::bus
+        WH --> FUL --> ORD_PACKED
+    end
+
+    subgraph MONEY_CAP["2. Pack Capture, Webhooks & T+1 Recon"]
+        direction TB
+        PAY_CAP["payment-service :8085<br/>OrderPackedEventConsumer -> 2-TX capture<br/>LedgerService double-entry (Helm recovery=false!)"]:::java
+        PWH["payment-webhook :8106 (Go)<br/>Stripe/Razorpay/PhonePe + SETNX<br/>-> payment.webhooks (Bridge Stripe-only & OFF!)"]:::warn
+        REC["reconciliation-engine :8107 (Go)<br/>CDC payments.cdc -> T+1 SAVEPOINT matcher<br/>(GAP: 0 psp_export_snapshot writers, INR hardcoded)"]:::gap
+        PWH -.-> PAY_CAP
+        PAY_CAP -.-> REC
+    end
+
+    subgraph LOG_SPLIT["3. Dual GPS Telemetry & Dispatch Split-Brain"]
+        direction TB
+        LOC_GO["location-ingestion :8105 (Go)<br/>Kalman filter -> Lua CAS rider:location:{id}<br/>+ axial hex riders:h3:* (NOT GEO!)<br/>Empty zones map -> rider.geofence.events empty"]:::gap
+        RDR_SVC["rider-fleet :8093 (Java)<br/>Separate POST /location -> GEOADD riders:active<br/>optimizer-enabled=false -> GEORADIUS + SKIP LOCKED"]:::java
+        DOPT["dispatch-optimizer :8102 (Go)<br/>hungarianAssign (actually greedy + 1-opt)<br/>/dispatch/assign unused + defer unlock bug"]:::warn
+        RDR_SVC -. "Bypassed by default" .-> DOPT
+    end
+
+    subgraph ETA_NOTIFY["4. Live ETA, Handoff, Loyalty & Notifications"]
+        direction TB
+        ETA["routing-eta :8094<br/>Haversine x1.4 + barriers + IST multipliers<br/>(0 OSRM/GMaps clients) -> STOMP /ws/tracking<br/>0.2km NEAR_DESTINATION · ETABreachRisk (5000p)"]:::java
+        DELIV["fulfillment DeliveryService<br/>6-digit dispatchOtp + <=200KB WEBP POD<br/>-> OrderDelivered (fulfillment.events)"]:::java
+        WAL_NTF["wallet-loyalty :8095 (1 pt/Rs + 2% cashback)<br/>notification :8087 (quiet hrs, PUSH->SMS->EMAIL;<br/>base YAML lacks fcm.* -> downgrades to SMS)"]:::warn
+        ETA --> DELIV --> WAL_NTF
+    end
+
+    ORD_PLACED --> PICK_PACK
+    ORD_PACKED --> PAY_CAP & RDR_SVC
+    LOC_GO -->|"rider.location.updates (lat/lng)"| ETA
+    RDR_SVC -->|"RiderAssigned (rider.events)"| DELIV & ETA
+    RDR_SVC -->|"rider.location.updates (latitude/longitude)"| ETA

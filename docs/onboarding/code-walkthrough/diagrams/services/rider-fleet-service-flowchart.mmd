@@ -1,0 +1,68 @@
+flowchart TB
+    classDef step fill:#EFF6FF,stroke:#2563EB,stroke-width:1.8px,color:#0F172A
+    classDef dec fill:#F8FAFC,stroke:#475569,stroke-width:1.8px,color:#0F172A
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.8px,color:#064E3B
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph SPLIT["GPS Telemetry Split-Brain Context"]
+        direction LR
+        GO_GPS["location-ingestion-service (:8105)<br/>Writes rider:location:{id} (Lua CAS)<br/>+ riders:h3:{idx} ONLY"]:::err
+        JAVA_GPS["POST /riders/{id}/location<br/>Writes GEOADD riders:active + HSET<br/>NEVER updates DB current_lat/lng"]:::warn
+    end
+
+    subgraph DISPATCH["1. Three-Tier Rider Selection (RiderAssignmentService.executeAssignment)"]
+        direction TB
+        D0["existsByOrderId(orderId)<br/>(status = 'ACTIVE')"]:::step
+        D0_DEC{"Already active<br/>assignment?"}:::dec
+        D0_ERR["Throw DuplicateAssignmentException (409)<br/>KafkaErrorConfig -> immediate DLT"]:::err
+
+        D1{"dispatch.optimizer-enabled?<br/>(default: false)"}:::dec
+        D2["Tier 1: tryOptimizerAssignment()<br/>Load DB store-available + Redis/DB coords<br/>POST /v2/optimize/assign (battery=100.0)"]:::warn
+        D2_LOCK{"Locked via SKIP LOCKED<br/>& isRiderEligible?"}:::dec
+
+        D3["Tier 2 (DEFAULT): resolveCandidateFromRedis()<br/>GEORADIUS riders:active r=5.0km ASC limit=100<br/>Filter storeId + isRiderEligible()"]:::step
+        D3_OK{"Eligible candidate locked<br/>FOR UPDATE SKIP LOCKED?"}:::dec
+
+        D4["Tier 3: PostgreSQL Haversine Fallback<br/>findEligibleNearestCandidates(..., limit=20)<br/>BLIND SPOT: requires current_lat/lng NOT NULL"]:::warn
+        D4_OK{"Eligible candidate locked<br/>FOR UPDATE SKIP LOCKED?"}:::dec
+        D4_ERR["Throw NoAvailableRiderException (503)<br/>Kafka retries 3x1s -> *.DLT"]:::err
+
+        D5["Eligibility Guard (RiderAssignmentSupport):<br/>status == ACTIVE & canCarry(weight)<br/>& (consecutive &lt; 8 OR idle &ge; 45m)<br/>& (!enforceShift OR hasActiveShift)"]:::step
+        D6["Reset consecutive=0 if cooldown expired<br/>Rider -> ON_DELIVERY · available=false<br/>INSERT rider_assignments (uk_active_order)<br/>Outbox: RiderAssigned -> rider.events"]:::ok
+
+        D0 --> D0_DEC
+        D0_DEC -->|"Yes"| D0_ERR
+        D0_DEC -->|"No"| D1
+        D1 -->|"true"| D2 --> D2_LOCK
+        D2_LOCK -->|"Yes"| D6
+        D2_LOCK -->|"No / Fail"| D3
+        D1 -->|"false (DEFAULT)"| D3
+        D3 --> D5 --> D3_OK
+        D3_OK -->|"Yes"| D6
+        D3_OK -->|"No / Redis empty"| D4 --> D4_OK
+        D4_OK -->|"Yes"| D6
+        D4_OK -->|"No"| D4_ERR
+    end
+
+    subgraph COMPLETE["2. Completion, Fatigue Lock & IST Earnings (completeDelivery)"]
+        direction TB
+        C1["markCompletedIfPending(orderId, now)<br/>(atomic UPDATE WHERE status=ACTIVE)"]:::step
+        C1_DEC{"Rows updated<br/>== 1?"}:::dec
+        C1_SKIP["Idempotent no-op return"]:::ok
+        C2["nextConsecutive = (idle &ge; 45m) ? 1 : prev + 1<br/>totalDeliveries++ · Rider -> ACTIVE"]:::step
+        C3{"nextConsecutive<br/>&ge; 8?"}:::dec
+        C4["Hold is_available = false<br/>Outbox: RiderFatigueLimitReached"]:::warn
+        C5["Restore is_available = true"]:::ok
+        C6["RiderEarningsService.computeEarnings (IST):<br/>fee = max(2500c, 2500c + round(km*600c) + [300c if &ge;10kg])<br/>+500c peak (12-14,19-22) +250c Sat/Sun<br/>+400c streak(&ge;5) +300c rating(&ge;4.75) + tip<br/>Outbox: DeliveryCompleted"]:::ok
+
+        C1 --> C1_DEC
+        C1_DEC -->|"0 (duplicate)"| C1_SKIP
+        C1_DEC -->|"1"| C2 --> C3
+        C3 -->|"Yes"| C4 --> C6
+        C3 -->|"No"| C5 --> C6
+    end
+
+    GO_GPS -. "Does NOT populate riders:active" .-> D3
+    JAVA_GPS -->|"GEOADD riders:active"| D3
+    D6 -.->|"OrderDelivered"| C1

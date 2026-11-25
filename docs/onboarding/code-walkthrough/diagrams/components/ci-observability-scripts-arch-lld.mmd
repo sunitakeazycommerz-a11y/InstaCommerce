@@ -1,0 +1,66 @@
+flowchart TB
+    classDef build fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef ci fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef obs fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef slo fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ops fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph ROW1["1. Workspace Toolchains, Governance & GitHub Actions CI (.github/ + Root Manifests)"]
+        direction LR
+        subgraph WORKSPACE["Root Build, Toolchain & Ownership Contracts"]
+            direction TB
+            GRADLE["Java 21 / Spring Boot 4.0.0<br/>settings.gradle.kts: 22 modules (20 svcs + contracts + platform-common)<br/>build.gradle.kts: Spotless · JaCoCo 0.8.12 · lz4-java substitution"]:::build
+            GOPY["Polyglot Workspaces<br/>go.work: Go 1.25.0 across 9 Go modules (8 svcs + go-shared)<br/>pyproject.toml: py312, ruff, pytest · pyrightconfig.json: 9 env roots"]:::build
+            GH_GOV["GitHub Governance<br/>.github/CODEOWNERS: 30 svcs + infra/contracts/data/docs rules<br/>.github/dependabot.yml: 8 ecosystems, 7d cooldown, grouped PRs"]:::build
+            GRADLE --- GOPY --- GH_GOV
+        end
+
+        subgraph CI_JOBS["GitHub Actions: ci.yml (892L) & codeql.yml (105L)"]
+            direction TB
+            DETECT["detect-changes (dorny/paths-filter@v4)<br/>contracts/java-shared -> 20 Java · go-shared -> 8 Go<br/>check-cloud-creds: WIP+SA or GCP_SA_KEY"]:::ci
+            MATRICES["Validation & Build Matrices<br/>build-test (20 Java, WIF + Trivy) · go-build-test (9 Go, golangci-lint, -race)<br/>python-build-test (2 AI svcs, ruff, pyright, pytest 7 dirs)<br/>contract-validation · data-platform-quality · ml-validation"]:::ci
+            GATES["Always-On PR/Push Gates & Security<br/>helm-validation (helm lint + template + verify-istio-mesh-policies.py)<br/>repo-governance-lint (ruff + pyright scripts/ + 422 checks)<br/>e2e-synthetic-test (Playwright) · security-scan (gitleaks + Trivy)<br/>dependency-review (PR) · codeql.yml (actions/go/java-kotlin/python)"]:::ci
+            CI_GAP["CI Auth & Filter Gaps<br/>go-build-test lacks id-token:write & uses GCP_SA_KEY only (no WIF)<br/>python-build-test lacks id-token:write · ml/data/chaos/synthetics ignored by python filter"]:::gap
+            DETECT --> MATRICES --> GATES --> CI_GAP
+        end
+    end
+
+    subgraph ROW2["2. Observability Collection, Burn-Rate SLOs, Dashboards & Verified Telemetry Drift"]
+        direction LR
+        subgraph COLLECT["Collectors, Probes & Synthetics"]
+            direction TB
+            OTEL_EBPF["In-Cluster Telemetry (deploy/helm/templates/observability/)<br/>OTel Collector :4317/:4318: 6-policy tail_sampling (10s wait) -> Tempo/Jaeger/Prom<br/>Beyla eBPF DaemonSet (grafana/beyla:1.4.0) ports 80..9090 -> OTel :4318"]:::obs
+            PROM_SCRAPE["monitoring/prometheus.yml (49L) & blackbox-exporter.yaml<br/>blackbox-http: 9 readiness/health targets (15s)<br/>blackbox-grpc: targets: [] (empty) · no app /metrics scrape job"]:::obs
+            CANARY["monitoring/synthetics/checkout_canary.py (:9102, 60s)<br/>Search -> Cart -> Reserve -> Pay (X-Synthetic-Canary: true)<br/>Exports synthetic_canary_success & consecutive_failures"]:::obs
+            OTEL_EBPF --- PROM_SCRAPE --- CANARY
+        end
+
+        subgraph RULES_UI["SLO Policy, Alert Rules, Alertmanager & Dashboards"]
+            direction TB
+            POLICY["docs/adr/015 · docs/slos/service-slos.md · error-budget-policy.yaml<br/>Tier 0: 99.9% (43.2m) · Tier 1: 99.5% (216m) · Tier 2: 99.0% (432m)<br/>Escalation: 75-100% R4 -> 0-25% Freeze (R0) + PagerDuty"]:::slo
+            PROM_RULES["Prometheus Rules & Alertmanager<br/>monitoring/prometheus-rules.yaml: 18 recording + 28 alerts (14.4x/6x/3x)<br/>prometheus/rules/: slo-rules.yml (1), slo-alerts.yml (24), wave-40 (51 alerts, 29 svcs)<br/>monitoring/alertmanager.yml: page|critical -> PagerDuty + #incidents"]:::slo
+            DASH_ARGO["Dashboards & ArgoCD Applications<br/>monitoring/grafana/dashboards/ (6 JSONs) · dashboards/golden-signals-template.json<br/>docs/observability/grafana-slo-dashboard.json · argocd/applications/monitoring*.yaml"]:::obs
+            OBS_GAP["Observability & Manifest Drift<br/>NetworkPolicy allows port:metrics, Deployment exposes only port:http<br/>wave-40 queries http_server_requests/ES/slo_target (absent on Go/Py/PG)<br/>docs/observability/grafana-dashboards/ empty · argocd/monitoring* raw non-K8s paths<br/>ADR-015/service-slos.md budget math (8.6m/2.2m) vs 30d truth (43.2m/21.6m)"]:::gap
+            POLICY --> PROM_RULES --> DASH_ARGO --> OBS_GAP
+        end
+    end
+
+    subgraph ROW3["3. Developer Bootstrap, Consistency/LSP Tooling, Ops CLIs & Test Harnesses"]
+        direction LR
+        subgraph SCRIPTS_BLK["scripts/ Tooling & Operational CLIs"]
+            direction TB
+            LOCAL_DEV["Local Stack & Consistency<br/>dev-local.sh (507L) + docker-compose.yml (109L) + init-dbs.sql (39 DBs)<br/>check-monorepo-consistency.sh + consistency_checks*.py: 422 checks<br/>lsp-walkthrough + scripts/lsp/*.py: gopls/pyright/jdtls + AST fallback"]:::ops
+            OPS_CLIS["Release Gate, DLQ & DR Scripts<br/>check-error-budget-gate.sh (165L): 30d PromQL freeze + VP override<br/>saga-dlq-retry.sh (171L): /checkout/dlq & Kafka DLT (lacks auth header!)<br/>generate-proto.sh (74L) · verify-istio-mesh-policies.py (112L)<br/>dr-database-failover-drill.sh (75L) · phase-2-sf-*.sh (hardcoded local paths!)"]:::ops
+            LOCAL_DEV --- OPS_CLIS
+        end
+
+        subgraph TESTS_BLK["tests/ Chaos & Playwright E2E Suites"]
+            direction TB
+            CHAOS["tests/chaos/<br/>pod-kill-checkout-experiment.yaml: Chaos Mesh PodChaos (@weekly, staging)<br/>run_chaos_suite.sh + test_chaos_recovery.py: 100 simulated checkouts (mocks)"]:::ops
+            E2E["tests/e2e/ (Playwright 1.65.1 + TS 5.7)<br/>checkout.spec.ts (3 flows) + checkout-edge-cases.spec.ts (4 flows)<br/>store-app.html + mock-routes.ts: browser SPA w/ full page.route() mocks"]:::ops
+            CHAOS --- E2E
+        end
+    end
+
+    ROW1 ~~~ ROW2 ~~~ ROW3

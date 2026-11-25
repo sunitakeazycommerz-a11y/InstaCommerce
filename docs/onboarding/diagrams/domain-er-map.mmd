@@ -1,0 +1,259 @@
+---
+config:
+  er:
+    useMaxWidth: false
+---
+erDiagram
+    %% Cross-Service Domain Entity-Relationship Map (isolated Postgres DBs: solid = SQL FK, dashed = logical UUID link)
+    direction LR
+
+    USERS {
+        uuid id PK
+        varchar email UK
+        varchar status "ACTIVE | SUSPENDED | DELETED"
+        int failed_attempts
+    }
+    REFRESH_TOKENS {
+        uuid id PK
+        uuid user_id FK
+        varchar token_hash UK
+        boolean revoked
+    }
+    CARTS {
+        uuid id PK
+        uuid user_id UK "logical -> users.id"
+        varchar store_id
+        timestamptz expires_at "now + 24h"
+    }
+    CART_ITEMS {
+        uuid id PK
+        uuid cart_id FK
+        uuid product_id "UK(cart_id,product_id)"
+        int quantity "CHECK gt 0"
+    }
+    PRODUCTS {
+        uuid id PK
+        varchar sku UK
+        uuid category_id FK
+        uuid store_id
+        bigint base_price_cents "CHECK gt 0"
+    }
+    PRICE_QUOTES {
+        uuid id PK
+        uuid user_id "logical -> users.id"
+        varchar content_hash "SHA-256"
+        bigint total_cents
+        timestamptz expires_at
+    }
+    PROMOTIONS {
+        uuid id PK
+        varchar discount_type
+        boolean stackable_with_coupon
+        int max_redemptions_per_user
+    }
+    COUPONS {
+        uuid id PK
+        varchar code UK
+        uuid promotion_id FK
+        bigint version
+    }
+    STOCK_ITEMS {
+        uuid id PK
+        uuid product_id "UK(product_id,store_id)"
+        uuid store_id "logical -> stores.id"
+        int on_hand "CHECK ge 0"
+        int reserved "CHECK reserved le on_hand"
+    }
+    STOCK_BATCHES {
+        uuid id PK
+        uuid store_id "UK(store,product,batch)"
+        uuid product_id
+        timestamptz expiry_date "FEFO ASC"
+        int quantity
+    }
+    RESERVATIONS {
+        uuid id PK
+        varchar idempotency_key UK "VARCHAR(64) overflow bug"
+        uuid store_id
+        enum status "PENDING | CONFIRMED | CANCELLED | EXPIRED"
+    }
+    RESERVATION_LINE_ITEMS {
+        uuid id PK
+        uuid reservation_id FK
+        uuid product_id
+        int quantity "CHECK gt 0"
+    }
+    ORDERS {
+        uuid id PK
+        uuid user_id "logical -> users.id"
+        uuid quote_id "logical -> price_quotes.id"
+        uuid reservation_id "logical -> reservations.id"
+        uuid payment_id "logical -> payments.id"
+        varchar idempotency_key UK "SHA-256 if gt 64c"
+        enum status "PENDING..DELIVERED | REFUNDED | CANCELLED"
+    }
+    ORDER_ITEMS {
+        uuid id PK
+        uuid order_id FK
+        uuid product_id
+        varchar product_sku
+        int quantity "CHECK gt 0"
+    }
+    OUTBOX_EVENTS {
+        uuid id PK
+        uuid event_id "EventEnvelope v1"
+        varchar aggregate_type
+        varchar aggregate_id "Kafka partition key"
+        varchar event_type
+        boolean sent "idx_outbox_unsent"
+    }
+    PAYMENTS {
+        uuid id PK
+        uuid order_id "logical -> orders.id"
+        bigint amount_cents "CHECK gt 0"
+        bigint captured_cents
+        bigint refunded_cents "CHECK le captured"
+        varchar idempotency_key UK
+        enum status "AUTHORIZE_PENDING..REFUNDED | DISPUTED"
+    }
+    REFUNDS {
+        uuid id PK
+        uuid payment_id FK
+        varchar psp_refund_id UK
+        varchar idempotency_key UK
+        bigint amount_cents "CHECK gt 0"
+    }
+    LEDGER_ENTRIES {
+        bigserial id PK
+        uuid payment_id FK
+        enum entry_type "DEBIT | CREDIT"
+        varchar account "V14 UK(payment,ref_type,ref_id,type)"
+        bigint amount_cents
+    }
+    WALLETS {
+        uuid id PK
+        uuid user_id UK "logical -> users.id"
+        bigint balance_cents "CHECK ge 0"
+        bigint version
+    }
+    WALLET_TRANSACTIONS {
+        uuid id PK
+        uuid wallet_id FK
+        varchar reference_type "UK(ref_type,ref_id)"
+        varchar reference_id
+        bigint amount_cents "CHECK gt 0"
+    }
+    WALLET_LEDGER_ENTRIES {
+        uuid id PK
+        uuid wallet_id FK
+        varchar debit_account
+        varchar credit_account
+        varchar transaction_type
+    }
+    STORES {
+        uuid id PK
+        varchar status
+        int max_concurrent_orders "default 100"
+        int current_pending_orders
+        boolean surge_mode_enabled
+    }
+    PICK_TASKS {
+        uuid id PK
+        uuid order_id UK "logical -> orders.id"
+        uuid store_id "logical -> stores.id"
+        uuid batch_id "logical -> pick_batches.id"
+        enum status "PENDING..COMPLETED | CANCELLED"
+    }
+    FULFILLMENT_DELIVERIES {
+        uuid id PK
+        uuid order_id UK "logical -> orders.id"
+        uuid rider_id FK
+        enum status "PENDING..DELIVERED | FAILED"
+    }
+    RIDERS {
+        uuid id PK
+        varchar phone UK
+        uuid store_id "logical -> stores.id"
+        varchar status
+        int consecutive_deliveries
+    }
+    RIDER_ASSIGNMENTS {
+        uuid id PK
+        uuid order_id "V13 UK(order_id) WHERE ACTIVE"
+        uuid rider_id FK
+        uuid store_id
+        varchar status "ACTIVE | COMPLETED | CANCELLED"
+    }
+    ROUTING_DELIVERIES {
+        uuid id PK
+        uuid order_id UK "logical -> orders.id"
+        uuid rider_id "logical -> riders.id"
+        uuid store_id
+        enum status "PENDING..DELIVERED | FAILED"
+    }
+    DELIVERY_TRACKING {
+        uuid id PK "PK(id,recorded_at) RANGE partitioned"
+        uuid delivery_id FK
+        decimal latitude
+        decimal longitude
+    }
+    PAYMENT_LEDGER {
+        varchar transaction_id PK "CDC from payments"
+        varchar payment_id
+        varchar order_id
+        bigint amount_cents
+        bigint source_lsn "monotone LSN guard"
+    }
+    RECONCILIATION_RUNS {
+        bigserial run_id PK
+        date run_date UK
+        varchar status "PENDING..COMPLETED | PARTIAL_FAILED"
+    }
+    RECONCILIATION_MISMATCHES {
+        bigserial mismatch_id PK
+        bigint run_id FK
+        varchar transaction_id
+        numeric discrepancy_amount "STORED generated"
+    }
+    AUDIT_EVENTS {
+        uuid id PK "PK(id,created_at) monthly RANGE"
+        varchar source_service
+        varchar resource_id
+        bigint sequence_number "global SHA-256 chain"
+        varchar event_hash
+    }
+
+    USERS ||--o{ REFRESH_TOKENS : "owns"
+    USERS ||..o| CARTS : "user_id"
+    CARTS ||--|{ CART_ITEMS : "contains"
+    PRODUCTS ||..o{ CART_ITEMS : "product_id"
+    PROMOTIONS ||--o{ COUPONS : "issues"
+    USERS ||..o{ PRICE_QUOTES : "user_id"
+    PRODUCTS ||..o{ STOCK_ITEMS : "product_id"
+    STOCK_ITEMS ||..o{ STOCK_BATCHES : "store_product"
+    RESERVATIONS ||--|{ RESERVATION_LINE_ITEMS : "locks"
+    STORES ||..o{ STOCK_ITEMS : "store_id"
+    COUPONS ||..o{ ORDERS : "coupon_code"
+    USERS ||..o{ ORDERS : "user_id"
+    STORES ||..o{ ORDERS : "store_id"
+    PRICE_QUOTES ||..o| ORDERS : "quote_id"
+    RESERVATIONS ||..o| ORDERS : "reservation_id"
+    ORDERS ||--|{ ORDER_ITEMS : "contains"
+    ORDERS ||..o{ OUTBOX_EVENTS : "1 TX (13 DBs)"
+    ORDERS ||..o{ PAYMENTS : "order_id"
+    PAYMENTS ||--o{ REFUNDS : "settles"
+    PAYMENTS ||--o{ LEDGER_ENTRIES : "double-entry"
+    USERS ||..o| WALLETS : "user_id"
+    WALLETS ||--o{ WALLET_TRANSACTIONS : "records"
+    WALLETS ||--o{ WALLET_LEDGER_ENTRIES : "double-entry"
+    ORDERS ||..o| PICK_TASKS : "order_id"
+    STORES ||..o{ PICK_TASKS : "store_id"
+    ORDERS ||..o| FULFILLMENT_DELIVERIES : "order_id"
+    RIDERS ||--o{ RIDER_ASSIGNMENTS : "dispatches"
+    ORDERS ||..o{ RIDER_ASSIGNMENTS : "order_id"
+    ORDERS ||..o| ROUTING_DELIVERIES : "order_id"
+    ROUTING_DELIVERIES ||--o{ DELIVERY_TRACKING : "tracks"
+    PAYMENTS ||..o| PAYMENT_LEDGER : "CDC target"
+    RECONCILIATION_RUNS ||--o{ RECONCILIATION_MISMATCHES : "flags"
+    PAYMENT_LEDGER ||..o{ RECONCILIATION_MISMATCHES : "txn_id"
+    OUTBOX_EVENTS ||..o{ AUDIT_EVENTS : "21 topics"

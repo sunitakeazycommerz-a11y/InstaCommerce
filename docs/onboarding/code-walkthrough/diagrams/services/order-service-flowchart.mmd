@@ -1,0 +1,58 @@
+flowchart TB
+    classDef state fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef term fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.8px,color:#065F46
+    classDef step fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+
+    subgraph VEGAS["1. AdaptiveConcurrencyFilter + VegasConcurrencyLimiter"]
+        direction LR
+        V_IN["HTTP Req (non-/actuator, non-/health)"]:::step --> V_CHK{"inFlight >= (int) currentLimit?"}:::dec
+        V_CHK -->|Yes| V_429["429 Too Many Requests<br/>Retry-After: 1 (raw JSON)"]:::term
+        V_CHK -->|No| V_INC["inFlight.incrementAndGet()<br/>chain.doFilter -> rttMs"]:::step
+        V_INC --> V_GRAD["queueSize = limit * (1 - rttNoLoad / max(rttNoLoad, rtt))"]:::step
+        V_GRAD --> V_ADJ{"queueSize <= 2.0 vs >= 6.0?"}:::dec
+        V_ADJ -->|"<= 2.0"| V_UP["newLimit = limit + 1"]:::ok
+        V_ADJ -->|">= 6.0"| V_DN["newLimit = limit - 2"]:::term
+        V_UP & V_DN --> V_CLAMP["currentLimit = clamp(0.8*cur + 0.2*new, 10, 500)<br/>inFlight.decrementAndGet()"]:::step
+    end
+
+    subgraph CREATE["2. OrderCreationService.createOrder Flow"]
+        direction LR
+        C_KEY["normalizeIdempotencyKey:<br/>blank->UUID, >64c->SHA-256 hex"]:::step --> C_PRE{"findByIdempotencyKey<br/>exists?"}:::dec
+        C_PRE -->|Yes| C_RET1["Return existing orderId"]:::ok
+        C_PRE -->|No| C_VAL["validateCreateOrderCommand:<br/>items>0, amounts>=0, sub==sum(line)<br/>disc<=sub, wallet<=total, total==max(0,sub-disc)+fee"]:::step
+        C_VAL --> C_Q{"discount>0 or coupon?<br/>(quoteId & quoteToken required)"}:::dec
+        C_Q -->|Yes| C_HTTP["RestPricingQuoteClient.validateQuote<br/>(OUTSIDE DB TX: CB+Retry+Bulkhead)"]:::dec
+        C_Q -->|No| C_TX
+        C_HTTP -->|"409 / fallback false"| C_409["409 QUOTE_VALIDATION_FAILED"]:::term
+        C_HTTP -->|true| C_TX["TransactionTemplate: persistOrder<br/>Persistable isNew=true -> insert Order(PENDING)<br/>+ OrderItems + OrderStatusHistory + OrderCreated"]:::step
+        C_TX -->|"DataIntegrityViolationException<br/>(uq_order_idempotency race)"| C_RACE["Re-query findByIdempotencyKey<br/>return winner orderId"]:::ok
+    end
+
+    subgraph FSM["3. OrderStateMachine (9 States) & Fulfillment Bridging"]
+        direction LR
+        S_P(["PENDING<br/>User cancel/amend OK"]):::state -->|"PLACED<br/>set slaDeadlineAt (+20m)"| S_PL(["PLACED<br/>User cancel/amend OK"]):::state
+        S_PL -->|PACKING| S_PK(["PACKING"]):::state
+        S_PK -->|PACKED| S_PKD(["PACKED"]):::state
+        S_PKD -->|OUT_FOR_DELIVERY| S_OFD(["OUT_FOR_DELIVERY"]):::state
+        S_OFD -->|"DELIVERED<br/>set deliveredAt"| S_DEL(["DELIVERED (terminal)"]):::ok
+        S_P & S_PL & S_PK & S_PKD & S_OFD -->|CANCELLED| S_CAN(["CANCELLED (terminal)"]):::term
+        S_P & S_PL & S_PK & S_PKD & S_OFD -->|FAILED| S_FAIL(["FAILED (terminal)"]):::term
+        S_PL & S_PK & S_PKD & S_OFD -->|REFUNDED| S_REF(["REFUNDED (terminal)"]):::term
+
+        FUL_IN["advanceLifecycleFromFulfillment<br/>findByIdForUpdate"]:::step --> FUL_G{"terminal or<br/>rank(cur) >= rank(target)?"}:::dec
+        FUL_G -->|Yes| FUL_IGN["Log & return no-op"]:::step
+        FUL_G -->|"PENDING"| FUL_ERR["Throw InvalidOrderStateException"]:::term
+        FUL_G -->|No| FUL_STEP["Step fulfillmentProgressionFor(target)<br/>e.g. PLACED -> PACKING -> PACKED"]:::step
+    end
+
+    subgraph MONEY["4. Saga Rollback Suppression & Partial Refund Math"]
+        direction LR
+        M_CAN["OrderOutboxPublisher.putWalletRefundFields"]:::step --> M_CHK{"reason == CHECKOUT_SAGA_ROLLBACK?"}:::dec
+        M_CHK -->|Yes| M_ZERO["walletRefundCents = 0, refundedCents = 0<br/>(prevents duplicate wallet/PSP refund)"]:::ok
+        M_CHK -->|No| M_FULL["walletRefund = min(wallet, total)<br/>refundedCents = total"]:::step
+        M_MOD["OrderModificationService<br/>OrderRefundCalculator"]:::step --> M_MATH["discAdj = (removedGross * disc) / sub<br/>refund = min(total, removedGross - discAdj)<br/>walletRefund = min(wallet, max(0, refund - pspCapacity))"]:::step
+    end
+
+    VEGAS ~~~ CREATE ~~~ FSM ~~~ MONEY

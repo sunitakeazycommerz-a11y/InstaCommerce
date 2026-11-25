@@ -1,0 +1,65 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Checkout / BFF / Admin
+    participant Filter as Vegas + Auth Filters
+    participant Ctrl as Order / Admin Controller
+    participant CreateSvc as OrderCreationService
+    participant Price as RestPricingQuoteClient<br/>(-> pricing :8089)
+    participant Life as OrderLifecycleService
+    participant Outbox as OrderOutboxPublisher<br/>+ OutboxService
+    participant PG as PostgreSQL (orders)
+    participant Relay as outbox-relay-order<br/>(-> orders.events)
+
+    rect rgb(239, 246, 255)
+        Note over Caller,PG: Flow A: Idempotent Order Creation (Checkout Step 6)
+        Caller->>Filter: POST /api/orders (OrderCreateRequest)
+        Filter->>Ctrl: CorrelationId -> VegasLimiter -> InternalAuth/JWT
+        Ctrl->>CreateSvc: OrderController.createOrder -> createOrder(cmd)
+        CreateSvc->>CreateSvc: normalizeIdempotencyKey (>64c -> SHA-256 hex)
+        CreateSvc->>PG: findByIdempotencyKey(normalizedKey)
+        alt Cache hit
+            PG-->>CreateSvc: existing Order
+            CreateSvc-->>Caller: 201 Created (existing orderId)
+        else Cache miss
+            CreateSvc->>CreateSvc: validateCreateOrderCommand (sums, wallet, quote)
+            opt quoteId != null or quoteToken present
+                CreateSvc->>Price: validateQuote(...) [OUTSIDE TX, CB+3x Retry+Bulkhead]
+                alt 409 Conflict or CB fallback false
+                    Price-->>CreateSvc: false
+                    CreateSvc-->>Caller: 409 QUOTE_VALIDATION_FAILED
+                end
+                Price-->>CreateSvc: 200 OK (true)
+            end
+            CreateSvc->>PG: TransactionTemplate -> persistOrder()
+            Note over CreateSvc,PG: Order implements Persistable (isNew=true -> direct INSERT)
+            CreateSvc->>Outbox: publish("Order", id, "OrderCreated", payload) [MANDATORY]
+            Outbox->>PG: INSERT Order, OrderItem[], OrderStatusHistory, OutboxEvent
+            alt DataIntegrityViolationException (concurrent uq_order_idempotency race)
+                CreateSvc->>PG: findByIdempotencyKey(normalizedKey)
+                PG-->>CreateSvc: winner Order.id
+            end
+            CreateSvc-->>Caller: 201 Created OrderCreationResult(orderId, 15)
+        end
+    end
+
+    rect rgb(236, 253, 245)
+        Note over Caller,Relay: Flow B: Status Confirmation (Step 9c) or Fulfillment Choreography
+        Caller->>Ctrl: POST /admin/orders/{id}/status {status: PLACED}
+        Note over Ctrl: AdminOrderController ignores Idempotency-Key header
+        Ctrl->>Life: updateOrderStatus(id, PLACED, changedBy, note, actorId)
+        Life->>PG: @Transactional @Retryable(3x) findByIdForUpdate(id) [SELECT FOR UPDATE]
+        Life->>Life: OrderStateMachine.validate(PENDING -> PLACED)<br/>stamp slaDeadlineAt = now + 20m
+        Life->>Outbox: publishStatusTransitionEffects -> OrderStatusChanged + OrderPlaced
+        Outbox->>PG: UPDATE orders + INSERT history, audit_log, outbox_events
+        PG-->>Relay: Poll sent=false (FOR UPDATE SKIP LOCKED)
+        Note over Relay: Publish orders.events to Kafka
+        Relay->>PG: UPDATE outbox_events SET sent=true
+    end
+
+    rect rgb(254, 242, 242)
+        Note over Caller,PG: Flow C: Cancellation & Kafka Failure Paths
+        Caller->>Life: cancelOrder(id, "CHECKOUT_SAGA_ROLLBACK", ...)
+        Life->>PG: findByIdForUpdate(id) -> validate(-> CANCELLED)
+        Life->>Outbox: publishCancelled (CHECKOUT_SAGA_ROLLBACK -> walletRefundCents=0, refundedCents=0)
+        Note over Caller,PG: FulfillmentEventConsumer (DEFAULT OFF) throws -> KafkaConfig 3x 1s -> *.DLT<br/>IdentityEventConsumer (UserErased) catches Exception internally -> skips .DLT!
+    end

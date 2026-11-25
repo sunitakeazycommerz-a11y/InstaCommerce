@@ -1,0 +1,46 @@
+sequenceDiagram
+    autonumber
+    participant PSP as External PSP (Stripe / RZP / PhonePe)
+    participant Mux as HTTP Server (:8106)<br/>otelhttp + correlation
+    participant WH as WebhookHandler<br/>(handler/webhook.go)
+    participant Ver as SignatureVerifier<br/>(handler/verify.go)
+    participant Ded as DedupeStore<br/>(Redis SETNX / InMem)
+    participant K as Kafka Writer<br/>(payment.webhooks)
+    participant Pay as payment-service<br/>(WebhookKafkaBridge)
+
+    PSP->>Mux: POST /webhooks/{psp} + raw JSON + sig header
+    Mux->>WH: HandleStripe / HandleRazorpay / HandlePhonePe
+    WH->>WH: EventsReceived(psp, "").Inc()
+    WH->>WH: Check verifier & producer configured, MaxBytesReader(1 MiB)
+    WH->>Ver: Verify(payload, signature)
+    alt Invalid or missing signature
+        Ver-->>WH: error
+        WH-->>PSP: 401 {"error":"invalid signature"}
+    else Valid signature
+        Ver-->>WH: nil
+        WH->>WH: enforceReplayWindow(r, psp, payload) (300s)
+        WH->>WH: ParseEventWithHeaderID -> WebhookEvent{Version: 2, RawPSPPayload}
+        WH->>Ded: CheckAndMark(ctx, event.ID)
+        alt Dedupe store error (fail-closed)
+            Ded-->>WH: false, err
+            WH-->>PSP: 503 {"error":"dedupe unavailable"}
+        else Duplicate event
+            Ded-->>WH: true, nil
+            WH-->>PSP: 200 {"status":"duplicate","duplicate":true}
+        else Fresh event (key claimed for 24h)
+            Ded-->>WH: false, nil
+            WH->>K: publishEvent(5s ctx, key=payment_id||id, hdrs+traceparent)
+            alt Kafka write fails
+                K-->>WH: err
+                WH->>Ded: Remove(Background 5s ctx, event.ID)
+                WH-->>PSP: 503 {"error":"failed to publish event"}
+            else Kafka write acknowledged (RequireOne)
+                K-->>WH: nil
+                WH-->>PSP: 202 Accepted {"status":"accepted","event_id":...}
+            end
+        end
+    end
+
+    Note over K,Pay: Downstream seam: payment.webhook.kafka-consumer-enabled=false by default
+    K-->>Pay: (When enabled) WebhookTransportEvent
+    Pay->>Pay: WebhookKafkaBridge.forward() -> Stripe only, skips RZP/PhonePe

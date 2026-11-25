@@ -1,0 +1,56 @@
+flowchart TB
+    classDef state fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef term fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.8px,color:#065F46
+    classDef step fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+
+    subgraph ADD["1. CartService.addItem & Retry / Store Affinity"]
+        direction LR
+        A_IN["POST /cart/items<br/>validateStoreServiceabilityIfPresent<br/>validateRequestQuantity (1..10)"]:::step --> A_PRC["PricingClient.getPrice(productId)<br/>OUTSIDE DB TX (omits storeId)<br/>ignore client unitPriceCents"]:::dec
+        A_PRC -->|"404"| A_404["404 PRODUCT_UNAVAILABLE"]:::term
+        A_PRC -->|"CB / 5xx / timeout"| A_503["503 PRICING_UNAVAILABLE<br/>(fail-closed)"]:::term
+        A_PRC -->|"OK"| A_RET["executeAddWithRetry (1..3)<br/>catches DataIntegrityViolation /<br/>ObjectOptimisticLockingFailure"]:::step
+        A_RET --> A_TX["JpaCartStore.addItem @Transactional<br/>findByUserIdForUpdate (or insert+flush)"]:::step
+        A_TX --> A_ST{"non-empty cart &<br/>storeId mismatch?"}:::dec
+        A_ST -->|Yes| A_409["409 STORE_MISMATCH"]:::term
+        A_ST -->|No| A_CAP["Enforce maxItems=50, maxQty=10,<br/>maxCartValue=10M · expiresAt=+24h<br/>saveAndFlush + CartItemAdded outbox"]:::ok
+    end
+
+    subgraph ETAG["2. CartController.updateQuantity & ETag If-Match"]
+        direction LR
+        E_IN["PATCH /cart/items/{productId}<br/>parseIfMatchVersion(If-Match)"]:::step --> E_HDR{"If-Match valid?"}:::dec
+        E_HDR -->|"negative / NaN"| E_400["400 INVALID_ETAG"]:::term
+        E_HDR -->|"* / blank -> null<br/>or W/quoted long"| E_TX["JpaCartStore.updateQuantity<br/>findByUserIdForUpdate"]:::step
+        E_TX --> E_VER{"expectedVersion != null &<br/>cart.version != expectedVersion?"}:::dec
+        E_VER -->|Yes| E_412["412 PRECONDITION_FAILED"]:::term
+        E_VER -->|No| E_OK["Update qty + expiresAt=+24h<br/>saveAndFlush + CartUpdated outbox<br/>200 OK + ETag: {version}"]:::ok
+    end
+
+    subgraph VAL["3. CartService.validateCart (Checkout Step 1)"]
+        direction LR
+        V_EV["@CacheEvict(beforeInvocation=true)<br/>JpaCartStore.validateCart (readOnly)<br/>404 if missing · 422 if empty/expired"]:::step --> V_ST["validateStoreServiceabilityForCheckout<br/>422 UNSERVICEABLE_STORE"]:::step
+        V_ST --> V_N{"distinct productIds > 1?"}:::dec
+        V_N -->|Yes| V_BAT["POST /pricing/products/batch"]:::step
+        V_N -->|No| V_ONE["GET /pricing/products/{id}"]:::step
+        V_BAT -->|"batch 404"| V_PER["Fallback: per-item getPrice"]:::step
+        V_BAT & V_PER & V_ONE --> V_DRIFT{"Any live price !=<br/>item.unitPriceCents?"}:::dec
+        V_DRIFT -->|Yes| V_UPD["updateItemPrices @Transactional<br/>findByUserIdForUpdate<br/>+ CartPriceRefreshed outbox"]:::step
+        V_DRIFT -->|No| V_LIM
+        V_UPD --> V_LIM{"unavailableProductIds<br/>isEmpty?"}:::dec
+        V_LIM -->|Yes| V_MIN["Check minOrderCents &<br/>maxCartValueCents -> 422 CART_INVALID"]:::step
+        V_LIM -->|No| V_OUT
+        V_MIN --> V_OUT["CartResponse (valid = items!empty && unavail.empty)<br/>blank storeId -> DEFAULT_STORE_ID"]:::ok
+    end
+
+    subgraph MERGE["4. mergeCart & CartCleanupJob"]
+        direction LR
+        M_IN["mergeCart(target, guest)"]:::step --> M_LK["Lock target then guest<br/>findByUserIdForUpdate"]:::step
+        M_LK --> M_EXP{"guest missing,<br/>expired or empty?"}:::dec
+        M_EXP -->|Yes| M_SKIP["Delete guest if present<br/>return targetCart"]:::step
+        M_EXP -->|No| M_MRG["applyOrVerifyStoreId<br/>qty = min(target+guest, maxQty)<br/>delete guest + CartMerged outbox"]:::ok
+        J_IN["CartCleanupJob (*/15m)<br/>ShedLock cartCleanup"]:::step --> J_DEL["deleteExpiredCarts(now)"]:::step
+        J_DEL -->|"deleted > 0"| J_CLR["cache.clear() ALL carts<br/>(NO CartExpired outbox!)"]:::term
+    end
+
+    ADD ~~~ ETAG ~~~ VAL ~~~ MERGE

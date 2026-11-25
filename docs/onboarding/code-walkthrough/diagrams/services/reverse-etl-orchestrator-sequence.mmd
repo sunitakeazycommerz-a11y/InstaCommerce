@@ -1,0 +1,39 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Caller (admin / ai-orchestrator)
+    participant API as API Handler (:8109)<br/>InternalAuth + correlation
+    participant Sub as subscription.Service<br/>(PostgreSQL)
+    participant WP as WorkerPool<br/>(concurrency=10)
+    participant RL as RateLimiter<br/>(1000 tokens/s)
+    participant Redis as Redis Operational Sink
+
+    Caller->>API: POST /api/v1/subscriptions/{id}/sync (SyncRequest <=4MiB)
+    API->>Sub: Get(ctx, id)
+    Sub-->>API: Subscription{State: ACTIVE, SourceDomain}
+    API->>WP: SyncUserFeatures / SyncCustomerFraudScores / SyncDarkStoreInventoryParallel
+
+    alt dark_store_inventory (parallel store fan-out)
+        WP->>WP: Spawn min(Concurrency, len(storeIDs)) goroutines
+    end
+
+    loop Per user / fraud record or dark store
+        WP->>RL: Acquire(ctx)
+        RL-->>WP: token granted
+        WP->>Redis: Eval writeTempHashLua(tempKey, ttlMs, kvPairs...) [or SET for fraud]
+        WP->>Redis: Eval atomicSwapTTLLua(tempKey, targetKey, ttlMs)
+        alt Transient Redis error (attempts < 3)
+            Redis-->>WP: timeout / ECONNRESET / 429 / 5xx
+            WP->>WP: Backoff (50ms -> 2s)
+            WP->>RL: Re-acquire token before retry
+            WP->>Redis: Retry Eval
+        else Permanent error or retries exhausted
+            Redis-->>WP: error
+            WP->>Redis: DEL tempKey (detached 2s Background ctx)
+        else Swap succeeded (RENAME + PEXPIRE)
+            Redis-->>WP: 1 (renamed) or 2 (TTL refreshed)
+        end
+    end
+
+    WP->>Sub: recordAudit(5s Background ctx) -> INSERT/ON CONFLICT reverse_etl_sync_audit
+    WP-->>API: SyncResult{JobID, RowsProcessed, Status, Duration}
+    API-->>Caller: 202 Accepted (or 500/503 on error)

@@ -1,0 +1,54 @@
+flowchart TB
+    classDef step fill:#EFF6FF,stroke:#2563EB,stroke-width:1.5px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.7px,color:#065F46
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:1.7px,color:#7F1D1D
+    classDef comp fill:#FDF4FF,stroke:#9333EA,stroke-width:1.6px,color:#581C87
+
+    subgraph INGRESS["1. Controller Admission & Idempotency"]
+        direction LR
+        IN["POST /checkout (Idempotency-Key, ?async)"] --> SEM{"Semaphore(1500)<br/>tryAcquire()?"}:::dec
+        SEM -->|No| R429["429 Retry-After: 5<br/>FAILED: RATE_LIMIT_EXCEEDED"]:::err
+        SEM -->|Yes| OWN{"principal == userId?"}:::dec
+        OWN -->|No| R403["403 FORBIDDEN"]:::err
+        OWN -->|Yes| CACHE{"findValidResponse<br/>(30m TTL)?"}:::dec
+        CACHE -->|Hit| HIT["200 OK cached CheckoutResponse<br/>(even if status is FAILED: !)"]:::err
+        CACHE -->|Miss| ASYNC{"?async=true?"}:::dec
+        ASYNC -->|Yes| A202["WorkflowClient.start -> 202 STARTED<br/>(no idempotency DB record!)"]:::step
+        ASYNC -->|No| SYNC["workflow.checkout(req)<br/>catch AlreadyStarted -> handleAlreadyStarted"]:::step
+    end
+
+    subgraph SAGA["2. 10-Step Forward Pipeline (CheckoutWorkflowImpl)"]
+        direction LR
+        S1["1. VALIDATING_CART<br/>cart :8090 /validate"]:::step --> S2["2. CALCULATING_PRICES<br/>pricing :8089 /calculate"]:::step
+        S2 --> DRIFT{"PriceDriftEvaluator:<br/>actual - expected <= maxDrift?"}:::dec
+        DRIFT -->|No| F_EARLY["fail(driftReason)<br/>(no saga comp needed)"]:::err
+        DRIFT -->|Yes| S3["3. RESERVING_INVENTORY<br/>key: {wfId}:inventory:reserve<br/>[reg: safeReleaseStock]"]:::step
+        S3 --> WCHK{"walletAmountCents > 0?"}:::dec
+        WCHK -->|Yes| S4["4. DEBITING_WALLET<br/>{wfId}:wallet:debit<br/>[reg: safeRefundWallet]"]:::step
+        WCHK -->|No| PCHK
+        S4 -->|"!debited"| COMP_SAGA
+        S4 -->|debited| PCHK{"total - wallet > 0?"}:::dec
+        PCHK -->|Yes| S5["5. AUTHORIZING_PAYMENT<br/>{wfId}:pay:auth (MANUAL)"]:::step
+        PCHK -->|No| S6
+        S5 -->|"!authorized"| COMP_SAGA
+        S5 -->|authorized| S6["6. CREATING_ORDER<br/>orderId=UUIDv3(order-{wfId})<br/>[reg: safeCancelOrder]"]:::step
+        S6 --> S7["7-8. COUPON & PROMOS<br/>redeemCoupon / redeemPromotion<br/>[reg: safeRollback*]"]:::step
+        S7 --> S9["9. CONFIRMING<br/>captureAttempted=true -> capture -> captured=true<br/>confirmStock -> confirmOrder(PLACED)"]:::step
+        S9 --> S10["10. CLEARING_CART (best effort)<br/>-> COMPLETED (cached 30m)"]:::ok
+    end
+
+    subgraph COMP["3. Failure Routing, 3-Tier Payment Comp & DLQ"]
+        direction LR
+        EXC["Exception in Steps 1..9"]:::err --> P3{"paymentAuthorized?"}:::dec
+        P3 -->|No| COMP_SAGA["saga.compensate() LIFO<br/>parallel=false, continueWithError=true"]:::comp
+        P3 -->|Yes| CAPQ{"paymentCaptured?"}:::dec
+        CAPQ -->|Yes| REF["refundPayment<br/>({wfId}:pay:{id}:refund, 5x)"]:::comp
+        CAPQ -->|No| VOID["voidPayment<br/>({wfId}:pay:{id}:void, 5x)"]:::comp
+        VOID -->|"throws AND paymentCaptureAttempted"| REF
+        REF & VOID --> COMP_SAGA
+        COMP_SAGA --> UNWIND["LIFO Unwind (5x retries each):<br/>rollbackPromotion -> unredeemCoupon -> cancelOrder<br/>(CHECKOUT_SAGA_ROLLBACK) -> refundWallet -> releaseStock"]:::comp
+        UNWIND -->|"5x retries exhausted"| DLQ["CompensationDlqActivityImpl<br/>INSERT compensation_dlq (status=FAILED)<br/>Replay: POST /checkout/dlq/{id}/retry"]:::err
+    end
+
+    INGRESS ~~~ SAGA ~~~ COMP

@@ -1,0 +1,46 @@
+flowchart TB
+    classDef local fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef ci fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef gitops fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef slo fill:#FFFBEB,stroke:#D97706,stroke-width:1.5px,color:#78350F
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph ROW1["1. Local Bootstrap & GitHub Actions CI"]
+        direction LR
+        subgraph LOCAL["Local Bootstrap (dev-local.sh + Compose)"]
+            direction TB
+            DEV_UP["./scripts/dev-local.sh up<br/>PG16 (39 DBs/aliases), Redis 7, Kafka, Debezium, Temporal :7233"]:::local
+            KEYS["RSA-2048 -> .local-dev/.env.local · SECRETMANAGER=false<br/>start-core boots 10 Java svcs · Narrow tests + consistency (422/422)"]:::local
+            DEV_UP --> KEYS
+        end
+
+        subgraph CI["GitHub Actions (.github/workflows/ci.yml)"]
+            direction TB
+            FILT["detect-changes (dorny/paths-filter@v4)<br/>contracts/libs fans 20 Java · go-shared fans 8 Go"]:::ci
+            JOBS["build/go/python/helm/Trivy · GAP: go-build-test needs GCP_SA_KEY (no WIF)<br/>deploy-dev: SHA tags -> yq updates values-dev.yaml (skips outbox-relay-*)"]:::gap
+            FILT --> JOBS
+        end
+
+        LOCAL -->|"git push"| CI
+    end
+
+    subgraph ROW2["2. ArgoCD / Helm / Terraform & ADR-015 SRE Gate"]
+        direction LR
+        subgraph GITOPS["ArgoCD, Helm & Terraform Reality"]
+            direction TB
+            ARGO["argocd/app-of-apps.yaml (single Application · prune + selfHeal)<br/>Umbrella Helm: 43 services · STRICT mTLS · EnvoyFilter · 7 RequestAuth"]:::gitops
+            TF_HELM["GAPS: NetworkPolicy port:metrics vs http · PROJECT:REGION:INSTANCE literal<br/>canary .enabled no-op · Terraform 17 DBs / 7 SAs / 0 IAM / 18 secret mismatches"]:::gap
+            ARGO --> TF_HELM
+        end
+
+        subgraph SRE["ADR-015 Observability & Error-Budget Gate"]
+            direction TB
+            TIERS["error-budget-policy.yaml & prometheus-rules.yaml<br/>Tier 0 (99.9% / 43.2m) · Tier 1 (99.5% / 216m) · Tier 2 (99.0% / 432m)<br/>14.4x / 6x / 3x burn alerts · check-error-budget-gate.sh blocks lt 0%"]:::slo
+            OBS_GAP["Drift: wave-40 queries Spring/ES metrics on Go/Py/PG ·<br/>service-slos.md 99.95% vs 99.9% · grafana-dashboards/ empty (0 files)"]:::gap
+            TIERS --> OBS_GAP
+        end
+
+        GITOPS --> SRE
+    end
+
+    ROW1 ~~~ ROW2

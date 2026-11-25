@@ -1,0 +1,54 @@
+flowchart LR
+    classDef prod fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef relay fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef topic fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef cons fill:#F5F3FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:1.7px,color:#78350F
+    classDef drift fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph PRODUCERS["1. Producers & CDC Bridges"]
+        direction TB
+        TX_SVCS["13 Outbox-Backed Java Services<br/>(10 CI-enforced + identity, routing-eta, fraud)<br/>identity, catalog, cart, pricing, inventory,<br/>order, payment, wallet, warehouse, fulfillment,<br/>rider-fleet, routing-eta, fraud -> outbox_events"]:::prod
+        OBR["outbox-relay-service (Go :8103 x13 Helm)<br/>SKIP LOCKED (500ms/1s) · WaitForAll<br/>Quirk: dual camel+snake keys + root flatten<br/>3x retry -> outbox.relay.dlq"]:::relay
+        CAT_JOB["catalog-service OutboxPublishJob<br/>1s ShedLock + KafkaTemplate (overlap<br/>with outbox-relay-catalog)"]:::warn
+        DIRECT_GO["Direct Go & Python Producers<br/>location-ingestion -> location & geofence<br/>payment-webhook -> payment.webhooks (v2)<br/>dispatch-optimizer -> rider.events<br/>reconciliation-engine -> reconciliation.events<br/>ai-orchestrator -> ai-orchestrator.events"]:::prod
+        DIRECT_JAVA["Direct Java Producer<br/>rider-fleet RiderAvailabilityService<br/>-> rider.location.updates"]:::prod
+        DEBEZIUM["Debezium WAL (infra/terraform)<br/>reconciliation_runs & mismatches<br/>-> reconciliation.cdc (12 partitions)"]:::warn
+
+        TX_SVCS --> OBR
+        TX_SVCS --> CAT_JOB
+    end
+
+    subgraph TOPICS["2. Kafka Topics & Partition Keys (TopicNames.java + Drift)"]
+        direction TB
+        T_CORE["Core & Commerce (.events)<br/>identity.events (key: userId)<br/>catalog.events (key: productId/catId)<br/>cart.events (key: cartId)<br/>pricing.events (key: pricing/coupon/promoId)<br/>inventory.events (key: product/res/batchId)<br/>orders.events (key: orderId)"]:::topic
+        T_MONEY["Money, Risk & Logistics (.events)<br/>payments.events (key: paymentId)<br/>wallet.events (key: wallet/accountId)<br/>fraud.events (key: fraudSignalId)<br/>warehouse.events (key: store/binId)<br/>fulfillment.events (key: orderId)<br/>rider.events (key: riderId)<br/>delivery.events (key: deliveryId)<br/>reconciliation.events (key: txnId/runId)"]:::topic
+        T_NON["Non-Domain & Direct Topics<br/>rider.location.updates (key: rider_id)<br/>rider.geofence.events (key: rider_id)<br/>payment.webhooks (key: payment_id #124;#124; event_id)<br/>ai-orchestrator.events (key: request_id)<br/>notification.events (0 active producers)"]:::topic
+        T_DORMANT["Dormant TopicNames.java Topics (0 prod/cons)<br/>promotion.events · search.events<br/>customer-support.events · returns.events"]:::warn
+        T_DRIFT["VERIFIED TOPIC & CDC DRIFT<br/>1. outbox-relay 'notification' -> notifications.events<br/>2. stream-processor listens singular order.events/payment.events<br/>3. outbox-relay maps audit.events & config.events (not in TopicNames)<br/>4. payments.cdc expected by recon-engine (0 TF connectors!)<br/>5. audit.DLT vs AuditProperties.dlqTopic='audit.dlq'<br/>6. notifications.DLT (code) vs notification.events.DLT (YAML)"]:::drift
+    end
+
+    subgraph CONSUMERS["3. Consumers & Dead-Letter Sinks (.DLT vs .dlq)"]
+        direction TB
+        C_JAVA["Domain Java @KafkaListener Groups<br/>order-service (fulfillment, identity)<br/>fulfillment-service (orders, rider, identity)<br/>pricing-service (catalog, warehouse)<br/>catalog-service (catalog, pricing, inventory)<br/>search-service (catalog, inventory)<br/>wallet-loyalty (orders, payments)<br/>fraud-detection (orders, payments)<br/>rider-fleet (fulfillment, orders)<br/>routing-eta (fulfillment, orders, rider, loc, geo)<br/>notification-service (orders, payments, fulfill, deliv, rider, wallet, identity)"]:::cons
+        C_PAY["payment-service Consumers (FLAG-GATED)<br/>OrderPackedEventConsumer (ON)<br/>OrderCancelledEventConsumer (OFF prod/staging)<br/>PaymentWebhookEventConsumer (OFF default; Stripe-only)"]:::warn
+        C_FAN["Platform & Streaming Consumers<br/>audit-trail-service: 21 TopicNames topics<br/>stream-processor: 8 topics (incl. singular)<br/>reconciliation-engine: payments.cdc, reconciliation.cdc<br/>cdc-consumer: KAFKA_TOPICS (crashes under base Helm)"]:::cons
+        DLT["Dead-Letter & Quarantine Topology<br/>Java DefaultErrorHandler + stream-processor: {topic}.DLT<br/>audit-trail: audit.DLT · recon-engine: reconciliation.events.DLT<br/>notification retry: notification.events.DLT<br/>outbox-relay: outbox.relay.dlq (ADR-003 exemption)<br/>cdc-consumer: cdc.dlq · checkout-orch: PG compensation_dlq"]:::drift
+    end
+
+    OBR --> T_CORE & T_MONEY
+    OBR -. "Drift: notifications.events" .-> T_DRIFT
+    CAT_JOB --> T_CORE
+    DIRECT_GO --> T_MONEY & T_NON
+    DIRECT_JAVA --> T_NON
+    DEBEZIUM -->|"reconciliation.cdc"| T_DRIFT
+
+    T_CORE --> C_JAVA & C_FAN
+    T_MONEY --> C_JAVA & C_PAY & C_FAN
+    T_NON --> C_JAVA & C_PAY & C_FAN
+    T_DRIFT -. "payments.cdc missing; singular aliases" .-> C_FAN
+
+    C_JAVA -. "Retry exhausted / poison" .-> DLT
+    C_PAY -. "JSON / handler fail" .-> DLT
+    C_FAN -. "Unmarshal / BQ / CDC fail" .-> DLT
+    OBR -. "3x publish / schema fail" .-> DLT

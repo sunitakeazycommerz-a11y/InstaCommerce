@@ -1,0 +1,55 @@
+flowchart TB
+    classDef step fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef dec fill:#F8FAFC,stroke:#475569,stroke-width:1.8px,color:#0F172A
+    classDef ok fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,color:#78350F
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D
+
+    subgraph CONSUME["1. Per-Topic Consumer Path (N× runConsumer)"]
+        direction TB
+        Fetch["reader.FetchMessage(ctx)<br/>Update cdc_consumer_lag<br/>Extract W3C traceparent"]:::step --> IsTomb{"isTombstonePayload?<br/>(empty or 'null')"}:::dec
+        IsTomb -->|"Yes"| Tomb["transformMessage(msg)<br/>op='d', tombstone=true"]:::step
+        IsTomb -->|"No"| Unmarshal{"json.Unmarshal<br/>into map?"}:::dec
+        Unmarshal -->|"Err"| EnqErr["Enqueue batchItem{transformErr}<br/>into batchCh"]:::warn
+        Unmarshal -->|"OK"| Extract["ExtractCDCFieldsFromMap<br/>(payload.after &rarr; payload &rarr; after &rarr; root)"]:::step
+        Extract --> FastPath{"All fields in<br/>knownFields sync.Map?"}:::dec
+        FastPath -->|"Yes"| Xform["transformParsedMessage()<br/>SchemaVersion + PartitionKey"]:::step
+        FastPath -->|"Unseen field"| Breaker{"Lock h.mu:<br/>Within 30s failureTTL?"}:::dec
+        Breaker -->|"Yes (CB open)"| EvoFail["Inc cdc_schema_evolution_errors_total<br/>Log warn; non-fatal continue"]:::warn
+        Breaker -->|"No"| BQMeta["table.Metadata(ctx)<br/>&amp; table.Update(nullable, AutoDetect)"]:::step
+        BQMeta -->|"OK"| UpdateCache["Store fields in knownFields<br/>Clear lastFailureAt"]:::ok --> Xform
+        BQMeta -->|"Err"| SetTTL["Set lastFailureAt = now()"]:::warn --> EvoFail --> Xform
+        Tomb --> EnqRow
+        Xform -->|"Err"| EnqErr
+        Xform -->|"OK"| EnqRow["Enqueue batchItem{row}<br/>into bounded batchCh<br/>(cap = 2×BatchSize, blocks if full)"]:::ok
+    end
+
+    subgraph FLUSH["2. Single Batcher Path (1× runBatcherWithDeps &amp; flushBatchWithDeps)"]
+        direction TB
+        Trigger(["Flush Trigger:<br/>len &gt;= 500 OR 5s ticker<br/>OR close(batchCh)"]):::step --> Split["ctx := context.Background()<br/>Split transformFailedItems<br/>vs validItems/rows"]:::step
+        Split --> HasTxErr{"transformFailedItems<br/>&gt; 0?"}:::dec
+        HasTxErr -->|"Yes"| SendTxDLQ["sendToDLQWithWriter(transformFailedItems)"]:::warn
+        SendTxDLQ --> TxDLQOK{"DLQ Write OK?"}:::dec
+        TxDLQOK -->|"No"| AbortFlush["Return err (no BQ insert,<br/>no offset commit -> reportErr)"]:::err
+        TxDLQOK -->|"Yes"| HasRows
+        HasTxErr -->|"No"| HasRows{"len(rows) &gt; 0?"}:::dec
+        HasRows -->|"No"| Commit["markReadyForCommit(items)<br/>commitMessages(10s/reader)"]:::ok
+
+        HasRows -->|"Yes"| BQPut["insertWithRetryDeps:<br/>inserter.Put(insertCtx 30s, rows)"]:::step
+        BQPut --> PutRes{"Put Result?"}:::dec
+        PutRes -->|"nil (All OK)"| Commit
+        PutRes -->|"bigquery.PutMultiError"| PartialDLQ["Extract failed rowIndexes<br/>sendToDLQWithWriter(failedItems)"]:::warn
+        PartialDLQ --> PartialOK{"DLQ Write OK?"}:::dec
+        PartialOK -->|"Yes"| Commit
+        PartialOK -->|"No"| AbortFlush
+
+        PutRes -->|"Error"| Retryable{"attempt &lt; 5 AND<br/>(DeadlineExceeded /<br/>429 / &gt;=500 / net.Timeout)?"}:::dec
+        Retryable -->|"Yes"| Backoff["Sleep min(30s, backoff + 20% jitter)<br/>backoff *= 2"]:::warn --> BQPut
+        Retryable -->|"No (exhausted or 400/403)"| FullDLQ["sendToDLQWithWriter(validItems)"]:::warn
+        FullDLQ --> FullDLQOK{"DLQ Write OK?"}:::dec
+        FullDLQOK -->|"Yes"| Commit
+        FullDLQOK -->|"No"| AbortFlush
+    end
+
+    EnqRow -->|"batchCh"| Trigger
+    EnqErr -->|"batchCh"| Trigger

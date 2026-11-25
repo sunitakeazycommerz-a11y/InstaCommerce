@@ -1,0 +1,52 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Caller / Admin / Kafka
+    participant Ctrl as FraudController /<br/>PaymentEventConsumer
+    participant FSS as FraudScoringService
+    participant BL as BlocklistService<br/>(Caffeine 60s)
+    participant AL as AllowlistService<br/>(DB uncached)
+    participant Redis as StringRedisTemplate<br/>(fraud:score:{userId})
+    participant RuleSvc as RuleEvaluationService /<br/>VelocityService
+    participant PG as PostgreSQL<br/>(fraud DB)
+
+    Note over Caller,PG: 1. Real-Time Fail-Closed Fraud Scoring (POST /fraud/score)
+    Caller->>Ctrl: scoreTransaction(FraudCheckRequest)
+    Ctrl->>FSS: scoreTransaction(request)
+    FSS->>BL: isBlocked(USER/DEVICE/IP) [Caffeine hit or PG SELECT]
+    alt Blocked
+        FSS->>PG: TX [REQUIRES_NEW]: INSERT fraud_signals + outbox FraudDetected
+        FSS-->>Caller: 200 {score:100, riskLevel:CRITICAL, action:BLOCK}
+    else Not blocked
+        FSS->>AL: isAllowlisted(USER/DEVICE/IP) [up to 3x PG queries]
+        alt Allowlisted
+            FSS->>PG: TX [REQUIRES_NEW]: INSERT fraud_signals(score=0, ALLOW)
+            FSS-->>Caller: 200 {score:0, riskLevel:LOW, action:ALLOW}
+        else Evaluate ML score + Rule Chain
+            FSS->>Redis: GET fraud:score:{userId}
+            Note right of Redis: In K8s, REDIS_HOST omitted →<br/>hits localhost:6379 → FALLBACK_RULES
+            FSS->>FSS: loadActiveRules() [@Cacheable fraudRules 300s]
+            loop Each active FraudRule by priority
+                FSS->>RuleSvc: evaluateRule(rule, request)
+                opt VELOCITY / DEVICE / RAPID_RETRY / COMBINATION
+                    RuleSvc->>PG: VelocityCounterRepository.sumCounterValueInWindow(now)
+                end
+            end
+            FSS->>RuleSvc: evaluateDefaultCombinationScore(request)
+            FSS->>PG: TX [REQUIRES_NEW] persistAndRespond: INSERT fraud_signals + outbox FraudDetected
+            Note right of PG: If DB fails when minimumErrorScore > 0,<br/>persistFailClosedSafe returns BLOCK/REVIEW anyway
+            FSS-->>Caller: 200 FraudCheckResponse
+        end
+    end
+
+    Note over Caller,PG: 2. Chargeback Auto-Blocklist Pipeline (payments.events → PaymentDisputed)
+    Caller->>Ctrl: onPaymentEvent(PaymentDisputed)
+    opt userId missing in payload
+        Ctrl->>Ctrl: RestOrderLookupClient.findOrder(orderId) → GET :8084/admin/orders/{id}
+    end
+    Ctrl->>RuleSvc: incrementCounter(USER/DEVICE/IP, CHARGEBACKS_30D)
+    RuleSvc->>PG: INSERT ... ON CONFLICT ON CONSTRAINT uq_velocity_window DO UPDATE (86400s sub-bucket)
+    Ctrl->>RuleSvc: getCount(USER, userId, CHARGEBACKS_30D)
+    alt count ≥ chargebackBlockThreshold (default 2)
+        Ctrl->>BL: block("USER", userId, expiresAt=null, "system:payment-disputed")
+        BL->>PG: deactivate old + INSERT blocked_entities + @CacheEvict(local pod only)
+    end

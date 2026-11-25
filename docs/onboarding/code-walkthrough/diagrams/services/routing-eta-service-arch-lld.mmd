@@ -1,0 +1,80 @@
+flowchart TB
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.8px,color:#0F172A
+    classDef svc fill:#F0F9FF,stroke:#0284C7,stroke-width:1.8px,color:#0F172A
+    classDef repo fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#064E3B
+    classDef broker fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.8px,color:#0F172A
+    classDef ext fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph CALLERS["Inbound HTTP, STOMP Clients & 5 Kafka Topics"]
+        direction LR
+        BFF["mobile-bff-service (:8080)<br/>BUG: ScreenAggregator passes orderId<br/>to GET /deliveries/{id}/eta (404)"]:::broken
+        AGW["admin-gateway-service (:8099)<br/>/admin/routing/{barriers,weather,traffic}"]:::ext
+        STOMP_C["Customer STOMP/SockJS Clients<br/>/ws/tracking (JWT on CONNECT;<br/>no topic ownership check on SUBSCRIBE)"]:::warn
+        K_IN[["5 Kafka Topics (KafkaConfig 3x1s -> *.DLT)<br/>rider.events · fulfillment.events · orders.events<br/>rider.location.updates (c=3) · rider.geofence.events"]]:::broker
+    end
+
+    subgraph SEC["HTTP & STOMP Security Chain"]
+        direction LR
+        HTTP_SEC["SecurityConfig + JwtAuthFilter + SharedInternalServiceAuthFilter<br/>permitAll: /actuator/**, /error, /ws/**<br/>/admin/routing/** -> ROLE_ADMIN · POST /tracking/location -> RIDER|ADMIN|INTERNAL_SERVICE"]:::ctrl
+        WS_SEC["WebSocketConfig (SimpleBroker /topic)<br/>stompJwtChannelInterceptor validates JWT on CONNECT<br/>requires non-null user on SUBSCRIBE/SEND"]:::warn
+    end
+
+    subgraph APP["routing-eta-service (:8094) — Java 21 / Spring Boot 4.0.0"]
+        direction TB
+        subgraph CTRL["Controllers & Consumers"]
+            direction LR
+            DC["DeliveryController<br/>/{orderId}, /{id}/eta, /{id}/tracking"]:::ctrl
+            TC["TrackingController<br/>POST /tracking/location"]:::ctrl
+            ARC["AdminRoutingController<br/>barriers, weather, traffic CRUD"]:::ctrl
+            REC_K["RiderEventConsumer<br/>(RiderAssigned)"]:::svc
+            FEC_K["FulfillmentEventConsumer<br/>(Dispatched/Delivered/Failed)"]:::svc
+            LUC_K["LocationUpdateConsumer<br/>(concurrency=3, Go+Java JSON)"]:::svc
+            GEC_K["GeofenceEventConsumer<br/>(upstream zones empty today)"]:::warn
+        end
+
+        subgraph SVC["Core Services & Scheduler"]
+            direction LR
+            DS["DeliveryService<br/>9-value FSM · updateETA()<br/>ETABreachRisk compensation (5000c)<br/>Sends STOMP before TX commit!"]:::warn
+            ETA["ETAService (Caffeine 'eta' 100k/10s)<br/>Haversine*1.4 + barriers + IST + traffic + weather<br/>BUG: 7/8-arg &amp; Confidence bypass @Cacheable"]:::warn
+            TS["TrackingService<br/>Breadcrumb insert + STOMP push<br/>+ 0.2km NEAR_DESTINATION check"]:::svc
+            OBS["OutboxService (MANDATORY)<br/>+ OutboxCleanupJob (03:00, batch 1000)"]:::svc
+        end
+
+        NO_EXT["ZERO OSRM or Google Maps HTTP Client!<br/>(google.maps.api-key in application.yml unused)"]:::broken
+
+        subgraph REPO["JPA Repositories"]
+            direction LR
+            DR["DeliveryRepository<br/>findByOrderId · findByRiderIdAndStatusIn"]:::repo
+            DTR["DeliveryTrackingRepository<br/>findLatestByDeliveryId"]:::repo
+            RBR["RoutingBarrierRepository"]:::repo
+            WCR["WeatherConditionRepository"]:::repo
+            TFR["TrafficCongestionFeedRepository"]:::repo
+            OER["OutboxEventRepository<br/>deleteBatchSentEventsBefore"]:::repo
+        end
+    end
+
+    subgraph INFRA["PostgreSQL (V1-V10) & Outbox Relay"]
+        direction LR
+        PG[("PostgreSQL: routing / routing_db<br/>deliveries (uq_delivery_order, @Version)<br/>delivery_tracking (RANGE monthly V5 + default)<br/>routing_barriers · weather_conditions<br/>traffic_congestion_feeds · outbox_events · shedlock")]:::store
+        OR["outbox-relay-routing-eta (:8103)<br/>Helm 1x · poll 500ms<br/>-> Kafka: delivery.events"]:::broker
+    end
+
+    BFF & AGW --> HTTP_SEC --> DC & TC & ARC
+    STOMP_C <--> WS_SEC
+    K_IN --> REC_K & FEC_K & LUC_K & GEC_K
+    REC_K & FEC_K --> DS
+    LUC_K --> TS & ETA & DS
+    GEC_K --> DS & TS
+    DC --> DS & ETA & TS
+    TC --> TS
+    ARC --> RBR & WCR & TFR
+    DS --> ETA & OBS & WS_SEC & DR
+    TS --> DS & WS_SEC & DTR & DR
+    ETA --> RBR & WCR & TFR
+    ETA -.-> NO_EXT
+    OBS --> OER
+    DR & DTR & RBR & WCR & TFR & OER --> PG
+    PG -->|"FOR UPDATE SKIP LOCKED"| OR
