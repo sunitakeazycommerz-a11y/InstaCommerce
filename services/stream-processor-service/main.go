@@ -272,16 +272,12 @@ func main() {
 	logger.Info("stream processor stopped")
 }
 
-// startConsumer launches a goroutine that reads from a Kafka topic and calls handler for each message.
-// Duplicate messages (identified by event_id/id or topic:partition:offset) are skipped but their offsets are still committed.
 type dltWriter interface {
 	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
 }
 
-func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, brokers []string, groupID, topic string, deduper *dedup.Checker, handler func(context.Context, kafka.Message) error) {
-	startConsumerWithDLQ(ctx, wg, logger, brokers, groupID, topic, deduper, nil, handler)
-}
-
+// startConsumerWithDLQ launches a goroutine that reads from a Kafka topic and calls handler for each message.
+// Duplicate messages (identified by event_id/id or topic:partition:offset) are skipped but their offsets are still committed.
 func startConsumerWithDLQ(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, brokers []string, groupID, topic string, deduper *dedup.Checker, dlqWriter dltWriter, handler func(context.Context, kafka.Message) error) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:           brokers,

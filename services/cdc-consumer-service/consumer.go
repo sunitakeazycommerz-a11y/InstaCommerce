@@ -205,19 +205,6 @@ func runConsumer(
 	}
 }
 
-func runBatcher(
-	batchCh <-chan batchItem,
-	inserter *bigquery.Inserter,
-	dlqWriter *kafka.Writer,
-	cfg Config,
-	metrics Metrics,
-	logger *slog.Logger,
-	tracer trace.Tracer,
-) error {
-	w, topic := unwrapDLQWriter(dlqWriter)
-	return runBatcherWithDeps(batchCh, unwrapBQInserter(inserter), w, topic, cfg, metrics, logger, tracer)
-}
-
 func runBatcherWithDeps(
 	batchCh <-chan batchItem,
 	inserter bqInserter,
@@ -263,19 +250,6 @@ func runBatcherWithDeps(
 			items = items[:0]
 		}
 	}
-}
-
-func flushBatch(
-	items []batchItem,
-	inserter *bigquery.Inserter,
-	dlqWriter *kafka.Writer,
-	cfg Config,
-	metrics Metrics,
-	logger *slog.Logger,
-	tracer trace.Tracer,
-) error {
-	w, topic := unwrapDLQWriter(dlqWriter)
-	return flushBatchWithDeps(items, unwrapBQInserter(inserter), w, topic, cfg, metrics, logger, tracer)
 }
 
 func flushBatchWithDeps(
@@ -359,10 +333,6 @@ func flushBatchWithDeps(
 
 	readyItems := markReadyForCommit(items)
 	return commitMessages(ctx, cfg.KafkaCommitTimeout, logger, readyItems)
-}
-
-func insertWithRetry(ctx context.Context, inserter *bigquery.Inserter, rows []bigquery.ValueSaver, cfg Config, logger *slog.Logger) ([]int, error) {
-	return insertWithRetryDeps(ctx, unwrapBQInserter(inserter), rows, cfg, logger)
 }
 
 func insertWithRetryDeps(ctx context.Context, inserter bqInserter, rows []bigquery.ValueSaver, cfg Config, logger *slog.Logger) ([]int, error) {

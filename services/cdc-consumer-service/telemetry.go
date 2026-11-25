@@ -77,10 +77,6 @@ func setupTracing(ctx context.Context, logger *slog.Logger) (*sdktrace.TracerPro
 	return providers.TracerProvider, otel.Tracer(serviceName)
 }
 
-func startHTTPServer(port string, healthHandler *health.Handler, logger *slog.Logger) *http.Server {
-	return startHTTPServerWithErr(port, healthHandler, logger, nil)
-}
-
 func startHTTPServerWithErr(port string, healthHandler *health.Handler, logger *slog.Logger, reportErr func(error)) *http.Server {
 	mux := http.NewServeMux()
 	healthHandler.RegisterRoutes(mux)
