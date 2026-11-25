@@ -1,0 +1,2 @@
+# Historical test string replaced with synthetic low-entropy token; keep PR commit fingerprint ignored for git-history scan
+5eceeacfdbac63809202a2f158446c26f269fd15:services/notification-service/src/test/java/com/instacommerce/notification/provider/MaskingUtilAndLocalProviderTest.java:generic-api-key:19

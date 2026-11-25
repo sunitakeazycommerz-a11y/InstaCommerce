@@ -16,10 +16,10 @@ class MaskingUtilAndLocalProviderTest {
     @Test
     @DisplayName("MaskingUtil masks PUSH tokens without stripping letters like maskPhone")
     void maskingUtilHandlesPushEmailAndPhoneDistinctly() {
-        String pushToken = "eXampleFcmToken:APA91bHun4MxP5egoKMwt2KZFBaFUH-1RYqx";
+        String pushToken = "push-token-0000000000000000-test";
         String maskedPush = MaskingUtil.maskRecipient(pushToken, NotificationChannel.PUSH);
-        assertThat(maskedPush).isEqualTo("eXam****RYqx");
-        assertThat(MaskingUtil.maskRecipient(pushToken)).isEqualTo("eXam****RYqx");
+        assertThat(maskedPush).isEqualTo("push****test");
+        assertThat(MaskingUtil.maskRecipient(pushToken)).isEqualTo("push****test");
 
         assertThat(MaskingUtil.maskRecipient("asha@example.com", NotificationChannel.EMAIL))
             .isEqualTo("a***@example.com");

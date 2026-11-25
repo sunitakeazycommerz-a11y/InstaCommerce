@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -598,5 +599,56 @@ class AdminDashboardControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.intact").value(true))
             .andExpect(jsonPath("$.eventsVerified").value(12));
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = "ADMIN")
+    void shouldValidateAndEncodeAuditQueryParametersSafely() throws Exception {
+        when(restTemplate.exchange(
+                ArgumentMatchers.any(URI.class),
+                eq(HttpMethod.GET),
+                anyEntity(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.ok(Map.of("content", java.util.List.of())));
+
+        String actorId = "11111111-1111-1111-1111-111111111111";
+        mockMvc.perform(get("/admin/v1/audit/events")
+                .param("actorId", actorId)
+                .param("resourceId", "ord-1&evil=true{foo}#bar")
+                .param("fromDate", "2026-11-25T00:00:00Z")
+                .param("toDate", "2026-11-25T12:00:00Z")
+                .with(csrf()))
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<URI> uriCaptor = ArgumentCaptor.forClass(URI.class);
+        verify(restTemplate).exchange(uriCaptor.capture(), eq(HttpMethod.GET), anyEntity(), anyMapType());
+        URI sentUri = uriCaptor.getValue();
+        assertThat(sentUri.getScheme()).isEqualTo("http");
+        assertThat(sentUri.getHost()).isEqualTo("audit-trail-service");
+        assertThat(sentUri.getPort()).isEqualTo(8096);
+        assertThat(sentUri.getPath()).isEqualTo("/admin/audit/events");
+        assertThat(sentUri.getRawQuery())
+            .contains("actorId=" + actorId)
+            .contains("resourceId=ord-1%26evil%3Dtrue%7Bfoo%7D%23bar")
+            .contains("fromDate=2026-11-25T00%3A00%3A00Z")
+            .contains("toDate=2026-11-25T12%3A00%3A00Z");
+
+        mockMvc.perform(get("/admin/v1/audit/events")
+                .param("actorId", "not-a-uuid")
+                .with(csrf()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+
+        mockMvc.perform(get("/admin/v1/audit/integrity/verify")
+                .param("from", "not-an-instant")
+                .with(csrf()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+
+        mockMvc.perform(get("/admin/v1/audit/events")
+                .param("resourceId", "bad\nvalue")
+                .with(csrf()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 }

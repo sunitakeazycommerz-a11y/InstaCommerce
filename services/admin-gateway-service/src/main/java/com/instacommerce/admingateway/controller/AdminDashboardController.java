@@ -4,11 +4,14 @@ import com.instacommerce.admingateway.service.DashboardAggregationService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,7 +49,8 @@ public class AdminDashboardController {
     private final String featureFlagUrl;
     private final String reconciliationUrl;
     private final String fraudUrl;
-    private final String auditUrl;
+    private final URI fraudBaseUri;
+    private final URI auditBaseUri;
 
     public AdminDashboardController(
             RestTemplate restTemplate,
@@ -72,10 +76,11 @@ public class AdminDashboardController {
             @Value("${admin-gateway.upstream.audit-url:${audit-trail.base-url:http://audit-trail-service:8096}}") String auditUrl) {
         this.restTemplate = restTemplate;
         this.dashboardAggregationService = dashboardAggregationService;
-        this.featureFlagUrl = normalizeBaseUrl(featureFlagUrl);
-        this.reconciliationUrl = normalizeBaseUrl(reconciliationUrl);
-        this.fraudUrl = normalizeBaseUrl(fraudUrl);
-        this.auditUrl = normalizeBaseUrl(auditUrl);
+        this.featureFlagUrl = parseBaseUri(featureFlagUrl, "feature-flag-url").toString();
+        this.reconciliationUrl = parseBaseUri(reconciliationUrl, "reconciliation-url").toString();
+        this.fraudBaseUri = parseBaseUri(fraudUrl, "fraud-url");
+        this.fraudUrl = this.fraudBaseUri.toString();
+        this.auditBaseUri = parseBaseUri(auditUrl, "audit-url");
     }
 
     @GetMapping("/dashboard")
@@ -185,11 +190,13 @@ public class AdminDashboardController {
     public Map<String, Object> listFraudRules(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        URI uri = UriComponentsBuilder.fromUriString(fraudUrl + "/admin/fraud/rules")
-            .queryParam("page", Math.max(0, page))
-            .queryParam("size", Math.min(Math.max(1, size), 100))
-            .build()
-            .toUri();
+        Map<String, Object> queryParams = new LinkedHashMap<>();
+        queryParams.put("page", Math.max(0, page));
+        queryParams.put("size", Math.min(Math.max(1, size), 100));
+        URI uri = buildUpstreamUri(fraudBaseUri, "/admin/fraud/rules", queryParams);
+        if (!fraudBaseUri.getHost().equals(uri.getHost())) {
+            throw new IllegalStateException("Resolved fraud URI host mismatch");
+        }
         var response = restTemplate.exchange(uri, HttpMethod.GET, null, OBJECT_TYPE);
         return normalizeObjectResponse("rules", response.getBody());
     }
@@ -209,11 +216,13 @@ public class AdminDashboardController {
     public Map<String, Object> listFraudBlocklist(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        URI uri = UriComponentsBuilder.fromUriString(fraudUrl + "/admin/fraud/blocklist")
-            .queryParam("page", Math.max(0, page))
-            .queryParam("size", Math.min(Math.max(1, size), 100))
-            .build()
-            .toUri();
+        Map<String, Object> queryParams = new LinkedHashMap<>();
+        queryParams.put("page", Math.max(0, page));
+        queryParams.put("size", Math.min(Math.max(1, size), 100));
+        URI uri = buildUpstreamUri(fraudBaseUri, "/admin/fraud/blocklist", queryParams);
+        if (!fraudBaseUri.getHost().equals(uri.getHost())) {
+            throw new IllegalStateException("Resolved fraud URI host mismatch");
+        }
         var response = restTemplate.exchange(uri, HttpMethod.GET, null, OBJECT_TYPE);
         return normalizeObjectResponse("items", response.getBody());
     }
@@ -298,18 +307,27 @@ public class AdminDashboardController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             HttpServletRequest httpRequest) {
-        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(auditUrl + "/admin/audit/events")
-            .queryParamIfPresent("actorId", optionalText(actorId))
-            .queryParamIfPresent("resourceType", optionalText(resourceType))
-            .queryParamIfPresent("resourceId", optionalText(resourceId))
-            .queryParamIfPresent("sourceService", optionalText(sourceService))
-            .queryParamIfPresent("eventType", optionalText(eventType))
-            .queryParamIfPresent("correlationId", optionalText(correlationId))
-            .queryParamIfPresent("fromDate", optionalText(fromDate))
-            .queryParamIfPresent("toDate", optionalText(toDate))
-            .queryParam("page", Math.max(0, page))
-            .queryParam("size", Math.min(Math.max(1, size), 100));
-        URI uri = builder.encode().build().toUri();
+        Map<String, Object> queryParams = new LinkedHashMap<>();
+        optionalUuid(actorId, "actorId").ifPresent(v -> queryParams.put("actorId", v));
+        optionalAuditFilter(resourceType, "resourceType", 100).ifPresent(v -> queryParams.put("resourceType", v));
+        optionalAuditFilter(resourceId, "resourceId", 255).ifPresent(v -> queryParams.put("resourceId", v));
+        optionalAuditFilter(sourceService, "sourceService", 100).ifPresent(v -> queryParams.put("sourceService", v));
+        optionalAuditFilter(eventType, "eventType", 100).ifPresent(v -> queryParams.put("eventType", v));
+        optionalAuditFilter(correlationId, "correlationId", 128).ifPresent(v -> queryParams.put("correlationId", v));
+        optionalInstant(fromDate, "fromDate").ifPresent(v -> queryParams.put("fromDate", v));
+        optionalInstant(toDate, "toDate").ifPresent(v -> queryParams.put("toDate", v));
+        queryParams.put("page", Math.max(0, page));
+        queryParams.put("size", Math.min(Math.max(1, size), 100));
+
+        URI uri = buildUpstreamUri(auditBaseUri, "/admin/audit/events", queryParams);
+        if (!auditBaseUri.getHost().equals(uri.getHost())) {
+            throw new IllegalStateException("Resolved audit URI host mismatch");
+        }
+        if (!auditBaseUri.getScheme().equals(uri.getScheme())
+                || auditBaseUri.getPort() != uri.getPort()
+                || uri.getRawUserInfo() != null) {
+            throw new IllegalStateException("Resolved audit URI origin mismatch");
+        }
         var response = restTemplate.exchange(uri, HttpMethod.GET, authForwardEntity(httpRequest), OBJECT_TYPE);
         return normalizeObjectResponse("content", response.getBody());
     }
@@ -320,13 +338,20 @@ public class AdminDashboardController {
             @RequestParam(required = false) String to,
             @RequestParam(defaultValue = "1000") int batchSize,
             HttpServletRequest httpRequest) {
-        URI uri = UriComponentsBuilder.fromUriString(auditUrl + "/admin/audit/integrity/verify")
-            .queryParamIfPresent("from", optionalText(from))
-            .queryParamIfPresent("to", optionalText(to))
-            .queryParam("batchSize", Math.min(Math.max(1, batchSize), 5000))
-            .encode()
-            .build()
-            .toUri();
+        Map<String, Object> queryParams = new LinkedHashMap<>();
+        optionalInstant(from, "from").ifPresent(v -> queryParams.put("from", v));
+        optionalInstant(to, "to").ifPresent(v -> queryParams.put("to", v));
+        queryParams.put("batchSize", Math.min(Math.max(1, batchSize), 5000));
+
+        URI uri = buildUpstreamUri(auditBaseUri, "/admin/audit/integrity/verify", queryParams);
+        if (!auditBaseUri.getHost().equals(uri.getHost())) {
+            throw new IllegalStateException("Resolved audit URI host mismatch");
+        }
+        if (!auditBaseUri.getScheme().equals(uri.getScheme())
+                || auditBaseUri.getPort() != uri.getPort()
+                || uri.getRawUserInfo() != null) {
+            throw new IllegalStateException("Resolved audit URI origin mismatch");
+        }
         var response = restTemplate.exchange(uri, HttpMethod.GET, authForwardEntity(httpRequest), MAP_TYPE);
         return response.getBody() != null ? response.getBody() : Map.of();
     }
@@ -369,6 +394,78 @@ public class AdminDashboardController {
 
     private static Optional<String> optionalText(String value) {
         return (value == null || value.isBlank()) ? Optional.empty() : Optional.of(value.trim());
+    }
+
+    private static Optional<String> optionalUuid(String value, String fieldName) {
+        Optional<String> text = optionalText(value);
+        if (text.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(UUID.fromString(text.get()).toString());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Invalid " + fieldName + " UUID format", ex);
+        }
+    }
+
+    private static Optional<String> optionalInstant(String value, String fieldName) {
+        Optional<String> text = optionalText(value);
+        if (text.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Instant.parse(text.get()).toString());
+        } catch (DateTimeParseException ex) {
+            throw new IllegalArgumentException("Invalid " + fieldName + " timestamp format", ex);
+        }
+    }
+
+    private static Optional<String> optionalAuditFilter(String value, String fieldName, int maxLength) {
+        Optional<String> text = optionalText(value);
+        if (text.isEmpty()) {
+            return Optional.empty();
+        }
+        String trimmed = text.get();
+        if (trimmed.length() > maxLength) {
+            throw new IllegalArgumentException(fieldName + " exceeds maximum length of " + maxLength);
+        }
+        for (int i = 0; i < trimmed.length(); i++) {
+            if (Character.isISOControl(trimmed.charAt(i))) {
+                throw new IllegalArgumentException(fieldName + " must not contain control characters");
+            }
+        }
+        return Optional.of(trimmed);
+    }
+
+    private static URI buildUpstreamUri(URI baseUri, String path, Map<String, Object> queryParams) {
+        UriComponentsBuilder builder = UriComponentsBuilder.fromUri(baseUri).path(path);
+        for (String key : queryParams.keySet()) {
+            builder.queryParam(key, "{" + key + "}");
+        }
+        return builder.encode().buildAndExpand(queryParams).toUri();
+    }
+
+    private static URI parseBaseUri(String baseUrl, String fieldName) {
+        String normalized = normalizeBaseUrl(baseUrl);
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException(fieldName + " must not be blank");
+        }
+        URI uri = URI.create(normalized);
+        String scheme = uri.getScheme();
+        if (scheme == null) {
+            throw new IllegalArgumentException(fieldName + " must include http or https scheme");
+        }
+        String normalizedScheme = scheme.toLowerCase(Locale.ROOT);
+        if (!"http".equals(normalizedScheme) && !"https".equals(normalizedScheme)) {
+            throw new IllegalArgumentException(fieldName + " scheme must be http or https");
+        }
+        if (uri.getHost() == null || uri.getHost().isBlank()) {
+            throw new IllegalArgumentException(fieldName + " must include a valid host");
+        }
+        if (uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null) {
+            throw new IllegalArgumentException(fieldName + " must not include userinfo, query, or fragment");
+        }
+        return uri;
     }
 
     private static HttpEntity<Map<String, Object>> jsonEntity(Map<String, Object> payload, HttpServletRequest request) {
