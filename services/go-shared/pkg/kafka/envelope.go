@@ -16,6 +16,7 @@ var schemaVersionPattern = regexp.MustCompile(`^(v[1-9][0-9]*|[0-9]+\.[0-9]+\.[0
 
 // EventEnvelope represents the canonical ADR-004 Kafka event envelope.
 type EventEnvelope struct {
+	ID            string    `json:"id"`
 	EventID       string    `json:"eventId"`
 	EventType     string    `json:"eventType"`
 	AggregateID   string    `json:"aggregateId"`
@@ -24,6 +25,7 @@ type EventEnvelope struct {
 	SourceService string    `json:"sourceService"`
 	CorrelationID string    `json:"correlationId"`
 	Timestamp     time.Time `json:"timestamp"`
+	EventTime     time.Time `json:"eventTime"`
 	Payload       any       `json:"payload"`
 }
 
@@ -44,6 +46,7 @@ func (e *EventEnvelope) Validate() error {
 	if e == nil {
 		return errors.New("kafka: event envelope must not be nil")
 	}
+	e.syncAliases()
 	if strings.TrimSpace(e.EventID) == "" {
 		return errors.New("kafka: eventId is required")
 	}

@@ -1,5 +1,7 @@
 package com.instacommerce.fulfillment.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.instacommerce.fulfillment.client.StoreCoordinates;
 import com.instacommerce.fulfillment.client.WarehouseClient;
 import com.instacommerce.fulfillment.consumer.OrderPlacedItem;
@@ -27,7 +29,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -50,7 +51,10 @@ public class PickService {
     private final AisleRoutingOptimizer aisleRoutingOptimizer;
     private final AuditLogService auditLogService;
     private final Timer pickDurationTimer;
-    private final Map<String, Long> scanDebounceMap = new ConcurrentHashMap<>();
+    private final Cache<String, Long> scanDebounceCache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofSeconds(10))
+        .build();
 
     public PickService(PickTaskRepository pickTaskRepository,
                        PickItemRepository pickItemRepository,
@@ -162,7 +166,7 @@ public class PickService {
         PickTask task = pickTaskRepository.findByOrderIdForUpdate(orderId)
             .orElseThrow(() -> new PickTaskNotFoundException(orderId));
         if (request.scannedBarcode() != null) {
-            PickTaskSupport.recordAndCheckDebounce(scanDebounceMap, orderId, request.scannedBarcode());
+            PickTaskSupport.recordAndCheckDebounce(scanDebounceCache, orderId, request.scannedBarcode());
         }
 
         if (task.getStatus() == PickTaskStatus.COMPLETED || task.getStatus() == PickTaskStatus.CANCELLED) {
@@ -210,10 +214,9 @@ public class PickService {
         }
 
         int missingQtyDelta = PickTaskSupport.calculateMissingQtyDelta(previousStatus, previousPickedQty, item);
-        boolean transitionedToSubstituted = item.getStatus() == PickItemStatus.SUBSTITUTED
-            && previousStatus != PickItemStatus.SUBSTITUTED;
-        if (missingQtyDelta > 0 || transitionedToSubstituted) {
-            substitutionService.handleMissingItem(task, item, missingQtyDelta);
+        int substitutedQtyDelta = PickTaskSupport.calculateSubstitutedQtyDelta(previousStatus, previousPickedQty, item);
+        if (missingQtyDelta > 0 || substitutedQtyDelta > 0) {
+            substitutionService.handleMissingItem(task, item, missingQtyDelta, substitutedQtyDelta);
         }
 
         if (isTaskCompleted(task)) {

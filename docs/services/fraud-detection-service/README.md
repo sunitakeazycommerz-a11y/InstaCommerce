@@ -7,7 +7,7 @@
 | **Module** | `:services:fraud-detection-service` |
 | **Port** | `8091` |
 | **Runtime** | Spring Boot 4.0 · Java 21 |
-| **Database** | PostgreSQL 15+ (fraud_flags, user_risk_profile, transaction_history) |
+| **Database** | PostgreSQL 16 (fraud_flags, user_risk_profile, transaction_history) |
 | **Messaging** | Kafka consumer (orders.events, payments.events, identity.events) |
 | **Resilience** | Graceful degradation (allow txn if service down) |
 | **Auth** | JWT RS256 |
@@ -571,7 +571,7 @@ alerts:
 **Resolution:**
 ```bash
 # Check ML model performance
-curl http://fraud-detection-service:8091/admin/model/stats
+curl http://fraud-detection-service:8097/admin/model/stats
 
 # Check database query time
 SELECT query, mean_exec_time FROM pg_stat_statements
@@ -610,7 +610,7 @@ kubectl logs -f deployment/fraud-detection-ml-server
 kubectl rollout restart deployment/fraud-detection-ml-server
 
 # Check model size and memory usage
-curl http://fraud-detection-service:8091/admin/model/memory-usage
+curl http://fraud-detection-service:8097/admin/model/memory-usage
 ```
 
 ### Scenario 3: False Positive Rate Too High (Legitimate users blocked)
@@ -640,7 +640,7 @@ FRAUD_DECISION_REVIEW_THRESHOLD=50 (from 35) -- More review, less blocks
 FRAUD_DECISION_BLOCK_THRESHOLD=80 (from 60) -- Higher threshold to block
 
 # Retrain model with new data
-curl -X POST http://fraud-detection-service:8091/admin/model/retrain
+curl -X POST http://fraud-detection-service:8097/admin/model/retrain
 
 # Whitelist new user cohort temporarily
 -- INSERT INTO fraud_flags (target_id, flag_type, reason)
@@ -667,7 +667,7 @@ Immediate actions:
 1. Lower decision thresholds (stricter blocking)
    FRAUD_DECISION_BLOCK_THRESHOLD=50 (from 80, temporary)
 2. Revert to previous model version
-   curl -X POST http://fraud-detection-service:8091/admin/model/rollback
+   curl -X POST http://fraud-detection-service:8097/admin/model/rollback
 3. Page on-call engineer for investigation
 
 # Investigation
@@ -709,7 +709,7 @@ redis-cli DEL fraud:whitelist:* fraud:blacklist:*
 FRAUD_WHITELIST_CACHE_TTL=60 (from 600, shorter)
 
 # Verify recent updates applied
-curl http://fraud-detection-service:8091/admin/flags/user-uuid/status
+curl http://fraud-detection-service:8097/admin/flags/user-uuid/status
 ```
 
 ### Scenario 6: Database Connection Pool Exhausted
@@ -760,13 +760,13 @@ kubectl rollout restart deployment/fraud-detection-service
 kubectl get pods -n services | grep wallet
 
 # Test connectivity
-curl http://wallet-loyalty-service:8090/actuator/health/live
+curl http://wallet-loyalty-service:8095/actuator/health/live
 
 # Check network policy
 kubectl get networkpolicies -n services | grep wallet
 
 # Verify API contract
-curl -X POST http://wallet-loyalty-service:8090/wallet/block \
+curl -X POST http://wallet-loyalty-service:8095/wallet/block \
   -d '{"userId":"test","reason":"FRAUD_DETECTED"}'
 ```
 
@@ -793,7 +793,7 @@ WHERE name = 'FraudModelRetrainingJob'
 AND lock_at_most_until < NOW();
 
 # Manually trigger retraining
-curl -X POST http://fraud-detection-service:8091/admin/model/retrain
+curl -X POST http://fraud-detection-service:8097/admin/model/retrain
 
 # Check training data pipeline
 SELECT COUNT(*) FROM training_data

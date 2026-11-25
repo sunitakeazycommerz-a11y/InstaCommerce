@@ -324,4 +324,43 @@ class WalletAndLoyaltyInvariantsTest {
             .satisfies(ex -> assertThat(((ApiException) ex).getCode()).isEqualTo("REFERRAL_ALREADY_USED"));
         verifyNoInteractions(walletService);
     }
+
+    @Test
+    void loyaltyRedeemCreditsWalletIdempotentlyWhenWalletServiceWired() {
+        LoyaltyAccountRepository accountRepo = mock(LoyaltyAccountRepository.class);
+        LoyaltyTransactionRepository txnRepo = mock(LoyaltyTransactionRepository.class);
+        OutboxService outboxService = mock(OutboxService.class);
+        WalletService walletService = mock(WalletService.class);
+        WalletProperties properties = new WalletProperties();
+        properties.getLoyalty().setPointsToPaiseRate(100L);
+
+        LoyaltyService loyaltyService = new LoyaltyService(
+            accountRepo, txnRepo, properties, outboxService, walletService);
+        UUID userId = UUID.randomUUID();
+        LoyaltyAccount account = new LoyaltyAccount();
+        account.setId(UUID.randomUUID());
+        account.setUserId(userId);
+        account.setPointsBalance(500);
+        account.setLifetimePoints(500);
+        account.setTier(LoyaltyTier.BRONZE);
+
+        when(accountRepo.findByUserIdForUpdate(userId)).thenReturn(Optional.of(account));
+        when(txnRepo.saveAndFlush(any(LoyaltyTransaction.class))).thenAnswer(inv -> {
+            LoyaltyTransaction txn = inv.getArgument(0);
+            txn.setId(UUID.randomUUID());
+            return txn;
+        });
+
+        LoyaltyResponse response = loyaltyService.redeemPoints(userId, 250, "ord-wallet-1");
+
+        assertThat(response.pointsBalance()).isEqualTo(250);
+        assertThat(response.walletCreditedCents()).isEqualTo(25_000L);
+        verify(walletService).credit(
+            eq(userId),
+            eq(25_000L),
+            eq(ReferenceType.PROMOTION),
+            eq("loyalty-redeem-ord-wallet-1"),
+            anyString());
+        verify(outboxService).publish(eq("Loyalty"), eq(account.getId().toString()), eq("PointsRedeemed"), any(Map.class));
+    }
 }

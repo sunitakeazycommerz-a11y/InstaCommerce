@@ -1,0 +1,34 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+  datasource:
+    url: ${FEATURE_FLAG_DB_URL:jdbc:postgresql://localhost:5432/feature_flags_db}
+    username: ${FEATURE_FLAG_DB_USER:postgres}
+    password: ${FEATURE_FLAG_DB_PASSWORD:devpass}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+feature-flag:
+  jwt:
+    public-key: ${FEATURE_FLAG_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+  cache:
+    redis-enabled: ${FEATURE_FLAG_REDIS_ENABLED:true}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

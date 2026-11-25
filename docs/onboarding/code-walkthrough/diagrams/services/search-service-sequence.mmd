@@ -1,0 +1,64 @@
+sequenceDiagram
+    autonumber
+    participant Caller as mobile-bff / ai-orch
+    participant SC as SearchController
+    participant SS as SearchService
+    participant SQC as SearchQueryCacheService
+    participant Cache as TwoLevelCacheManager
+    participant FS as FacetedSearchService
+    participant PG as PostgreSQL (search)
+    participant TS as TrendingService (@Async)
+    participant Kafka as KafkaListener + ErrorHandler
+    participant SIS as SearchIndexService
+
+    Note over Caller,TS: Flow 1 - Search Query (Cache Miss -> FTS -> Fuzzy Fallback -> Fail-Open Facets -> Async Trending)
+    Caller->>SC: GET /search?query=coke zro, storeId={id}, page=0, size=20
+    SC->>SS: search("coke  zro", ..., storeId, 0, 20)
+    SS->>SS: normalizeQuery -> "coke zro", validate minPrice <= maxPrice
+    SS->>SQC: executeSearch("coke zro", ..., storeId, 0, 20)
+    SQC->>Cache: @Cacheable("searchResults") get(buildCacheKey)
+    Cache-->>SQC: L1 Caffeine miss -> L2 Redis miss
+    SQC->>PG: fullTextSearchScoped(plainto_tsquery('english','coke zro'), storeId)
+    PG-->>SQC: Page.empty() (0 hits)
+    SQC->>PG: fuzzyFallbackSearchFiltered("%coke zro%", storeId)
+    PG-->>SQC: Page.empty()
+    SQC->>SQC: selectLongestSearchToken("coke zro") -> "coke"
+    SQC->>PG: fuzzyFallbackSearchFiltered("%coke%", storeId)
+    PG-->>SQC: [Coca Cola Zero Sugar Can, rank=0.5]
+    SQC->>SQC: didYouMean = "Coca Cola Zero Sugar Can"
+    SQC->>FS: computeStoreScopedFacets("coke zro", storeId)
+    FS->>PG: facetByBrandAndStore and facetByCategoryAndStore (plainto_tsquery)
+    alt Facet SQL error or timeout
+        PG-->>FS: Exception (e.g. statement_timeout=5000ms)
+        FS->>FS: facetFailureCounter.increment() -> empty lists (fail-open)
+    else Facet query succeeds
+        PG-->>FS: brand[] and category[] counts
+    end
+    FS-->>SQC: facets map
+    SQC->>Cache: put(key, SearchResponse) -> L1 (15s) + L2 Redis (5m)
+    SQC-->>SS: SearchResponse
+    SS-)TS: @Async recordQuery("coke zro")
+    TS->>PG: INSERT trending_queries ON CONFLICT (query) DO UPDATE hit_count + 1
+    SS-->>SC: SearchResponse
+    SC-->>Caller: 200 OK {results, totalResults, facets, didYouMean}
+
+    Note over Caller,PG: Flow 2 - Autocomplete and Daily 03:00 ShedLock Cleanup
+    Caller->>SC: GET /search/autocomplete?prefix=co, limit=10
+    SC->>SQC: @Cacheable("autocomplete", cond len >= 2) autocomplete("co", 10)
+    SQC->>PG: lower(name) LIKE lower(:prefix)||'%' (no storeId filter)
+    PG-->>Caller: 200 AutocompleteResult[]
+    Note right of TS: @Scheduled(0 0 3 * * *) @SchedulerLock cleanupOldEntries<br/>Deletes trending_queries older than 30d + @CacheEvict("trending", allEntries=true)
+
+    Note over Cache,SIS: Flow 3 - Kafka Index Sync, Cross-Pod Pub/Sub Cache Bust and DLT Recovery
+    Kafka->>Kafka: CatalogEventConsumer / InventoryEventConsumer receives event
+    alt Valid event payload
+        Kafka->>SIS: @Transactional upsertDocument / updateStockStatus / deleteDocument
+        SIS->>PG: Write search_documents (trg_search_documents_vector updates TSVECTOR)
+        SIS->>Cache: @CacheEvict(allEntries=true) -> L1 clear + L2 clear + Pub/Sub search:cache:invalidate
+        Kafka->>Cache: explicit searchResults.clear() + autocomplete.clear()
+        Cache-->>Cache: Peer pods receive Pub/Sub (originId check) -> l1Cache.invalidateAll()
+    else Deserialization / Runtime failure
+        Kafka->>Kafka: DefaultErrorHandler FixedBackOff(1000ms, maxAttempts=3)
+        Note right of Kafka: Skips retry on JsonProcessingException / IllegalArgumentException
+        Kafka->>Kafka: DeadLetterPublishingRecoverer -> {topic}.DLT
+    end

@@ -1,0 +1,30 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  datasource:
+    password: ${AUDIT_DB_PASSWORD:devpass}
+
+audit:
+  jwt:
+    public-key: ${AUDIT_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+  archive:
+    enable-encryption: ${AUDIT_ARCHIVE_ENABLE_ENCRYPTION:false}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

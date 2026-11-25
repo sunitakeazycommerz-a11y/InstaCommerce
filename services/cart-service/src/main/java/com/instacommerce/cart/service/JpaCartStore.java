@@ -11,6 +11,7 @@ import com.instacommerce.cart.repository.CartItemRepository;
 import com.instacommerce.cart.repository.CartRepository;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,12 +22,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class JpaCartStore implements CartStore {
-    private static final String AGGREGATE_TYPE = "CART";
-    private static final String EVENT_ITEM_ADDED = "ITEM_ADDED";
-    private static final String EVENT_CART_UPDATED = "CART_UPDATED";
-    private static final String EVENT_ITEM_REMOVED = "ITEM_REMOVED";
-    private static final String EVENT_CART_CLEARED = "CART_CLEARED";
-    private static final String EVENT_CART_PRICE_REFRESHED = "CART_PRICE_REFRESHED";
+    private static final String AGGREGATE_TYPE = "Cart";
+    private static final String EVENT_ITEM_ADDED = "CartItemAdded";
+    private static final String EVENT_CART_UPDATED = "CartUpdated";
+    private static final String EVENT_ITEM_REMOVED = "CartItemRemoved";
+    private static final String EVENT_CART_CLEARED = "CartCleared";
+    private static final String EVENT_CART_MERGED = "CartMerged";
+    private static final String EVENT_CART_PRICE_REFRESHED = "CartPriceRefreshed";
 
     private final CartRepository cartRepository;
     private final CartItemRepository cartItemRepository;
@@ -93,7 +95,7 @@ public class JpaCartStore implements CartStore {
         cart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
         Cart savedCart = cartRepository.saveAndFlush(cart);
         outboxService.publish(AGGREGATE_TYPE, savedCart.getId().toString(), EVENT_ITEM_ADDED,
-            itemPayload(userId, savedCart, item));
+            itemPayload(userId, savedCart, item, "addedAt"));
         return savedCart;
     }
 
@@ -125,7 +127,7 @@ public class JpaCartStore implements CartStore {
         cart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
         Cart savedCart = cartRepository.saveAndFlush(cart);
         outboxService.publish(AGGREGATE_TYPE, savedCart.getId().toString(), EVENT_CART_UPDATED,
-            itemPayload(userId, savedCart, item));
+            itemPayload(userId, savedCart, item, "updatedAt"));
         return savedCart;
     }
 
@@ -144,7 +146,7 @@ public class JpaCartStore implements CartStore {
         cart.setExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
         Cart savedCart = cartRepository.save(cart);
         outboxService.publish(AGGREGATE_TYPE, savedCart.getId().toString(), EVENT_ITEM_REMOVED,
-            itemPayload(userId, savedCart, item));
+            itemPayload(userId, savedCart, item, "removedAt"));
         return savedCart;
     }
 
@@ -152,8 +154,12 @@ public class JpaCartStore implements CartStore {
     @Transactional
     public void clearCart(UUID userId) {
         cartRepository.findByUserIdForUpdate(userId).ifPresent(cart -> {
-            outboxService.publish(AGGREGATE_TYPE, cart.getId().toString(), EVENT_CART_CLEARED,
-                Map.of("userId", userId, "cartId", cart.getId(), "itemCount", cart.getItems().size()));
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("userId", userId);
+            payload.put("cartId", cart.getId());
+            payload.put("itemCount", cart.getItems().size());
+            payload.put("clearedAt", Instant.now().toString());
+            outboxService.publish(AGGREGATE_TYPE, cart.getId().toString(), EVENT_CART_CLEARED, payload);
             cartRepository.delete(cart);
         });
     }
@@ -252,7 +258,7 @@ public class JpaCartStore implements CartStore {
 
         cartRepository.delete(guestCart);
 
-        outboxService.publish(AGGREGATE_TYPE, savedTargetCart.getId().toString(), "CART_MERGED",
+        outboxService.publish(AGGREGATE_TYPE, savedTargetCart.getId().toString(), EVENT_CART_MERGED,
             Map.of("targetUserId", targetUserId.toString(), "guestUserId", sourceGuestUserId.toString()));
 
         return savedTargetCart;
@@ -306,14 +312,15 @@ public class JpaCartStore implements CartStore {
         }
     }
 
-    private Map<String, Object> itemPayload(UUID userId, Cart cart, CartItem item) {
-        return Map.of(
-            "userId", userId,
-            "cartId", cart.getId(),
-            "productId", item.getProductId(),
-            "quantity", item.getQuantity(),
-            "unitPriceCents", item.getUnitPriceCents(),
-            "productName", item.getProductName()
-        );
+    private Map<String, Object> itemPayload(UUID userId, Cart cart, CartItem item, String timestampField) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("userId", userId);
+        payload.put("cartId", cart.getId());
+        payload.put("productId", item.getProductId());
+        payload.put("quantity", item.getQuantity());
+        payload.put("unitPriceCents", item.getUnitPriceCents());
+        payload.put("productName", item.getProductName());
+        payload.put(timestampField, Instant.now().toString());
+        return payload;
     }
 }

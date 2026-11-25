@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -98,6 +98,7 @@ class AgentState(BaseModel):
     # -- Tool execution ------------------------------------------------------
     execute_tools: bool = True
     tool_results: List[ToolResult] = Field(default_factory=list)
+    planned_tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
     tool_calls_remaining: int = 10
 
     # -- Budget tracking -----------------------------------------------------
@@ -110,6 +111,7 @@ class AgentState(BaseModel):
 
     # -- Output --------------------------------------------------------------
     response: str = ""
+    generation_mode: Literal["fallback", "llm"] = "fallback"
     response_citations: List[str] = Field(default_factory=list)
     needs_escalation: bool = False
     escalation_reason: Optional[str] = None

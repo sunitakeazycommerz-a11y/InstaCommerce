@@ -123,4 +123,32 @@ class RuleEvaluationServiceTest {
         assertThat(evaluationService.evaluateRule(rule, nearby)).isFalse();
         assertThat(evaluationService.evaluateRule(rule, farAway)).isTrue();
     }
+
+    @Test
+    @DisplayName("evaluateRule AMOUNT handles missing/null newUsersOnly without NPE")
+    void evaluateRule_amount_missingNewUsersOnlyDoesNotThrow() {
+        FraudRule rule = new FraudRule();
+        rule.setRuleType("AMOUNT");
+        rule.setConditionJson(Map.of("maxAmountCents", 5000L));
+
+        FraudCheckRequest request = new FraudCheckRequest(
+                UUID.randomUUID(), UUID.randomUUID(), 9000L, "dev-1", "10.0.0.1",
+                12.97, 77.59, 2, "CARD", false);
+
+        assertThat(evaluationService.evaluateRule(rule, request)).isTrue();
+    }
+
+    @Test
+    @DisplayName("evaluateRule RAPID_RETRY returns false when userId is null")
+    void evaluateRule_rapidRetry_nullUserIdReturnsFalse() {
+        FraudRule rule = new FraudRule();
+        rule.setRuleType("RAPID_RETRY");
+        rule.setConditionJson(Map.of("threshold", 2));
+
+        FraudCheckRequest request = new FraudCheckRequest(
+                null, UUID.randomUUID(), 1000L, "dev-1", "10.0.0.1",
+                12.97, 77.59, 1, "CARD", false);
+
+        assertThat(evaluationService.evaluateRule(rule, request)).isFalse();
+    }
 }

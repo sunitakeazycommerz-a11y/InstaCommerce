@@ -796,6 +796,7 @@ services:
     env:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8091"
+      SPRING_DATASOURCE_URL: jdbc:postgresql:///checkout_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
       TEMPORAL_SERVICE_ADDRESS: temporal:7233
       CART_SERVICE_URL: "http://cart-service:8090"
       PRICING_SERVICE_URL: "http://pricing-service:8089"
@@ -891,7 +892,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/order_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: order-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "orders.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -910,7 +914,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/payment_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: payment-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "payments.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -929,7 +936,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/cart_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: cart-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "cart.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -948,7 +958,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/fulfillment_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: fulfillment-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "fulfillment.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -967,7 +980,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/inventory_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: inventory-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "inventory.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -986,7 +1002,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/identity_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: identity-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "identity.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -1005,7 +1024,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/catalog_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: catalog-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "catalog.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -1024,7 +1046,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/rider_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: rider-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "rider.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -1043,7 +1068,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/warehouse_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: warehouse-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "warehouse.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -1062,7 +1090,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/pricing_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: pricing-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "pricing.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -1081,7 +1112,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/wallet_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: wallet-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "wallet.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -1100,7 +1134,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/fraud_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: fraud-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "fraud.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -1119,7 +1156,10 @@ services:
     env:
       PORT: "8103"
       SERVER_PORT: "8103"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/routing_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: outbox-relay-db-secrets
+          key: routing-db-url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       OUTBOX_TOPIC: "delivery.events"
       OUTBOX_POLL_INTERVAL: "500ms"
@@ -1207,7 +1247,7 @@ services:
       HTTP_PORT: "8108"
       SERVER_PORT: "8108"
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
-      REDIS_ADDR: "redis-cluster.default.svc.cluster.local:6379"
+      REDIS_ADDR: "instacommerce-redis-dev.redis.cache.goog:6379"
       HEALTH_PORT: "8108"
 
   reverse-etl-orchestrator:
@@ -1224,7 +1264,10 @@ services:
       API_ADDR: ":8109"
       HEALTH_ADDR: ":8110"
       METRICS_ADDR: ":9090"
-      DATABASE_URL: "postgres://postgres:postgres@cloudsql-proxy.default.svc.cluster.local:5432/reverse_etl_db?sslmode=disable"
+      DATABASE_URL:
+        secretKeyRef:
+          name: reverse-etl-db-credentials
+          key: url
       KAFKA_BROKERS: "kafka.default.svc.cluster.local:9092"
       REDIS_ADDR: ""
       WAREHOUSE_SOURCE_MODE: "mock"
@@ -1351,7 +1394,7 @@ services:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8098"
       SPRING_DATASOURCE_URL: jdbc:postgresql:///config_db?cloudSqlInstance=PROJECT:REGION:INSTANCE&socketFactory=com.google.cloud.sql.postgres.SocketFactory
-      REDIS_HOST: redis-cluster.default.svc.cluster.local
+      REDIS_HOST: instacommerce-redis-dev.redis.cache.goog
       REDIS_PORT: "6379"
       FEATURE_FLAG_REDIS_ENABLED: "true"
     hpa:
@@ -1391,9 +1434,12 @@ services:
     env:
       SPRING_PROFILES_ACTIVE: gcp
       SERVER_PORT: "8099"
+      JWT_PUBLIC_KEY: ${sm://jwt-rsa-public-key}
+      ADMIN_GATEWAY_JWT_PUBLIC_KEY: ${sm://jwt-rsa-public-key}
       FEATURE_FLAG_SERVICE_URL: "http://config-feature-flag-service:8098"
       RECONCILIATION_ENGINE_URL: "http://reconciliation-engine:8107"
       AUDIT_TRAIL_SERVICE_URL: "http://audit-trail-service:8096"
+      AUDIT_TRAIL_BASE_URL: "http://audit-trail-service:8096"
       ORDER_SERVICE_URL: "http://order-service:8084"
       PAYMENT_SERVICE_URL: "http://payment-service:8085"
       FULFILLMENT_SERVICE_URL: "http://fulfillment-service:8086"

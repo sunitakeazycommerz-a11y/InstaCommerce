@@ -1,0 +1,48 @@
+flowchart LR
+    subgraph Ingress["External PSP Ingress & Probes (No InternalAuthMiddleware)"]
+        STRIPE["Stripe<br/>POST /payments/webhook<br/>POST /webhooks/stripe"]
+        RZP["Razorpay<br/>POST /webhooks/razorpay"]
+        PPE["PhonePe<br/>POST /webhooks/phonepe"]
+        OPS["K8s / Prometheus<br/>GET /health, /health/ready, /ready<br/>GET /health/live, /metrics"]
+    end
+
+    subgraph HTTP["payment-webhook-service :8106 (main.go)"]
+        direction TB
+        MW["otelhttp.NewHandler<br/>-> correlation.Middleware<br/>-> http.ServeMux"]
+        WH["handler.WebhookHandler<br/>maxBodyBytes=1MiB<br/>publishTimeout=5s<br/>replayTolerance=300s"]
+        subgraph Verifiers["buildVerifiers(cfg) SignatureVerifier Map"]
+            VS["StripeVerifier<br/>WEBHOOK_SECRETS CSV"]
+            VR["RazorpayVerifier<br/>RAZORPAY_WEBHOOK_SECRETS CSV"]
+            VP["PhonePeVerifier<br/>PHONEPE_SALT_KEYS key:idx"]
+            VU["UnconfiguredVerifier<br/>fails closed -> HTTP 503"]
+        end
+        PARSE["ParseEventWithHeaderID<br/>WebhookEvent schema_version=2<br/>+ raw_psp_payload verbatim"]
+        DEDUP["DedupeStore Interface<br/>Check / CheckAndMark / Remove"]
+        PROD["KafkaProducer Interface<br/>KafkaWriterProducer (Async: false)<br/>vs UnconfiguredKafkaProducer"]
+        HH["health.Handler + Metrics<br/>payment_webhook_* Prometheus"]
+        MW --> WH
+        MW --> HH
+        WH --> Verifiers
+        WH --> PARSE
+        WH --> DEDUP
+        WH --> PROD
+    end
+
+    subgraph State["Dedup Backends (Zero PostgreSQL)"]
+        REDIS[("Redis<br/>SETNX payment-webhook:event:{id} EX 24h<br/>50ms timeout")]
+        MEM["InMemoryIdempotencyStore<br/>Fallback if REDIS_ADDR empty<br/>or boot Ping fails (cap 10000)"]
+    end
+
+    subgraph Downstream["Kafka & Downstream Payment Seam"]
+        KAFKA[("Kafka: payment.webhooks<br/>key=payment_id||id, RequireOne<br/>hdrs: event_id, event_type, traceparent")]
+        BRIDGE["payment-service<br/>PaymentWebhookEventConsumer<br/>(DEFAULT DISABLED: false)<br/>WebhookKafkaBridge: stripe only!"]
+    end
+
+    STRIPE --> MW
+    RZP --> MW
+    PPE --> MW
+    OPS --> MW
+    DEDUP -->|"REDIS_ADDR ok"| REDIS
+    DEDUP -->|"empty or boot Ping err"| MEM
+    PROD -->|"sync WriteMessages"| KAFKA
+    KAFKA -.->|"disabled by default;<br/>drops razorpay & phonepe"| BRIDGE

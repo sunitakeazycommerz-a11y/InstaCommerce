@@ -32,6 +32,7 @@ import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
 import com.instacommerce.checkout.workflow.activity.PricingActivity;
+import com.instacommerce.checkout.workflow.activity.PromotionActivity;
 import io.temporal.client.WorkflowOptions;
 import io.temporal.testing.TestWorkflowEnvironment;
 import io.temporal.worker.Worker;
@@ -64,6 +65,7 @@ class CheckoutSagaCompensationIntegrationTest {
     private PaymentActivity paymentActivity;
     private OrderActivity orderActivity;
     private CouponActivity couponActivity;
+    private PromotionActivity promotionActivity;
     private CompensationDlqActivity dlqActivity;
 
     @BeforeEach
@@ -76,6 +78,7 @@ class CheckoutSagaCompensationIntegrationTest {
         paymentActivity = mock(PaymentActivity.class);
         orderActivity = mock(OrderActivity.class);
         couponActivity = mock(CouponActivity.class);
+        promotionActivity = mock(PromotionActivity.class);
         dlqActivity = mock(CompensationDlqActivity.class);
 
         Worker worker = testEnv.newWorker(TASK_QUEUE);
@@ -87,6 +90,7 @@ class CheckoutSagaCompensationIntegrationTest {
             new TestPaymentActivity(paymentActivity),
             new TestOrderActivity(orderActivity),
             new TestCouponActivity(couponActivity),
+            new TestPromotionActivity(promotionActivity),
             new TestCompensationDlqActivity(dlqActivity)
         );
 
@@ -141,10 +145,11 @@ class CheckoutSagaCompensationIntegrationTest {
         assertThat(response.totalCents()).isEqualTo(15000L);
         assertThat(response.estimatedDeliveryMinutes()).isEqualTo(15);
 
-        // Verify confirmStock, capturePayment, and confirmOrder called
-        verify(inventoryActivity).confirmStock(RESERVATION_ID);
-        verify(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
-        verify(orderActivity).confirmOrder(ORDER_ID, workflowId + ":order:confirm");
+        // Verify capturePayment executes before confirmStock, followed by confirmOrder
+        InOrder confirmOrder = inOrder(paymentActivity, inventoryActivity, orderActivity);
+        confirmOrder.verify(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
+        confirmOrder.verify(inventoryActivity).confirmStock(RESERVATION_ID);
+        confirmOrder.verify(orderActivity).confirmOrder(ORDER_ID, workflowId + ":order:confirm");
         verify(cartActivity).clearCart(USER_ID);
 
         // Verify no compensations were executed
@@ -342,6 +347,17 @@ class CheckoutSagaCompensationIntegrationTest {
         TestCompensationDlqActivity(CompensationDlqActivity mock) { this.mock = mock; }
         @Override public void recordFailedCompensation(String workflowId, String step, String referenceId, String reason, String payload) {
             mock.recordFailedCompensation(workflowId, step, referenceId, reason, payload);
+        }
+    }
+
+    static class TestPromotionActivity implements PromotionActivity {
+        private final PromotionActivity mock;
+        TestPromotionActivity(PromotionActivity mock) { this.mock = mock; }
+        @Override public void redeemPromotion(String promotionId, String userId, String orderId, long discountCents) {
+            mock.redeemPromotion(promotionId, userId, orderId, discountCents);
+        }
+        @Override public void rollbackPromotion(String promotionId, String userId, String orderId) {
+            mock.rollbackPromotion(promotionId, userId, orderId);
         }
     }
 }

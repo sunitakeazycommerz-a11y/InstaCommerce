@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/instacommerce/go-shared/pkg/health"
+	"go.opentelemetry.io/otel"
 )
 
 func TestResolveKafkaTopic(t *testing.T) {
@@ -374,12 +376,33 @@ func TestPerEventRetryTrackingAndHTTPMux(t *testing.T) {
 
 	mux := newHTTPMux(svc, health.NewHandler())
 
+	// /metrics exposes outbox_relay_* counters/histogram after recording
+	m, mErr := newRelayMetrics(otel.Meter("test"))
+	if mErr != nil {
+		t.Fatalf("newRelayMetrics failed: %v", mErr)
+	}
+	m.addRelayed(context.Background(), 2)
+	m.addFailures(context.Background(), 1)
+	m.addDLQ(context.Background(), 1)
+	m.recordLag(context.Background(), 0.25)
+
 	// /metrics
 	reqMetrics := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	recMetrics := httptest.NewRecorder()
 	mux.ServeHTTP(recMetrics, reqMetrics)
 	if recMetrics.Code != http.StatusOK {
 		t.Fatalf("expected 200 on /metrics, got %d", recMetrics.Code)
+	}
+	metricsBody := recMetrics.Body.String()
+	for _, metricName := range []string{
+		"outbox_relay_events_total",
+		"outbox_relay_failures_total",
+		"outbox_relay_dlq_total",
+		"outbox_relay_lag_seconds",
+	} {
+		if !strings.Contains(metricsBody, metricName) {
+			t.Fatalf("expected /metrics to expose %s, body=%s", metricName, metricsBody)
+		}
 	}
 
 	// /health/ready when healthy

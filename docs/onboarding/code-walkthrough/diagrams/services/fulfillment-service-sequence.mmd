@@ -1,0 +1,39 @@
+sequenceDiagram
+    autonumber
+    participant Kafka as Kafka (orders / rider)
+    participant Picker as Picker / Rider App
+    participant Svc as PickService /<br/>DeliveryService
+    participant Sub as SubstitutionService
+    participant PG as PostgreSQL<br/>(fulfillment DB)
+    participant WH as WarehouseClient<br/>(Caffeine cache)
+    participant Bus as Spring Events<br/>(AFTER_COMMIT)
+
+    Note over Kafka,Bus: 1. Order Intake → Item Scan → Substitution & Auto-Pack
+    Kafka->>Svc: OrderEventConsumer(OrderPlaced) → createPickTask
+    Svc->>PG: INSERT pick_tasks (PENDING) + S-curve pick_items (uq_pick_order)
+
+    Picker->>Svc: POST /fulfillment/picklist/{orderId}/items/{productId} (SUBSTITUTED/PICKED)
+    Svc->>PG: SELECT pick_tasks WHERE order_id = :id FOR UPDATE
+    Svc->>Svc: PickTaskSupport.recordAndCheckDebounce(1000ms)
+    opt Missing or Substituted delta > 0
+        Svc->>Sub: handleMissingItem(task, item, missingDelta, subDelta) [same TX]
+        Sub->>PG: INSERT outbox_events (ItemSubstituted / OrderModified)
+        Sub->>Bus: publish ItemSubstitutedEvent / MissingItemEvent
+    end
+    opt PENDING count == 0 and picked+substituted > 0
+        Svc->>WH: getStoreCoordinates(storeId) [Caffeine → GET /stores/{id}]
+        Svc->>PG: UPDATE pick_tasks COMPLETED + INSERT outbox OrderPacked
+        Svc->>Bus: publish OrderStatusUpdateEvent("PACKED")
+    end
+    PG-->>Picker: TX commit → PickItemResponse
+    Bus->>Sub: AFTER_COMMIT: RestInventoryClient /inventory/adjust (release + reserve)
+    Bus->>WH: AFTER_COMMIT: RestOrderClient POST /admin/orders/{id}/status (if flag ON)
+
+    Note over Kafka,Bus: 2. Rider Projection, Cryptographic Handoff & Delivery
+    Kafka->>Svc: RiderEventConsumer(RiderAssigned) → syncRiderAssignment
+    Svc->>PG: insertProjectionIfAbsent(riders) + INSERT deliveries(ASSIGNED, 6-digit OTP)
+    Picker->>Svc: POST /fulfillment/orders/{orderId}/handoff {riderId, dispatchOtp}
+    Svc->>PG: UPDATE deliveries PICKED_UP + INSERT outbox RiderHandoffCompleted
+    Picker->>Svc: POST /fulfillment/orders/{orderId}/proof-of-delivery (WEBP, ≤200KB, masked)
+    Picker->>Svc: POST /fulfillment/orders/{orderId}/delivered
+    Svc->>PG: UPDATE deliveries DELIVERED + rider.available=true + outbox OrderDelivered

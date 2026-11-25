@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/subscription"
@@ -24,15 +26,41 @@ type SubscriptionManager interface {
 	Archive(ctx context.Context, id string) error
 }
 
+// SyncRunner executes reverse ETL sync workloads via WorkerPool.
+type SyncRunner interface {
+	SyncUserFeatures(ctx context.Context, jobID, subscriptionID string, records []subscription.UserFeatureRecord) (subscription.SyncResult, error)
+	SyncCustomerFraudScores(ctx context.Context, jobID, subscriptionID string, scores []subscription.CustomerFraudScoreRecord) (subscription.SyncResult, error)
+	SyncDarkStoreInventoryParallel(ctx context.Context, jobID, subscriptionID string, storeIDs []string, fetchStoreInventory func(ctx context.Context, storeID string) ([]subscription.InventoryRecord, error)) (subscription.SyncResult, error)
+}
+
+// SyncRequest specifies an optional sync trigger payload for POST /api/v1/subscriptions/{id}/sync.
+type SyncRequest struct {
+	JobID            string                                    `json:"job_id,omitempty"`
+	SyncType         string                                    `json:"sync_type,omitempty"`
+	UserFeatures     []subscription.UserFeatureRecord          `json:"user_features,omitempty"`
+	FraudRiskScores  []subscription.CustomerFraudScoreRecord   `json:"fraud_risk_scores,omitempty"`
+	StoreIDs         []string                                  `json:"store_ids,omitempty"`
+	InventoryByStore map[string][]subscription.InventoryRecord `json:"inventory_by_store,omitempty"`
+}
+
 // Handler provides HTTP handlers for the API.
 type Handler struct {
 	subscriptionSvc SubscriptionManager
+	syncRunner      SyncRunner
 }
 
 // NewHandler creates a new API handler.
 func NewHandler(subscriptionSvc SubscriptionManager) *Handler {
 	return &Handler{
 		subscriptionSvc: subscriptionSvc,
+	}
+}
+
+// NewHandlerWithSync creates a Handler wired to a SyncRunner (such as WorkerPool).
+func NewHandlerWithSync(subscriptionSvc SubscriptionManager, syncRunner SyncRunner) *Handler {
+	return &Handler{
+		subscriptionSvc: subscriptionSvc,
+		syncRunner:      syncRunner,
 	}
 }
 
@@ -45,6 +73,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/subscriptions/{id}", h.DeleteSubscription).Methods("DELETE")
 	r.HandleFunc("/subscriptions/{id}/activate", h.ActivateSubscription).Methods("POST")
 	r.HandleFunc("/subscriptions/{id}/pause", h.PauseSubscription).Methods("POST")
+	r.HandleFunc("/subscriptions/{id}/sync", h.TriggerSync).Methods("POST")
 
 	// Health check at API level
 	r.HandleFunc("/health", h.Health).Methods("GET")
@@ -221,4 +250,116 @@ func (h *Handler) PauseSubscription(w http.ResponseWriter, r *http.Request) {
 		"status":  "paused",
 		"message": "Subscription paused successfully",
 	})
+}
+
+// TriggerSync handles POST /api/v1/subscriptions/{id}/sync by dispatching work to SyncRunner.
+func (h *Handler) TriggerSync(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	sub, err := h.subscriptionSvc.Get(r.Context(), id)
+	if err != nil {
+		if isNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
+			return
+		}
+		slog.Error("failed to load subscription for sync", "error", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to load subscription")
+		return
+	}
+	if sub == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Subscription not found")
+		return
+	}
+	if sub.State != subscription.StateActive {
+		writeError(w, http.StatusConflict, "subscription_not_active", "Subscription must be ACTIVE to trigger sync")
+		return
+	}
+	if h.syncRunner == nil {
+		writeError(w, http.StatusServiceUnavailable, "sync_unavailable", "Sync worker pool is not configured")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	defer r.Body.Close()
+
+	var req SyncRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON sync payload")
+		return
+	}
+
+	jobID := strings.TrimSpace(req.JobID)
+	if jobID == "" {
+		jobID = uuid.New().String()
+	}
+
+	syncType := resolveSyncType(req.SyncType, sub)
+	var result subscription.SyncResult
+	var syncErr error
+
+	switch syncType {
+	case "user_features":
+		result, syncErr = h.syncRunner.SyncUserFeatures(r.Context(), jobID, id, req.UserFeatures)
+	case "fraud_risk_scores":
+		result, syncErr = h.syncRunner.SyncCustomerFraudScores(r.Context(), jobID, id, req.FraudRiskScores)
+	case "dark_store_inventory":
+		storeIDs := req.StoreIDs
+		if len(storeIDs) == 0 && len(req.InventoryByStore) > 0 {
+			storeIDs = make([]string, 0, len(req.InventoryByStore))
+			for storeID := range req.InventoryByStore {
+				storeIDs = append(storeIDs, storeID)
+			}
+		}
+		result, syncErr = h.syncRunner.SyncDarkStoreInventoryParallel(r.Context(), jobID, id, storeIDs, func(_ context.Context, storeID string) ([]subscription.InventoryRecord, error) {
+			return req.InventoryByStore[storeID], nil
+		})
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported_sync_type", "Unsupported sync_type: "+syncType)
+		return
+	}
+
+	if syncErr != nil {
+		slog.Error("reverse ETL sync failed", "subscription_id", id, "job_id", jobID, "sync_type", syncType, "error", syncErr)
+		statusCode := http.StatusInternalServerError
+		if strings.Contains(syncErr.Error(), "not configured") {
+			statusCode = http.StatusServiceUnavailable
+		}
+		writeJSON(w, statusCode, map[string]any{
+			"error":           "sync_failed",
+			"message":         syncErr.Error(),
+			"job_id":          jobID,
+			"subscription_id": id,
+			"sync_type":       syncType,
+			"status":          result.Status,
+			"rows_processed":  result.RowsProcessed,
+			"duration_ms":     result.Duration.Milliseconds(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"job_id":          result.JobID,
+		"subscription_id": id,
+		"sync_type":       result.SyncType,
+		"rows_processed":  result.RowsProcessed,
+		"stores_synced":   result.StoresSynced,
+		"status":          result.Status,
+		"duration_ms":     result.Duration.Milliseconds(),
+	})
+}
+
+func resolveSyncType(explicit string, sub *subscription.Subscription) string {
+	candidate := strings.ToLower(strings.TrimSpace(explicit))
+	if candidate == "" && sub != nil {
+		candidate = strings.ToLower(strings.TrimSpace(sub.SourceDomain))
+	}
+	switch candidate {
+	case "user_features", "features", "customer_features", "clv":
+		return "user_features"
+	case "fraud", "fraud_risk_scores", "fraud_scores":
+		return "fraud_risk_scores"
+	case "inventory", "dark_store_inventory", "store_inventory":
+		return "dark_store_inventory"
+	default:
+		return candidate
+	}
 }

@@ -1,0 +1,61 @@
+flowchart LR
+    subgraph SecurityChain["Servlet Security Chain (:8082)"]
+        Internal["InternalServiceAuthFilter<br/>(custom, ROLE_INTERNAL_SERVICE only)"]
+        JwtFilt["JwtAuthenticationFilter<br/>Static RSA key, preserves ROLE_INTERNAL_SERVICE"]
+        SecCfg["SecurityConfig<br/>permitAll GET: /products/**, /categories/**, /search/**<br/>authenticated: /pricing/compute, /admin/**"]
+        Internal --> JwtFilt --> SecCfg
+    end
+
+    subgraph Controllers["Active & Legacy Controllers"]
+        ProdCtrl["ProductController<br/>/products & /api/v1/products (+ storeId)<br/>productLimiter (100/60s per IP)"]
+        CatCtrl["CategoryController<br/>/categories, /subtree, /{id}/products"]
+        AdmProd["AdminProductController (@PreAuthorize ADMIN)"]
+        AdmCat["AdminCategoryController (@PreAuthorize ADMIN)"]
+        LegSearch["SearchController (Legacy, searchLimiter)"]
+        LegPrice["PricingController (Legacy /pricing/compute)"]
+        SecCfg --> ProdCtrl
+        SecCfg --> CatCtrl
+        SecCfg --> AdmProd
+        SecCfg --> AdmCat
+        SecCfg --> LegSearch
+        SecCfg --> LegPrice
+    end
+
+    subgraph ServicesAndCache["Domain Services, Rate Limit & Two-Level Cache"]
+        ProdSvc["ProductService<br/>@Cacheable('products', key=#id)<br/>@CacheEvict + Outbox + AuditLog"]
+        CatSvc["CategoryService<br/>MAX_CATEGORY_DEPTH=5, BFS paths<br/>(NO outbox events on category writes!)"]
+        OutboxSvc["OutboxService (MANDATORY)"]
+        AuditSvc["AuditLogService"]
+        RateSvc["RateLimitService<br/>Caffeine 10k -> Resilience4j"]
+        CacheMgr["TwoLevelCacheManager (CacheConfig)<br/>L1 Caffeine (10-30s) + L2 Redis (1-10m)<br/>Pub/Sub: catalog:cache:invalidate"]
+        ProdCtrl --> RateSvc
+        ProdCtrl --> ProdSvc
+        CatCtrl --> CatSvc
+        AdmProd --> ProdSvc
+        AdmCat --> CatSvc
+        ProdSvc --> OutboxSvc
+        ProdSvc --> AuditSvc
+        ProdSvc --> CacheMgr
+        CatSvc --> CacheMgr
+    end
+
+    subgraph AsyncAndData["Outbox Relay, Kafka Consumer & Storage"]
+        OutboxJob["OutboxPublishJob (1000ms, ShedLock)<br/>KafkaOutboxEventPublisher (5s .get())"]
+        Cleanup["OutboxCleanupJob & AuditLogCleanupJob (ShedLock)"]
+        InvalidCons["CatalogCacheInvalidationConsumer<br/>catalog.events, pricing.events, inventory.events<br/>(3x 1s retry -> {topic}.DLT)"]
+        PG["PostgreSQL catalog / catalog_db (V1-V15)<br/>categories, products (TSVECTOR trigger), product_images,<br/>outbox_events, audit_log, shedlock, pricing_rules, coupons"]
+        Redis["Redis (L2 catalog:* & Pub/Sub)"]
+        Kafka["Kafka Topics<br/>Publishes: catalog.events<br/>Consumes: catalog/pricing/inventory.events"]
+        ExtRelay["outbox-relay-catalog (:8103, SKIP LOCKED)<br/>DUPLICATE RELAY RISK vs OutboxPublishJob!"]
+    end
+
+    ProdSvc --> PG
+    CatSvc --> PG
+    OutboxSvc --> PG
+    AuditSvc --> PG
+    OutboxJob --> PG
+    Cleanup --> PG
+    OutboxJob --> Kafka
+    Kafka --> InvalidCons --> CacheMgr
+    CacheMgr --> Redis
+    PG -. "polls outbox_events" .-> ExtRelay

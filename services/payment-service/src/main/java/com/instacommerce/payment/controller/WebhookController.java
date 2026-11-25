@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/payments/webhook")
+@RequestMapping({"/payments/webhook", "/api/payments/webhook", "/api/v1/payments/webhook"})
 public class WebhookController {
     private static final Logger log = LoggerFactory.getLogger(WebhookController.class);
     private final WebhookSignatureVerifier signatureVerifier;

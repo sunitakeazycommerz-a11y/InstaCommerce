@@ -164,7 +164,8 @@ docker --version
 ### Step 1: Initialize Terraform
 
 ```bash
-cd /Users/omkarkumar/InstaCommerce/infra/terraform/phases/phase-2
+# Run from repository root
+cd infra/terraform/phases/phase-2
 
 # Initialize Terraform (download providers)
 terraform init
@@ -293,7 +294,8 @@ kubectl get pods -n kube-system
 ### Step 1: Create Namespace and RBAC
 
 ```bash
-cd /Users/omkarkumar/InstaCommerce/infra/kubernetes/phases/phase-2
+# Run from repository root
+cd infra/kubernetes/phases/phase-2
 
 # Apply namespace, RBAC, and resource quotas
 kubectl apply -f 01-namespace-sf-canary.yaml
@@ -648,8 +650,8 @@ kubectl delete -f 02-dark-store-deployment-sf.yaml
 kubectl delete -f 05-storage-pvc-sf.yaml
 kubectl delete -f 01-namespace-sf-canary.yaml
 
-# Delete Terraform-managed infrastructure
-cd /Users/omkarkumar/InstaCommerce/infra/terraform/phases/phase-2
+# Delete Terraform-managed infrastructure (from repository root)
+cd infra/terraform/phases/phase-2
 terraform destroy -var-file=terraform.tfvars
 
 # Verify cleanup

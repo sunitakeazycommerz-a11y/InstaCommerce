@@ -3,10 +3,12 @@ package com.instacommerce.audit.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,6 +23,8 @@ import com.instacommerce.audit.repository.AuditArchiveManifestRepository;
 import com.instacommerce.audit.repository.AuditEventRepository;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -31,11 +35,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class ArchiveExportPipelineServiceTest {
 
     private static final String BUCKET = "instacommerce-audit-archive-dev";
+    private static final String TEST_KMS_KEY =
+            "projects/instacommerce-dev/locations/global/keyRings/audit/cryptoKeys/archive";
     private static final Instant START = Instant.parse("2025-02-01T00:00:00Z");
     private static final Instant END = Instant.parse("2025-03-01T00:00:00Z");
 
@@ -60,18 +68,20 @@ class ArchiveExportPipelineServiceTest {
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         service = new ArchiveExportPipelineService(
                 auditEventRepository, manifestRepository, storage, objectMapper, 0L);
+        ReflectionTestUtils.setField(service, "kmsKeyId", TEST_KMS_KEY);
     }
 
     @Test
     void exportPartition_nonEmptyEvents_uploadsArchiveAndVerifiesManifest() throws Exception {
         AuditEvent e1 = sampleEvent(1L, "ORDER_CREATED", START.plusSeconds(60));
         AuditEvent e2 = sampleEvent(2L, "PAYMENT_CAPTURED", START.plusSeconds(120));
-        when(auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(START, END))
+        when(auditEventRepository.findForArchiveWindow(eq(START), eq(END), any(Pageable.class)))
                 .thenReturn(List.of(e1, e2));
         byte[][] capturedContent = new byte[1][];
-        when(storage.create(any(BlobInfo.class), any(byte[].class), any(Storage.BlobTargetOption[].class)))
+        when(storage.createFrom(any(BlobInfo.class), any(Path.class), any(Storage.BlobWriteOption[].class)))
                 .thenAnswer(inv -> {
-                    byte[] bytes = inv.getArgument(1);
+                    Path tempPath = inv.getArgument(1);
+                    byte[] bytes = Files.readAllBytes(tempPath);
                     capturedContent[0] = bytes;
                     when(uploadedBlob.getSize()).thenReturn((long) bytes.length);
                     when(uploadedBlob.getContent()).thenReturn(bytes);
@@ -98,12 +108,11 @@ class ArchiveExportPipelineServiceTest {
                 .isEqualTo("gs://" + BUCKET + "/audit/partitions/2025/02/audit_events_2025_02.ndjson.gz");
 
         ArgumentCaptor<BlobInfo> blobInfoCaptor = ArgumentCaptor.forClass(BlobInfo.class);
-        ArgumentCaptor<byte[]> contentCaptor = ArgumentCaptor.forClass(byte[].class);
-        verify(storage).create(blobInfoCaptor.capture(), contentCaptor.capture(), any(Storage.BlobTargetOption[].class));
+        verify(storage).createFrom(blobInfoCaptor.capture(), any(Path.class), any(Storage.BlobWriteOption[].class));
         assertThat(blobInfoCaptor.getValue().getBlobId()).isEqualTo(expectedBlobId);
 
         String decompressed;
-        try (GZIPInputStream gzip = new GZIPInputStream(new ByteArrayInputStream(contentCaptor.getValue()))) {
+        try (GZIPInputStream gzip = new GZIPInputStream(new ByteArrayInputStream(capturedContent[0]))) {
             decompressed = new String(gzip.readAllBytes(), StandardCharsets.UTF_8);
         }
         assertThat(decompressed.lines().toList()).hasSize(2);
@@ -113,8 +122,8 @@ class ArchiveExportPipelineServiceTest {
     }
 
     @Test
-    void exportPartition_emptyPartition_savesZeroRowVerifiedManifestWithoutUpload() {
-        when(auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(START, END))
+    void exportPartition_emptyPartition_savesZeroRowVerifiedManifestWithoutUpload() throws Exception {
+        when(auditEventRepository.findForArchiveWindow(eq(START), eq(END), any(Pageable.class)))
                 .thenReturn(List.of());
         when(manifestRepository.save(any(AuditArchiveManifest.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -125,32 +134,47 @@ class ArchiveExportPipelineServiceTest {
         assertThat(manifest.getRowCount()).isZero();
         assertThat(manifest.getCompressedSizeBytes()).isZero();
         assertThat(manifest.getCreationMethod()).isEqualTo("PARTITION_MAINTENANCE");
-        verify(storage, never()).create(any(BlobInfo.class), any(byte[].class), any(Storage.BlobTargetOption[].class));
+        verify(storage, never()).createFrom(any(BlobInfo.class), any(Path.class), any(Storage.BlobWriteOption[].class));
     }
 
     @Test
-    void exportPartition_uploadFails_throwsAndDoesNotVerify() {
+    void exportPartition_uploadFails_throwsAndDoesNotVerify() throws Exception {
         AuditEvent e1 = sampleEvent(1L, "ORDER_CREATED", START.plusSeconds(60));
-        when(auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(START, END))
+        when(auditEventRepository.findForArchiveWindow(eq(START), eq(END), any(Pageable.class)))
                 .thenReturn(List.of(e1));
-        when(storage.create(any(BlobInfo.class), any(byte[].class), any(Storage.BlobTargetOption[].class)))
+        when(storage.createFrom(any(BlobInfo.class), any(Path.class), any(Storage.BlobWriteOption[].class)))
                 .thenThrow(new RuntimeException("GCS outage"));
 
         assertThatThrownBy(() -> service.exportPartition("audit_events_2025_02", START, END))
                 .isInstanceOf(RuntimeException.class);
 
         verify(storage, times(3))
-                .create(any(BlobInfo.class), any(byte[].class), any(Storage.BlobTargetOption[].class));
+                .createFrom(any(BlobInfo.class), any(Path.class), any(Storage.BlobWriteOption[].class));
         verify(manifestRepository, never()).save(any());
     }
 
     @Test
-    void exportPartition_verificationBlobMissing_marksManifestFailedAndThrows() {
+    void exportPartition_encryptionEnabledWithBlankKmsKey_failsClosed() {
+        ReflectionTestUtils.setField(service, "kmsKeyId", "   ");
         AuditEvent e1 = sampleEvent(1L, "ORDER_CREATED", START.plusSeconds(60));
-        when(auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(START, END))
+        when(auditEventRepository.findForArchiveWindow(eq(START), eq(END), any(Pageable.class)))
+                .thenReturn(List.of(e1));
+
+        assertThatThrownBy(() -> service.exportPartition("audit_events_2025_02", START, END))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("kms-key-id");
+
+        verifyNoInteractions(storage);
+        verify(manifestRepository, never()).save(any());
+    }
+
+    @Test
+    void exportPartition_verificationBlobMissing_marksManifestFailedAndThrows() throws Exception {
+        AuditEvent e1 = sampleEvent(1L, "ORDER_CREATED", START.plusSeconds(60));
+        when(auditEventRepository.findForArchiveWindow(eq(START), eq(END), any(Pageable.class)))
                 .thenReturn(List.of(e1));
         when(uploadedBlob.getSize()).thenReturn(128L);
-        when(storage.create(any(BlobInfo.class), any(byte[].class), any(Storage.BlobTargetOption[].class)))
+        when(storage.createFrom(any(BlobInfo.class), any(Path.class), any(Storage.BlobWriteOption[].class)))
                 .thenReturn(uploadedBlob);
         BlobId expectedBlobId = BlobId.of(BUCKET, "audit/partitions/2025/02/audit_events_2025_02.ndjson.gz");
         when(storage.get(expectedBlobId)).thenReturn(null);
@@ -167,13 +191,13 @@ class ArchiveExportPipelineServiceTest {
     }
 
     @Test
-    void exportPartition_verificationChecksumMismatch_marksManifestFailedAndThrows() {
+    void exportPartition_verificationChecksumMismatch_marksManifestFailedAndThrows() throws Exception {
         AuditEvent e1 = sampleEvent(1L, "ORDER_CREATED", START.plusSeconds(60));
-        when(auditEventRepository.findByCreatedAtBetweenOrderByCreatedAt(START, END))
+        when(auditEventRepository.findForArchiveWindow(eq(START), eq(END), any(Pageable.class)))
                 .thenReturn(List.of(e1));
         when(uploadedBlob.getSize()).thenReturn(128L);
         when(uploadedBlob.getContent()).thenReturn("corrupted-bytes".getBytes(StandardCharsets.UTF_8));
-        when(storage.create(any(BlobInfo.class), any(byte[].class), any(Storage.BlobTargetOption[].class)))
+        when(storage.createFrom(any(BlobInfo.class), any(Path.class), any(Storage.BlobWriteOption[].class)))
                 .thenReturn(uploadedBlob);
         BlobId expectedBlobId = BlobId.of(BUCKET, "audit/partitions/2025/02/audit_events_2025_02.ndjson.gz");
         when(storage.get(expectedBlobId)).thenReturn(uploadedBlob);

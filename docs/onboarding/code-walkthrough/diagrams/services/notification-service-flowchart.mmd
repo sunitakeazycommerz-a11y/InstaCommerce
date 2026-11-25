@@ -1,0 +1,28 @@
+flowchart TD
+    classDef start fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef step fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.5px,color:#0F172A
+
+    EV(["Kafka Event on 7 Topics"]):::start --> TREG{"TemplateRegistry.resolve<br/>(19 mapped types)"}:::dec
+    TREG -->|Unmapped| DROP(["Drop silently"]):::ok
+    TREG -->|Matched| CANON["resolveEventId:<br/>9 status events -&gt; status:{orderId}:{eventType}<br/>len &gt; 64 -&gt; SHA-256 hex<br/>resolve userId (+ OrderLookup if PaymentRefund*)"]:::step
+
+    CANON --> PREF["UserPreferenceService.getPreferences(userId)<br/>Caffeine 60s -&gt; identity-service (Retry 3x + CB)<br/>CB fallback: txnal ON, marketingOptOut=true"]:::step
+    PREF --> LOOP{"For each template channel:<br/>allowNotification?"}:::dec
+
+    LOOP -->|Opt-out or promo in<br/>22:00-07:00 quiet hours| SKIP_Q["persistSkipped (SKIPPED)<br/>Opted out / Suppressed during quiet hours"]:::ok
+    LOOP -->|Allowed| RCPT{"Resolve recipient<br/>(payload / UserDir / device_tokens)"}:::dec
+
+    RCPT -->|Missing| MISS["persistSkipped(Missing recipient)<br/>SMS -&gt; DLT; PUSH w/o SMS/EMAIL -&gt; tryFallback"]:::step
+    RCPT -->|Found| DEDUP{"DeduplicationService.createLog<br/>uq_notification_dedup (event_id, channel)"}:::dec
+
+    DEDUP -->|Duplicate constraint| DUP(["Return null (idempotent drop)"]):::ok
+    DEDUP -->|Inserted PENDING| ASYNC["@Async notificationExecutor (4/16/500)<br/>NotificationProviderSender.dispatch"]:::step
+
+    ASYNC --> PROV{"Provider Result?"}:::dec
+    PROV -->|Success| SENT["status = SENT, set providerRef"]:::ok
+    PROV -->|ProviderTemporaryException<br/>&amp; retryCount + 1 &lt; 3| RETRY["status = RETRY_PENDING<br/>backoff: 5s -&gt; 30s -&gt; 5m<br/>NotificationRetryJob (5s, SKIP LOCKED, 5m lease)"]:::step
+    PROV -->|ProviderPermanentException<br/>or retries &gt;= 3| FB["status = FAILED -&gt; ChannelFallbackService<br/>PUSH -&gt; SMS -&gt; EMAIL<br/>(NOTE: missing prod FCM creds forces SMS/EMAIL!)"]:::err
+    FB -->|All channels fail| DLQ["NotificationDlqPublisher<br/>-&gt; notification.events.DLT (masked)"]:::err

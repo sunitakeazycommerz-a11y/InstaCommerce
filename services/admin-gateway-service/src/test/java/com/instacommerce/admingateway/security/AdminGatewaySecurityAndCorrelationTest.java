@@ -113,5 +113,21 @@ class AdminGatewaySecurityAndCorrelationTest {
         assertThatThrownBy(() -> controller.overrideFlag("checkout.express", Map.of("ttlSeconds", 99_999_999L)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ttlSeconds must be between");
+
+        assertThatThrownBy(() -> new AdminDashboardController(
+                mock(RestTemplate.class),
+                mock(DashboardAggregationService.class),
+                "file:///etc/passwd",
+                "http://reconciliation-engine:8107"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("scheme must be http or https");
+
+        assertThatThrownBy(() -> new AdminDashboardController(
+                mock(RestTemplate.class),
+                mock(DashboardAggregationService.class),
+                "http://user:pass@feature-flag-service:8098",
+                "http://reconciliation-engine:8107"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not include userinfo");
     }
 }

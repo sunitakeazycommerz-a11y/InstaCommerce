@@ -1,0 +1,40 @@
+sequenceDiagram
+    autonumber
+    participant KIn as Kafka (payments.cdc)
+    participant CDC as CDCConsumer
+    participant Sched as DailyScheduler
+    participant PG as PostgreSQL (reconciliation)
+    participant Pub as EventPublisher<br/>(reconciliation.events)
+    participant Op as Operator API<br/>(HandleApplyFix)
+
+    Note over KIn,PG: Async CDC Ledger Ingestion
+    KIn->>CDC: FetchMessage(payments.cdc)
+    CDC->>PG: BeginTx -> DEL placeholder -> INSERT payment_ledger ON CONFLICT DO UPDATE (source_lsn >=)
+    alt Transient error
+        PG-->>CDC: error -> retry up to 3x (100ms..5s)
+    else Permanent or exhausted
+        CDC->>Pub: sendToDLT(reconciliation.events.DLT)
+    end
+    CDC->>KIn: CommitMessages(msg) (unless partition blocked)
+
+    Note over Sched,Pub: Scheduled T+1 Run
+    Sched->>PG: db.Conn() + SELECT pg_try_advisory_lock(7283910451)
+    Sched->>PG: BeginTx -> getOrCreateRun(yesterday) -> UPDATE status='IN_PROGRESS'
+    Sched->>PG: SELECT payment_ledger & SELECT psp_export_snapshot
+    loop Each detected mismatch
+        Sched->>PG: SAVEPOINT mismatch_sp -> INSERT reconciliation_mismatches
+        alt Row insert error
+            PG-->>Sched: error -> ROLLBACK TO SAVEPOINT mismatch_sp (mark PARTIAL_FAILED)
+        else Row OK
+            Sched->>PG: RELEASE SAVEPOINT mismatch_sp
+        end
+    end
+    Sched->>PG: UPDATE run counts & status -> tx.Commit()
+    Sched->>Pub: PublishMismatchEvent + DiscrepancyAlert (if >0) + CompletionEvent (RequireAll)
+    Sched->>PG: SELECT pg_advisory_unlock(7283910451) + conn.Close()
+
+    Note over Op,PG: Manual Operator Remediation
+    Op->>PG: POST /reconciliation/mismatches/{id}/fix -> BeginTx
+    Op->>PG: SELECT ... FROM reconciliation_mismatches WHERE fix_applied_at IS NULL FOR UPDATE
+    Op->>PG: INSERT reconciliation_fixes + UPSERT payment_ledger (currency='INR', status='ADJUSTED')
+    Op->>PG: UPDATE reconciliation_mismatches SET fix_applied_at=NOW() -> Commit

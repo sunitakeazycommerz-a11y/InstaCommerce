@@ -80,7 +80,7 @@ C4Context
     System_Ext(identity_provider, "Identity Provider", "Google / Apple Sign-In — social OAuth federation")
 
     Rel(customer, instacommerce, "Places orders, tracks delivery", "HTTPS / WebSocket")
-    Rel(rider, instacommerce, "Accepts jobs, updates location", "HTTPS / gRPC stream")
+    Rel(rider, instacommerce, "Accepts jobs, updates location", "HTTPS / WebSocket")
     Rel(admin, instacommerce, "Manages catalog, monitors ops", "HTTPS")
 
     Rel(instacommerce, payment_gw, "Authorize, capture, refund", "HTTPS REST")
@@ -96,8 +96,8 @@ C4Context
 - **Customer App** communicates over HTTPS with WebSocket upgrade for live order tracking (rider
   location, ETA updates). The Mobile BFF aggregates multiple downstream calls into a single
   optimized response payload to minimize mobile round-trips.
-- **Rider App** streams GPS coordinates via gRPC bidirectional streaming to the Location Ingestion
-  service, ensuring sub-second position updates at scale (~50K concurrent riders).
+- **Rider App** sends GPS coordinates via HTTP / WebSocket ingestion to the Location Ingestion
+  service (`8105`), supporting high-frequency position updates at scale.
 - **Admin Portal** is a React SPA fronted by the Admin Gateway, which enforces RBAC policies and
   rate limiting independently of the customer path.
 - All external provider integrations use **circuit breakers** (Resilience4j / custom Go middleware)
@@ -124,7 +124,7 @@ C4Container
         Container_Boundary(core, "Core Commerce Domain") {
             Container(identity, "Identity Service", "Java / Spring Boot", "Auth, user profiles, RBAC")
             Container(catalog, "Catalog Service", "Java / Spring Boot", "Product catalog, categories")
-            Container(search, "Search Service", "Java / Spring Boot", "Full-text search, Elasticsearch")
+            Container(search, "Search Service", "Java / Spring Boot", "Full-text search, PostgreSQL tsvector FTS")
             Container(pricing, "Pricing Service", "Java / Spring Boot", "Dynamic pricing, promotions, coupons")
             Container(cart, "Cart Service", "Java / Spring Boot", "Cart management, TTL-based expiry")
             Container(checkout, "Checkout Orchestrator", "Java / Spring Boot", "Saga orchestration via Temporal")
@@ -185,7 +185,7 @@ C4Container
     Rel(checkout, payment, "Authorize", "REST")
     Rel(checkout, order, "Create", "REST")
 
-    Rel(dispatch, location, "Rider positions", "REST/gRPC")
+    Rel(dispatch, location, "Rider positions", "HTTP/REST")
     Rel(riderfleet, dispatch, "Assignment request", "REST")
     Rel(routing, location, "Current positions", "Redis")
 ```
@@ -301,12 +301,12 @@ semantics without manual intervention.
 
 | Event | Producer | Key Consumers | Kafka Topic |
 |---|---|---|---|
-| `OrderPlaced` | Order Service | Fulfillment, Analytics, Fraud | `order.lifecycle` |
+| `OrderPlaced` | Order Service | Fulfillment, Analytics, Fraud | `orders.events` |
 | `OrderPacked` | Fulfillment | Rider Fleet, Notification | `fulfillment.events` |
-| `RiderAssigned` | Rider Fleet | Notification, ETA | `fleet.events` |
+| `RiderAssigned` | Rider Fleet | Notification, ETA | `rider.events` |
 | `OrderPickedUp` | Fulfillment | Notification, ETA | `fulfillment.events` |
 | `DeliveryCompleted` | Fulfillment | Payment, Wallet, Notification, Analytics | `fulfillment.events` |
-| `OrderCancelled` | Order Service | Inventory, Payment, Notification | `order.lifecycle` |
+| `OrderCancelled` | Order Service | Inventory, Payment, Notification | `orders.events` |
 
 ---
 
@@ -364,11 +364,11 @@ graph TB
             subgraph infra_ns["Namespace: infrastructure"]
                 kafka["Kafka (Strimzi Operator)<br/>3 brokers, 3 ZK"]
                 temporal["Temporal Server<br/>+ Workers"]
-                es["Elasticsearch<br/>(Search index)"]
+                pg_fts["PostgreSQL FTS (GIN)<br/>+ Caffeine L1 (Search)"]
             end
         end
         subgraph managed["GCP Managed Services"]
-            cloudsql["Cloud SQL (PostgreSQL 15)<br/>HA, read replicas"]
+            cloudsql["Cloud SQL (PostgreSQL 16)<br/>HA, read replicas"]
             redis["Memorystore (Redis 7)<br/>Cluster mode, 64GB"]
             bq["BigQuery<br/>Analytics data warehouse"]
             vertex["Vertex AI<br/>Model training & endpoints"]
@@ -619,7 +619,7 @@ to Kafka if and only if the corresponding database transaction commits:
 Change Data Capture via Debezium Connect streams PostgreSQL WAL changes for operational tables
 into Kafka CDC topics (`<db>.public.<table>`). The `cdc-consumer-service` (Go) consumes these
 topics, normalizes schema evolution deltas, and batches streaming inserts into Google BigQuery
-`cdc_events` using exponential backoff and routing unprocessable messages to `cdc.dlq`.
+`cdc_events` using exponential backoff and routing unprocessable messages to `cdc.events.DLT`.
 
 ### Stream Processing & Analytics
 
@@ -770,7 +770,7 @@ graph TB
     end
 
     subgraph messaging["Kafka Scaling"]
-        partitions["Partition Strategy<br/>order.lifecycle: 32 partitions<br/>fulfillment.events: 16 partitions<br/>fleet.events: 64 partitions (high volume)"]
+        partitions["Partition Strategy<br/>orders.events: 32 partitions<br/>fulfillment.events: 16 partitions<br/>rider.events: 64 partitions (high volume)"]
         consumers["Consumer Groups<br/>Auto-scaling consumers per partition<br/>Max parallelism = partition count"]
         retention["Retention Policy<br/>Hot: 7 days (SSD)<br/>Cold: 90 days (tiered storage)"]
         backpressure["Backpressure<br/>Consumer lag alert > 10K<br/>Auto-scale consumer pods"]
@@ -918,15 +918,15 @@ custom middleware for Go) to prevent cascade failures:
 
 | Topic | Partitions | Replication | Retention | Compaction | Key |
 |---|---|---|---|---|---|
-| `order.lifecycle` | 32 | 3 | 7 days | No | `orderId` |
+| `orders.events` | 32 | 3 | 7 days | No | `orderId` |
 | `fulfillment.events` | 16 | 3 | 7 days | No | `orderId` |
-| `fleet.events` | 64 | 3 | 3 days | No | `riderId` |
-| `payment.events` | 16 | 3 | 30 days | No | `paymentId` |
+| `rider.events` | 64 | 3 | 3 days | No | `riderId` |
+| `payments.events` | 16 | 3 | 30 days | No | `paymentId` |
 | `inventory.events` | 16 | 3 | 7 days | No | `warehouseId:sku` |
-| `notification.commands` | 8 | 3 | 1 day | No | `userId` |
+| `notification.events` | 8 | 3 | 1 day | No | `userId` |
 | `cdc.catalog` | 8 | 3 | 3 days | Compact | `productId` |
 | `cdc.orders` | 32 | 3 | 3 days | No | `orderId` |
-| `rider.location` | 64 | 2 | 1 hour | No | `riderId` |
+| `rider.location.updates` | 64 | 2 | 1 hour | No | `riderId` |
 | `analytics.enriched` | 16 | 3 | 90 days | No | `eventId` |
 
 ---
@@ -938,25 +938,25 @@ the key architectural decisions as an Architecture Decision Record (ADR) summary
 
 | # | Decision | Choice | Alternatives Considered | Rationale |
 |---|---|---|---|---|
-| 1 | **Domain services language** | Java 21 + Spring Boot 3 | Kotlin, Go, Node.js | Mature ecosystem for complex domain logic, rich ORM (JPA/Hibernate), proven at scale, large talent pool. Virtual threads (Project Loom) eliminate reactive complexity for I/O. |
-| 2 | **I/O-bound services language** | Go 1.22 | Rust, Java, Node.js | Superior goroutine concurrency model for high-throughput I/O (GPS ingestion at 50K writes/sec). Minimal memory footprint (30 MB vs 200 MB JVM). Fast cold start for burst scaling. |
+| 1 | **Domain services language** | Java 21 + Spring Boot 4.0.0 | Kotlin, Go, Node.js | Mature ecosystem for complex domain logic, rich ORM (JPA/Hibernate), proven at scale, large talent pool. Virtual threads (Project Loom) eliminate reactive complexity for I/O. |
+| 2 | **I/O-bound services language** | Go 1.25 | Rust, Java, Node.js | Superior goroutine concurrency model for high-throughput I/O (GPS ingestion at 50K writes/sec). Minimal memory footprint (30 MB vs 200 MB JVM). Fast cold start for burst scaling. |
 | 3 | **ML services language** | Python 3.12 + FastAPI | Java (DJL), Go (TFServing) | Python is the lingua franca of ML — best library support (PyTorch, scikit-learn, LangChain). FastAPI provides async HTTP with automatic OpenAPI docs. |
 | 4 | **Saga orchestration** | Temporal | Axon Framework, Camunda, custom | Durable execution model eliminates state management complexity. Native support for retries, timeouts, compensation. Language-agnostic workers (Java + Go). Battle-tested at Uber/Snap scale. |
 | 5 | **Event streaming** | Apache Kafka (Strimzi) | RabbitMQ, Pulsar, GCP Pub/Sub | Kafka's log-based architecture enables event replay, exactly-once semantics, and high throughput (100K msg/s). Strimzi operator simplifies K8s-native operations. |
 | 6 | **Service mesh** | Istio | Linkerd, Consul Connect, none | mTLS without code changes, traffic shifting for canary deploys, rich observability (distributed tracing). Envoy proxy provides circuit breaking and rate limiting at the mesh layer. |
-| 7 | **Primary database** | PostgreSQL 15 (Cloud SQL) | MySQL, CockroachDB, Spanner | JSONB for flexible schemas, excellent indexing (GIN, BRIN, partial), strong consistency, mature tooling. Cloud SQL provides automated HA, backups, and read replicas. |
+| 7 | **Primary database** | PostgreSQL 16 (Cloud SQL) | MySQL, CockroachDB, Spanner | JSONB for flexible schemas, excellent indexing (GIN, BRIN, partial), strong consistency, mature tooling. Cloud SQL provides automated HA, backups, and read replicas. |
 | 8 | **Cache** | Redis 7 (Memorystore) | Memcached, Hazelcast | Rich data structures (sorted sets for leaderboards, geo for locations, streams for event buffering). Cluster mode for horizontal scaling. Sub-millisecond latency. |
 | 9 | **Container orchestration** | GKE Autopilot | EKS, AKS, self-managed K8s | Autopilot eliminates node management overhead. Native integration with GCP services (Cloud SQL, Memorystore, IAM). Pod-level SLA. |
 | 10 | **CI/CD** | GitHub Actions + ArgoCD | Jenkins, GitLab CI, Flux | GitHub Actions for build/test (native GitHub integration). ArgoCD for GitOps deployment (declarative, auditable, drift detection). |
 | 11 | **Infrastructure as Code** | Terraform | Pulumi, Crossplane, GCP DM | Industry standard, vast provider ecosystem, state management, plan/apply workflow ensures safe infra changes. |
-| 12 | **Search engine** | Elasticsearch | Algolia, Meilisearch, Typesense | Full-text search with fuzzy matching, faceted navigation, and custom ranking. Self-hosted for data control and cost at scale. |
+| 12 | **Search engine** | PostgreSQL `tsvector` FTS + GIN + Caffeine L1 | Elasticsearch, Algolia, Meilisearch | Zero extra search cluster footprint; transactional consistency with PostgreSQL projections, GIN full-text indexing, and low-latency Caffeine L1 cache. |
 | 13 | **AI agent framework** | LangGraph (LangChain) | AutoGen, CrewAI, custom | Graph-based agent orchestration with state persistence, human-in-the-loop support, and native tool calling. |
 | 14 | **Data warehouse** | BigQuery | Snowflake, Redshift, ClickHouse | Serverless, pay-per-query, native GCP integration, ML integration with Vertex AI, columnar storage for analytics. |
 | 15 | **Observability** | OpenTelemetry + Prometheus + Grafana + Loki + Tempo | Datadog, New Relic, Elastic APM | Open-source, vendor-neutral, full telemetry (metrics + logs + traces). Cost-effective at scale vs. SaaS alternatives. |
 
 ### Language Runtime Comparison (InstaCommerce Workloads)
 
-| Criterion | Java 21 (Spring Boot) | Go 1.22 | Python 3.12 (FastAPI) |
+| Criterion | Java 21 (Spring Boot 4.0.0) | Go 1.25 | Python 3.12 (FastAPI) |
 |---|---|---|---|
 | **Best for** | Complex domain logic, CRUD | High-throughput I/O, streaming | ML inference, AI agents |
 | **Concurrency model** | Virtual threads (Loom) | Goroutines + channels | asyncio + uvicorn workers |

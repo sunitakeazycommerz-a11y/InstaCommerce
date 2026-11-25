@@ -2,6 +2,7 @@ package com.instacommerce.identity.service;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
@@ -36,21 +37,31 @@ public class RateLimitService {
 
     @Autowired
     public RateLimitService(RateLimiterRegistry rateLimiterRegistry, ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
-        this.rateLimiterRegistry = rateLimiterRegistry;
-        this.redisTemplate = redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null;
-        this.limiters = Caffeine.newBuilder()
-            .maximumSize(10_000)
-            .expireAfterAccess(Duration.ofMinutes(5))
-            .build();
+        this(rateLimiterRegistry, redisTemplateProvider != null ? redisTemplateProvider.getIfAvailable() : null);
     }
 
     public RateLimitService(RateLimiterRegistry rateLimiterRegistry, StringRedisTemplate redisTemplate) {
         this.rateLimiterRegistry = rateLimiterRegistry;
         this.redisTemplate = redisTemplate;
-        this.limiters = Caffeine.newBuilder()
+        this.limiters = buildLimitersCache(rateLimiterRegistry);
+    }
+
+    private static Cache<String, RateLimiter> buildLimitersCache(RateLimiterRegistry registry) {
+        return Caffeine.newBuilder()
             .maximumSize(10_000)
             .expireAfterAccess(Duration.ofMinutes(5))
+            .executor(Runnable::run)
+            .removalListener((String key, RateLimiter value, RemovalCause cause) -> {
+                if (key != null) {
+                    registry.remove(key);
+                }
+            })
             .build();
+    }
+
+    void cleanUpLocalLimiters() {
+        limiters.invalidateAll();
+        limiters.cleanUp();
     }
 
     public void checkLogin(String ipAddress) {

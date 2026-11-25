@@ -1,0 +1,69 @@
+sequenceDiagram
+    autonumber
+    participant Main as main / HTTP (:8103)
+    participant Tick as pollLoop Goroutine
+    participant Relay as relayService.relayBatch
+    participant PG as PostgreSQL (outbox_events)
+    participant Kafka as Kafka (sarama.SyncProducer)
+    participant DLQ as Kafka (outbox.relay.dlq)
+
+    rect rgb(239, 246, 255)
+        Note over Main,Kafka: 1. Startup and Live Readiness Probe
+        Note right of Main: loadConfig() + pgxpool.New()<br/>+ newKafkaProducer() + setupTelemetry()
+        Main->>Main: newHTTPMux()<br/>correlation.Middleware
+        Main->>Tick: spawn go pollLoop(pollCtx)
+        Main->>PG: GET /health/ready -> db.Ping(2s)
+        Main->>Kafka: checkKafka() via BrokerAttemptContext<br/>+ contextProxyDialer
+        Kafka-->>Main: Controller connected (200 ready)
+    end
+
+    rect rgb(240, 253, 244)
+        Note over Tick,DLQ: 2. Poll-Produce-Mark Cycle (Open pgx.Tx)
+        Tick->>Relay: pollLoop invokes relayBatch(pollCtx)
+        Relay->>PG: tx, _ := db.Begin(ctx)
+        Relay->>PG: SELECT id::text, aggregate_type, aggregate_id, ...<br/>WHERE sent = false ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED
+        PG-->>Relay: Locked unsent rows
+        Relay->>Relay: Scan rows into slice<br/>and call rows.Close()
+
+        loop For each evt in events (pgx.Tx stays OPEN)
+            Relay->>Relay: resolveKafkaTopic + populateEventTrace<br/>+ validateOutboxEvent
+
+            alt Validation failed (missing key / bad schema / invalid JSON)
+                Relay->>DLQ: quarantineEvent(attempts=1, valErr)<br/>SendMessage(DLQTopic)
+                alt DLQ write succeeded
+                    Relay->>PG: tx.Exec(commitCtx 10s, UPDATE sent=true WHERE id=$1)
+                else DLQ write failed
+                    Relay->>Relay: sendErr = valErr (break loop)
+                end
+            else Validation passed
+                Relay->>Relay: buildEventMessage(dual keys + flat payload)<br/>+ buildSaramaHeaders
+                Relay->>Kafka: SendMessage(topic, key=AggregateID, WaitForAll, Idempotent)
+                alt SendMessage succeeded
+                    Relay->>Relay: clearRetryAttempt(evt.ID)<br/>+ addRelayed + recordLag
+                    Relay->>PG: tx.Exec(commitCtx 10s, UPDATE sent=true WHERE id=$1)
+                else SendMessage failed
+                    Relay->>Relay: attempts = recordRetryAttempt(evt.ID)
+                    alt attempts < OUTBOX_MAX_RETRIES (3)
+                        Relay->>Relay: sendErr = err (break loop, row stays sent=false)
+                    else attempts >= 3 (exhausted)
+                        Relay->>DLQ: quarantineEvent(attempts, err)<br/>SendMessage(DLQTopic)
+                        opt DLQ write succeeded
+                            Relay->>Relay: clearRetryAttempt(evt.ID)
+                            Relay->>PG: tx.Exec(commitCtx 10s, UPDATE sent=true WHERE id=$1)
+                        end
+                    end
+                end
+            end
+        end
+
+        Relay->>PG: tx.Commit(commitCtx 10s) [deferred Rollback(5s) on error]
+    end
+
+    rect rgb(254, 242, 242)
+        Note over Main,PG: 3. Graceful Shutdown Drain Order (SIGINT / SIGTERM)
+        Note right of Main: shuttingDown.Store(true) (/ready -> 503)
+        Main->>Tick: pollCancel()
+        Note right of Main: health.ShutdownServer(server,<br/>SHUTDOWN_TIMEOUT=20s)
+        Tick-->>Main: wg.Wait() finishes active relayBatch within 20s
+        Note right of Main: telemetry.shutdown() -> producer.Close()<br/>-> dbPool.Close()
+    end

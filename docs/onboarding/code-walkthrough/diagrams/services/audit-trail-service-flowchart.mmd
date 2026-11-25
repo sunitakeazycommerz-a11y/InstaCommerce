@@ -1,0 +1,26 @@
+flowchart TD
+    subgraph IngestFlow["Event Ingestion & DLT Flow"]
+        Src{"Source"} -- "Kafka Record" --> Parse["DomainEventConsumer.onDomainEvent()<br/>readTree + transformToAuditEvent()"]
+        Src -- "REST POST" --> Valid["AuditIngestionController<br/>@Valid AuditEventRequest(s)"]
+        Parse -- "JSON/Transform/DB Exception" --> DltSend["sendToDlt(): kafkaTemplate.send(audit.DLT)<br/>.get(10s) -> throws if DLT fails"]
+        Parse -- "OK" --> Lock["AuditIngestionService<br/>HashChainService.acquireChainLock()<br/>pg_advisory_xact_lock(global_chain)"]
+        Valid --> Lock
+        Lock --> Prev["getLatestHash() (latest or GENESIS)<br/>+ nextval('audit_chain_seq')"]
+        Prev --> Hash["computeEventHash() SHA-256 v2<br/>15 fields, MICROS timestamp, sorted details"]
+        Hash --> SavePG["Save to monthly audit_events_YYYY_MM"]
+    end
+
+    subgraph ArchiveFlow["Partition Retention & Archival Flow"]
+        Cron["PartitionMaintenanceJob (Monthly 1st 02:00 UTC)<br/>@SchedulerLock('partitionMaintenance')"] --> Future["ensure_future_audit_partitions(3)"]
+        Future --> Scan["Query pg_inherits for partitions<br/>older than retentionDays (365d)"]
+        Scan --> EmptyChk{"rowCount == 0?"}
+        EmptyChk -- "Yes" --> EmptyMan["Persist empty VERIFIED manifest"]
+        EmptyChk -- "No" --> KmsChk{"enableEncryption &&<br/>kmsKeyId blank?"}
+        KmsChk -- "Yes" --> FailEnc["Throw IllegalStateException<br/>(Archive fails, partition NOT detached!)"]
+        KmsChk -- "No" --> Upload["uploadToGcsGlacier() (<=3 retries, exp backoff)<br/>Save manifest status=PENDING"]
+        Upload --> Verify["verifyArchiveIntegrity(): stream remote GCS<br/>Compute SHA-256 == manifest checksum?"]
+        Verify -- "Mismatch / Missing" --> MarkFail["Set status=FAILED, throw<br/>Partition NOT detached"]
+        Verify -- "Match" --> MarkOk["Set status=VERIFIED"]
+        EmptyMan --> Detach["ALTER TABLE audit_events<br/>DETACH PARTITION {part} CONCURRENTLY"]
+        MarkOk --> Detach
+    end

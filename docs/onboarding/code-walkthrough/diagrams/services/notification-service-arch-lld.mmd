@@ -1,0 +1,49 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef sec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph IN["7 Inbound Kafka Topics (concurrency=3) &amp; Device API"]
+        direction LR
+        K6["NotificationEventConsumer (group: notification-service)<br/>orders · payments · fulfillment · delivery · rider · wallet"]:::caller
+        KI["IdentityEventConsumer<br/>identity.events (UserErased · AccountLocked)"]:::caller
+        MOB["Mobile Client<br/>POST/DELETE /notifications/devices"]:::caller
+    end
+
+    subgraph NOTIF["notification-service :8087 (Java 21 · Spring Boot 4.0.0 · NO outbox_events)"]
+        direction TB
+        SEC["SecurityConfig (@Import InternalServiceSecurityConfiguration)<br/>/notifications/** authenticated · JwtAuthenticationFilter<br/>DeviceTokenController + UserErasureService (GDPR)"]:::sec
+
+        subgraph PIPE["service/ &amp; template/"]
+            direction LR
+            NS["NotificationService + NotificationPayloadSupport<br/>Canonical ID: status:{orderId}:{eventType} (9 events)<br/>DeduplicationService (uq_notification_dedup, PII strip)"]:::svc
+            UPS["UserPreferenceService (Caffeine 60s via selfProvider)<br/>Fail-open CB fallback for txnal; quiet hours 22:00-07:00<br/>RestUserDirectoryClient · RestOrderLookupClient (3x 500ms + CB)"]:::svc
+            TREG["TemplateRegistry (19 events) + TemplateService (Mustache)<br/>OrderConfirmed in DEDUPLICATED_STATUS_EVENTS orphan!"]:::svc
+        end
+
+        subgraph DISPATCH["infrastructure/retry/ &amp; provider/"]
+            direction LR
+            ASYNC["AsyncConfig notificationExecutor (core=4, max=16, q=500)<br/>RetryableNotificationSender -&gt; NotificationProviderSender<br/>Crash before update leaves PENDING stranded!"]:::warn
+            FALL["ChannelFallbackService (PUSH -&gt; SMS -&gt; EMAIL)<br/>NotificationRetryJob (5s poll, SKIP LOCKED, 5m lease)<br/>NotificationLogCleanupJob (03:00 daily, 90d)"]:::svc
+            PROV["NotificationProviderRegistry:<br/>prod|gcp: FcmPush · TwilioSms · SendGridEmail (CB 10, 50%, 60s)<br/>!prod&amp;!gcp: LoggingProvider"]:::sec
+            FCM_TRAP["PROD FCM TRAP (application.yml:44-53):<br/>notification.providers.fcm.* omitted in base YAML &amp; Helm!<br/>FcmPush throws PermanentEx -&gt; PUSH downgrades to SMS/EMAIL!"]:::warn
+        end
+    end
+
+    subgraph OUT["PostgreSQL notification DB (V1..V6) &amp; DLT"]
+        direction LR
+        PG["PostgreSQL Tables:<br/>notification_log (uq_notification_dedup, idx_notification_retry)<br/>device_tokens (V5) · audit_log (V2) · shedlock (V4)"]:::db
+        DLT["NotificationDlqPublisher -&gt; notification.events.DLT<br/>KafkaErrorConfig (3x 1s -&gt; {topic}.DLT)"]:::db
+    end
+
+    K6 --> NS
+    KI --> NS & SEC
+    MOB --> SEC --> PG
+    NS --> UPS & TREG --> ASYNC
+    ASYNC --> PROV & FALL
+    FALL --> PROV & DLT
+    NS & ASYNC & FALL --> PG
+    PROV -.- FCM_TRAP

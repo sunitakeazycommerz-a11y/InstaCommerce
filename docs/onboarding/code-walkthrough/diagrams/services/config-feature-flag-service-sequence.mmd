@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    actor Admin as Admin / Internal Caller
+    participant CtrlA as AdminFlagController (Pod A)
+    participant MgmtA as FlagManagementService (Pod A)
+    participant PG as PostgreSQL
+    participant Redis as Redis Pub/Sub
+    participant InvB as FlagCacheInvalidator (Pod B)
+    participant CacheB as CaffeineCacheManager (Pod B)
+    participant SseB as FlagChangeStreamController (Pod B)
+    participant ClientB as SSE / Bulk Caller (Pod B)
+
+    Note over Admin,PG: Pod A: Transactional Update + Post-Commit Sync
+    Admin->>CtrlA: POST /admin/flags/emergency-stop/{flagKey}
+    CtrlA->>MgmtA: forceDisable(flagKey, changedBy) [@Transactional]
+    MgmtA->>PG: UPDATE feature_flags SET enabled=false WHERE key=?
+    MgmtA->>MgmtA: Evict local Caffeine 'flags' & clear 'flags-all'
+    MgmtA->>PG: INSERT INTO flag_audit_log (action='EMERGENCY_STOP')
+    MgmtA->>PG: COMMIT
+    Note over MgmtA,Redis: TransactionSynchronization.afterCommit() fires ONLY after PG commit
+    MgmtA->>Redis: FlagCacheEventListener.publishBulkUpdate("emergency_stop") -> flag-updates:all
+    MgmtA->>CtrlA: flagChangeStreamController.broadcast(flagKey, false) [Pod A SSE]
+    Note right of CtrlA: DRIFT: AdminFlagController.emergencyStop ALSO calls broadcast() again (double local SSE!)
+    CtrlA-->>Admin: 200 OK
+
+    Note over Redis,ClientB: Pod B: Async Cross-Pod Invalidation & SSE Push (<100ms)
+    Redis-->>InvB: Message on PatternTopic("flag-updates:*")
+    InvB->>InvB: handleCacheInvalidation(channel, payload)
+    InvB->>CacheB: Clear 'flags', 'flags-all', 'flag-overrides', 'flag-overrides-bulk'
+    InvB->>SseB: broadcast("__bulk__", "emergency_stop")
+    SseB-->>ClientB: event: flag-change {"flag":"__bulk__","value":"emergency_stop"}
+    InvB->>InvB: Update staleness gauge & invalidations counter

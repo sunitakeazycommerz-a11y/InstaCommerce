@@ -1,0 +1,53 @@
+flowchart TD
+    classDef svc fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef cache fill:#FFF7ED,stroke:#EA580C,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef broker fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph QueryFlow["1. Search Query, Two-Stage Fuzzy Fallback & Fail-Open Facets"]
+        direction TB
+        Req["GET /search?query&amp;brand&amp;category&amp;minPriceCents&amp;maxPriceCents&amp;storeId&amp;page&amp;size<br/>SearchService.search: normalizeQuery (trim + collapse whitespace)"]:::svc
+        PriceChk{"minPriceCents &gt;<br/>maxPriceCents?"}:::svc
+        Err400["400 INVALID_PRICE_RANGE<br/>(ApiException -> GlobalExceptionHandler)"]:::warn
+        CacheChk{"TwoLevelCache<br/>searchResults hit?"}:::cache
+        StoreChk{"storeId != null?"}:::svc
+        FtsScoped["fullTextSearchScoped<br/>plainto_tsquery('english', :query) &amp; in_stock=TRUE<br/>AND (store_id = :storeId OR store_id IS NULL)"]:::db
+        FtsGlobal["fullTextSearch<br/>plainto_tsquery('english', :query) &amp; in_stock=TRUE<br/>ORDER BY ts_rank DESC (page 0..50, size 1..50)"]:::db
+        FtsEmpty{"results.isEmpty()?"}:::svc
+        Fuzzy1["Fuzzy Stage 1: escape % _ \\<br/>lower(name) LIKE '%escapedQuery%' (rank=0.5)<br/>fuzzyFallbackSearchFiltered if any filter/storeId"]:::db
+        Fuzzy1Empty{"still empty AND<br/>contains space?"}:::svc
+        LongestTok["selectLongestSearchToken (len &ge; 3)<br/>Fuzzy Stage 2: LIKE '%token%'"]:::db
+        SetDYM["If fallback non-empty:<br/>didYouMean = searchResults[0].name"]:::svc
+        Facets["FacetedSearchService (on normalizedQuery)<br/>computeFilteredFacets or computeStoreScopedFacets<br/>catch Exception -> metric++ &amp; empty lists"]:::svc
+        TrendAsync["@Async TrendingService.recordQuery<br/>INSERT trending_queries ON CONFLICT DO UPDATE<br/>(runs even on cache hit!)"]:::db
+        Resp["200 SearchResponse {results, totalResults, facets, didYouMean}"]:::svc
+
+        Req --> PriceChk
+        PriceChk -->|"Yes"| Err400
+        PriceChk -->|"No"| CacheChk
+        CacheChk -->|"Hit"| TrendAsync
+        CacheChk -->|"Miss"| StoreChk
+        StoreChk -->|"Yes"| FtsScoped --> FtsEmpty
+        StoreChk -->|"No"| FtsGlobal --> FtsEmpty
+        FtsEmpty -->|"No"| Facets
+        FtsEmpty -->|"Yes"| Fuzzy1 --> Fuzzy1Empty
+        Fuzzy1Empty -->|"Yes"| LongestTok --> SetDYM --> Facets
+        Fuzzy1Empty -->|"No"| SetDYM
+        Facets --> TrendAsync --> Resp
+    end
+
+    subgraph AutoFlow["2. Autocomplete Path"]
+        direction TB
+        AutoIn["GET /search/autocomplete?prefix&amp;limit=10<br/>@Cacheable autocomplete if prefix.trim().length() &ge; 2"]:::svc
+        AutoDB["SearchDocumentRepository.autocomplete<br/>lower(name) LIKE lower(:prefix) || '%'<br/>Uses V6 text_pattern_ops · Seam: NO storeId filter"]:::warn
+        AutoIn --> AutoDB
+    end
+
+    subgraph SyncFlow["3. Kafka Sync, Cache Eviction & DLT"]
+        direction TB
+        EvIn["Kafka: catalog.events / inventory.events<br/>3x 1000ms retry (skip JsonProcessing/IllegalArg -> .DLT)"]:::broker
+        MutDB["SearchIndexService (@Transactional)<br/>upsert (drops inStock!) / updateStock / delete<br/>PG trg_search_documents_vector updates TSVECTOR"]:::warn
+        Evict["@CacheEvict(allEntries=true) + .clear()<br/>L1 clear + L2 clear + Pub/Sub search:cache:invalidate"]:::cache
+        EvIn --> MutDB --> Evict
+    end

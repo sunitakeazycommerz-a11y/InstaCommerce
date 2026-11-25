@@ -7,7 +7,7 @@
 | **Module** | `:services:search-service` |
 | **Port (local)** | `8088` (`application.yml`) |
 | **Runtime** | Spring Boot · Java 21 · eclipse-temurin:21-jre-alpine |
-| **Database** | PostgreSQL 15+ (tsvector FTS, Flyway-managed) |
+| **Database** | PostgreSQL 16 (tsvector FTS, Flyway-managed) |
 | **Messaging** | Kafka consumer (`catalog.events`, `inventory.events`, group `search-service`) |
 | **Cache** | Caffeine (JVM-local, 3 named caches) |
 | **Auth** | JWT RS256 (issuer: `instacommerce-identity`) |
@@ -630,7 +630,7 @@ FROM eclipse-temurin:25-jre-alpine (runtime)
 
 - Non-root user: `appuser` (UID 1001)
 - JVM flags: `-XX:MaxRAMPercentage=75.0 -XX:+UseZGC`
-- Healthcheck: `wget -qO- http://localhost:8080/actuator/health/liveness` every 30s
+- Healthcheck: `wget -qO- http://localhost:8088/actuator/health/liveness` every 30s
 - Exposed port: `8080` (overrides the `8086` default in `application.yml`)
 
 ---
@@ -680,7 +680,7 @@ FROM eclipse-temurin:25-jre-alpine (runtime)
 
 | Component | Required For |
 |-----------|-------------|
-| PostgreSQL 15+ | FTS, tsvector, GIN indexes |
+| PostgreSQL 16 | FTS, tsvector, GIN indexes |
 | Kafka | `catalog.events` consumption, DLQ publishing |
 | GCP Secret Manager | Production secret injection (optional locally) |
 | OTEL Collector | Trace and metric export (optional locally) |

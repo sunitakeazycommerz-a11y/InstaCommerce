@@ -1,11 +1,13 @@
 package com.instacommerce.riderfleet.service;
 
+import com.instacommerce.platform.geo.GeoUtils;
 import com.instacommerce.riderfleet.client.DispatchOptimizerClient;
 import com.instacommerce.riderfleet.config.RiderFleetProperties;
 import com.instacommerce.riderfleet.domain.model.Rider;
 import com.instacommerce.riderfleet.domain.model.RiderAssignment;
 import com.instacommerce.riderfleet.domain.model.RiderAvailability;
 import com.instacommerce.riderfleet.domain.model.RiderStatus;
+import com.instacommerce.riderfleet.domain.model.VehicleType;
 import com.instacommerce.riderfleet.exception.DuplicateAssignmentException;
 import com.instacommerce.riderfleet.exception.NoAvailableRiderException;
 import com.instacommerce.riderfleet.exception.RiderNotFoundException;
@@ -17,16 +19,27 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.geo.Circle;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.GeoResult;
+import org.springframework.data.geo.GeoResults;
+import org.springframework.data.geo.Metrics;
+import org.springframework.data.geo.Point;
+import org.springframework.data.redis.connection.RedisGeoCommands;
+import org.springframework.data.redis.core.GeoOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
@@ -37,8 +50,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class RiderAssignmentService {
     private static final Logger logger = LoggerFactory.getLogger(RiderAssignmentService.class);
-    private static final long DEFAULT_DELIVERY_FEE_CENTS = 3000L;
     private static final int CANDIDATE_FETCH_LIMIT = 20;
+    private static final int REDIS_CANDIDATE_FETCH_LIMIT = 100;
+    private static final String REDIS_ACTIVE_RIDERS_GEO_KEY = "riders:active";
 
     private final RiderRepository riderRepository;
     private final RiderAvailabilityRepository availabilityRepository;
@@ -76,9 +90,8 @@ public class RiderAssignmentService {
     /**
      * Assigns the nearest available rider to an order.
      * If the dispatch optimizer is enabled, delegates to the optimizer service first.
-     * Falls back to Haversine nearest-neighbor if the optimizer is disabled, unavailable,
-     * or returns no assignment. Uses pessimistic locking (FOR UPDATE SKIP LOCKED) via
-     * the repository query in the Haversine path to prevent double-assignment.
+     * Otherwise queries Redis geospatial index ({@code riders:active}) as primary lookup
+     * and falls back to PostgreSQL Haversine nearest-neighbor with {@code FOR UPDATE SKIP LOCKED}.
      */
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
@@ -131,11 +144,21 @@ public class RiderAssignmentService {
         assignment.setRiderId(rider.getId());
         assignment.setStoreId(storeId);
         assignment.setStatus("ACTIVE");
+        if (pickupLat != null && pickupLng != null && dropoffLat != null && dropoffLng != null) {
+            assignment.setDistanceKm(GeoUtils.haversineKm(
+                pickupLat.doubleValue(), pickupLng.doubleValue(),
+                dropoffLat.doubleValue(), dropoffLng.doubleValue()));
+        }
+        assignment.setOrderWeightGrams(orderWeightGrams);
         try {
             assignmentRepository.save(assignment);
         } catch (DataIntegrityViolationException ex) {
             throw new DuplicateAssignmentException(orderId);
         }
+
+        String vehicleType = rider.getVehicleType() != null
+            ? rider.getVehicleType().name()
+            : VehicleType.MOTORCYCLE.name();
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("riderId", rider.getId());
@@ -146,6 +169,7 @@ public class RiderAssignmentService {
         if (rider.getName() != null) {
             payload.put("riderName", rider.getName());
         }
+        payload.put("vehicleType", vehicleType);
         if (pickupLat != null) {
             payload.put("pickupLat", pickupLat);
         }
@@ -197,6 +221,12 @@ public class RiderAssignmentService {
             }
         }
 
+        Optional<SelectedRider> redisCandidate = resolveCandidateFromRedis(
+            storeId, pickupLat, pickupLng, radiusKm, orderWeightGrams, now);
+        if (redisCandidate.isPresent()) {
+            return redisCandidate.get();
+        }
+
         logger.info("Using Haversine nearest-neighbor for rider assignment, order={}", orderId);
         int minWeightGrams = orderWeightGrams != null && orderWeightGrams > 0 ? orderWeightGrams : 0;
         int maxConsecutive = properties.getAssignment().getMaxConsecutiveDeliveries();
@@ -230,6 +260,82 @@ public class RiderAssignmentService {
         throw new NoAvailableRiderException(storeId != null ? storeId.toString() : "unknown");
     }
 
+    private Optional<SelectedRider> resolveCandidateFromRedis(UUID storeId,
+                                                              BigDecimal pickupLat,
+                                                              BigDecimal pickupLng,
+                                                              double radiusKm,
+                                                              Integer orderWeightGrams,
+                                                              Instant now) {
+        if (redisTemplate == null || pickupLat == null || pickupLng == null) {
+            return Optional.empty();
+        }
+        try {
+            GeoOperations<String, String> geoOps = redisTemplate.opsForGeo();
+            if (geoOps == null) {
+                return Optional.empty();
+            }
+            Circle area = new Circle(
+                new Point(pickupLng.doubleValue(), pickupLat.doubleValue()),
+                new Distance(radiusKm, Metrics.KILOMETERS));
+            RedisGeoCommands.GeoRadiusCommandArgs args = RedisGeoCommands.GeoRadiusCommandArgs
+                .newGeoRadiusArgs()
+                .includeDistance()
+                .sortAscending()
+                .limit(REDIS_CANDIDATE_FETCH_LIMIT);
+            GeoResults<RedisGeoCommands.GeoLocation<String>> results =
+                geoOps.radius(REDIS_ACTIVE_RIDERS_GEO_KEY, area, args);
+            if (results == null || results.getContent().isEmpty()) {
+                return Optional.empty();
+            }
+
+            Set<UUID> orderedIds = new LinkedHashSet<>();
+            for (GeoResult<RedisGeoCommands.GeoLocation<String>> entry : results.getContent()) {
+                if (entry == null || entry.getContent() == null || entry.getContent().getName() == null) {
+                    continue;
+                }
+                try {
+                    orderedIds.add(UUID.fromString(entry.getContent().getName()));
+                } catch (IllegalArgumentException ignored) {
+                    logger.debug("Ignoring non-UUID member in Redis geo index: {}", entry.getContent().getName());
+                }
+            }
+            if (orderedIds.isEmpty()) {
+                return Optional.empty();
+            }
+
+            List<UUID> candidateIds = new ArrayList<>(orderedIds);
+            List<RiderAvailability> available = storeId != null
+                ? availabilityRepository.findByStoreIdAndIsAvailableTrueAndRiderIdIn(storeId, candidateIds)
+                : availabilityRepository.findByIsAvailableTrueAndRiderIdIn(candidateIds);
+            if (available.isEmpty()) {
+                return Optional.empty();
+            }
+
+            Map<UUID, RiderAvailability> availableByRider = available.stream()
+                .collect(Collectors.toMap(RiderAvailability::getRiderId, Function.identity(), (a, b) -> a));
+            Map<UUID, Rider> ridersById = riderRepository.findAllById(availableByRider.keySet()).stream()
+                .collect(Collectors.toMap(Rider::getId, Function.identity()));
+
+            for (UUID riderId : orderedIds) {
+                if (!availableByRider.containsKey(riderId)) {
+                    continue;
+                }
+                Rider rider = ridersById.get(riderId);
+                if (rider == null || !isRiderEligible(rider, orderWeightGrams, now)) {
+                    continue;
+                }
+                Optional<RiderAvailability> locked = availabilityRepository
+                    .findAvailableByRiderIdForUpdateSkipLocked(riderId);
+                if (locked.isPresent() && locked.get().isAvailable()) {
+                    return Optional.of(new SelectedRider(locked.get(), rider));
+                }
+            }
+        } catch (Exception ex) {
+            logger.warn("Redis GEORADIUS lookup failed, falling back to PostgreSQL: {}", ex.getMessage());
+        }
+        return Optional.empty();
+    }
+
     private record SelectedRider(RiderAvailability availability, Rider rider) {
     }
 
@@ -241,6 +347,13 @@ public class RiderAssignmentService {
                maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
     @Transactional
     public void completeDelivery(UUID orderId) {
+        completeDelivery(orderId, 0L);
+    }
+
+    @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
+               maxAttempts = 3, backoff = @Backoff(delay = 100, multiplier = 2))
+    @Transactional
+    public void completeDelivery(UUID orderId, long tipCents) {
         Optional<RiderAssignment> assignmentOpt = assignmentRepository.findByOrderId(orderId);
         if (assignmentOpt.isEmpty()) {
             logger.info("No rider assignment found to complete for order={}", orderId);
@@ -299,7 +412,13 @@ public class RiderAssignmentService {
         }
 
         if (riderEarningsService != null && riderOpt.isPresent()) {
-            riderEarningsService.recordEarning(orderId, riderId, DEFAULT_DELIVERY_FEE_CENTS, 0L);
+            riderEarningsService.recordDeliveryEarning(
+                orderId,
+                riderOpt.get(),
+                assignment.getDistanceKm(),
+                assignment.getOrderWeightGrams(),
+                tipCents,
+                now);
         }
 
         outboxService.publish("Rider", riderId.toString(), "DeliveryCompleted",

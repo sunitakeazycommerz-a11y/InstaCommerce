@@ -56,8 +56,8 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 
 **Build & Push**:
 ```bash
-docker build -t gcr.io/instacommerce/order-service:v1.0.0 .
-docker push gcr.io/instacommerce/order-service:v1.0.0
+docker build -t asia-south1-docker.pkg.dev/instacommerce/images/order-service:v1.0.0 .
+docker push asia-south1-docker.pkg.dev/instacommerce/images/order-service:v1.0.0
 ```
 
 ---

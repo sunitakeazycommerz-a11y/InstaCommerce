@@ -1,0 +1,90 @@
+flowchart TB
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.8px,color:#0F172A
+    classDef svc fill:#F0F9FF,stroke:#0284C7,stroke-width:1.8px,color:#0F172A
+    classDef repo fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#064E3B
+    classDef broker fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.8px,color:#0F172A
+    classDef ext fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph CALLERS["Inbound Callers & Kafka Topics"]
+        direction LR
+        BFF["Mobile BFF / Rider App<br/>Bearer JWT (sub = riderId)"]:::ext
+        CO["checkout-orchestrator / Internal<br/>X-Internal-Service + X-Internal-Token"]:::ext
+        AGW["admin-gateway-service<br/>ROLE_ADMIN"]:::ext
+        K_IN[["Kafka Consumers (KafkaErrorConfig 3x1s -> *.DLT)<br/>fulfillment.events + orders.events<br/>groupId: rider-fleet-service"]]:::broker
+    end
+
+    subgraph SEC["Spring Security Filter Chain (SecurityConfig.java)"]
+        direction LR
+        F1["JwtAuthenticationFilter<br/>RSA Public Key (JwtKeyLoader)<br/>skips /actuator/**, /error"]:::ctrl
+        F2["SharedInternalServiceAuthFilter<br/>X-Internal-Service / X-Internal-Token<br/>grants ROLE_INTERNAL_SERVICE"]:::ctrl
+        F3["Authorization Rules + CORS<br/>/admin/** -> ROLE_ADMIN<br/>/riders/assign -> INTERNAL*|ADMIN<br/>/riders/{id}/** -> assertRiderAccess(id)"]:::ctrl
+        F1 --> F2 --> F3
+    end
+
+    subgraph APP["rider-fleet-service (:8093) — Java 21 / Spring Boot 4.0.0"]
+        direction TB
+        subgraph CTRL["REST Controllers (/riders, /api/riders, /admin/riders)"]
+            direction LR
+            RC["RiderController<br/>availability, location, available,<br/>get, earnings, shifts CRUD"]:::ctrl
+            RAC["RiderAssignmentController<br/>assign, complete, cancel"]:::ctrl
+            ARC["AdminRiderController<br/>create, list, get, activate,<br/>suspend, onboard"]:::ctrl
+        end
+
+        subgraph CONS["Consumer & Client"]
+            direction LR
+            FEC["FulfillmentEventConsumer<br/>OrderPacked, OrderDelivered,<br/>DeliveryCompleted, Cancelled/Failed"]:::svc
+            DOC["DispatchOptimizerClient<br/>RestClient (2s/5s) + InternalAuth<br/>BUG: catch(Exception) defeats @CircuitBreaker"]:::broken
+        end
+
+        subgraph SVC["Services & Scheduled Jobs (@Retryable 3x100ms*2)"]
+            direction LR
+            RS["RiderService<br/>Rider FSM + Outbox"]:::svc
+            RAVS["RiderAvailabilityService<br/>Redis GEOADD+HSET + Kafka<br/>(no DB lat/lng write)"]:::warn
+            RAS["RiderAssignmentService<br/>+ RiderAssignmentSupport<br/>Optimizer / GEORADIUS / SQL"]:::svc
+            RES["RiderEarningsService<br/>Fee + IST Incentives"]:::svc
+            RSS["RiderShiftService<br/>Overlap + Active Shift"]:::svc
+            OBS["OutboxService (MANDATORY)<br/>+ OutboxCleanupJob (6h)"]:::svc
+            REC["StuckRiderRecoveryJob<br/>ShedLock 10m (FLAG OFF)"]:::warn
+        end
+
+        subgraph REPO["JPA Repositories & Spring Data Redis"]
+            direction LR
+            RR["RiderRepository"]:::repo
+            RAR["RiderAvailabilityRepository<br/>FOR UPDATE SKIP LOCKED + Haversine"]:::repo
+            RAAR["RiderAssignmentRepository<br/>markCompletedIfPending()"]:::repo
+            RER["RiderEarningRepository<br/>sumFee/Tip/Incentive"]:::repo
+            RSR["RiderShiftRepository"]:::repo
+            OER["OutboxEventRepository"]:::repo
+            SRT["StringRedisTemplate<br/>opsForGeo + opsForHash"]:::repo
+        end
+    end
+
+    subgraph INFRA["Stores, Relay, Optimizer & Helm Topology"]
+        direction LR
+        RED[("Redis (Memorystore)<br/>GEO: riders:active<br/>HASH: rider:location:{id}<br/>(Java writes lack CAS/TTL)")]:::warn
+        PG[("PostgreSQL: rider_fleet / rider_db<br/>V1-V14 Flyway · Hikari max=20 (10 staging)<br/>riders · rider_availability · rider_assignments<br/>rider_earnings · rider_shifts · rider_ratings<br/>outbox_events · shedlock")]:::store
+        OR["outbox-relay-rider-fleet (:8103)<br/>Helm 1x · poll 500ms<br/>-> Kafka: rider.events"]:::broker
+        K_LOC[["Kafka: rider.location.updates<br/>{rider_id, latitude, longitude, timestamp}<br/>(schema diverges from Go)"]]:::warn
+        OPT["dispatch-optimizer-service (:8102)<br/>POST /v2/optimize/assign<br/>(optimizer-enabled=false default)"]:::warn
+    end
+
+    BFF & CO & AGW --> SEC
+    SEC --> RC & RAC & ARC
+    K_IN --> FEC --> RAS
+    RC --> RS & RAVS & RES & RSS & RAR
+    RAC --> RAS
+    ARC --> RS
+    RAS --> DOC -.->|"if optimizer-enabled=true"| OPT
+    RAS --> RAR & RR & RAAR & RES & RSS & OBS & SRT
+    RS --> RR & RAR & OBS
+    RAVS --> RR & RAR & SRT & K_LOC
+    RES --> RER & RR
+    RSS --> RSR & RR
+    REC --> RR & RAR & OBS
+    OBS --> OER
+    RR & RAR & RAAR & RER & RSR & OER --> PG
+    SRT --> RED
+    PG -->|"FOR UPDATE SKIP LOCKED"| OR

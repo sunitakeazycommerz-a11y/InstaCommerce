@@ -119,9 +119,10 @@ class PaymentSuccessRateAggregator(beam.CombineFn):
 
     def add_input(self, acc, element):
         acc["total"] += 1
-        if element.get("status") == "SUCCESS":
+        status = str(element.get("status") or "").upper()
+        if status in ("CAPTURED", "COMPLETED", "SUCCESS"):
             acc["success"] += 1
-        elif element.get("status") in ("FAILED", "DECLINED"):
+        elif status in ("FAILED", "DECLINED", "VOIDED"):
             acc["failed"] += 1
         if element.get("latency_ms") is not None:
             acc["latencies_ms"].append(element["latency_ms"])

@@ -61,12 +61,12 @@ class PartitionMaintenanceJobTest {
         inOrder.verify(jdbcTemplate).execute("SELECT ensure_future_audit_partitions(3)");
         inOrder.verify(archiveExportPipelineService)
                 .exportPartition("audit_events_2025_02", febStart, marStart);
-        inOrder.verify(jdbcTemplate).execute("ALTER TABLE audit_events DETACH PARTITION audit_events_2025_02");
+        inOrder.verify(jdbcTemplate).execute("ALTER TABLE audit_events DETACH PARTITION audit_events_2025_02 CONCURRENTLY");
 
         verify(archiveExportPipelineService, never())
                 .exportPartition(eq("audit_events_2025_03"), any(), any());
         verify(jdbcTemplate, never())
-                .execute("ALTER TABLE audit_events DETACH PARTITION audit_events_2025_03");
+                .execute("ALTER TABLE audit_events DETACH PARTITION audit_events_2025_03 CONCURRENTLY");
     }
 
     @Test
@@ -85,8 +85,8 @@ class PartitionMaintenanceJobTest {
         job.maintain();
 
         verify(jdbcTemplate, never())
-                .execute("ALTER TABLE audit_events DETACH PARTITION audit_events_2025_01");
-        verify(jdbcTemplate).execute("ALTER TABLE audit_events DETACH PARTITION audit_events_2025_02");
+                .execute("ALTER TABLE audit_events DETACH PARTITION audit_events_2025_01 CONCURRENTLY");
+        verify(jdbcTemplate).execute("ALTER TABLE audit_events DETACH PARTITION audit_events_2025_02 CONCURRENTLY");
     }
 
     @Test
@@ -122,7 +122,7 @@ class PartitionMaintenanceJobTest {
         inOrder.verify(archiveExportPipelineService)
                 .exportPartition("audit_events_2025_01", janStart, febStart);
         inOrder.verify(jdbcTemplate)
-                .execute("ALTER TABLE audit_events DETACH PARTITION public.audit_events_2025_01");
+                .execute("ALTER TABLE audit_events DETACH PARTITION public.audit_events_2025_01 CONCURRENTLY");
     }
 
     @Test

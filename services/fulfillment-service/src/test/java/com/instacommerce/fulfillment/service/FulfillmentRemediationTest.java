@@ -144,6 +144,8 @@ class FulfillmentRemediationTest {
             eq(originalProductId), eq(storeId), eq(2), eq("FULFILLMENT_SUBSTITUTED_ORIGINAL_RELEASE"), any());
         verify(inventoryClient).reserveOrDeductStock(
             eq(replacementProductId), eq(storeId), eq(2), eq("FULFILLMENT_SUBSTITUTION_REPLACEMENT"), any());
+        verify(inventoryClient).reserveOrDeductStock(
+            eq(originalProductId), eq(storeId), eq(1), eq("FULFILLMENT_MISSING"), any());
     }
 
     @Test
@@ -261,7 +263,7 @@ class FulfillmentRemediationTest {
 
         pickService.markItem(orderId, productId,
             new MarkItemPickedRequest(PickItemStatus.SUBSTITUTED, 3, subProductId, "sub"), UUID.randomUUID());
-        verify(subService).handleMissingItem(task, item, 1);
+        verify(subService).handleMissingItem(task, item, 1, 3);
     }
 
     @Test

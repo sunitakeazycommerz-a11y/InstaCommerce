@@ -13,15 +13,21 @@ public record AuthorizeRequest(
     @NotBlank String idempotencyKey,
     String paymentMethod,
     String paymentMethodId,
-    UUID userId
+    UUID userId,
+    String purpose
 ) {
     public AuthorizeRequest(UUID orderId, long amountCents, String currency, String idempotencyKey, String paymentMethod) {
-        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, null, null);
+        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, null, null, null);
     }
 
     public AuthorizeRequest(UUID orderId, long amountCents, String currency, String idempotencyKey,
                             String paymentMethod, String paymentMethodId) {
-        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, paymentMethodId, null);
+        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, paymentMethodId, null, null);
+    }
+
+    public AuthorizeRequest(UUID orderId, long amountCents, String currency, String idempotencyKey,
+                            String paymentMethod, String paymentMethodId, UUID userId) {
+        this(orderId, amountCents, currency, idempotencyKey, paymentMethod, paymentMethodId, userId, null);
     }
 
     public String effectivePaymentMethod() {

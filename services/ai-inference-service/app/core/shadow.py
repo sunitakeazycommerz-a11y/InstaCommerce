@@ -51,12 +51,18 @@ def _extract_score(output: Any) -> Optional[float]:
             "score",
             "prediction",
             "predicted_units",
+            "predicted_annual_value_cents",
             "delivery_fee_cents",
             "raw_score",
         ):
             val = output.get(key)
             if isinstance(val, (int, float)) and not isinstance(val, bool):
                 return float(val)
+        recs = output.get("recommendations")
+        if isinstance(recs, list) and recs and isinstance(recs[0], dict):
+            top_score = recs[0].get("score")
+            if isinstance(top_score, (int, float)) and not isinstance(top_score, bool):
+                return float(top_score)
     return None
 
 

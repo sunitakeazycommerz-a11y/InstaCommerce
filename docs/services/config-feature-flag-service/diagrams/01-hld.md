@@ -60,7 +60,7 @@ graph TB
     end
 
     subgraph "Persistence Layer"
-        PostgreSQL["🗄️ PostgreSQL 15+<br/>feature_flags<br/>experiments<br/>experiment_assignments<br/>flag_rollout_rules"]
+        PostgreSQL["🗄️ PostgreSQL 16<br/>feature_flags<br/>experiments<br/>experiment_assignments<br/>flag_rollout_rules"]
         Redis["🔴 Redis<br/>Pub/Sub Channel<br/>flag-invalidations"]
     end
 

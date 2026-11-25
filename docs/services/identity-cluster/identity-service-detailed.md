@@ -18,7 +18,7 @@ flowchart TB
     end
 
     subgraph Storage["Data Layer"]
-        PG[("PostgreSQL 15+<br/>identity_db<br/>5 tables")]
+        PG[("PostgreSQL 16<br/>identity_db<br/>5 tables")]
         SM["GCP Secret Manager<br/>JWT RSA keys<br/>DB password"]
         KF["Kafka<br/>identity.events"]
     end

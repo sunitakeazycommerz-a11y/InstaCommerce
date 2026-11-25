@@ -5,7 +5,7 @@
 The AI orchestrator service is the central hub for AI/ML model selection, request routing, and batch optimization in InstaCommerce. It manages the lifecycle of AI inference requests, routes them to appropriate specialized models (ranking, recommendation, fraud detection), implements intelligent batching for cost optimization, and provides fallback mechanisms for reliability.
 
 **Service Ownership**: AI Platform Team - Model Orchestration
-**Language**: Python 3.11+ / FastAPI / LangGraph
+**Language**: Python 3.12 / FastAPI / LangGraph
 **Default Port**: 8100
 **Status**: Tier 1 Critical (AI-driven business logic)
 
@@ -46,7 +46,7 @@ The AI orchestrator service is the central hub for AI/ML model selection, reques
 ```
 ┌──────────────────────────────────────────────────────────┐
 │ Incoming AI Request                                       │
-│ POST /ai/v1/infer                                         │
+│ POST /agent/assist · POST /v2/agent/execute               │
 └────────────────────┬─────────────────────────────────────┘
                      │
         ┌────────────▼──────────────────┐
@@ -228,10 +228,10 @@ redis:
 ## Troubleshooting
 
 ### Circuit Breaker Stuck Open
-1. **Check inference-service health**: `curl http://ai-inference-service:8090/health`
+1. **Check inference-service health**: `curl http://ai-inference-service:8101/health`
 2. **Verify connectivity**: Ensure ai-orchestrator can reach inference-service
 3. **Check error rate**: Review error logs from inference-service for issues
-4. **Manual reset** (if needed): `curl -X POST http://ai-orchestrator-service:8089/api/v1/admin/circuit-breaker/reset`
+4. **Check orchestrator readiness**: `curl http://ai-orchestrator-service:8100/health/ready`
 
 ### High Latency (p99 > 1s)
 1. **Check batch aggregation timeout**: Verify `BATCH_AGGREGATION_TIMEOUT_MILLISECONDS` is not too high

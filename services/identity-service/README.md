@@ -2,7 +2,7 @@
 
 > **Module path:** `services/identity-service`
 > **Port:** 8081 (dev) · 8080 (k8s container)
-> **Runtime:** Spring Boot 3, Java 21, PostgreSQL 15+
+> **Runtime:** Spring Boot 4.0.0, Java 21, PostgreSQL 16
 > **Source of truth for:** user credentials, JWT issuance, refresh-token lifecycle, GDPR erasure, audit trail
 
 ---
@@ -581,7 +581,7 @@ Configured in `application.yml`:
 
 ### 8.3 Running Locally
 
-**Prerequisites:** Java 21, PostgreSQL 15+ (or `docker-compose up -d` from repo root which creates `identity_db` via `scripts/init-dbs.sql`).
+**Prerequisites:** Java 21, PostgreSQL 16 (or `docker-compose up -d` from repo root which creates `identity_db` via `scripts/init-dbs.sql`).
 
 ```bash
 # Generate RSA key pair for local dev
@@ -602,7 +602,7 @@ curl http://localhost:8081/actuator/health
 ```bash
 ./gradlew :services:identity-service:bootJar
 docker build -t identity-service services/identity-service/
-docker run -p 8081:8080 \
+docker run -p 8081:8081 \
   -e IDENTITY_DB_URL=jdbc:postgresql://host.docker.internal:5432/identity_db \
   -e IDENTITY_DB_PASSWORD=postgres \
   -e IDENTITY_JWT_PUBLIC_KEY="$(cat public.pem)" \

@@ -6,9 +6,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -130,7 +132,7 @@ class NotificationServiceTest {
         assertThatThrownBy(() -> notificationService.handleEvent(record, envelope))
             .isInstanceOf(PreferenceLookupException.class);
 
-        verify(deduplicationService, never()).createLog(any(), any());
+        verifyNoInteractions(deduplicationService);
         verify(logRepository, never()).save(any());
     }
 
@@ -166,18 +168,22 @@ class NotificationServiceTest {
         when(deviceTokenRepository.findFirstByUserIdAndActiveTrueOrderByUpdatedAtDesc(userId))
             .thenReturn(Optional.of(deviceToken));
         NotificationLog logEntry = new NotificationLog();
-        when(deduplicationService.createLog(any(NotificationRequest.class), anyString())).thenReturn(logEntry);
         when(templateService.render(eq(NotificationChannel.PUSH), eq("order_packed"), anyMap()))
             .thenReturn("Your order is packed");
+        when(deduplicationService.createLog(any(NotificationRequest.class), anyString(), any(), any()))
+            .thenReturn(logEntry);
 
         notificationService.handleEvent(record, envelope);
 
         ArgumentCaptor<NotificationRequest> requestCaptor = ArgumentCaptor.forClass(NotificationRequest.class);
         ArgumentCaptor<String> maskedCaptor = ArgumentCaptor.forClass(String.class);
-        verify(deduplicationService).createLog(requestCaptor.capture(), maskedCaptor.capture());
+        var inOrder = inOrder(templateService, deduplicationService, sender);
+        inOrder.verify(templateService).render(eq(NotificationChannel.PUSH), eq("order_packed"), anyMap());
+        inOrder.verify(deduplicationService).createLog(
+            requestCaptor.capture(), maskedCaptor.capture(), eq(null), eq("Your order is packed"));
         assertThat(requestCaptor.getValue().recipient()).isEqualTo("fcm-device-token-987654");
         assertThat(maskedCaptor.getValue()).doesNotContain("fcm-device-token-987654");
-        verify(sender).send(eq(requestCaptor.getValue()), eq(logEntry), eq(null), eq("Your order is packed"));
+        inOrder.verify(sender).send(eq(requestCaptor.getValue()), eq(logEntry), eq(null), eq("Your order is packed"));
     }
 
     @Test

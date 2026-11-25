@@ -37,6 +37,12 @@ public class DiscountCalculator {
             Long maxDiscountCents
     ) {}
 
+    public record AppliedPromotion(
+            UUID promotionId,
+            String name,
+            long discountCents
+    ) {}
+
     public record CalculationResult(
             long grossSubtotalCents,
             long itemDiscountCents,
@@ -44,8 +50,22 @@ public class DiscountCalculator {
             long couponDiscountCents,
             long totalDiscountCents,
             long netTotalCents,
-            List<String> appliedPromotionNames
-    ) {}
+            List<String> appliedPromotionNames,
+            List<AppliedPromotion> appliedPromotionDetails
+    ) {
+        public CalculationResult(
+                long grossSubtotalCents,
+                long itemDiscountCents,
+                long bundleDiscountCents,
+                long couponDiscountCents,
+                long totalDiscountCents,
+                long netTotalCents,
+                List<String> appliedPromotionNames) {
+            this(grossSubtotalCents, itemDiscountCents, bundleDiscountCents,
+                    couponDiscountCents, totalDiscountCents, netTotalCents,
+                    appliedPromotionNames, List.of());
+        }
+    }
 
     public CalculationResult calculateDiscounts(
             List<PricedItem> items,
@@ -132,13 +152,22 @@ public class DiscountCalculator {
         long combinedStackableTotal = stackablePromoDiscount + couponDiscountWithStackable;
 
         long couponDiscount;
+        List<AppliedPromotion> appliedPromotionDetails = new ArrayList<>();
         if (bestExclusivePromo != null && exclusivePromoDiscount >= combinedStackableTotal) {
             appliedPromotions.add(bestExclusivePromo.getName());
+            if (bestExclusivePromo.getId() != null) {
+                appliedPromotionDetails.add(new AppliedPromotion(
+                        bestExclusivePromo.getId(), bestExclusivePromo.getName(), exclusivePromoDiscount));
+            }
             bundleDiscounts += exclusivePromoDiscount;
             couponDiscount = 0;
         } else {
             if (bestStackablePromo != null) {
                 appliedPromotions.add(bestStackablePromo.getName());
+                if (bestStackablePromo.getId() != null) {
+                    appliedPromotionDetails.add(new AppliedPromotion(
+                            bestStackablePromo.getId(), bestStackablePromo.getName(), stackablePromoDiscount));
+                }
                 bundleDiscounts += stackablePromoDiscount;
             }
             bundleDiscounts = Math.min(bundleDiscounts, grossSubtotal);
@@ -161,7 +190,8 @@ public class DiscountCalculator {
                 couponDiscount,
                 totalDiscount,
                 netTotal,
-                appliedPromotions
+                appliedPromotions,
+                List.copyOf(appliedPromotionDetails)
         );
     }
 

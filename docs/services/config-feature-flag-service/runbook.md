@@ -58,7 +58,7 @@ kubectl get deploy config-feature-flag-service -n platform -o jsonpath='{.spec.r
 kubectl get deploy -n platform config-feature-flag-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Upgrade
-helm upgrade config-feature-flag-service deploy/helm/config-feature-flag-service \
+helm upgrade instacommerce deploy/helm \
   -n platform \
   --values deploy/helm/values.yaml \
   --values deploy/helm/values-prod.yaml
@@ -267,7 +267,7 @@ kubectl exec -n platform deploy/config-feature-flag-service -- \
 
 ```bash
 # For very frequently evaluated flags (>10K req/s):
-helm upgrade config-feature-flag-service deploy/helm/config-feature-flag-service \
+helm upgrade instacommerce deploy/helm \
   -n platform \
   --set cache.caffeine.maxSize=20000 \
   --set cache.caffeine.ttlSeconds=3600 \
@@ -315,6 +315,6 @@ config_flag_overrides_count
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/config-feature-flag-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/config-feature-flag-service/README.md`
 - **Alert Rules**: `/monitoring/prometheus/config-feature-flag-rules.yaml`

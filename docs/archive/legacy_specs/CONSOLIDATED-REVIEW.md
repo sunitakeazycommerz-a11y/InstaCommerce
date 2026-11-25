@@ -1,5 +1,7 @@
 # Instacommerce Platform — Consolidated Code Review
 
+> **Status:** ARCHIVED / HISTORICAL REFERENCE — Inception-phase architectural audit. See [`docs/reviews/iter3/master-review.md`](../../reviews/iter3/master-review.md) and [`docs/repo-truth/README.md`](../../repo-truth/README.md) for current status.
+
 **Date:** 2026-02-07  
 **Scope:** Full codebase — 7 microservices, infrastructure, CI/CD, contracts  
 **Scale Target:** 20M+ users, Q-commerce (10-min delivery), PCI-DSS/GDPR compliant  

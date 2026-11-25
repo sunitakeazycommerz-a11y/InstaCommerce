@@ -5,7 +5,7 @@
 The ai-inference-service provides ML model serving capabilities for InstaCommerce, handling real-time inference requests for ETA predictions, demand forecasting, and dynamic pricing. It supports batching, model versioning, and automatic cache invalidation for sub-500ms latency at p99.
 
 **Service Ownership**: Platform Team - AI/ML Infrastructure Tier 3
-**Language**: Python 3.13 (FastAPI + Linear/Logistic/Ensemble Models)
+**Language**: Python 3.12 (FastAPI + Linear/Logistic/Ensemble Models)
 **Default Port**: 8101
 **Status**: Tier 3 Strategic (ML-driven features)
 
@@ -134,7 +134,7 @@ curl -s http://localhost:8101/metrics
 
 ### Environment Variables
 ```env
-SERVER_PORT=8090
+SERVER_PORT=8101
 MODEL_REGISTRY_BUCKET=gs://instacommerce-ml-models
 ACTIVE_MODEL_PATH=eta-model/v202603.1
 SHADOW_MODEL_PATH=eta-model/v202603-candidate
@@ -226,7 +226,7 @@ ai-inference:
 3. **Review batch window**: `BATCH_WINDOW_MS` too large (increase window for better throughput)
 
 ### Model Accuracy Degradation
-1. **Verify active model version**: `curl http://ai-inference-service:8090/models` (wrong version?)
+1. **Verify active model version**: `curl http://ai-inference-service:8101/models` (wrong version?)
 2. **Monitor shadow model**: Compare candidate accuracy vs. active over 24-hour window
 3. **Check feature drift**: Compare feature distributions from 7 days ago vs. today
 

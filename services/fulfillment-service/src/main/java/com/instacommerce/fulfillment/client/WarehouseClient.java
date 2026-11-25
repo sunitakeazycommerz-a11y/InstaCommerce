@@ -34,7 +34,7 @@ public class WarehouseClient {
         this.baseUrl = fulfillmentProperties.getClients().getWarehouse().getBaseUrl();
     }
 
-    @Cacheable(value = "storeCoordinates", key = "#storeId")
+    @Cacheable(value = "storeCoordinates", key = "#storeId", unless = "#result == null")
     @CircuitBreaker(name = "warehouseService", fallbackMethod = "getStoreCoordinatesFallback")
     @Retry(name = "warehouseService")
     @SuppressWarnings("unchecked")

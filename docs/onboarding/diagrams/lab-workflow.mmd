@@ -1,0 +1,44 @@
+flowchart LR
+    classDef setup fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef auth fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef saga fill:#F5F3FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef test fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#0F172A
+    classDef ops fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+    classDef store fill:#F1F5F9,stroke:#334155,stroke-width:1.5px,color:#0F172A
+
+    subgraph L1["Lab 1: Bootstrap & Readiness"]
+        direction TB
+        L1A["./scripts/dev-local.sh up<br/>Docker Compose + 39 PG DBs/aliases<br/>Temporal: instacommerce & reverse-etl"]:::setup
+        L1B["RSA-2048 Keypair + .local-dev/.env.local<br/>./scripts/dev-local.sh start-core (10 Java svcs)<br/>/actuator/health/readiness & smoke"]:::setup
+        L1A --> L1B
+    end
+
+    subgraph L2["Lab 2: Auth & Zero-Trust Edge"]
+        direction TB
+        L2A["POST /api/v1/auth/register & login (:8081)<br/>RS256 JWT: aud=instacommerce-api, kid<br/>GET /.well-known/jwks.json"]:::auth
+        L2B["Edge Trace:<br/>mobile-bff :8080 (header propagation)<br/>checkout :8091 (403 on DLQ/user mismatch)<br/>admin-gateway :8099 (401 customer JWT)"]:::auth
+        L2A --> L2B
+    end
+
+    subgraph L3["Lab 3: Checkout Saga & State"]
+        direction TB
+        L3A["Seed price_rules + stock_items<br/>POST /cart/items (:8090)<br/>POST /bff/mobile/v1/checkout/submit or /checkout"]:::saga
+        L3B["Inspect Live State:<br/>Temporal UI :8233 · Kafka UI :8070<br/>PG: orders, outbox_events, reservations,<br/>ledger_entries / payment_ledger"]:::store
+        L3A --> L3B
+    end
+
+    subgraph L4["Lab 4: Inner-Loop Tests & LSP"]
+        direction TB
+        L4A["Narrow Polyglot Validation:<br/>./gradlew :services:{svc}:test<br/>go test -race ./... · .venv/bin/pytest<br/>run_quality_checks.py --fixtures"]:::test
+        L4B["LSP Navigation:<br/>./scripts/lsp-walkthrough status<br/>outline / def / refs / check"]:::test
+        L4A --> L4B
+    end
+
+    subgraph L5["Lab 5: Ops & Safety Drills"]
+        direction TB
+        L5A["./scripts/saga-dlq-retry.sh<br/>--list · --retry · --resolve · --replay<br/>(supports --dry-run)"]:::ops
+        L5B["./scripts/check-error-budget-gate.sh<br/>bash scripts/check-monorepo-consistency.sh<br/>--strict-docs"]:::ops
+        L5A --> L5B
+    end
+
+    L1 --> L2 --> L3 --> L4 --> L5

@@ -1,0 +1,28 @@
+flowchart TD
+    subgraph LaneA["Lane A: CDC Ingestion Loop (pkg/cdc)"]
+        F1["FetchMessage(2*MaxWait)"] --> F2{"empty/null or<br/>op not in c,i,u,r?"}
+        F2 -->|Yes| FCOM["CommitMessages"]
+        F2 -->|No| FTBL{"source.table<br/>(or topic contains payment)"}
+        FTBL -->|"reconciliation_*"| FSNAP["Update in-mem dailySnapshots"] --> FCOM
+        FTBL -->|"payments"| FUP["parsePaymentLedgerRecord<br/>upsertPaymentLedger:<br/>DEL placeholder + INSERT ON CONFLICT<br/>WHERE EXCLUDED.source_lsn >= current"]
+        FUP -->|OK| FCOM
+        FUP -->|Err| FRET{"isPermanentCDCError or<br/>retries >= CDC_MAX_RETRIES(3)?"}
+        FRET -->|No| FBACK["Wait backoff (100ms..5s) & retry"] --> FUP
+        FRET -->|Yes| FDLT{"sendToDLT -> reconciliation.events.DLT"}
+        FDLT -->|OK| FCOM
+        FDLT -->|Fail| FBLK["blockedPartitions[p]=true<br/>Hold offset commit & backoff"]
+    end
+
+    subgraph LaneB["Lane B: T+1 Scheduled Matcher (pkg/reconciliation)"]
+        S1(["DailyScheduler tick<br/>(RunOnStartup UNWIRED)"]) --> S2{"running.CompareAndSwap<br/>& pg_try_advisory_lock(7283910451)?"}
+        S2 -->|"Busy"| SSKIP["Skip run (already running)"]
+        S2 -->|Acquired| S3["BeginTx -> getOrCreateRun(yesterday)<br/>If existing: DEL WHERE fix_applied_at IS NULL"]
+        S3 --> S4["Load payment_ledger (amount_cents by created_at)<br/>& psp_export_snapshot (export_date)"]
+        S4 --> S5{"detectMismatches Classification"}
+        S5 -->|"Only in PSP / Ledger"| M1["missing_ledger_entry / missing_psp_export<br/>ManualReview=true (HIGH)"]
+        S5 -->|"abs(diff) <= 2c (same sign)"| M2["fee_tax_rounding_within_tolerance<br/>AutoFixed=true"]
+        S5 -->|"abs(diff) <= 100c & <= 5%"| M3["amount_mismatch_auto_fixable<br/>AutoFixed=true"]
+        S5 -->|"Otherwise"| M4["amount_mismatch_manual_review<br/>ManualReview=true"]
+        M1 & M2 & M3 & M4 --> SSP["SAVEPOINT mismatch_sp<br/>INSERT mismatch or ROLLBACK TO SAVEPOINT<br/>(failedCount>0 -> PARTIAL_FAILED)"]
+        SSP --> SCOM["tx.Commit() -> EventPublisher (best-effort)<br/>-> pg_advisory_unlock"]
+    end

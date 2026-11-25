@@ -1,24 +1,24 @@
 # ADR-012: Per-Service Token Scoping for Least-Privilege Service Auth
 
 ## Status
-Proposed
+Accepted (Phase 1 Dual-Mode rolled out; Phase 2 shared-fallback retirement in progress)
 
 ## Date
 2026-03-21
 
 ## Context
 
-All 28 InstaCommerce services share a single `INTERNAL_SERVICE_TOKEN` for service-to-service authentication. While ADR-006 and ADR-010 improved the security posture (constant-time comparison, reduced privileges, per-service allowlists), the shared token remains a significant blast-radius risk.
+Historically, all 30 InstaCommerce services shared a single `INTERNAL_SERVICE_TOKEN` for service-to-service authentication. While ADR-006 and ADR-010 improved the security posture (constant-time comparison, reduced privileges, per-service allowlists), the shared token remains a significant blast-radius risk.
 
 **Problem Statement:**
 - Compromise of any service's configuration or memory exposes the shared token
-- Attackers gain immediate impersonation capability across all 28 services
+- Attackers gain immediate impersonation capability across all 30 services
 - Token rotation requires coordination and deployment to all services simultaneously
 - No audit trail of which service uses which token in production
 
 **Scale:**
 - 20 Java services
-- 7 Go services
+- 8 Go services (`+ go-shared` library)
 - 2 Python services
 - Defense-in-depth needed on top of existing Istio mTLS
 
@@ -27,10 +27,10 @@ All 28 InstaCommerce services share a single `INTERNAL_SERVICE_TOKEN` for servic
 Implement **per-service token scoping** with a structured 2-phase rollout:
 
 ### Phase 1: Dual-Mode Accept (Wave 34 Track B - This PR)
-- Generate unique token for each of 28 services
+- Generate unique token for each of 30 services
 - Store all tokens in Kubernetes secret `service-tokens`
 - Update identity-service filter to check per-service token first, then fall back to shared token
-- Update all 28 services' Helm charts to inject their own token
+- Update all 30 services' Helm charts to inject their own token
 - Deploy: services accept both per-service tokens AND shared token
 - Duration: 2 weeks (2026-03-21 to 2026-04-04)
 
@@ -46,7 +46,7 @@ Implement **per-service token scoping** with a structured 2-phase rollout:
 ### Token Generation
 ```
 Format: base64-encoded 64-byte random string (4x security vs 16-byte UUID)
-Stored: Kubernetes secret "service-tokens" with 28 keys
+Stored: Kubernetes secret "service-tokens" with 30 keys
 Keys: "{service-name}-token"
 Rotation: Independent per-service via Terraform
 ```
@@ -54,7 +54,7 @@ Rotation: Independent per-service via Terraform
 ### Token Flow
 ```
 1. Terraform/random_password generates unique tokens
-2. Kubernetes secret created with all 28 tokens
+2. Kubernetes secret created with all 30 tokens
 3. Helm values mount secret as env variables
 4. Service A → reads OWN_SERVICE_TOKEN from secret
 5. Service A → sends X-Internal-Token: $OWN_SERVICE_TOKEN to Service B
@@ -79,7 +79,7 @@ internal:
     allowed-callers:
       order-service: ${ORDER_SERVICE_TOKEN:}
       payment-service: ${PAYMENT_SERVICE_TOKEN:}
-      # ... 26 more services
+      # ... 28 more services
 ```
 
 ## Deployment
@@ -94,12 +94,12 @@ resource "kubernetes_secret" "service_tokens" {
   data = {
     "order-service-token" = random_password.order_service_token.result,
     "payment-service-token" = random_password.payment_service_token.result,
-    # ... 26 more
+    # ... 28 more
   }
 }
 ```
 
-### Helm Chart Updates (All 28 Services)
+### Helm Chart Updates (All 30 Services)
 ```yaml
 services:
   order-service:
@@ -108,7 +108,7 @@ services:
         secretKeyRef:
           name: service-tokens
           key: order-service-token
-  # Repeat for all 28 services
+  # Repeat for all 30 services
 ```
 
 ### Service Client Updates (Minimal)
@@ -124,8 +124,8 @@ No code changes needed. Services already send X-Internal-Token header with their
 - **Gradual rollout**: 2-week dual-mode period allows safe monitoring
 
 ### Negative
-- **Increased secret surface**: 28 tokens instead of 1 (but Kubernetes secret encryption mitigates)
-- **Helm complexity**: 28 env variable injections per identity-service (templating can reduce)
+- **Increased secret surface**: 30 tokens instead of 1 (but Kubernetes secret encryption mitigates)
+- **Helm complexity**: 30 env variable injections per identity-service (templating can reduce)
 - **Terraform state size**: Per-service random_password resources (negligible impact)
 
 ### Risks
@@ -147,7 +147,7 @@ No code changes needed. Services already send X-Internal-Token header with their
 
 3. **Rolling Deployment** (2-week observation window)
    - Deploy identity-service first (updated filter)
-   - Deploy all 28 services (updated Helm values)
+   - Deploy all 30 services (updated Helm values)
    - Monitor: logs for token acceptance patterns
    - Validate: X-Internal-Service audit logs show per-service tokens accepted
 
@@ -181,7 +181,7 @@ Services continue working with shared token. No downtime.
 
 ### Option B: OAuth2 Client Credentials Flow
 - **Pro**: Industry standard, time-bound access
-- **Con**: Adds OAuth server, complexity for 28 callers
+- **Con**: Adds OAuth server, complexity for 30 callers
 - **Decision**: Rejected; too heavyweight for internal services
 
 ### Option C: Hashicorp Vault Agent Sidecar

@@ -8,6 +8,7 @@ public class RiderFleetProperties {
     private final Assignment assignment = new Assignment();
     private final Recovery recovery = new Recovery();
     private final Dispatch dispatch = new Dispatch();
+    private final Earnings earnings = new Earnings();
 
     public Jwt getJwt() {
         return jwt;
@@ -23,6 +24,10 @@ public class RiderFleetProperties {
 
     public Dispatch getDispatch() {
         return dispatch;
+    }
+
+    public Earnings getEarnings() {
+        return earnings;
     }
 
     public static class Jwt {
@@ -142,6 +147,117 @@ public class RiderFleetProperties {
 
         public void setOptimizerBaseUrl(String optimizerBaseUrl) {
             this.optimizerBaseUrl = optimizerBaseUrl;
+        }
+    }
+
+    public static class Earnings {
+        private long baseFeeCents = 2500L;
+        private long perKmFeeCents = 600L;
+        private long minDeliveryFeeCents = 2500L;
+        private long peakHourBonusCents = 500L;
+        private int streakThreshold = 5;
+        private long streakBonusCents = 400L;
+        private double highRatingThreshold = 4.75;
+        private long highRatingBonusCents = 300L;
+        private long weekendBonusCents = 250L;
+        private int heavyOrderWeightGrams = 10_000;
+        private long heavyOrderBonusCents = 300L;
+        private String timezone = "Asia/Kolkata";
+
+        public long getBaseFeeCents() {
+            return baseFeeCents;
+        }
+
+        public void setBaseFeeCents(long baseFeeCents) {
+            this.baseFeeCents = baseFeeCents;
+        }
+
+        public long getPerKmFeeCents() {
+            return perKmFeeCents;
+        }
+
+        public void setPerKmFeeCents(long perKmFeeCents) {
+            this.perKmFeeCents = perKmFeeCents;
+        }
+
+        public long getMinDeliveryFeeCents() {
+            return minDeliveryFeeCents;
+        }
+
+        public void setMinDeliveryFeeCents(long minDeliveryFeeCents) {
+            this.minDeliveryFeeCents = minDeliveryFeeCents;
+        }
+
+        public long getPeakHourBonusCents() {
+            return peakHourBonusCents;
+        }
+
+        public void setPeakHourBonusCents(long peakHourBonusCents) {
+            this.peakHourBonusCents = peakHourBonusCents;
+        }
+
+        public int getStreakThreshold() {
+            return streakThreshold;
+        }
+
+        public void setStreakThreshold(int streakThreshold) {
+            this.streakThreshold = streakThreshold;
+        }
+
+        public long getStreakBonusCents() {
+            return streakBonusCents;
+        }
+
+        public void setStreakBonusCents(long streakBonusCents) {
+            this.streakBonusCents = streakBonusCents;
+        }
+
+        public double getHighRatingThreshold() {
+            return highRatingThreshold;
+        }
+
+        public void setHighRatingThreshold(double highRatingThreshold) {
+            this.highRatingThreshold = highRatingThreshold;
+        }
+
+        public long getHighRatingBonusCents() {
+            return highRatingBonusCents;
+        }
+
+        public void setHighRatingBonusCents(long highRatingBonusCents) {
+            this.highRatingBonusCents = highRatingBonusCents;
+        }
+
+        public long getWeekendBonusCents() {
+            return weekendBonusCents;
+        }
+
+        public void setWeekendBonusCents(long weekendBonusCents) {
+            this.weekendBonusCents = weekendBonusCents;
+        }
+
+        public int getHeavyOrderWeightGrams() {
+            return heavyOrderWeightGrams;
+        }
+
+        public void setHeavyOrderWeightGrams(int heavyOrderWeightGrams) {
+            this.heavyOrderWeightGrams = heavyOrderWeightGrams;
+        }
+
+        public long getHeavyOrderBonusCents() {
+            return heavyOrderBonusCents;
+        }
+
+        public void setHeavyOrderBonusCents(long heavyOrderBonusCents) {
+            this.heavyOrderBonusCents = heavyOrderBonusCents;
+        }
+
+        public String getTimezone() {
+            return timezone;
+        }
+
+        public void setTimezone(String timezone) {
+            this.timezone = timezone;
         }
     }
 }

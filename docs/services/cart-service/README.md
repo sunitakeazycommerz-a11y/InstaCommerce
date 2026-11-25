@@ -7,7 +7,7 @@
 | **Module** | `:services:cart-service` |
 | **Port** | `8090` |
 | **Runtime** | Spring Boot 4.0 · Java 21 |
-| **Database** | PostgreSQL 15+ (Flyway-managed, V1-V7) |
+| **Database** | PostgreSQL 16 (Flyway-managed, V1-V7) |
 | **Messaging** | Transactional Outbox → `cart.events` |
 | **Cache** | Two-Level: Caffeine L1 + Redis L2 with Pub/Sub |
 | **Auth** | JWT RS256 + per-service token isolation |
@@ -63,7 +63,7 @@
                          ▼
        ┌─────────────────────────────────────┐
        │ Istio IngressGateway                 │
-       │ VirtualService → cart-service:8088   │
+       │ VirtualService → cart-service:8090   │
        └────────────┬────────────────────────┘
                     │
         ┌───────────▼─────────────┐
@@ -634,13 +634,13 @@ alerts:
 **Resolution:**
 ```bash
 # Check pricing-service health
-curl http://pricing-service:8087/actuator/health/ready
+curl http://pricing-service:8089/actuator/health/ready
 
 # Check inventory-service health
-curl http://inventory-service:8086/actuator/health/ready
+curl http://inventory-service:8083/actuator/health/ready
 
 # Check database connection pool
-curl http://cart-service:8088/actuator/metrics/db_connection_pool_active
+curl http://cart-service:8090/actuator/metrics/db_connection_pool_active
 
 # Increase timeouts temporarily
 CART_PRICING_TIMEOUT_MS=1000 (from 500)
@@ -678,7 +678,7 @@ SELECT pg_size_pretty(pg_total_relation_size('outbox_events'));
 VACUUM ANALYZE outbox_events;
 
 # Trigger manual outbox drain
-curl -X POST http://outbox-relay:8096/admin/drain-outbox
+curl -X POST http://outbox-relay:8103/admin/drain-outbox
 ```
 
 ### Scenario 3: Pricing Service Circuit Breaker Open (Always returning 503)
@@ -699,13 +699,13 @@ curl -X POST http://outbox-relay:8096/admin/drain-outbox
 kubectl get pods -n services | grep pricing
 
 # Test network connectivity
-curl http://pricing-service:8087/actuator/health/live
+curl http://pricing-service:8089/actuator/health/live
 
 # Force circuit breaker reset
-curl -X POST http://cart-service:8088/admin/circuit-breaker/reset
+curl -X POST http://cart-service:8090/admin/circuit-breaker/reset
 
 # Check circuit breaker config
-curl http://cart-service:8088/actuator/metrics/resilience4j_circuitbreaker_state
+curl http://cart-service:8090/actuator/metrics/resilience4j_circuitbreaker_state
 ```
 
 ### Scenario 4: Caffeine Cache Hit Rate Drops (Cache churn)
@@ -724,10 +724,10 @@ curl http://cart-service:8088/actuator/metrics/resilience4j_circuitbreaker_state
 **Resolution:**
 ```bash
 # Check cache config
-curl http://cart-service:8088/actuator/metrics/cache_cache_size
+curl http://cart-service:8090/actuator/metrics/cache_cache_size
 
 # Inspect eviction patterns
-curl http://cart-service:8088/actuator/metrics/cache_evictions_weight
+curl http://cart-service:8090/actuator/metrics/cache_evictions_weight
 
 # Verify cache TTL
 echo $CART_CACHE_TTL_SECONDS (should be 86400 = 24h)
@@ -758,7 +758,7 @@ kubectl rollout restart deployment/cart-service
 kubectl get pods -n services | grep inventory
 
 # Test connectivity
-curl http://inventory-service:8086/actuator/health/ready
+curl http://inventory-service:8083/actuator/health/ready
 
 # Check network policy allows traffic from cart-service
 kubectl get networkpolicies -n services | grep inventory
@@ -822,7 +822,7 @@ DELETE FROM shedlock WHERE name = 'ExpireCartJob'
 AND lock_at_most_until < NOW();
 
 # Trigger manual cleanup job
-curl -X POST http://cart-service:8088/admin/jobs/expire-carts
+curl -X POST http://cart-service:8090/admin/jobs/expire-carts
 
 # Increase job memory and timeout
 CART_JOB_MEMORY_MB=1024 (from 512)
@@ -892,7 +892,7 @@ kubectl rollout restart deployment/cart-service
    - Compare cart-service cache vs inventory-service source
    - Check Kafka consumer lag
 2. **Quick Fix:**
-   - Clear inventory cache: `curl -X POST http://inventory-service:8086/admin/cache/clear`
+   - Clear inventory cache: `curl -X POST http://inventory-service:8083/admin/cache/clear`
 3. **Recovery:**
    - Restart CDC consumer if lag > 5 min
    - Audit transaction history for correctness
@@ -925,7 +925,7 @@ kubectl rollout restart deployment/cart-service
 ### Environment Variables
 
 ```env
-SERVER_PORT=8088
+SERVER_PORT=8090
 SPRING_PROFILES_ACTIVE=gcp
 
 SPRING_DATASOURCE_URL=jdbc:postgresql://cloudsql-proxy:5432/carts

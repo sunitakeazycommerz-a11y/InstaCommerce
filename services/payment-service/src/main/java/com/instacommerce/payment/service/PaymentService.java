@@ -57,45 +57,20 @@ public class PaymentService {
 
             String normalizedKey = IdempotencyKeys.normalize(request.idempotencyKey());
             Payment pending = txHelper.savePendingAuthorization(request, normalizedKey);
-            if (pending == null) {
-                // idempotent hit — already exists
+            Payment target = pending;
+            if (target == null) {
                 Payment existing = paymentRepository.findByIdempotencyKey(normalizedKey).orElseThrow();
-                if (existing.getStatus() == PaymentStatus.AUTHORIZE_PENDING
-                    && existing.getPspReference() != null
-                    && !existing.getPspReference().isBlank()) {
-                    existing = reconcilePendingAuthorization(existing);
+                if (existing.getStatus() != PaymentStatus.AUTHORIZE_PENDING) {
+                    return PaymentMapper.toResponse(existing);
                 }
-                return PaymentMapper.toResponse(existing);
+                if (existing.getPspReference() != null && !existing.getPspReference().isBlank()) {
+                    return PaymentMapper.toResponse(reconcilePendingAuthorization(existing));
+                }
+                // Previous attempt failed before receiving a PSP reference; retry PSP with the same idempotency key.
+                target = existing;
             }
 
-            GatewayAuthResult gatewayResult;
-            try {
-                gatewayResult = paymentGateway.authorize(new GatewayAuthRequest(
-                    request.amountCents(),
-                    pending.getCurrency(),
-                    normalizedKey,
-                    request.effectivePaymentMethod()
-                ));
-            } catch (PaymentGatewayTransientException ex) {
-                log.warn("Transient PSP authorization timeout/error for payment {}: {}",
-                    pending.getId(), ex.getMessage());
-                throw ex;
-            } catch (Exception ex) {
-                String reason = (ex.getMessage() != null && !ex.getMessage().isBlank())
-                    ? ex.getMessage() : "PSP authorization error";
-                txHelper.markAuthorizationFailed(pending.getId(), reason);
-                throw ex;
-            }
-
-            if (!gatewayResult.success()) {
-                String reason = (gatewayResult.declineReason() != null && !gatewayResult.declineReason().isBlank())
-                    ? gatewayResult.declineReason() : "Authorization declined by PSP";
-                txHelper.markAuthorizationFailed(pending.getId(), reason);
-                throw new PaymentDeclinedException(gatewayResult.declineReason());
-            }
-
-            Payment saved = txHelper.completeAuthorization(pending.getId(), gatewayResult.pspReference());
-            return PaymentMapper.toResponse(saved);
+            return executeGatewayAuthorization(target, request, normalizedKey);
         } catch (PaymentGatewayException e) {
             result = "gateway_error";
             throw e;
@@ -109,6 +84,40 @@ public class PaymentService {
                 .register(meterRegistry));
             meterRegistry.counter("payment.operation.total", "operation", "authorize", "result", result).increment();
         }
+    }
+
+    private PaymentResponse executeGatewayAuthorization(Payment pending, AuthorizeRequest request, String normalizedKey) {
+        String paymentMethod = request.effectivePaymentMethod() != null
+            ? request.effectivePaymentMethod()
+            : pending.getPaymentMethod();
+        GatewayAuthResult gatewayResult;
+        try {
+            gatewayResult = paymentGateway.authorize(new GatewayAuthRequest(
+                pending.getAmountCents(),
+                pending.getCurrency(),
+                normalizedKey,
+                paymentMethod
+            ));
+        } catch (PaymentGatewayTransientException ex) {
+            log.warn("Transient PSP authorization timeout/error for payment {}: {}",
+                pending.getId(), ex.getMessage());
+            throw ex;
+        } catch (Exception ex) {
+            String reason = (ex.getMessage() != null && !ex.getMessage().isBlank())
+                ? ex.getMessage() : "PSP authorization error";
+            txHelper.markAuthorizationFailed(pending.getId(), reason);
+            throw ex;
+        }
+
+        if (!gatewayResult.success()) {
+            String reason = (gatewayResult.declineReason() != null && !gatewayResult.declineReason().isBlank())
+                ? gatewayResult.declineReason() : "Authorization declined by PSP";
+            txHelper.markAuthorizationFailed(pending.getId(), reason);
+            throw new PaymentDeclinedException(gatewayResult.declineReason());
+        }
+
+        Payment saved = txHelper.completeAuthorization(pending.getId(), gatewayResult.pspReference());
+        return PaymentMapper.toResponse(saved);
     }
 
     private Payment reconcilePendingAuthorization(Payment existing) {

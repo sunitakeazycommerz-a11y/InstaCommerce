@@ -1,0 +1,32 @@
+flowchart TD
+    Req["Incoming HTTP Request"] --> Corr["CorrelationIdFilter<br/>Populate MDC + X-Correlation-ID"]
+    Corr --> SkipJwt{"shouldNotFilter?<br/>/actuator, /admin/health,<br/>/admin/metrics, /error"}
+    SkipJwt -- "Yes" --> RoutePublic["Permit /actuator & /admin/health<br/>(Note: /admin/metrics unmapped -> 404)"]
+    SkipJwt -- "No" --> Strip["AdminJwtAuthenticationFilter<br/>Wrap request to strip x-admin-* & x-internal-*"]
+
+    Strip --> HasAuth{"Authorization: Bearer ...?"}
+    HasAuth -- "No" --> NoAuth["Leave SecurityContext empty"]
+    HasAuth -- "Yes" --> Validate["DefaultJwtService.validateAccessToken()<br/>Static RSA + iss + accepted-audiences<br/>(instacommerce-admin, instacommerce-api)"]
+
+    Validate -- "JwtException" --> E401["401 TOKEN_INVALID (JSON)<br/>Returns early; skips audit filter"]
+    Validate -- "Valid" --> AudBridge{"aud == instacommerce-admin?"}
+    AudBridge -- "No (e.g. instacommerce-api)" --> RoleChk{"Has ROLE_ADMIN or<br/>ROLE_SUPER_ADMIN?"}
+    RoleChk -- "No" --> E401
+    RoleChk -- "Yes" --> SetCtx["Set SecurityContext"]
+    AudBridge -- "Yes" --> SetCtx
+
+    NoAuth --> RateLim["AdminRateLimitFilter<br/>Key: user:{sub} or ip:{ClientIpResolver}"]
+    SetCtx --> RateLim
+    RateLim --> TryAcq{"WindowCounter.tryAcquire<br/>(120 rpm, max 4096 keys)"}
+    TryAcq -- "Exceeded" --> E429["429 RATE_LIMIT_EXCEEDED<br/>Retry-After: 60 (skips audit filter)"]
+    TryAcq -- "Allowed" --> AuditWrap["AdminSecurityAuditFilter<br/>try { filterChain.doFilter }"]
+
+    AuditWrap --> Rbac{"SecurityConfig + @PreAuthorize<br/>SUPER_ADMIN for /override, /emergency-stop<br/>ADMIN|SUPER_ADMIN for /admin/v1/**"}
+    Rbac -- "Unauthenticated / Denied" --> Err401_403["401 AUTHENTICATION_REQUIRED<br/>or 403 ACCESS_DENIED"]
+    Rbac -- "Authorized" --> Ctrl["AdminDashboardController<br/>SAFE_IDENTIFIER + upstream RestTemplate"]
+
+    Ctrl --> Finally{"finally: POST/PUT/DELETE/PATCH?"}
+    Err401_403 --> Finally
+    Finally -- "Yes" --> EmitAudit["AdminAuditClient.publishAuditEvent()<br/>Sync POST /audit/events (ADMIN_MUTATION)<br/>Failure -> admin.audit.failures++ (never aborts)"]
+    Finally -- "No (GET)" --> Done["Return HTTP Response"]
+    EmitAudit --> Done

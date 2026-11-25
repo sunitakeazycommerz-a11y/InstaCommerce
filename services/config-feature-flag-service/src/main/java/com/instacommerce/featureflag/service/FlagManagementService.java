@@ -10,15 +10,22 @@ import com.instacommerce.featureflag.dto.response.FlagResponse;
 import com.instacommerce.featureflag.exception.ApiException;
 import com.instacommerce.featureflag.repository.FlagAuditLogRepository;
 import com.instacommerce.featureflag.repository.FeatureFlagRepository;
+import jakarta.annotation.Nullable;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class FlagManagementService {
@@ -31,11 +38,21 @@ public class FlagManagementService {
     private final CacheManager cacheManager;
     private final FlagCacheEventListener cacheEventListener;
 
+    @Autowired
     public FlagManagementService(FeatureFlagRepository flagRepository,
                                  FlagAuditLogRepository auditLogRepository,
                                  FlagChangeStreamController flagChangeStreamController,
                                  CacheManager cacheManager,
-                                 FlagCacheEventListener cacheEventListener) {
+                                 ObjectProvider<FlagCacheEventListener> cacheEventListenerProvider) {
+        this(flagRepository, auditLogRepository, flagChangeStreamController, cacheManager,
+                cacheEventListenerProvider != null ? cacheEventListenerProvider.getIfAvailable() : null);
+    }
+
+    public FlagManagementService(FeatureFlagRepository flagRepository,
+                                 FlagAuditLogRepository auditLogRepository,
+                                 FlagChangeStreamController flagChangeStreamController,
+                                 CacheManager cacheManager,
+                                 @Nullable FlagCacheEventListener cacheEventListener) {
         this.flagRepository = flagRepository;
         this.auditLogRepository = auditLogRepository;
         this.flagChangeStreamController = flagChangeStreamController;
@@ -44,6 +61,10 @@ public class FlagManagementService {
     }
 
     @Transactional
+    @Caching(evict = {
+        @CacheEvict(value = "flags", key = "#request.key()"),
+        @CacheEvict(value = "flags-all", allEntries = true)
+    })
     public FlagResponse createFlag(CreateFlagRequest request, String changedBy) {
         FlagTargetingValidator.validateKey(request.key());
         FlagTargetingValidator.validateRolloutPercentage(request.rolloutPercentage());
@@ -77,11 +98,24 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "CREATED", null,
                 flagSummary(flag), changedBy));
 
+        UUID flagId = flag.getId();
+        String flagKey = flag.getKey();
+        String summary = flagSummary(flag);
+        boolean enabled = flag.isEnabled();
+        publishAfterCommit(() -> {
+            if (cacheEventListener != null) {
+                cacheEventListener.publishFlagUpdate(flagId, flagKey, summary);
+            }
+            flagChangeStreamController.broadcast(flagKey, enabled);
+        });
         return toResponse(flag);
     }
 
     @Transactional
-    @CacheEvict(value = "flags", key = "#key")
+    @Caching(evict = {
+        @CacheEvict(value = "flags", key = "#key"),
+        @CacheEvict(value = "flags-all", allEntries = true)
+    })
     public FlagResponse updateFlag(String key, UpdateFlagRequest request, String changedBy) {
         FlagTargetingValidator.validateRolloutPercentage(request.rolloutPercentage());
         FlagTargetingValidator.validateTargetUsersJson(request.targetUsers());
@@ -119,13 +153,23 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "UPDATED", oldValue,
                 flagSummary(flag), changedBy));
 
-        cacheEventListener.publishFlagUpdate(flag.getId(), key, flagSummary(flag));
-        flagChangeStreamController.broadcast(key, flag.isEnabled());
+        UUID flagId = flag.getId();
+        String summary = flagSummary(flag);
+        boolean enabled = flag.isEnabled();
+        publishAfterCommit(() -> {
+            if (cacheEventListener != null) {
+                cacheEventListener.publishFlagUpdate(flagId, key, summary);
+            }
+            flagChangeStreamController.broadcast(key, enabled);
+        });
         return toResponse(flag);
     }
 
     @Transactional
-    @CacheEvict(value = "flags", key = "#key")
+    @Caching(evict = {
+        @CacheEvict(value = "flags", key = "#key"),
+        @CacheEvict(value = "flags-all", allEntries = true)
+    })
     public FlagResponse enableFlag(String key, String changedBy) {
         FeatureFlag flag = findByKeyOrThrow(key);
         boolean oldEnabled = flag.isEnabled();
@@ -135,13 +179,21 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "ENABLED",
                 String.valueOf(oldEnabled), "true", changedBy));
 
-        cacheEventListener.publishFlagUpdate(flag.getId(), key, "enabled=true");
-        flagChangeStreamController.broadcast(key, true);
+        UUID flagId = flag.getId();
+        publishAfterCommit(() -> {
+            if (cacheEventListener != null) {
+                cacheEventListener.publishFlagUpdate(flagId, key, "enabled=true");
+            }
+            flagChangeStreamController.broadcast(key, true);
+        });
         return toResponse(flag);
     }
 
     @Transactional
-    @CacheEvict(value = "flags", key = "#key")
+    @Caching(evict = {
+        @CacheEvict(value = "flags", key = "#key"),
+        @CacheEvict(value = "flags-all", allEntries = true)
+    })
     public FlagResponse disableFlag(String key, String changedBy) {
         FeatureFlag flag = findByKeyOrThrow(key);
         boolean oldEnabled = flag.isEnabled();
@@ -151,13 +203,21 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "DISABLED",
                 String.valueOf(oldEnabled), "false", changedBy));
 
-        cacheEventListener.publishFlagUpdate(flag.getId(), key, "enabled=false");
-        flagChangeStreamController.broadcast(key, false);
+        UUID flagId = flag.getId();
+        publishAfterCommit(() -> {
+            if (cacheEventListener != null) {
+                cacheEventListener.publishFlagUpdate(flagId, key, "enabled=false");
+            }
+            flagChangeStreamController.broadcast(key, false);
+        });
         return toResponse(flag);
     }
 
     @Transactional
-    @CacheEvict(value = "flags", key = "#key")
+    @Caching(evict = {
+        @CacheEvict(value = "flags", key = "#key"),
+        @CacheEvict(value = "flags-all", allEntries = true)
+    })
     public FlagResponse setRolloutPercentage(String key, int percentage, String changedBy) {
         if (percentage < 0 || percentage > 100) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PERCENTAGE",
@@ -172,8 +232,13 @@ public class FlagManagementService {
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "UPDATED",
                 String.valueOf(oldPercentage), String.valueOf(percentage), changedBy));
 
-        cacheEventListener.publishFlagUpdate(flag.getId(), key, "rollout=" + percentage);
-        flagChangeStreamController.broadcast(key, percentage);
+        UUID flagId = flag.getId();
+        publishAfterCommit(() -> {
+            if (cacheEventListener != null) {
+                cacheEventListener.publishFlagUpdate(flagId, key, "rollout=" + percentage);
+            }
+            flagChangeStreamController.broadcast(key, percentage);
+        });
         return toResponse(flag);
     }
 
@@ -189,17 +254,37 @@ public class FlagManagementService {
         flag.setEnabled(false);
         flagRepository.save(flag);
 
-        // Bypass cache: directly evict to ensure immediate propagation
         if (cacheManager.getCache("flags") != null) {
             cacheManager.getCache("flags").evict(flagKey);
+        }
+        if (cacheManager.getCache("flags-all") != null) {
+            cacheManager.getCache("flags-all").clear();
         }
 
         String actor = (changedBy != null && !changedBy.isBlank()) ? changedBy : "system";
         auditLogRepository.save(new FlagAuditLog(flag.getId(), "EMERGENCY_STOP",
                 String.valueOf(oldEnabled), "false", actor));
 
-        cacheEventListener.publishBulkUpdate("emergency_stop");
+        publishAfterCommit(() -> {
+            if (cacheEventListener != null) {
+                cacheEventListener.publishBulkUpdate("emergency_stop");
+            }
+            flagChangeStreamController.broadcast(flagKey, false);
+        });
         log.warn("flags.force_disable flag={} previous_state={} by={}", flagKey, oldEnabled, actor);
+    }
+
+    private static void publishAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
+        }
     }
 
     public FlagResponse getFlag(String key) {

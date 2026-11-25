@@ -20,9 +20,9 @@
      - `.github/workflows/ci.yml` (path filters, test matrices, deploy keys)
 3. **Canonical Sources of Truth**:
    - Microservice identifiers: `settings.gradle.kts` (Java), `services/*/go.mod` (Go), and `.github/workflows/ci.yml` (CI matrices).
-   - Domain vocabulary & service topology: [GLOSSARY.md](file:///Users/omkarkumar/InstaCommerce/GLOSSARY.md).
-   - Architectural decisions: [docs/adr/](file:///Users/omkarkumar/InstaCommerce/docs/adr/).
-   - Event topics & envelope: [TopicNames.java](file:///Users/omkarkumar/InstaCommerce/contracts/src/main/java/com/instacommerce/contracts/topics/TopicNames.java) and [EventEnvelope.v1.json](file:///Users/omkarkumar/InstaCommerce/contracts/src/main/resources/schemas/common/EventEnvelope.v1.json).
+   - Domain vocabulary & service topology: [GLOSSARY.md](GLOSSARY.md).
+   - Architectural decisions: [docs/adr/](docs/adr/).
+   - Event topics & envelope: [TopicNames.java](contracts/src/main/java/com/instacommerce/contracts/topics/TopicNames.java) and [EventEnvelope.v1.json](contracts/src/main/resources/schemas/common/EventEnvelope.v1.json).
 
 ---
 
@@ -42,7 +42,7 @@ Agents consume excessive tokens when reading large files blindly or running broa
    - In Go, test only the affected package: `cd services/<service> && go test -race ./pkg/<package>`.
    - In Python, target the specific test: `cd services/<service> && pytest tests/test_file.py::test_fn -v`.
 5. **Rely on `GLOSSARY.md`**:
-   - Use the domain terms defined in [GLOSSARY.md](file:///Users/omkarkumar/InstaCommerce/GLOSSARY.md) rather than writing long exploratory explanations.
+   - Use the domain terms defined in [GLOSSARY.md](GLOSSARY.md) rather than writing long exploratory explanations.
 
 ---
 
@@ -83,11 +83,11 @@ cd services/<service-name> && go build ./...
 ### Python / FastAPI Services
 
 ```bash
-# Run pytest for AI service
-cd services/<python-service> && pytest -v
+# Run pytest for AI service (uses .venv/bin/pytest if virtualenv is local)
+cd services/<python-service> && .venv/bin/pytest -v
 
 # Run single pytest function
-cd services/<python-service> && pytest tests/test_file.py::test_name -v
+cd services/<python-service> && .venv/bin/pytest tests/test_file.py::test_name -v
 
 # Run AI service locally with reload
 cd services/ai-orchestrator-service && uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload
@@ -110,10 +110,14 @@ cd data-platform/dbt && dbt test --select <model_name>
 ### Infrastructure & GitOps
 
 ```bash
-# Local development infrastructure (Postgres, Redis, Kafka, Debezium, Temporal)
+# Bootstrap full local stack + ephemeral RSA-2048 JWT keys + .local-dev/.env.local
+# Subcommands: up | down | reset | status | env | start-core | stop-core | smoke
+./scripts/dev-local.sh up
+
+# Or start local infra containers directly (Postgres 16, Redis 7, Kafka on localhost:9092, Debezium, Temporal)
 docker-compose up -d
 
-# Check monorepo consistency and drift
+# Check monorepo consistency and drift (add --strict-docs for live documentation checks)
 ./scripts/check-monorepo-consistency.sh
 
 # LSP code navigation engine health
@@ -129,13 +133,13 @@ When modifying or adding components, enforce alignment against the monorepo base
 | Dimension | Baseline Standard | Verification Step |
 | --- | --- | --- |
 | **Spring Boot / Java** | Spring Boot 4.0.0 BOM, Java 21, Flyway migrations | Check `build.gradle.kts` and `src/main/resources/db/migration/` |
-| **Go Toolchain** | Go 1.24+ / 1.25, use `services/go-shared` | Inspect `go.mod` and replace directives |
-| **Ports** | Dedicated port per service (see [GLOSSARY.md](file:///Users/omkarkumar/InstaCommerce/GLOSSARY.md)) | Check `application.yml`, Dockerfile, and Helm values |
+| **Go Toolchain** | Go 1.25, use `services/go-shared` | Inspect `go.mod` and replace directives |
+| **Ports** | Dedicated port per service (see [GLOSSARY.md](GLOSSARY.md)) | Check `application.yml`, Dockerfile, and Helm values |
 | **Health Endpoints** | Java: `/actuator/health/readiness`<br>Go: `/health/ready`, `/health/live`<br>Python: `/health` | Curl endpoints or check router registrations |
 | **Outbox Pattern** | Transactional `outbox_events` table for stateful services publishing domain events | Verify Flyway migration creates outbox table and indexes |
 | **Event Envelope** | Conforms to `EventEnvelope.v1.json` with `eventId`, `eventType`, `correlation_id` | Validate serialized JSON payload structure |
 | **CI Path Filters** | Update `.github/workflows/ci.yml` when files/services are added or renamed | Ensure path filter, matrix, and Helm deploy key exist |
-| **Helm Mapping** | Update `deploy/helm/values.yaml` with correct service key | Verify mapped names (e.g. `cdc-consumer`, `payment-webhook`) |
+| **Helm Mapping** | Update `deploy/helm/values.yaml` with correct service key | Verify mapped names (`cdc-consumer`, `location-ingestion`, `outbox-relay`, `payment-webhook`, `stream-processor`) |
 
 ---
 

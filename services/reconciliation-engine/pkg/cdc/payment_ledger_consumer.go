@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ import (
 const (
 	defaultInitialFetchBackoff = 100 * time.Millisecond
 	defaultMaxFetchBackoff     = 5 * time.Second
+	defaultDLTTopic            = "reconciliation.events.DLT"
+	defaultMaxProcessRetries   = 3
 )
 
 type kafkaFetcher interface {
@@ -26,20 +29,27 @@ type kafkaFetcher interface {
 	CommitMessages(ctx context.Context, msgs ...kafka.Message) error
 }
 
+type dltMessageWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
+}
+
 // CDCConsumer processes Debezium CDC events for reconciliation.
 type CDCConsumer struct {
-	kafkaReader    *kafka.Reader
-	db             *sql.DB
-	config         CDCConsumerConfig
-	logger         *slog.Logger
-	mu             sync.RWMutex
-	dailySnapshots map[string]*DailySnapshot
-	metrics        *CDCMetrics
-	done           chan struct{}
-	stopOnce       sync.Once
-	stopErr        error
-	wg             sync.WaitGroup
-	retryBackoff   time.Duration
+	kafkaReader       *kafka.Reader
+	dltWriter         dltMessageWriter
+	db                *sql.DB
+	config            CDCConsumerConfig
+	logger            *slog.Logger
+	mu                sync.RWMutex
+	dailySnapshots    map[string]*DailySnapshot
+	metrics           *CDCMetrics
+	done              chan struct{}
+	stopOnce          sync.Once
+	stopErr           error
+	wg                sync.WaitGroup
+	retryBackoff      time.Duration
+	maxProcessRetries int
 }
 
 func resolveTopics(config CDCConsumerConfig) []string {
@@ -116,16 +126,38 @@ func NewCDCConsumer(_ context.Context, config CDCConsumerConfig, logger *slog.Lo
 		readerCfg.GroupTopics = topics
 	}
 
+	if strings.TrimSpace(config.DLTTopic) == "" {
+		config.DLTTopic = defaultDLTTopic
+	}
+	maxProcessRetries := config.MaxProcessRetries
+	if maxProcessRetries <= 0 {
+		maxProcessRetries = defaultMaxProcessRetries
+	}
+	config.MaxProcessRetries = maxProcessRetries
+
+	var dltWriter dltMessageWriter
+	if len(config.KafkaBrokers) > 0 {
+		dltWriter = &kafka.Writer{
+			Addr:         kafka.TCP(config.KafkaBrokers...),
+			Topic:        config.DLTTopic,
+			Balancer:     &kafka.LeastBytes{},
+			RequiredAcks: kafka.RequireAll,
+			Async:        false,
+		}
+	}
+
 	reader := kafka.NewReader(readerCfg)
 	return &CDCConsumer{
-		kafkaReader:    reader,
-		db:             config.DB,
-		config:         config,
-		logger:         logger,
-		dailySnapshots: make(map[string]*DailySnapshot),
-		metrics:        &CDCMetrics{},
-		done:           make(chan struct{}),
-		retryBackoff:   defaultInitialFetchBackoff,
+		kafkaReader:       reader,
+		dltWriter:         dltWriter,
+		db:                config.DB,
+		config:            config,
+		logger:            logger,
+		dailySnapshots:    make(map[string]*DailySnapshot),
+		metrics:           &CDCMetrics{},
+		done:              make(chan struct{}),
+		retryBackoff:      defaultInitialFetchBackoff,
+		maxProcessRetries: maxProcessRetries,
 	}, nil
 }
 
@@ -160,6 +192,11 @@ func (c *CDCConsumer) Stop() error {
 		close(done)
 		if c.kafkaReader != nil {
 			c.stopErr = c.kafkaReader.Close()
+		}
+		if c.dltWriter != nil {
+			if err := c.dltWriter.Close(); err != nil && c.stopErr == nil {
+				c.stopErr = err
+			}
 		}
 	})
 	c.wg.Wait()
@@ -216,6 +253,7 @@ func (c *CDCConsumer) runConsumerLoopWithFetcher(ctx context.Context, fetcher ka
 	}
 	initialBackoff := c.initialBackoff()
 	backoff := initialBackoff
+	blockedPartitions := make(map[int]bool)
 
 	for {
 		if c.isStopping(ctx) {
@@ -258,21 +296,55 @@ func (c *CDCConsumer) runConsumerLoopWithFetcher(ctx context.Context, fetcher ka
 		}
 		backoff = initialBackoff
 
-		if err := c.processMessageCtx(ctx, msg); err != nil {
-			if c.logger != nil {
-				c.logger.Warn("failed to process cdc message", "error", err, "offset", msg.Offset)
-			}
+		if err := c.processWithRetries(ctx, msg); err != nil {
 			c.mu.Lock()
 			c.metrics.eventsFailed++
 			c.mu.Unlock()
-			continue
-		}
 
-		c.mu.Lock()
-		if msg.Offset > c.metrics.lastProcessedLSN {
-			c.metrics.lastProcessedLSN = msg.Offset
+			if dltErr := c.sendToDLT(ctx, msg, err); dltErr != nil {
+				blockedPartitions[msg.Partition] = true
+				if c.logger != nil {
+					c.logger.Error("failed to process cdc message and DLT unavailable; holding offset",
+						"error", err,
+						"dlt_error", dltErr,
+						"topic", msg.Topic,
+						"partition", msg.Partition,
+						"offset", msg.Offset,
+					)
+				}
+				if !c.waitForRetryOrStop(ctx, backoff) {
+					return
+				}
+				backoff = min(backoff*2, defaultMaxFetchBackoff)
+				continue
+			}
+
+			c.mu.Lock()
+			c.metrics.eventsDLQ++
+			c.mu.Unlock()
+			if c.logger != nil {
+				c.logger.Warn("routed failed cdc message to DLT",
+					"error", err,
+					"topic", msg.Topic,
+					"dlt_topic", c.dltTopic(),
+					"partition", msg.Partition,
+					"offset", msg.Offset,
+				)
+			}
+			if blockedPartitions[msg.Partition] {
+				continue
+			}
+		} else {
+			c.mu.Lock()
+			if msg.Offset > c.metrics.lastProcessedLSN {
+				c.metrics.lastProcessedLSN = msg.Offset
+			}
+			c.mu.Unlock()
+
+			if blockedPartitions[msg.Partition] {
+				continue
+			}
 		}
-		c.mu.Unlock()
 
 		commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := fetcher.CommitMessages(commitCtx, msg); err != nil && c.logger != nil {
@@ -280,6 +352,87 @@ func (c *CDCConsumer) runConsumerLoopWithFetcher(ctx context.Context, fetcher ka
 		}
 		commitCancel()
 	}
+}
+
+func (c *CDCConsumer) maxRetries() int {
+	if c.maxProcessRetries > 0 {
+		return c.maxProcessRetries
+	}
+	return defaultMaxProcessRetries
+}
+
+func (c *CDCConsumer) dltTopic() string {
+	if strings.TrimSpace(c.config.DLTTopic) != "" {
+		return c.config.DLTTopic
+	}
+	return defaultDLTTopic
+}
+
+func (c *CDCConsumer) processWithRetries(ctx context.Context, msg kafka.Message) error {
+	var lastErr error
+	backoff := c.initialBackoff()
+	attempts := c.maxRetries()
+	for attempt := 0; attempt <= attempts; attempt++ {
+		if c.isStopping(ctx) {
+			return ctx.Err()
+		}
+		err := c.processMessageCtx(ctx, msg)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if isPermanentCDCError(err) || attempt >= attempts {
+			return err
+		}
+		if c.logger != nil {
+			c.logger.Warn("transient cdc processing error; retrying",
+				"attempt", attempt+1,
+				"max_retries", attempts,
+				"offset", msg.Offset,
+				"error", err,
+			)
+		}
+		if !c.waitForRetryOrStop(ctx, backoff) {
+			return lastErr
+		}
+		backoff = min(backoff*2, defaultMaxFetchBackoff)
+	}
+	return lastErr
+}
+
+func (c *CDCConsumer) sendToDLT(ctx context.Context, msg kafka.Message, procErr error) error {
+	if c.dltWriter == nil {
+		return errors.New("dlt writer not configured")
+	}
+	headers := append([]kafka.Header(nil), msg.Headers...)
+	headers = append(headers,
+		kafka.Header{Key: "dlt_original_topic", Value: []byte(msg.Topic)},
+		kafka.Header{Key: "dlt_original_partition", Value: []byte(strconv.Itoa(msg.Partition))},
+		kafka.Header{Key: "dlt_original_offset", Value: []byte(strconv.FormatInt(msg.Offset, 10))},
+		kafka.Header{Key: "dlt_error", Value: []byte(procErr.Error())},
+		kafka.Header{Key: "dlt_failed_at", Value: []byte(time.Now().UTC().Format(time.RFC3339))},
+	)
+	dltCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return c.dltWriter.WriteMessages(dltCtx, kafka.Message{
+		Key:     msg.Key,
+		Value:   msg.Value,
+		Headers: headers,
+		Time:    time.Now().UTC(),
+	})
+}
+
+func isPermanentCDCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "failed to unmarshal") || strings.Contains(msg, "missing ")
 }
 
 func (c *CDCConsumer) processMessage(msg kafka.Message) error {

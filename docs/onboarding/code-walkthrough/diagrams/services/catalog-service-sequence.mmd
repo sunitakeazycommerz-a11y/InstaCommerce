@@ -1,0 +1,38 @@
+sequenceDiagram
+    autonumber
+    actor Admin as Admin Client
+    participant Ctrl as AdminProductController
+    participant ProdSvc as ProductService
+    participant OutboxSvc as OutboxService
+    participant PG as PostgreSQL (catalog_db)
+    participant CacheA as TwoLevelCacheManager (Pod A)
+    participant Redis as Redis (L2 + Pub/Sub)
+    participant Job as OutboxPublishJob (@SchedulerLock)
+    participant Kafka as Kafka (catalog.events)
+    participant ConsB as CatalogCacheInvalidationConsumer (Pod B)
+    participant CacheB as TwoLevelCacheManager (Pod B)
+
+    Note over Admin,PG: Phase 1: Atomic Product Mutation + Outbox + Cache Evict
+    Admin->>Ctrl: PUT /admin/products/{id} (ROLE_ADMIN JWT)
+    Ctrl->>ProdSvc: updateProduct(id, request) [@Transactional, @CacheEvict("products")]
+    ProdSvc->>PG: SELECT/UPDATE products & product_images (@Version)
+    ProdSvc->>OutboxSvc: recordProductEvent(saved, "ProductUpdated") [MANDATORY]
+    OutboxSvc->>PG: INSERT outbox_events (sent=false, payload=ProductChangedEvent)
+    ProdSvc->>PG: AuditLogService.log("PRODUCT_UPDATED", ...)
+    PG-->>ProdSvc: COMMIT
+    ProdSvc->>CacheA: TwoLevelCache.evict(id)
+    CacheA->>CacheA: L1 Caffeine invalidate(id)
+    CacheA->>Redis: DEL catalog:products::{id} & PUBLISH catalog:cache:invalidate "{instA}#124;products:{id}"
+    Redis-->>CacheB: onMessage -> evictLocal(id) on peer L1 (ignores self instanceId)
+    Ctrl-->>Admin: 200 ProductResponse
+
+    Note over PG,CacheB: Phase 2: Scheduled Outbox Relay & Cross-Service Kafka Invalidation
+    Job->>PG: ShedLock acquire("outbox-publish") + findTop100BySentFalseOrderByCreatedAtAsc()
+    loop Up to 100 rows inside @Transactional
+        Job->>Kafka: KafkaOutboxEventPublisher.publish() -> send(catalog.events).get(5s)
+        Job->>PG: UPDATE outbox_events SET sent=true
+    end
+    Note right of Job: RISK: outbox-relay-catalog (:8103) also polls outbox_events!
+    Kafka-->>ConsB: onEvent(envelope {eventType: "ProductUpdated", payload: {productId}})
+    ConsB->>CacheB: evictProductCaches(payload) [String + UUID] & clear categories/search
+    CacheB->>Redis: PUBLISH catalog:cache:invalidate

@@ -138,12 +138,13 @@ public class NotificationService {
             recipient,
             variables
         );
-        NotificationLog log = deduplicationService.createLog(request, MaskingUtil.maskRecipient(recipient));
+        String body = templateService.render(channel, template.templateId(), variables);
+        String subject = channel == NotificationChannel.EMAIL ? template.subject() : null;
+        NotificationLog log = deduplicationService.createLog(
+            request, MaskingUtil.maskRecipient(recipient, channel), subject, body);
         if (log == null) {
             return;
         }
-        String body = templateService.render(channel, template.templateId(), variables);
-        String subject = channel == NotificationChannel.EMAIL ? template.subject() : null;
         sender.send(request, log, subject, body);
     }
 

@@ -1,0 +1,63 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Checkout / Cart / Order
+    participant PC as PricingController
+    participant PS as PricingService
+    participant Surge as SurgePricingService
+    participant DC as DiscountCalculator
+    participant QTS as QuoteTokenService
+    participant CS as CouponService
+    participant Lock as PromoReservationService
+    participant Promo as PromotionService
+    participant DB as PostgreSQL (pricing)
+    participant Kafka as Kafka Consumers / Outbox
+
+    Note over Caller,DB: Flow 1 - Cart Quote Calculation, Promo Arbitration and HMAC Token Issuance
+    Caller->>PC: POST /pricing/calculate {items, userId, couponCode, storeId}
+    PC->>PS: calculateCartPrice(request) [@RateLimiter pricingLimiter]
+    PS->>DB: PriceRuleRepository.findActiveRulesByProductIds(productIds, now)
+    PS->>Promo: findActivePromotions() [@Cacheable activePromotions L1 30s / L2 2m]
+    Promo->>DB: SELECT promotions WHERE active AND start_at <= now <= end_at
+    PS->>Promo: findUserRedemptionCounts(userId, promoIds)
+    opt couponCode != null and userId != null
+        PS->>CS: validateCoupon(code, userId, subtotal - preliminaryStackablePromo)
+        CS->>DB: SELECT coupon + COUNT(coupon_redemptions)
+    end
+    PS->>DC: calculateDiscounts(pricedItems, activePromotions, [], couponDiscount, null)
+    Note right of DC: Compares bestExclusivePromo vs bestStackablePromo + coupon<br/>Sets couponDiscount=0 if exclusive >= combinedStackableTotal
+    PS->>Surge: evaluateSurge(storeId) -> StoreSurgeStateStore (pod-local)
+    PS->>QTS: issueQuote(userId, response, appliedCoupon)
+    QTS->>DB: INSERT price_quotes (SHA-256 contentHash, 300s TTL)
+    QTS-->>PC: QuoteResult(quoteId, HmacSHA256(quoteId + ":" + contentHash))
+    PC-->>Caller: 200 PriceCalculationResponse
+
+    Note over Caller,DB: Flow 2 - Concurrent Coupon + Promotion Redemption and Saga Compensation
+    Caller->>PC: POST /pricing/coupons/redeem {code, userId, orderId, discountCents}
+    PC->>CS: redeemCoupon(...) [@Retryable 3x @Transactional]
+    CS->>Lock: SET promo:{CODE}:{userId} "1" NX EX 300 (CHM fallback)
+    Lock-->>CS: true
+    CS->>DB: SELECT * FROM coupons WHERE UPPER(code)=UPPER(:code) FOR UPDATE
+    alt Existing (coupon_id, user_id, order_id)
+        CS-->>PC: 200 OK (idempotent replay)
+    else New redemption
+        CS->>Promo: recordPromotionUsage(promoId, userId, orderId, discountCents)
+        Promo->>DB: SELECT promotions WHERE id=:id FOR UPDATE
+        Promo->>DB: INSERT promotion_redemptions + UPDATE current_uses + 1
+        CS->>DB: INSERT coupon_redemptions + UPDATE total_redeemed + 1
+        CS->>DB: OutboxService.recordEvent("pricing", "CouponRedeemed") [MANDATORY]
+    end
+    CS->>Lock: DEL promo:{CODE}:{userId} (finally before TX commit!)
+    PC-->>Caller: 200 OK
+    Note right of Caller: On saga failure: POST /pricing/coupons/unredeem or /promotions/rollback<br/>deletes redemption row, decrements counters, evicts activePromotions
+
+    Note over Caller,Kafka: Flow 3 - Order Quote Verification and Async Event Pipelines
+    Caller->>PC: POST /pricing/quotes/validate [INTERNAL_SERVICE or ADMIN]
+    PC->>QTS: validate(quoteId, quoteToken, total, subtotal, discount, userId)
+    QTS->>DB: SELECT * FROM price_quotes WHERE id=:quoteId
+    Note right of QTS: Checks validationEnabled, expiresAt, userId, MessageDigest.isEqual(HMAC), totals<br/>Seam: price_quotes never marked consumed (replayable for 300s)
+    QTS-->>Caller: 200 {valid: true} or 409 {valid: false, reason}
+
+    Kafka->>Kafka: catalog.events -> CatalogEventConsumer (ProductCreated/Updated only!)
+    Kafka->>DB: Upsert STANDARD PriceRule + evict L1/L2 productPrices + priceRules
+    Kafka->>Surge: warehouse.events -> WarehouseEventConsumer -> StoreSurgeStateStore (pod-local!)
+    Note right of Kafka: Consumer failure -> 3x 1000ms retry -> {topic}.DLT<br/>outbox_events polled by outbox-relay-pricing (:8103) -> pricing.events

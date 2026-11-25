@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     cart_service_url: Union[AnyHttpUrl, str] = "http://cart-service:8090"
     order_service_url: Union[AnyHttpUrl, str] = "http://order-service:8084"
     redis_url: str = "redis://localhost:6379/0"
+    redis_session_budgets_enabled: bool = True
+    session_budget_ttl_seconds: int = 3600
 
     llm_api_url: Optional[AnyHttpUrl] = None
     llm_api_key: Optional[str] = None

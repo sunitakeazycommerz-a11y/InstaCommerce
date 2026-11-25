@@ -648,4 +648,4 @@ India's leading q-commerce operators (Zepto, Blinkit, Swiggy Instamart) use even
 
 ---
 
-*Last verified against: `services/outbox-relay-service/main.go` (837 lines), `go.mod` (Go 1.24, sarama v1.43.2, pgx v5.8.0, OTel v1.41.0), `Dockerfile`, and review documents under `docs/reviews/iter3/`.*
+*Last verified against: `services/outbox-relay-service/main.go` (837 lines), `go.mod` (Go 1.25, sarama v1.43.2, pgx v5.8.0, OTel v1.41.0), `Dockerfile`, and review documents under `docs/reviews/iter3/`.*

@@ -1,0 +1,61 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef filter fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph UPSTREAM["Upstream Callers & External Dependencies"]
+        direction LR
+        CO["checkout-orchestrator :8091<br/>X-Internal-Service/Token<br/>InventoryActivityImpl"]:::caller
+        BFF["mobile-bff / search / fulfillment<br/>POST /inventory/check & /adjust*"]:::caller
+        OPS["Dark-Store Operators / Admin<br/>ROLE_ADMIN / ROLE_WAREHOUSE_MANAGER"]:::caller
+    end
+
+    subgraph APP["inventory-service :8083 (Java 21 / Spring Boot 4.0.0 — ZERO Redis, ZERO :contracts)"]
+        direction TB
+        subgraph CHAIN["Filter & Exception Pipeline (SecurityConfig)"]
+            direction LR
+            CORR["CorrelationIdFilter<br/>Order HIGHEST_PRECEDENCE<br/>MDC correlationId only"]:::filter
+            ISAF["SharedInternalServiceAuthFilter<br/>libs/platform-common -> ROLE_INTERNAL_SERVICE"]:::filter
+            JWT["JwtAuthenticationFilter<br/>DefaultJwtService (RS256)<br/>local fallback key in application-local.yml"]:::warn
+            AUTH["SecurityConfig + ClientIpResolver<br/>/adjust* hasAnyRole(ADMIN, INTERNAL_SERVICE)<br/>right-to-left X-Forwarded-For CIDR"]:::filter
+            EX["GlobalExceptionHandler<br/>409 INSUFFICIENT_STOCK / EXPIRED / FROZEN<br/>409 DATA_INTEGRITY_CONFLICT / LOCK_TIMEOUT"]:::filter
+        end
+
+        subgraph CTRLS["6 REST Controllers"]
+            direction LR
+            RC["ReservationController<br/>/inventory & /api/inventory<br/>reserve, confirm, cancel, release-partial"]:::ctrl
+            SC["StockController<br/>/inventory/check (RateLimitService 50/60s)<br/>/adjust, /adjust-batch"]:::ctrl
+            OPS_C["4 Operational Controllers<br/>InboundReceivingController (/receiving/*)<br/>PerishableController · SafetyStockController<br/>StockReconciliationController"]:::ctrl
+        end
+
+        subgraph SVCS["Core Reservation, Stock, FEFO & Ops Services"]
+            direction LR
+            RS["ReservationService + ReservationSupport<br/>reserveTransactionTemplate (READ_COMMITTED)<br/>sorted productId FOR UPDATE (2s)<br/>noRollbackFor = ReservationExpiredException"]:::svc
+            IS["InventoryService + AuditLogService<br/>checkAvailability · adjustStock/Batch<br/>RateLimitService (Caffeine 10k + Res4j)"]:::svc
+            FEFO["FefoBatchAllocationService + PerishableLiquidation<br/>resolveSellableAvailable · allocateFefoForConfirm<br/>restoreOnConfirmedCancel (silent no-op trap)"]:::svc
+            MON["StockLevelMonitor (pod Caffeine 1h, 15m)<br/>+ SafetyStockService (DB 4h cooldown)<br/>+ InboundReceiving + StockReconciliation"]:::svc
+            WHC["RestWarehouseClient<br/>RestClient (2s/5s) · Caffeine storeStatusCache (10m)<br/>Retry(1)->CB(2)->Bulkhead(20)<br/>default localhost:8092 (UNSET IN HELM!)"]:::warn
+            JOBS["ShedLock Jobs + OutboxService<br/>ReservationExpiryJob (30s, batch 100)<br/>OutboxCleanupJob (30d) · AuditLogCleanupJob (730d)"]:::svc
+        end
+    end
+
+    subgraph INFRA["PostgreSQL (V1..V15), Warehouse Service & Outbox Relay"]
+        direction LR
+        PG["PostgreSQL inventory / inventory_db (Hikari max=60)<br/>stock_items (CHECK on_hand≥0, reserved≥0, reserved≤on_hand, is_frozen)<br/>reservations (idempotency_key VARCHAR(64)!) · reservation_line_items<br/>reservation_release_logs (V15) · stock_batches · sku_safety_stock_buffers<br/>inbound_asns · asn_line_items · stock_adjustment_log · audit_log · outbox_events · shedlock"]:::db
+        WH["warehouse-service :8092<br/>GET /stores/{id} · GET /stores/{id}/open"]:::caller
+        RELAY["outbox-relay-inventory :8103 (Go)<br/>FOR UPDATE SKIP LOCKED -> Kafka inventory.events"]:::db
+    end
+
+    CO --> CORR
+    BFF & OPS --> CORR --> ISAF --> JWT --> AUTH --> CTRLS
+    CTRLS -.-> EX
+    RC --> RS
+    SC --> IS
+    OPS_C --> FEFO & MON
+    RS -->|"outside DB TX"| WHC --> WH
+    RS & IS --> FEFO & MON
+    RS & IS & FEFO & MON & JOBS --> PG
+    PG -->|"outbox_events (sent=false)"| RELAY

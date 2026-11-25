@@ -51,8 +51,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST,
                                 "/audit/events", "/audit/events/batch",
                                 "/api/v1/audit/events", "/api/v1/audit/events/batch")
-                            .hasAnyRole("SYSTEM", "SERVICE", "INTERNAL_SERVICE", "ADMIN")
-                        .requestMatchers("/admin/**").hasRole("ADMIN")
+                            .hasAnyRole("SYSTEM", "SERVICE", "INTERNAL_SERVICE", "ADMIN", "SUPER_ADMIN")
+                        .requestMatchers("/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(authenticationEntryPoint)

@@ -8,10 +8,10 @@ flowchart TD
     B --> C["Call search-service"]
     C --> D{"Redis cache<br/>hit?<br/>TTL: 5min"}
     D -->|Yes| D1["Return cached<br/>results"]
-    D -->|No| E["Query Elasticsearch<br/>(search-db)"]
-    E --> F{"ES<br/>success?"}
+    D -->|No| E["Query PostgreSQL FTS<br/>(search-db tsvector + GIN)"]
+    E --> F{"DB<br/>success?"}
     F -->|Yes| G["Parse results"]
-    F -->|No| H["Circuit breaker<br/>returns fallback<br/>from PostgreSQL"]
+    F -->|No| H["Circuit breaker<br/>returns degraded<br/>cached/empty fallback"]
     G --> I["Filter by<br/>availability<br/>proximity"]
     I --> J["Rank by<br/>relevance<br/>+ available inventory"]
     J --> K["Cache results<br/>in Redis<br/>TTL: 5min"]

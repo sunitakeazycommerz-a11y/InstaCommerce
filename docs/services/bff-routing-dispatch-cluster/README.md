@@ -60,7 +60,7 @@ This cluster comprises three services forming the **customer-facing API layer** 
 - **Load Balancing**: Distributes orders fairly across zone riders
 - **Rebalancing**: Periodic assignment optimization during delivery
 - **Port**: 8087 (dev), 8080 (container)
-- **Runtime**: Go 1.24 (fast math-heavy optimization)
+- **Runtime**: Go 1.25 (fast math-heavy optimization)
 
 ## Key Technologies
 

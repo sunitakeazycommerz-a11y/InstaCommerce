@@ -137,6 +137,7 @@ func WithBatchDropHook(fn func(reason string, count int)) LocationBatcherOption 
 type LocationBatcher struct {
 	mu           sync.Mutex
 	buffer       []LocationUpdate
+	reserved     int
 	maxSize      int
 	maxBuffer    int
 	maxWait      time.Duration
@@ -191,6 +192,73 @@ func NewLocationBatcher(
 	return b, nil
 }
 
+// BatchReservation reserves capacity in a LocationBatcher so downstream state
+// mutations can occur safely before committing the update to the Kafka buffer.
+type BatchReservation struct {
+	batcher *LocationBatcher
+	once    sync.Once
+}
+
+// Reserve validates producer availability and reserves one buffer slot without
+// exposing the update before upstream persistence succeeds.
+func (b *LocationBatcher) Reserve() (*BatchReservation, error) {
+	if b == nil || b.producer == nil {
+		return nil, ErrKafkaDisabled
+	}
+	if wp, ok := b.producer.(*KafkaWriterProducer); ok && (wp == nil || wp.writer == nil) {
+		return nil, ErrKafkaDisabled
+	}
+
+	b.mu.Lock()
+	if b.maxBuffer > 0 && len(b.buffer)+b.reserved >= b.maxBuffer {
+		b.mu.Unlock()
+		return nil, ErrKafkaBufferFull
+	}
+	b.reserved++
+	b.mu.Unlock()
+
+	return &BatchReservation{batcher: b}, nil
+}
+
+// Commit converts the reserved slot into a buffered update and wakes the flusher if needed.
+func (r *BatchReservation) Commit(update LocationUpdate) {
+	if r == nil || r.batcher == nil {
+		return
+	}
+	r.once.Do(func() {
+		b := r.batcher
+		b.mu.Lock()
+		if b.reserved > 0 {
+			b.reserved--
+		}
+		b.buffer = append(b.buffer, update)
+		shouldNotify := len(b.buffer) >= b.maxSize
+		b.mu.Unlock()
+
+		if shouldNotify {
+			select {
+			case b.notify <- struct{}{}:
+			default:
+			}
+		}
+	})
+}
+
+// Abort releases the reserved slot when an upstream step fails before commit.
+func (r *BatchReservation) Abort() {
+	if r == nil || r.batcher == nil {
+		return
+	}
+	r.once.Do(func() {
+		b := r.batcher
+		b.mu.Lock()
+		if b.reserved > 0 {
+			b.reserved--
+		}
+		b.mu.Unlock()
+	})
+}
+
 // Enqueue appends an update to the internal buffer, returning ErrKafkaBufferFull
 // if a bounded buffer capacity is configured and exceeded.
 func (b *LocationBatcher) Enqueue(update LocationUpdate) error {
@@ -202,7 +270,7 @@ func (b *LocationBatcher) Enqueue(update LocationUpdate) error {
 	}
 
 	b.mu.Lock()
-	if b.maxBuffer > 0 && len(b.buffer) >= b.maxBuffer {
+	if b.maxBuffer > 0 && len(b.buffer)+b.reserved >= b.maxBuffer {
 		b.mu.Unlock()
 		return ErrKafkaBufferFull
 	}

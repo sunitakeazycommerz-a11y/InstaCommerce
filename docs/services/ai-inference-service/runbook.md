@@ -39,7 +39,7 @@ kubectl get deploy ai-inference-service -o jsonpath='{.spec.replicas}'
 
 ```bash
 # Upgrade
-helm upgrade ai-inference-service deploy/helm/ai-inference-service
+helm upgrade instacommerce deploy/helm
 
 # Monitor rollout
 kubectl rollout status deploy/ai-inference-service --timeout=10m
@@ -236,6 +236,6 @@ rate(ai_inferences_total[5m])
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/ai-inference-service/`
+- **Deployment**: `deploy/helm/`
 - **Models**: `/deploy/ai-models/`
 - **GPU Setup**: `/deploy/gpu-drivers/`

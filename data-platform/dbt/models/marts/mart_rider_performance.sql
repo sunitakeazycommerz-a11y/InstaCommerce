@@ -11,7 +11,7 @@ rider_deliveries AS (
         o.order_date,
         COUNT(DISTINCT d.delivery_id) AS total_deliveries,
         COUNTIF(d.status = 'DELIVERED') AS completed_deliveries,
-        COUNTIF(d.status = 'CANCELLED') AS cancelled_deliveries,
+        COUNTIF(d.status IN ('CANCELLED', 'FAILED')) AS cancelled_deliveries,
         AVG(TIMESTAMP_DIFF(d.delivered_at, o.placed_at, MINUTE)) AS avg_total_delivery_minutes,
         AVG(TIMESTAMP_DIFF(d.picked_up_at, d.assigned_at, MINUTE)) AS avg_pickup_minutes,
         AVG(TIMESTAMP_DIFF(d.delivered_at, d.picked_up_at, MINUTE)) AS avg_dropoff_minutes,

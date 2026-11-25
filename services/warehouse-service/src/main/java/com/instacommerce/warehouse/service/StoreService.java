@@ -15,6 +15,7 @@ import com.instacommerce.warehouse.exception.StoreNotFoundException;
 import com.instacommerce.warehouse.repository.StoreBlackoutWindowRepository;
 import com.instacommerce.warehouse.repository.StoreHoursRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
+import com.instacommerce.warehouse.repository.StoreZoneRepository;
 import java.time.Clock;
 import java.time.DateTimeException;
 import java.time.Instant;
@@ -28,6 +29,8 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
@@ -44,6 +47,8 @@ public class StoreService {
     private final WarehouseProperties warehouseProperties;
     private final Clock clock;
     private final StoreBlackoutWindowRepository blackoutWindowRepository;
+    private final StoreZoneRepository storeZoneRepository;
+    private final ObjectProvider<StoreService> selfProvider;
 
     public StoreService(StoreRepository storeRepository,
                         StoreHoursRepository storeHoursRepository,
@@ -51,12 +56,29 @@ public class StoreService {
                         WarehouseProperties warehouseProperties,
                         Clock clock,
                         StoreBlackoutWindowRepository blackoutWindowRepository) {
+        this(storeRepository, storeHoursRepository, outboxService,
+            warehouseProperties, clock, blackoutWindowRepository, null, null);
+    }
+
+    @Autowired
+    public StoreService(StoreRepository storeRepository,
+                        StoreHoursRepository storeHoursRepository,
+                        OutboxService outboxService,
+                        WarehouseProperties warehouseProperties,
+                        Clock clock,
+                        StoreBlackoutWindowRepository blackoutWindowRepository,
+                        ObjectProvider<StoreZoneRepository> storeZoneRepositoryProvider,
+                        ObjectProvider<StoreService> selfProvider) {
         this.storeRepository = storeRepository;
         this.storeHoursRepository = storeHoursRepository;
         this.outboxService = outboxService;
         this.warehouseProperties = warehouseProperties;
         this.clock = clock != null ? clock : Clock.systemUTC();
         this.blackoutWindowRepository = blackoutWindowRepository;
+        this.storeZoneRepository = storeZoneRepositoryProvider != null
+            ? storeZoneRepositoryProvider.getIfAvailable()
+            : null;
+        this.selfProvider = selfProvider;
     }
 
     @Transactional(readOnly = true)
@@ -176,7 +198,10 @@ public class StoreService {
     }
 
     @Transactional
-    @CacheEvict(value = "stores", key = "#storeId")
+    @Caching(evict = {
+        @CacheEvict(value = "stores", key = "#storeId"),
+        @CacheEvict(value = "store-hours", key = "#storeId + ':' + #request.dayOfWeek()")
+    })
     public StoreResponse.HoursResponse upsertStoreHours(UUID storeId, UpsertStoreHoursRequest request) {
         Store store = storeRepository.findById(storeId)
                 .orElseThrow(() -> new StoreNotFoundException(storeId));
@@ -205,17 +230,24 @@ public class StoreService {
                 saved.isHoliday());
     }
 
+    @Transactional(readOnly = true)
+    @Cacheable(value = "store-hours", key = "#storeId + ':' + #dayOfWeek")
+    public Optional<StoreHours> getStoreHoursForDay(UUID storeId, int dayOfWeek) {
+        return storeHoursRepository.findByStoreIdAndDayOfWeek(storeId, dayOfWeek);
+    }
+
     private boolean checkStoreHours(UUID storeId, ZonedDateTime storeNow) {
         int dayOfWeek = storeNow.getDayOfWeek().getValue() % 7;
         LocalTime currentTime = storeNow.toLocalTime();
+        StoreService proxy = selfProvider != null ? selfProvider.getIfAvailable(() -> this) : this;
 
-        Optional<StoreHours> hours = storeHoursRepository.findByStoreIdAndDayOfWeek(storeId, dayOfWeek);
+        Optional<StoreHours> hours = proxy.getStoreHoursForDay(storeId, dayOfWeek);
         if (hours.isPresent() && isWithinOperatingHours(hours.get(), currentTime)) {
             return true;
         }
 
         int previousDay = (dayOfWeek + 6) % 7;
-        Optional<StoreHours> previousHours = storeHoursRepository.findByStoreIdAndDayOfWeek(storeId, previousDay);
+        Optional<StoreHours> previousHours = proxy.getStoreHoursForDay(storeId, previousDay);
         return previousHours.isPresent()
                 && !previousHours.get().isHoliday()
                 && previousHours.get().getClosesAt().isBefore(previousHours.get().getOpensAt())
@@ -249,12 +281,16 @@ public class StoreService {
     @Transactional
     @Caching(evict = {
         @CacheEvict(value = "stores", key = "#id"),
-        @CacheEvict(value = "store-zones", allEntries = true)
+        @CacheEvict(value = "store-zones", allEntries = true),
+        @CacheEvict(value = "store-hours", allEntries = true)
     })
     public StoreResponse updateStoreStatus(UUID id, StoreStatus status) {
         Store store = storeRepository.findById(id)
                 .orElseThrow(() -> new StoreNotFoundException(id));
         StoreStatus previous = store.getStatus();
+        if (status == StoreStatus.ACTIVE && previous != StoreStatus.ACTIVE) {
+            validateStoreReadinessForActivation(store);
+        }
         store.setStatus(status);
         Store saved = storeRepository.save(store);
         outboxService.publish("Store", saved.getId().toString(), "StoreStatusChanged",
@@ -264,18 +300,35 @@ public class StoreService {
         return StoreMapper.toResponse(saved);
     }
 
+    private void validateStoreReadinessForActivation(Store store) {
+        if (store.getLatitude() == null || store.getLongitude() == null) {
+            throw new IllegalArgumentException("Store coordinates must be configured before activation");
+        }
+        if (storeHoursRepository.findByStoreId(store.getId()).isEmpty()) {
+            throw new IllegalArgumentException("Store operating hours must be configured before activation");
+        }
+        if (storeZoneRepository != null && storeZoneRepository.findByStoreId(store.getId()).isEmpty()) {
+            throw new IllegalArgumentException("At least one delivery zone must be configured before activation");
+        }
+    }
+
     @Transactional
     @Caching(evict = {
         @CacheEvict(value = "stores", key = "#id"),
-        @CacheEvict(value = "store-zones", allEntries = true)
+        @CacheEvict(value = "store-zones", allEntries = true),
+        @CacheEvict(value = "store-hours", allEntries = true)
     })
     public void deleteStore(UUID id) {
         Store store = storeRepository.findById(id)
                 .orElseThrow(() -> new StoreNotFoundException(id));
-        storeRepository.delete(store);
+        if (store.getStatus() == StoreStatus.INACTIVE) {
+            return;
+        }
+        store.setStatus(StoreStatus.INACTIVE);
+        storeRepository.save(store);
         outboxService.publish("Store", id.toString(), "StoreDeleted",
-                Map.of("storeId", id, "name", store.getName()));
-        log.info("Deleted store {}", id);
+                Map.of("storeId", id, "name", store.getName(), "status", StoreStatus.INACTIVE.name()));
+        log.info("Soft-deleted (deactivated) store {}", id);
     }
 
     private ZonedDateTime toStoreTime(Store store, LocalDateTime now) {

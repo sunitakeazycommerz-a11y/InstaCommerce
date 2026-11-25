@@ -3,7 +3,9 @@ package com.instacommerce.inventory.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -13,8 +15,10 @@ import com.instacommerce.inventory.domain.model.StockItem;
 import com.instacommerce.inventory.repository.SkuSafetyStockBufferRepository;
 import com.instacommerce.inventory.repository.StockItemRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -111,5 +115,42 @@ class StockLevelMonitorTest {
         verify(outboxService).publish(eq("StockItem"), eq(productId.toString()), eq("OutOfStock"), any());
         verify(outboxService).publish(eq("StockItem"), eq(productId.toString()), eq("LowStockAlert"), any());
         verify(outboxService, never()).publish(eq("INVENTORY_SAFETY_STOCK"), any(), eq("ReorderPointReached"), any());
+    }
+
+    @Test
+    @DisplayName("Uses FEFO sellable available quantity and deduplicates repeated alerts within cooldown")
+    void usesSellableAvailableAndDeduplicatesAlertsWithinCooldown() {
+        UUID storeId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+        StockItem stock = new StockItem();
+        stock.setStoreId(storeId);
+        stock.setProductId(productId);
+        stock.setOnHand(20);
+        stock.setReserved(0);
+
+        FefoBatchAllocationService fefoService = mock(FefoBatchAllocationService.class);
+        when(fefoService.resolveSellableAvailable(stock))
+            .thenReturn(0, 0, 25, 0);
+
+        Clock fixedClock = Clock.fixed(Instant.parse("2026-03-20T12:00:00Z"), ZoneOffset.UTC);
+        InventoryProperties props = new InventoryProperties();
+        props.setLowStockThreshold(10);
+        props.setAlertCooldownMinutes(15);
+
+        StockLevelMonitor monitor = new StockLevelMonitor(
+            props, outboxService, null, null, fefoService, fixedClock);
+
+        // First drop to sellable=0 emits alerts
+        monitor.evaluateAfterStockDecrease(stock, storeId);
+        // Repeated drop within cooldown does not emit duplicate alerts
+        monitor.evaluateAfterStockDecrease(stock, storeId);
+        verify(outboxService, times(1)).publish(eq("StockItem"), eq(productId.toString()), eq("OutOfStock"), any());
+        verify(outboxService, times(1)).publish(eq("StockItem"), eq(productId.toString()), eq("LowStockAlert"), any());
+
+        // Replenished above threshold invalidates dedup state, then dropping again re-emits
+        monitor.evaluateAfterStockDecrease(stock, storeId);
+        monitor.evaluateAfterStockDecrease(stock, storeId);
+        verify(outboxService, times(2)).publish(eq("StockItem"), eq(productId.toString()), eq("OutOfStock"), any());
+        verify(outboxService, times(2)).publish(eq("StockItem"), eq(productId.toString()), eq("LowStockAlert"), any());
     }
 }

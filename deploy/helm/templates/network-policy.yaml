@@ -14,15 +14,42 @@ spec:
     - Ingress
   ingress:
     {{- range $policy.allowFrom }}
+    {{- if eq . "istio-ingressgateway" }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+          podSelector:
+            matchLabels:
+              app: istio-ingressgateway
+        - podSelector:
+            matchLabels:
+              app: {{ . }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- else }}
     - from:
         - podSelector:
             matchLabels:
               app: {{ . }}
-    {{- end }}
-    # Always allow Prometheus scraping and health probes
-    - ports:
+      ports:
         - port: http
           protocol: TCP
+    {{- end }}
+    {{- end }}
+    # Allow Prometheus scraping only from monitoring namespace/pods
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        - podSelector:
+            matchLabels:
+              app: prometheus
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
         - port: metrics
           protocol: TCP
 {{- end }}

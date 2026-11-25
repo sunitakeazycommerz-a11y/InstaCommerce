@@ -9,7 +9,7 @@
 | **K8s Container Port** | `8080` (mapped in `deploy/helm/values.yaml`) |
 | **Upstream Data Source** | Google BigQuery analytical marts (`data-platform/dbt`) |
 | **Operational Sinks** | Redis Cluster (feature hydration), PostgreSQL operational DBs |
-| **Health Checks** | `http://localhost:8110/health`, `/health/live`, `/health/ready` |
+| **Health Checks** | `http://localhost:8109/health`, `/health/live`, `/health/ready` |
 | **Metrics** | `http://localhost:9090/metrics` |
 
 ---

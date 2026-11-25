@@ -1,0 +1,48 @@
+flowchart TD
+    classDef step fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef dec fill:#F8FAFC,stroke:#475569,stroke-width:1.8px,color:#0F172A
+    classDef ok fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,color:#78350F
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D
+
+    Start(["pollLoop ticker fires<br/>(1s default / 500ms Helm)"]):::step --> BeginTx["relayBatch(ctx):<br/>Start OTel span 'outbox.relay.batch'<br/>tx, err := s.db.Begin(ctx)"]:::step
+    BeginTx --> Query["tx.Query(ctx, selectSQL, BatchSize)<br/>WHERE sent = false ORDER BY created_at<br/>LIMIT $1 FOR UPDATE SKIP LOCKED"]:::step
+    Query --> ScanClose["Scan into events slice<br/>Call rows.Close() BEFORE publishing"]:::step
+    ScanClose --> NextEvt{"More events &amp;<br/>ctx.Err() == nil?"}:::dec
+
+    NextEvt -->|"Yes"| TopicSpan["resolveKafkaTopic(OUTBOX_TOPIC, AggregateType)<br/>Start 'outbox.relay.publish' span<br/>populateEventTrace(&amp;evt, msgSpan)"]:::step
+    TopicSpan --> Validate["validateOutboxEvent(evt):<br/>1. Non-empty trimmed AggregateID?<br/>2. sharedkafka.ValidateSchemaVersion?<br/>3. Valid JSON in evt.Payload?"]:::dec
+
+    Validate -->|"Validation failed<br/>(partition_key_missing /<br/>schema_version_invalid /<br/>payload_invalid)"| ValMetrics["metrics.addFailures(1)<br/>msgSpan.RecordError(valErr)"]:::warn
+    ValMetrics --> ValDLQ["quarantineEvent(..., attempts=1, valErr)<br/>Key = partitionKey or evt.ID<br/>Send to DLQ_TOPIC (outbox.relay.dlq)"]:::warn
+    ValDLQ --> ValDLQOK{"DLQ Send OK?"}:::dec
+    ValDLQOK -->|"No"| BreakVal["sendErr = valErr<br/>Break loop (poison stays unsent)"]:::err
+    ValDLQOK -->|"Yes"| MarkSentVal["tx.Exec(commitCtx, updateSQL, evt.ID)<br/>(sent = true; avoids HOL block)"]:::ok
+    MarkSentVal --> NextEvt
+
+    Validate -->|"Valid"| BuildMsg["buildEventMessage(evt)<br/>(dual camelCase+snake_case + hoisted payload)<br/>buildSaramaHeaders(evt, traceID)"]:::step
+    BuildMsg --> SendKafka["producer.SendMessage(message)<br/>WaitForAll · Idempotent · Retry.Max=10<br/>(pgx.Tx stays OPEN!)"]:::step
+    SendKafka --> SendOK{"SendMessage OK?"}:::dec
+
+    SendOK -->|"Yes"| ClearMark["clearRetryAttempt(evt.ID)<br/>addRelayed(1) · recordLag(created_at)<br/>tx.Exec(commitCtx, updateSQL, evt.ID)"]:::ok
+    ClearMark --> NextEvt
+
+    SendOK -->|"No (Kafka error)"| IncRetry["addFailures(1)<br/>attempts = recordRetryAttempt(evt.ID)<br/>(process-local map; reset on pod restart!)"]:::warn
+    IncRetry --> RetryCap{"attempts &gt;=<br/>maxPublishRetries (3)?"}:::dec
+
+    RetryCap -->|"No (attempts &lt; 3)"| BreakRetry["sendErr = err; Break loop<br/>(failed &amp; trailing rows stay sent=false)"]:::warn
+    RetryCap -->|"Yes (exhausted)"| PubDLQ["quarantineEvent(..., attempts, err)<br/>category = 'publish_failure'"]:::warn
+    PubDLQ --> PubDLQOK{"DLQ Send OK?"}:::dec
+    PubDLQOK -->|"No"| BreakStall["Log 'pipeline stalled'<br/>sendErr = err; Break loop"]:::err
+    PubDLQOK -->|"Yes"| ClearAndMark["clearRetryAttempt(evt.ID)<br/>tx.Exec(commitCtx, updateSQL, evt.ID)"]:::ok
+    ClearAndMark --> NextEvt
+
+    NextEvt -->|"No (done or break)"| CommitTx["tx.Commit(commitCtx 10s)<br/>(deferred tx.Rollback 5s if !committed)"]:::step
+    BreakVal --> CommitTx
+    BreakRetry --> CommitTx
+    BreakStall --> CommitTx
+
+    CommitTx --> CommitOK{"tx.Commit OK?"}:::dec
+    CommitOK -->|"Yes"| ReturnErr["Return sendErr to pollLoop<br/>Wait for ticker.C or ctx.Done()"]:::step
+    CommitOK -->|"No"| Rollback["Deferred tx.Rollback(5s)<br/>metrics.addFailures(1)<br/>(Sent msgs may duplicate on next poll)"]:::err
+    Rollback --> ReturnErr

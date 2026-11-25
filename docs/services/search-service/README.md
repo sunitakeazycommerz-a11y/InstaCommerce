@@ -8,7 +8,7 @@ The search-service is the denormalized read-projection for product discovery in 
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8088
 **Status**: Tier 2 Critical (read-plane; impacts customer experience)
-**Database**: PostgreSQL 15+ (tsvector FTS, denormalized index)
+**Database**: PostgreSQL 16 (tsvector FTS, denormalized index)
 **Cache**: TwoLevelCacheManager (Caffeine L1 + Redis L2 with Pub/Sub invalidation)
 **Messaging**: Kafka consumer (catalog.events, inventory.events)
 **Load Balancing**: Round-robin across 2 replicas
@@ -44,7 +44,7 @@ The search-service is the denormalized read-projection for product discovery in 
 - **Readiness Probe**: `/actuator/health/readiness` (checks DB + Kafka)
 
 ### Database
-- **Name**: `search` (PostgreSQL 15+)
+- **Name**: `search` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V6) auto-applied
 - **Connection Pool**: HikariCP 15 connections
 - **Replication**: Read-only (read replicas for analytics)
@@ -268,19 +268,19 @@ Response (200):
 
 ```bash
 # 1. Full-text search
-curl -s 'http://search-service:8086/search?query=milk&brand=Amul' \
+curl -s 'http://search-service:8088/search?query=milk&brand=Amul' \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.results | length'
 
 # 2. Autocomplete as user types
-curl -s 'http://search-service:8086/search/autocomplete?prefix=mil&limit=5' \
+curl -s 'http://search-service:8088/search/autocomplete?prefix=mil&limit=5' \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.[].name'
 
 # 3. Trending queries
-curl -s 'http://search-service:8086/search/trending?limit=10' \
+curl -s 'http://search-service:8088/search/trending?limit=10' \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.[0].query'
 
 # 4. Complex search with facets
-curl -s 'http://search-service:8086/search?query=dairy&category=Dairy&minPriceCents=3000&maxPriceCents=10000&page=0&size=20' \
+curl -s 'http://search-service:8088/search?query=dairy&category=Dairy&minPriceCents=3000&maxPriceCents=10000&page=0&size=20' \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.facets'
 ```
 
@@ -461,7 +461,7 @@ kubectl exec -n default pod/search-service-0 -- psql -U postgres -d search -c \
 kubectl logs -n default deployment/search-service | grep -i "slow\|duration"
 
 # Check cache hit rate
-curl http://localhost:8086/actuator/metrics/cache.caffeine.hitRate
+curl http://localhost:8088/actuator/metrics/cache.caffeine.hitRate
 ```
 
 **Resolution:**
@@ -480,7 +480,7 @@ psql -d search -c "SELECT * FROM trending_queries ORDER BY updated_at DESC LIMIT
 kubectl logs -n default deployment/search-service | grep -i "trending"
 
 # Check if async write is causing delays
-curl http://localhost:8086/actuator/metrics/search.trending.count
+curl http://localhost:8088/actuator/metrics/search.trending.count
 ```
 
 **Resolution:**
@@ -493,7 +493,7 @@ curl http://localhost:8086/actuator/metrics/search.trending.count
 ### Environment Variables
 ```env
 # Server
-SERVER_PORT=8086
+SERVER_PORT=8088
 SPRING_PROFILES_ACTIVE=gcp
 
 # Database
@@ -519,7 +519,7 @@ OTEL_TRACES_SAMPLER=always_on
 ### application.yml
 ```yaml
 server:
-  port: 8086
+  port: 8088
 spring:
   jpa:
     hibernate:
@@ -560,14 +560,14 @@ spec:
         app: search-service
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8086"
+        prometheus.io/port: "8088"
         prometheus.io/path: "/actuator/prometheus"
     spec:
       containers:
       - name: search-service
         image: search-service:v1.2.3
         ports:
-        - containerPort: 8086
+        - containerPort: 8088
           name: http
         env:
         - name: SPRING_PROFILES_ACTIVE
@@ -584,13 +584,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/live
-            port: 8086
+            port: 8088
           initialDelaySeconds: 10
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /actuator/health/ready
-            port: 8086
+            port: 8088
           initialDelaySeconds: 15
           periodSeconds: 5
 ---
@@ -603,8 +603,8 @@ spec:
   selector:
     app: search-service
   ports:
-  - port: 8086
-    targetPort: 8086
+  - port: 8088
+    targetPort: 8088
     name: http
   type: ClusterIP
 ```
@@ -743,7 +743,7 @@ Correction applied if no results found
    ```
 3. **Manually trigger aggregation**:
    ```bash
-   curl -X POST http://search-service:8086/admin/trending/refresh
+   curl -X POST http://search-service:8088/admin/trending/refresh
    ```
 4. **Verify output**: `SELECT * FROM trending_queries ORDER BY updated_at DESC LIMIT 5;`
 
@@ -791,7 +791,7 @@ ANALYZE search_documents;
 
 ```bash
 # Check eviction rate
-curl http://localhost:8086/actuator/metrics/cache.caffeine.evictionWeight
+curl http://localhost:8088/actuator/metrics/cache.caffeine.evictionWeight
 
 # If high eviction:
 # Cause 1: Cache size too small

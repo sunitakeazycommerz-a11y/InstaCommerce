@@ -20,13 +20,15 @@ sys.path.insert(0, SCRIPT_DIR)
 
 from ast_parser import parse_any
 from lsp_client import (
+    canonicalize_path,
     get_lsp_status,
     query_gopls_definition,
     query_gopls_references,
     query_gopls_symbols,
 )
 
-REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+SCRIPT_DIR = canonicalize_path(SCRIPT_DIR)
+REPO_ROOT = canonicalize_path(os.path.join(SCRIPT_DIR, "..", ".."))
 
 
 def print_banner():
@@ -73,6 +75,7 @@ def cmd_status():
 
 def cmd_outline(file_path: str):
     """Outputs a clean symbol outline of a file."""
+    file_path = canonicalize_path(file_path)
     if not os.path.isfile(file_path):
         print(f"Error: File not found: {file_path}")
         sys.exit(1)
@@ -135,6 +138,7 @@ def cmd_outline(file_path: str):
 
 def cmd_definition(file_path: str, line: int, col: int):
     """Jumps to symbol definition."""
+    file_path = canonicalize_path(file_path)
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".go":
         res = query_gopls_definition(file_path, line, col)
@@ -150,6 +154,7 @@ def cmd_definition(file_path: str, line: int, col: int):
 
 def cmd_references(file_path: str, line: int, col: int):
     """Finds all references to symbol."""
+    file_path = canonicalize_path(file_path)
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".go":
         res = query_gopls_references(file_path, line, col)
@@ -162,6 +167,7 @@ def cmd_references(file_path: str, line: int, col: int):
 
 def cmd_walkthrough(file_path: str):
     """Generates an in-depth code walkthrough report for a source file."""
+    file_path = canonicalize_path(file_path)
     if not os.path.isfile(file_path):
         print(f"Error: File not found: {file_path}")
         sys.exit(1)
@@ -249,21 +255,23 @@ _FILE_EXT_TO_KIND = {
 
 
 def _resolve_gradle_project(abs_path: str) -> Optional[str]:
+    canon_repo = canonicalize_path(REPO_ROOT)
+    canon_abs = canonicalize_path(abs_path)
     try:
-        rel = Path(abs_path).resolve().relative_to(Path(REPO_ROOT).resolve())
+        rel = Path(canon_abs).relative_to(Path(canon_repo))
     except ValueError:
         return None
     parts = rel.parts
     if len(parts) >= 2 and parts[0] == "services":
-        svc_root = os.path.join(REPO_ROOT, "services", parts[1])
+        svc_root = os.path.join(canon_repo, "services", parts[1])
         if os.path.isfile(os.path.join(svc_root, "build.gradle.kts")):
             return f":services:{parts[1]}"
     if len(parts) >= 2 and parts[0] == "libs":
-        lib_root = os.path.join(REPO_ROOT, "libs", parts[1])
+        lib_root = os.path.join(canon_repo, "libs", parts[1])
         if os.path.isfile(os.path.join(lib_root, "build.gradle.kts")):
             return f":libs:{parts[1]}"
     if len(parts) >= 1 and parts[0] == "contracts":
-        if os.path.isfile(os.path.join(REPO_ROOT, "contracts", "build.gradle.kts")):
+        if os.path.isfile(os.path.join(canon_repo, "contracts", "build.gradle.kts")):
             return ":contracts"
     return None
 
@@ -312,18 +320,29 @@ def _check_go(abs_path: str) -> Dict[str, Any]:
     gopls_bin = shutil.which("gopls")
     if not gopls_bin:
         return _missing_tool_result(abs_path, "gopls", "Install via: brew install gopls")
-    go_files = [abs_path] if os.path.isfile(abs_path) else _collect_files(abs_path, ".go")
+    canon_abs = canonicalize_path(abs_path)
+    canon_repo = canonicalize_path(REPO_ROOT)
+    go_files = [canon_abs] if os.path.isfile(canon_abs) else _collect_files(canon_abs, ".go")
     if not go_files:
         return {
-            "path": abs_path,
+            "path": canon_abs,
             "tool": "gopls",
             "status": "error",
             "exit_code": 1,
             "diagnostics": [],
             "summary": {"filesAnalyzed": 0, "errorCount": 1},
-            "output": f"No .go files found under {abs_path}",
+            "output": f"No .go files found under {canon_abs}",
         }
-    proc = subprocess.run([gopls_bin, "check", *go_files], cwd=REPO_ROOT, capture_output=True, text=True)
+    try:
+        Path(canon_abs).relative_to(Path(canon_repo))
+        gopls_cwd = canon_repo
+    except ValueError:
+        gopls_cwd = canon_abs if os.path.isdir(canon_abs) else os.path.dirname(canon_abs)
+    gopls_env = dict(os.environ)
+    gopls_env["PWD"] = gopls_cwd
+    proc = subprocess.run(
+        [gopls_bin, "check", *go_files], cwd=gopls_cwd, env=gopls_env, capture_output=True, text=True
+    )
     combined = "\n".join(part for part in (proc.stdout.strip(), proc.stderr.strip()) if part)
     diagnostics: List[Dict[str, Any]] = []
     for line in combined.splitlines():
@@ -338,11 +357,13 @@ def _check_go(abs_path: str) -> Dict[str, Any]:
             })
         elif line.strip():
             diagnostics.append({"severity": "error", "message": line.strip()})
+    failed = proc.returncode != 0 or len(diagnostics) > 0
+    exit_code = proc.returncode if proc.returncode != 0 else (1 if failed else 0)
     return {
-        "path": abs_path,
+        "path": canon_abs,
         "tool": "gopls",
-        "status": "pass" if proc.returncode == 0 else "fail",
-        "exit_code": proc.returncode,
+        "status": "fail" if failed else "pass",
+        "exit_code": exit_code,
         "diagnostics": diagnostics,
         "summary": {"filesAnalyzed": len(go_files), "errorCount": len(diagnostics)},
         "output": combined,
@@ -463,14 +484,14 @@ _CHECKERS: Dict[str, Callable[[str], Dict[str, Any]]] = {
 
 def _display_path(abs_path: str, original: str) -> str:
     try:
-        return str(Path(abs_path).resolve().relative_to(Path(REPO_ROOT).resolve()))
+        return str(Path(canonicalize_path(abs_path)).relative_to(Path(canonicalize_path(REPO_ROOT))))
     except ValueError:
         return original
 
 
 def cmd_check(target_path: str, as_json: bool = False) -> None:
     """Runs static diagnostics and type checking for a file or directory."""
-    abs_path = os.path.abspath(target_path)
+    abs_path = canonicalize_path(target_path)
     display_path = _display_path(abs_path, target_path)
 
     if not os.path.exists(abs_path):

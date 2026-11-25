@@ -3,8 +3,8 @@
 ## Service Metadata
 - **Module Path:** `services/reverse-etl-orchestrator`
 - **Canonical Ports:** `8109` (API), `8110` (Health), `9090` (Metrics)
-- **Readiness Probe:** `http://localhost:8110/health/ready`
-- **Liveness Probe:** `http://localhost:8110/health/live`
+- **Readiness Probe:** `http://localhost:8109/health/ready`
+- **Liveness Probe:** `http://localhost:8109/health/live`
 - **Metrics Endpoint:** `http://localhost:9090/metrics`
 - **Local Startup:** `cd services/reverse-etl-orchestrator && go run ./cmd/server`
 

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -12,18 +14,21 @@ import com.instacommerce.warehouse.config.WarehouseProperties;
 import com.instacommerce.warehouse.domain.model.Store;
 import com.instacommerce.warehouse.domain.model.StoreHours;
 import com.instacommerce.warehouse.domain.model.StoreStatus;
+import com.instacommerce.warehouse.domain.model.StoreZone;
 import com.instacommerce.warehouse.dto.request.CreateStoreRequest;
 import com.instacommerce.warehouse.dto.response.StoreResponse;
 import com.instacommerce.warehouse.exception.StoreNotFoundException;
 import com.instacommerce.warehouse.repository.StoreBlackoutWindowRepository;
 import com.instacommerce.warehouse.repository.StoreHoursRepository;
 import com.instacommerce.warehouse.repository.StoreRepository;
+import com.instacommerce.warehouse.repository.StoreZoneRepository;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,6 +38,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 @ExtendWith(MockitoExtension.class)
 class StoreServiceTest {
@@ -179,5 +185,58 @@ class StoreServiceTest {
 
         assertThat(updated.status()).isEqualTo("TEMPORARILY_CLOSED");
         verify(outboxService).publish(eq("Store"), eq(storeId.toString()), eq("StoreStatusChanged"), any(Map.class));
+    }
+
+    @Test
+    @DisplayName("deleteStore soft-deletes store to INACTIVE without invoking hard delete")
+    void deleteStoreSoftDeletesToInactive() {
+        UUID storeId = UUID.randomUUID();
+        Store store = buildStore(storeId, StoreStatus.ACTIVE, "UTC");
+        when(storeRepository.findById(storeId)).thenReturn(Optional.of(store));
+        when(storeRepository.save(any(Store.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        storeService.deleteStore(storeId);
+
+        assertThat(store.getStatus()).isEqualTo(StoreStatus.INACTIVE);
+        verify(storeRepository).save(store);
+        verify(storeRepository, never()).delete(any());
+        verify(outboxService).publish(eq("Store"), eq(storeId.toString()), eq("StoreDeleted"), any(Map.class));
+    }
+
+    @Test
+    @DisplayName("updateStoreStatus validates coordinates, operating hours, and zones before activating a store")
+    @SuppressWarnings("unchecked")
+    void updateStoreStatusValidatesReadinessBeforeActivation() {
+        StoreZoneRepository zoneRepository = mock(StoreZoneRepository.class);
+        ObjectProvider<StoreZoneRepository> zoneProvider = mock(ObjectProvider.class);
+        when(zoneProvider.getIfAvailable()).thenReturn(zoneRepository);
+        StoreService guardedService = new StoreService(
+            storeRepository, storeHoursRepository, outboxService,
+            new WarehouseProperties(), Clock.systemUTC(), blackoutWindowRepository,
+            zoneProvider, null);
+
+        UUID storeId = UUID.randomUUID();
+        Store store = buildStore(storeId, StoreStatus.INACTIVE, "Asia/Kolkata");
+        when(storeRepository.findById(storeId)).thenReturn(Optional.of(store));
+
+        // Missing operating hours blocks activation
+        when(storeHoursRepository.findByStoreId(storeId)).thenReturn(List.of());
+        assertThatThrownBy(() -> guardedService.updateStoreStatus(storeId, StoreStatus.ACTIVE))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("operating hours");
+
+        // Missing zones blocks activation even when hours exist
+        when(storeHoursRepository.findByStoreId(storeId)).thenReturn(List.of(new StoreHours()));
+        when(zoneRepository.findByStoreId(storeId)).thenReturn(List.of());
+        assertThatThrownBy(() -> guardedService.updateStoreStatus(storeId, StoreStatus.ACTIVE))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("zone");
+
+        // Complete readiness permits activation
+        when(zoneRepository.findByStoreId(storeId)).thenReturn(List.of(new StoreZone()));
+        when(storeRepository.save(any(Store.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        StoreResponse activated = guardedService.updateStoreStatus(storeId, StoreStatus.ACTIVE);
+        assertThat(activated.status()).isEqualTo("ACTIVE");
     }
 }

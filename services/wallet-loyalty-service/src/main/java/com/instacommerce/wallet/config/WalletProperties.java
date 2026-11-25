@@ -30,6 +30,7 @@ public class WalletProperties {
         private long monthlyCashbackCapCents = 200_000L;
         private int maxPointsEarnPerOrder = 100_000;
         private int maxReferralRedemptionsPerReferrer = 50;
+        private long pointsToPaiseRate = 100L;
 
         public int getPointsPerRupee() { return pointsPerRupee; }
         public void setPointsPerRupee(int pointsPerRupee) { this.pointsPerRupee = pointsPerRupee; }
@@ -53,6 +54,8 @@ public class WalletProperties {
         public void setMaxReferralRedemptionsPerReferrer(int maxReferralRedemptionsPerReferrer) {
             this.maxReferralRedemptionsPerReferrer = maxReferralRedemptionsPerReferrer;
         }
+        public long getPointsToPaiseRate() { return pointsToPaiseRate; }
+        public void setPointsToPaiseRate(long pointsToPaiseRate) { this.pointsToPaiseRate = pointsToPaiseRate; }
     }
 
     public static class Referral {

@@ -8,7 +8,7 @@ The fulfillment-service orchestrates the complete fulfillment lifecycle for orde
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8086
 **Status**: Tier 1 Critical (operational fulfillment)
-**Database**: PostgreSQL 15+ (fulfillment tracking)
+**Database**: PostgreSQL 16 (fulfillment tracking)
 
 ## SLOs & Availability
 
@@ -39,7 +39,7 @@ The fulfillment-service orchestrates the complete fulfillment lifecycle for orde
 - **Readiness Probe**: `/actuator/health/readiness` (checks DB + Kafka)
 
 ### Database
-- **Name**: `fulfillment` (PostgreSQL 15+)
+- **Name**: `fulfillment` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V12)
 - **Connection Pool**: HikariCP 25 connections
 - **Replicas**: Read replicas for analytics queries
@@ -376,7 +376,7 @@ resilience4j:
 
 ### Environment Variables
 ```env
-SERVER_PORT=8080
+SERVER_PORT=8086
 SPRING_PROFILES_ACTIVE=gcp
 
 SPRING_DATASOURCE_URL=jdbc:postgresql://cloudsql-proxy:5432/fulfillment

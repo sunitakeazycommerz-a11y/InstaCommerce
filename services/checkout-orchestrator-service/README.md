@@ -670,7 +670,7 @@ Marks a DLQ entry as manually resolved with an operator note.
 | `TEMPORAL_NAMESPACE` | `instacommerce` | Temporal namespace |
 | `TEMPORAL_TASK_QUEUE` | `CHECKOUT_ORCHESTRATOR_TASK_QUEUE` | Temporal task queue name |
 | `CART_SERVICE_URL` | `http://localhost:8090` | Cart service base URL |
-| `PRICING_SERVICE_URL` | `http://localhost:8089` | Pricing service base URL |
+| `PRICING_SERVICE_URL` | `http://localhost:8091` | Pricing service base URL |
 | `INVENTORY_SERVICE_URL` | `http://localhost:8083` | Inventory service base URL |
 | `PAYMENT_SERVICE_URL` | `http://localhost:8085` | Payment service base URL |
 | `ORDER_SERVICE_URL` | `http://localhost:8084` | Order service base URL |

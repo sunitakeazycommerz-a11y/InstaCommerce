@@ -42,6 +42,15 @@ func TestMigrationSQLContracts(t *testing.T) {
 			t.Errorf("V4 migration missing required DDL fragment %q", required)
 		}
 	}
+
+	v5Bytes, err := os.ReadFile(filepath.Join("src", "main", "resources", "db", "migration", "V5__allow_partial_failed_status.sql"))
+	if err != nil {
+		t.Fatalf("read V5 migration: %v", err)
+	}
+	v5SQL := string(v5Bytes)
+	if !strings.Contains(v5SQL, "'PARTIAL_FAILED'") {
+		t.Errorf("V5 migration must allow PARTIAL_FAILED status")
+	}
 }
 
 // TestReconciliationSchema verifies the database schema is correctly created.

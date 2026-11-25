@@ -1,0 +1,43 @@
+flowchart TB
+    classDef ok fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef mesh fill:#EEF2FF,stroke:#4338CA,stroke-width:1.6px,color:#1E1B4B
+    classDef argo fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef fail fill:#FEF2F2,stroke:#DC2626,stroke-width:1.7px,color:#7F1D1D
+
+    subgraph P1["Phase A: Terraform Provisioning & CI-to-ArgoCD GitOps Delivery Flow"]
+        direction LR
+        TF_APPLY["1. Terraform Apply<br/>dev (11 mods) / prod (10 mods)<br/>GKE + VPC + CloudSQL + Redis + SM<br/>(no PSA VPC peering; 0 IAM/WI bindings)"]:::ok
+        CI_VAL["2. GitHub Actions CI (ci.yml)<br/>helm lint + helm template x7<br/>verify-istio-mesh-policies.py (43 policies)<br/>check-monorepo-consistency.sh"]:::ok
+        CI_DEV["3. deploy-dev (push main)<br/>yq updates values-dev.yaml tags<br/>commits [skip ci] (skips 13 outbox-relay-*)"]:::warn
+        ARGO_SYNC["4. ArgoCD Automated Sync<br/>prune=true, selfHeal=true<br/>Syncs deploy/helm + raw monitoring/ dirs<br/>(monitoring/ and monitoring/grafana/ lack K8s YAML)"]:::argo
+        CANARY_GATE["5. Argo Rollouts Canary Gate<br/>Austin: 5%->10%->25%->50%->100% (2h..12h)<br/>Seattle: 10%->25%->50% · SF: 100%<br/>Prometheus AnalysisTemplate rollback"]:::argo
+
+        TF_APPLY --> CI_VAL --> CI_DEV --> ARGO_SYNC --> CANARY_GATE
+    end
+
+    subgraph P2["Phase B: Runtime Ingress -> Service Mesh -> Pod Startup Resolution"]
+        direction TB
+        CLIENT["External HTTPS Request<br/>api / m / admin.instacommerce.{dev,com}"]:::ok
+        GW_FILTER["istio-ingressgateway<br/>EnvoyFilter strip-internal-headers<br/>(unwired in Helm chart!)"]:::fail
+        JWT_CHECK["RequestAuthentication JWT/JWKS<br/>identity-service:8081/.well-known/jwks.json<br/>ingress-admin-host-isolation DENY if aud != admin"]:::mesh
+        VS_ROUTE["VirtualService api-routing (24 prefixes -> 18 svcs)<br/>+ PeerAuthentication STRICT mTLS"]:::mesh
+        AUTHZ_EVAL["AuthorizationPolicy Evaluation<br/>deny-default + allow-{svc} + custom ALLOW<br/>NOTE: ALLOW unions bypass mobile-bff path restriction<br/>(prod drops payment/inventory/admin-deny policies)"]:::warn
+        NP_EVAL["K8s NetworkPolicy Check<br/>{svc}-ingress ALLOW http from allowFrom<br/>TRAP: scrape allows port: metrics (undefined!)<br/>TRAP: otel-collector 4317/4318 denied"]:::fail
+
+        CLIENT --> GW_FILTER --> JWT_CHECK --> VS_ROUTE --> AUTHZ_EVAL --> NP_EVAL
+    end
+
+    subgraph P3["Phase C: Pod Startup & Secret / Datastore Binding Verification"]
+        direction LR
+        DB_BIND["1. Cloud SQL Binding<br/>18 Java SVCs: literal PROJECT:REGION:INSTANCE<br/>checkout_db / reconciliation / reverse_etl missing<br/>No PSA VPC peering, no Cloud SQL IAM/users"]:::fail
+        SEC_BIND["2. Secret Manager & K8s Tokens<br/>Java sm://db-password-* & jwt-rsa-* missing in TF<br/>5 SVCs get literal sm://internal-service-token<br/>(Python reads raw string; Java missing SM secret)<br/>38 SVCs lack INTERNAL_SERVICE_TOKEN"]:::fail
+        REDIS_BIND["3. Memorystore Redis Binding<br/>stream-processor (prod/stg) hits -dev Redis<br/>location-ingestion defaults to localhost:6379<br/>enable_auth=false, enable_tls=false"]:::fail
+        RELAY_BIND["4. Sidecar & Standalone Traps<br/>13 outbox-relay-* need missing outbox-relay-db-secrets<br/>reverse-etl-db-credentials only in reverse-etl ns<br/>phase-2 sf-canary WI annotation key wrong"]:::fail
+    end
+
+    ARGO_SYNC -->|"Reconciles Manifests"| GW_FILTER
+    NP_EVAL -->|"Pod Ingress / Startup"| DB_BIND
+    NP_EVAL -->|"Pod Env Injection"| SEC_BIND
+    NP_EVAL -->|"Cache / State Connect"| REDIS_BIND
+    NP_EVAL -->|"Sidecar / Phase-2"| RELAY_BIND

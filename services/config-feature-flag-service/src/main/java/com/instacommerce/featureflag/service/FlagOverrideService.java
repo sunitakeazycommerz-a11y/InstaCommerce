@@ -9,6 +9,7 @@ import com.instacommerce.featureflag.exception.ApiException;
 import com.instacommerce.featureflag.repository.FlagAuditLogRepository;
 import com.instacommerce.featureflag.repository.FeatureFlagRepository;
 import com.instacommerce.featureflag.repository.FlagOverrideRepository;
+import jakarta.annotation.Nullable;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -16,12 +17,16 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Caching;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class FlagOverrideService {
@@ -31,10 +36,19 @@ public class FlagOverrideService {
     private final FlagAuditLogRepository auditLogRepository;
     private final FlagCacheEventListener cacheEventListener;
 
+    @Autowired
     public FlagOverrideService(FeatureFlagRepository flagRepository,
                                FlagOverrideRepository overrideRepository,
                                FlagAuditLogRepository auditLogRepository,
-                               FlagCacheEventListener cacheEventListener) {
+                               ObjectProvider<FlagCacheEventListener> cacheEventListenerProvider) {
+        this(flagRepository, overrideRepository, auditLogRepository,
+                cacheEventListenerProvider != null ? cacheEventListenerProvider.getIfAvailable() : null);
+    }
+
+    public FlagOverrideService(FeatureFlagRepository flagRepository,
+                               FlagOverrideRepository overrideRepository,
+                               FlagAuditLogRepository auditLogRepository,
+                               @Nullable FlagCacheEventListener cacheEventListener) {
         this.flagRepository = flagRepository;
         this.overrideRepository = overrideRepository;
         this.auditLogRepository = auditLogRepository;
@@ -44,6 +58,7 @@ public class FlagOverrideService {
     @Transactional
     @Caching(evict = {
         @CacheEvict(value = "flags", key = "#flagKey"),
+        @CacheEvict(value = "flags-all", allEntries = true),
         @CacheEvict(value = "flag-overrides", key = "#flagKey + ':' + #request.userId()"),
         @CacheEvict(value = "flag-overrides-bulk", allEntries = true)
     })
@@ -83,13 +98,18 @@ public class FlagOverrideService {
                 request.value() + " (user=" + request.userId() + ")",
                 changedBy));
 
-        cacheEventListener.publishBulkUpdate("override_added");
+        publishAfterCommit(() -> {
+            if (cacheEventListener != null) {
+                cacheEventListener.publishBulkUpdate("override_added");
+            }
+        });
         return override;
     }
 
     @Transactional
     @Caching(evict = {
         @CacheEvict(value = "flags", key = "#flagKey"),
+        @CacheEvict(value = "flags-all", allEntries = true),
         @CacheEvict(value = "flag-overrides", key = "#flagKey + ':' + #userId"),
         @CacheEvict(value = "flag-overrides-bulk", allEntries = true)
     })
@@ -109,7 +129,24 @@ public class FlagOverrideService {
                 null,
                 changedBy));
 
-        cacheEventListener.publishBulkUpdate("override_removed");
+        publishAfterCommit(() -> {
+            if (cacheEventListener != null) {
+                cacheEventListener.publishBulkUpdate("override_removed");
+            }
+        });
+    }
+
+    private static void publishAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
+        }
     }
 
     @Cacheable(value = "flag-overrides", key = "#flagKey + ':' + #userId")

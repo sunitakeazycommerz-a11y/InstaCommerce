@@ -32,6 +32,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
@@ -276,7 +277,7 @@ class CartServiceCheckoutAndValidationTest {
     }
 
     @Test
-    @DisplayName("JpaCartStore enforces atomic expectedVersion on updateQuantity and publishes CART_UPDATED outbox event")
+    @DisplayName("JpaCartStore enforces atomic expectedVersion on updateQuantity and publishes CartUpdated outbox event")
     void jpaCartStoreEnforcesAtomicVersionAndEmitsUpdatedEvent() {
         CartRepository cartRepo = mock(CartRepository.class);
         CartItemRepository itemRepo = mock(CartItemRepository.class);
@@ -301,7 +302,57 @@ class CartServiceCheckoutAndValidationTest {
 
         store.updateQuantity(userId, productId, 3, 5L);
         assertThat(cartItem.getQuantity()).isEqualTo(3);
-        verify(outbox).publish(eq("CART"), eq(cartId.toString()), eq("CART_UPDATED"), any());
+        verify(outbox).publish(eq("Cart"), eq(cartId.toString()), eq("CartUpdated"), any());
+    }
+
+    @Test
+    @DisplayName("JpaCartStore emits canonical Cart aggregateType and schema-aligned outbox event names/fields")
+    @SuppressWarnings("unchecked")
+    void jpaCartStoreEmitsCanonicalOutboxPayloadsWithSchemaFields() {
+        CartRepository cartRepo = mock(CartRepository.class);
+        CartItemRepository itemRepo = mock(CartItemRepository.class);
+        OutboxService outbox = mock(OutboxService.class);
+        JpaCartStore store = new JpaCartStore(cartRepo, itemRepo, outbox, new CartProperties());
+
+        UUID userId = UUID.randomUUID();
+        UUID guestId = UUID.randomUUID();
+        UUID cartId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+        Cart cart = buildCart(cartId, userId, "store-blr-01", new java.util.ArrayList<>(), 1L);
+
+        when(cartRepo.findByUserIdForUpdate(userId)).thenReturn(Optional.of(cart));
+        when(cartRepo.saveAndFlush(any(Cart.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(cartRepo.save(any(Cart.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepo.findByCartIdAndProductId(cartId, productId)).thenReturn(Optional.empty());
+
+        store.addItem(userId, new AddItemRequest(productId, "Milk", 3500L, 2, "store-blr-01"));
+        ArgumentCaptor<Map<String, Object>> addedCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(outbox).publish(eq("Cart"), eq(cartId.toString()), eq("CartItemAdded"), addedCaptor.capture());
+        assertThat(addedCaptor.getValue()).containsKeys(
+                "cartId", "userId", "productId", "productName", "unitPriceCents", "quantity", "addedAt");
+
+        CartItem unnamedItem = item(productId, null, 3500L, 1);
+        when(itemRepo.findByCartIdAndProductId(cartId, productId)).thenReturn(Optional.of(unnamedItem));
+        store.removeItem(userId, productId);
+        ArgumentCaptor<Map<String, Object>> removedCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(outbox).publish(eq("Cart"), eq(cartId.toString()), eq("CartItemRemoved"), removedCaptor.capture());
+        assertThat(removedCaptor.getValue()).containsKeys("cartId", "userId", "productId", "productName", "removedAt");
+
+        store.clearCart(userId);
+        ArgumentCaptor<Map<String, Object>> clearedCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(outbox).publish(eq("Cart"), eq(cartId.toString()), eq("CartCleared"), clearedCaptor.capture());
+        assertThat(clearedCaptor.getValue()).containsKeys("cartId", "userId", "itemCount", "clearedAt");
+
+        Cart guestCart = buildCart(UUID.randomUUID(), guestId, "store-blr-01",
+                List.of(item(productId, "Milk", 3500L, 1)), 0L);
+        when(cartRepo.findByUserIdForUpdate(guestId)).thenReturn(Optional.of(guestCart));
+        when(itemRepo.findByCartIdAndProductId(cartId, productId)).thenReturn(Optional.empty());
+        store.mergeCart(userId, guestId);
+        ArgumentCaptor<Map<String, Object>> mergedCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(outbox).publish(eq("Cart"), eq(cartId.toString()), eq("CartMerged"), mergedCaptor.capture());
+        assertThat(mergedCaptor.getValue())
+                .containsEntry("targetUserId", userId.toString())
+                .containsEntry("guestUserId", guestId.toString());
     }
 
     @Test

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -86,6 +87,55 @@ func evolveSchemaIfPresent(
 	}
 }
 
+func evolveSchemaFromMap(
+	ctx context.Context,
+	msg kafka.Message,
+	raw map[string]any,
+	evolver schemaEvolver,
+	metrics Metrics,
+	logger *slog.Logger,
+	span trace.Span,
+) {
+	if evolver == nil || len(raw) == 0 {
+		return
+	}
+	cdcFields := ExtractCDCFieldsFromMap(raw)
+	if len(cdcFields) == 0 {
+		return
+	}
+	if err := evolver.DetectAndEvolveSchema(ctx, cdcFields); err != nil {
+		if logger != nil {
+			logger.Warn("schema evolution failed",
+				"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
+		}
+		if span != nil {
+			span.RecordError(err)
+		}
+		if metrics.schemaEvolutionErrors != nil {
+			metrics.schemaEvolutionErrors.Inc()
+		}
+	}
+}
+
+func processMessageForConsumer(
+	ctx context.Context,
+	msg kafka.Message,
+	evolver schemaEvolver,
+	metrics Metrics,
+	logger *slog.Logger,
+	span trace.Span,
+) (bigquery.ValueSaver, error) {
+	if isTombstonePayload(msg.Value) {
+		return transformMessage(msg)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(msg.Value, &payload); err != nil {
+		return nil, err
+	}
+	evolveSchemaFromMap(ctx, msg, payload, evolver, metrics, logger, span)
+	return transformParsedMessage(msg, payload)
+}
+
 func runConsumer(
 	ctx context.Context,
 	reader *kafka.Reader,
@@ -133,9 +183,7 @@ func runConsumer(
 			),
 		)
 
-		evolveSchemaIfPresent(msgCtx, msg, evolver, metrics, logger, span)
-
-		row, err := transformMessage(msg)
+		row, err := processMessageForConsumer(msgCtx, msg, evolver, metrics, logger, span)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "transform failed")
@@ -155,19 +203,6 @@ func runConsumer(
 			return
 		}
 	}
-}
-
-func runBatcher(
-	batchCh <-chan batchItem,
-	inserter *bigquery.Inserter,
-	dlqWriter *kafka.Writer,
-	cfg Config,
-	metrics Metrics,
-	logger *slog.Logger,
-	tracer trace.Tracer,
-) error {
-	w, topic := unwrapDLQWriter(dlqWriter)
-	return runBatcherWithDeps(batchCh, unwrapBQInserter(inserter), w, topic, cfg, metrics, logger, tracer)
 }
 
 func runBatcherWithDeps(
@@ -215,19 +250,6 @@ func runBatcherWithDeps(
 			items = items[:0]
 		}
 	}
-}
-
-func flushBatch(
-	items []batchItem,
-	inserter *bigquery.Inserter,
-	dlqWriter *kafka.Writer,
-	cfg Config,
-	metrics Metrics,
-	logger *slog.Logger,
-	tracer trace.Tracer,
-) error {
-	w, topic := unwrapDLQWriter(dlqWriter)
-	return flushBatchWithDeps(items, unwrapBQInserter(inserter), w, topic, cfg, metrics, logger, tracer)
 }
 
 func flushBatchWithDeps(
@@ -311,10 +333,6 @@ func flushBatchWithDeps(
 
 	readyItems := markReadyForCommit(items)
 	return commitMessages(ctx, cfg.KafkaCommitTimeout, logger, readyItems)
-}
-
-func insertWithRetry(ctx context.Context, inserter *bigquery.Inserter, rows []bigquery.ValueSaver, cfg Config, logger *slog.Logger) ([]int, error) {
-	return insertWithRetryDeps(ctx, unwrapBQInserter(inserter), rows, cfg, logger)
 }
 
 func insertWithRetryDeps(ctx context.Context, inserter bqInserter, rows []bigquery.ValueSaver, cfg Config, logger *slog.Logger) ([]int, error) {

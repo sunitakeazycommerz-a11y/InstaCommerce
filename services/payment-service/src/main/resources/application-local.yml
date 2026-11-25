@@ -1,0 +1,41 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  datasource:
+    password: ${PAYMENT_DB_PASSWORD:devpass}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+payment:
+  jwt:
+    public-key: ${PAYMENT_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+  choreography:
+    order-cancelled-consumer-enabled: ${PAYMENT_CHOREOGRAPHY_ORDER_CANCELLED_CONSUMER_ENABLED:true}
+  gateway:
+    allow-placeholder-fallback: true
+
+stripe:
+  api-key: ${STRIPE_API_KEY:sk_test_local_placeholder}
+  webhook-secret: ${STRIPE_WEBHOOK_SECRET:whsec_local_placeholder}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:0.0}
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

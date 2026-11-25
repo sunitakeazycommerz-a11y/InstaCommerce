@@ -11,6 +11,7 @@ dependencies {
     compileOnly("org.springframework.data:spring-data-commons")
     compileOnly("com.github.ben-manes.caffeine:caffeine")
     compileOnly("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
+    compileOnly("io.jsonwebtoken:jjwt-api")
 
     testImplementation("org.springframework.boot:spring-boot-starter-web")
     testImplementation("org.springframework.boot:spring-boot-starter-security")
@@ -19,7 +20,10 @@ dependencies {
     testImplementation("org.springframework.data:spring-data-commons")
     testImplementation("com.github.ben-manes.caffeine:caffeine")
     testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
+    testImplementation("io.jsonwebtoken:jjwt-api")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testRuntimeOnly("io.jsonwebtoken:jjwt-impl")
+    testRuntimeOnly("io.jsonwebtoken:jjwt-jackson")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

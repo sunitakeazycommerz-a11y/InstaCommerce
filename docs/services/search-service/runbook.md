@@ -21,13 +21,13 @@
 
 # Build Docker image
 cd services/search-service
-docker build -t gcr.io/instacommerce/search-service:v1.2.3 .
-docker push gcr.io/instacommerce/search-service:v1.2.3
+docker build -t asia-south1-docker.pkg.dev/instacommerce/images/search-service:v1.2.3 .
+docker push asia-south1-docker.pkg.dev/instacommerce/images/search-service:v1.2.3
 
 # Tag as latest for convenience
-docker tag gcr.io/instacommerce/search-service:v1.2.3 \
-           gcr.io/instacommerce/search-service:latest
-docker push gcr.io/instacommerce/search-service:latest
+docker tag asia-south1-docker.pkg.dev/instacommerce/images/search-service:v1.2.3 \
+           asia-south1-docker.pkg.dev/instacommerce/images/search-service:latest
+docker push asia-south1-docker.pkg.dev/instacommerce/images/search-service:latest
 ```
 
 #### 2. Apply Database Migrations
@@ -47,7 +47,7 @@ ls services/search-service/src/main/resources/db/migration/V*.sql
 ```bash
 # Rolling update (default: 1 pod at a time)
 kubectl set image deployment/search-service \
-  search-service=gcr.io/instacommerce/search-service:v1.2.3 \
+  search-service=asia-south1-docker.pkg.dev/instacommerce/images/search-service:v1.2.3 \
   -n default \
   --record  # Tracks deployment history
 

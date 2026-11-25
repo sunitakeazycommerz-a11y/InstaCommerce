@@ -1,0 +1,11 @@
+flowchart TD
+    START(["Solver.Solve(ctx, riders, orders)"]) --> AVAIL["Filter r.IsAvailable == true"]
+    AVAIL -->|"len(available) == 0"| EMPTY["emptyResult (all orders unassigned)"]
+    AVAIL -->|"len(orders) == 0"| ZERO["SolverResult{SolveDurationMs}"]
+    AVAIL -->|">0 riders & orders"| COST["buildCostMatrix<br/>Haversine -> ETA (default 20 km/h)<br/>activeDelay = ActiveOrders * eta * 0.5<br/>computeSLARisk sigmoid (frozen -5m, cold -3m, exp -2m)<br/>priorityCost = baseCost - urgencyBoost"]
+    COST --> MASK["buildFeasibilityMask: ConstraintChecker.CheckAll<br/>1:capacity 2:zone 3:battery(20%/3km,15%) 4:consec(8)<br/>5:new_rider(3km) 6:bike(8kg) 7:bag(kg/L) 8:cold_chain"]
+    MASK --> BATCH["BatchCompatibleWithDetour<br/>same StoreID or <=0.15km; pairwise <=1km & <=3m<br/>detour chain <= MaxBatchDetourKm (1.5km)"]
+    BATCH --> ASSIGN["hungarianAssign (GREEDY edge sort)<br/>Sort feasible (rider,order) edges asc by priorityCost<br/>If order in batch (>1): tryAssignBatch atomically<br/>Else assign single order if riderBagLoad fits"]
+    ASSIGN --> OPT["postOptimise (up to 1000 1-opt passes)<br/>Relocate single order ra -> rb if feasible,<br/>bag fits, and cost[rb][oi] < cost[ra][oi]"]
+    OPT --> BUILD["buildResult<br/>Multi-stop cumulative distance & ETA<br/>TotalCost = WeightDelivery*ETA + WeightSLA*breach*100<br/>Record dispatch_optimizer_solver_* metrics"]
+    BUILD --> RET(["Return SolverResult, ctx.Err()"])

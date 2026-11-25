@@ -1,0 +1,48 @@
+flowchart LR
+    subgraph Ingress["Dual Ingestion Entrypoints (:8096)"]
+        KafkaIn["Kafka (21 TopicNames topics)<br/>concurrency=3, ack-mode=record<br/>max.poll.records=100, auto-commit=false"]
+        DomCons["DomainEventConsumer<br/>transformToAuditEvent() or sendToDlt()"]
+        HttpIn["Sync REST Clients<br/>(admin-gateway, internal svcs)"]
+        SecChain["SecurityConfig<br/>InternalServiceAuthFilter -> JwtAuthenticationFilter<br/>(lazy JwtKeyLoader, mergeInternalAuthorities)"]
+        IngestCtrl["AuditIngestionController<br/>POST /audit/events & /batch (<=1000)"]
+        QueryCtrl["AdminAuditController & AuditIntegrityController<br/>GET /admin/audit/{events,export,integrity/verify}"]
+        KafkaIn --> DomCons
+        HttpIn --> SecChain --> IngestCtrl
+        SecChain --> QueryCtrl
+    end
+
+    subgraph CoreServices["Hash-Chain, Query, Export & Verification"]
+        IngestSvc["AuditIngestionService<br/>@Transactional"]
+        HashSvc["HashChainService<br/>pg_advisory_xact_lock('audit_events_global_chain')<br/>nextval('audit_chain_seq'), SHA-256 v2 (15 fields)"]
+        QuerySvc["AuditQueryService + AuditEventSpecifications<br/>Max 366d window, max page size 100"]
+        ExportSvc["AuditExportService<br/>500-row keyset cursor, entityManager.clear()<br/>CSV formula-injection escaping"]
+        IntegSvc["AuditIntegrityService<br/>Verify v1/v2 hashes & manifest chain anchors"]
+        DomCons --> IngestSvc
+        IngestCtrl --> IngestSvc
+        IngestSvc --> HashSvc
+        QueryCtrl --> QuerySvc
+        QueryCtrl --> ExportSvc
+        QueryCtrl --> IntegSvc
+    end
+
+    subgraph ArchiveAndJobs["Scheduled Maintenance & GCS Archival (ShedLock)"]
+        PartJob["PartitionMaintenanceJob (0 0 2 1 * *)<br/>ensure_future_audit_partitions(3)<br/>DETACH PARTITION CONCURRENTLY"]
+        ArchSvc["ArchiveExportPipelineService (0 0 2 * * * UTC)<br/>ndjson.gz + SHA-256 + KMS check + 3x retry<br/>Verify remote SHA-256 -> VERIFIED manifest"]
+        PartJob --> ArchSvc
+    end
+
+    subgraph Storage["PostgreSQL audit_db (V1-V7) + GCS + Kafka DLT"]
+        PG["PostgreSQL audit_db<br/>audit_events (RANGE partitioned by created_at)<br/>prevent_audit_update / prevent_audit_delete RULEs<br/>audit_archive_manifests, shedlock, audit_chain_seq"]
+        GCS["Google Cloud Storage<br/>gs://{bucket}/audit/YYYY/MM/DD/audit_events.ndjson.gz<br/>& audit/partitions/YYYY/MM/{part}.ndjson.gz"]
+        DLT["Kafka DLT: audit.DLT<br/>(Note: AuditProperties.dlqTopic unused)"]
+    end
+
+    DomCons -. "parse/ingest error" .-> DLT
+    HashSvc --> PG
+    IngestSvc --> PG
+    QuerySvc --> PG
+    ExportSvc --> PG
+    IntegSvc --> PG
+    PartJob --> PG
+    ArchSvc --> PG
+    ArchSvc --> GCS

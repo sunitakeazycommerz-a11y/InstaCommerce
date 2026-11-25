@@ -539,8 +539,8 @@ erDiagram
 | Kafka bootstrap | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` |
 | Kafka consumer group | `FULFILLMENT_KAFKA_GROUP` | `fulfillment-service` |
 | Kafka auto-offset-reset | — | `earliest` |
-| Order service URL | `ORDER_SERVICE_URL` | `http://localhost:8085` |
-| Payment service URL | `PAYMENT_SERVICE_URL` | `http://localhost:8086` |
+| Order service URL | `ORDER_SERVICE_URL` | `http://localhost:8084` |
+| Payment service URL | `PAYMENT_SERVICE_URL` | `http://localhost:8085` |
 | Inventory service URL | `INVENTORY_SERVICE_URL` | `http://localhost:8083` |
 | JWT issuer | `FULFILLMENT_JWT_ISSUER` | `instacommerce-identity` |
 | JWT public key | `FULFILLMENT_JWT_PUBLIC_KEY` | `sm://jwt-rsa-public-key` |
@@ -559,7 +559,7 @@ erDiagram
 - **JVM flags:** `-XX:MaxRAMPercentage=75.0 -XX:+UseZGC`
 - **Non-root user:** `app` (uid 1001)
 - **Container port:** `8080` (`SERVER_PORT` overridden in Dockerfile)
-- **Healthcheck:** `wget -qO- http://localhost:8080/actuator/health/liveness` every 30s, 3 retries
+- **Healthcheck:** `wget -qO- http://localhost:8086/actuator/health/liveness` every 30s, 3 retries
 - **Secrets:** GCP Secret Manager via `spring.config.import: optional:sm://`
 
 ### 8.3 Security Model
@@ -877,7 +877,7 @@ and `routing-eta-service`.
 
 | Endpoint | Local | Container |
 |----------|-------|-----------|
-| Application | `http://localhost:8087` | `http://localhost:8080` |
+| Application | `http://localhost:8086` | `http://localhost:8086` |
 | Liveness | `/actuator/health/liveness` | same |
 | Readiness | `/actuator/health/readiness` | same |
 | Prometheus | `/actuator/prometheus` | same |

@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    actor Client as Client App
+    participant Ctrl as AuthController
+    participant Auth as AuthService
+    participant Repo as RefreshTokenRepository
+    participant Block as TokenBlocklistService
+    participant Redis as Redis (:6379)
+    participant Outbox as OutboxService
+    participant Audit as AuditService (@Async)
+    participant JwtFlt as JwtAuthenticationFilter
+
+    Note over Client,Outbox: Flow 1: Refresh Token Rotation & Replay-Reuse Cascade
+    Client->>Ctrl: POST /auth/refresh {refreshToken}
+    Ctrl->>Auth: refresh(request, ip, userAgent, traceId)
+    Note right of Auth: @Transactional(noRollbackFor = TokenRevokedException)
+    Auth->>Repo: findByTokenHash(sha256(token))
+    Repo-->>Auth: RefreshToken existing (user, revoked)
+    alt existing.isRevoked() OR revokeIfNotRevoked(id) == 0
+        Auth->>Repo: revokeAllByUserId(userId)
+        Auth->>Block: revokeAllUserTokens(userId)
+        Block->>Block: localUserRevokedBefore.put(userId, nowMs)
+        Block->>Redis: SET identity:revoked_user_before:{userId} nowMs EX 900
+        Auth->>Outbox: publish("User", userId, "TokenReuseDetected", payload)
+        Auth->>Audit: logAction(userId, "TOKEN_REUSE_DETECTED", ...)
+        Auth-->>Client: 401 TokenRevokedException (DB revocations committed!)
+    else Atomic CAS UPDATE returned 1
+        Auth->>Repo: save(rotated RefreshToken) & enforceMaxRefreshTokens(5)
+        Auth->>Audit: logAction(userId, "TOKEN_REFRESH", ...)
+        Auth-->>Client: 200 AuthResponse {accessToken, newRefreshToken}
+    end
+
+    Note over Client,JwtFlt: Flow 2: Fail-Closed Access-Token Check on Protected Request
+    Client->>JwtFlt: GET /users/me (Authorization: Bearer oldJwt)
+    JwtFlt->>JwtFlt: DefaultJwtService.validateAccessToken(oldJwt)
+    JwtFlt->>Block: isTokenRevoked(jti, sub, iat, iat_ms)
+    Block->>Redis: HAS_KEY revoked_jti & GET revoked_user_before:{userId}
+    alt Redis returns cutoff >= iat_ms OR Redis throws exception
+        Redis-->>Block: cutoff >= iat_ms (or Exception -> fail closed!)
+        Block-->>JwtFlt: true
+        JwtFlt-->>Client: 401 TOKEN_REVOKED
+    else Not revoked
+        Block-->>JwtFlt: false
+        JwtFlt-->>Client: Proceeds to UserController -> 200 UserResponse
+    end

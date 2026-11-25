@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -41,8 +42,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.InOrder;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -384,6 +387,47 @@ class CheckoutControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("RESOLVED"));
         verify(replayService).replay(entry);
+    }
+
+    @Test
+    void asyncCheckoutReturns202WithWorkflowIdAndStatusEndpointIncludesResultSnapshot() throws Exception {
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new GlobalExceptionHandler(new TraceIdProvider()))
+            .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
+            .build();
+
+        when(idempotencyKeyRepository.findByIdempotencyKey("user-123:idem-async")).thenReturn(Optional.empty());
+        when(workflowClient.newWorkflowStub(eq(CheckoutWorkflow.class), any(WorkflowOptions.class))).thenReturn(workflow);
+        when(workflowClient.newWorkflowStub(CheckoutWorkflow.class, "checkout-user-123-idem-async")).thenReturn(workflow);
+        when(workflow.getStatus()).thenReturn("COMPLETED");
+        when(workflow.getResultSnapshot()).thenReturn(CheckoutResponse.success("ord-async-1", 4500L, 14));
+
+        SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("user-123", null));
+        try (MockedStatic<WorkflowClient> wfClientStatic = mockStatic(WorkflowClient.class)) {
+            mockMvc.perform(post("/api/v1/checkout?async=true")
+                    .header("Idempotency-Key", "idem-async")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(request())))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("STARTED"))
+                .andExpect(jsonPath("$.workflowId").value("checkout-user-123-idem-async"));
+
+            wfClientStatic.verify(() -> WorkflowClient.start(
+                ArgumentMatchers.<io.temporal.workflow.Functions.Func1<CheckoutRequest, CheckoutResponse>>any(),
+                any(CheckoutRequest.class)));
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+        verify(idempotencyKeyRepository, never()).save(any());
+
+        mockMvc.perform(get("/api/v1/checkout/checkout-user-123-idem-async/status")
+                .principal(new TestingAuthenticationToken("user-123", null, "ROLE_USER")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.workflowId").value("checkout-user-123-idem-async"))
+            .andExpect(jsonPath("$.status").value("COMPLETED"))
+            .andExpect(jsonPath("$.result.orderId").value("ord-async-1"))
+            .andExpect(jsonPath("$.result.totalCents").value(4500))
+            .andExpect(jsonPath("$.result.workflowId").value("checkout-user-123-idem-async"));
     }
 
     private CheckoutRequest request() {

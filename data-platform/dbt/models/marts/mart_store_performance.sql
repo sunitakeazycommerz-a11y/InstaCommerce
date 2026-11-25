@@ -15,8 +15,8 @@ store_orders AS (
         AVG(od.total_cents) / 100.0 AS avg_order_value_usd,
         AVG(od.total_delivery_minutes) AS avg_delivery_minutes,
         COUNTIF(od.sla_met) AS sla_met_orders,
-        COUNT(*) AS total_delivery_orders,
-        SAFE_DIVIDE(COUNTIF(od.sla_met), COUNT(*)) * 100 AS sla_10min_pct,
+        COUNT(od.sla_met) AS total_delivery_orders,
+        SAFE_DIVIDE(COUNTIF(od.sla_met), NULLIF(COUNT(od.sla_met), 0)) * 100 AS sla_10min_pct,
         AVG(od.distance_meters) AS avg_distance_meters
     FROM order_deliveries od
     GROUP BY od.store_id, od.order_date
@@ -24,13 +24,18 @@ store_orders AS (
 store_payments AS (
     SELECT
         o.store_id,
-        DATE(p.completed_at) AS payment_date,
-        SUM(p.amount_cents) / 100.0 AS collected_revenue_usd,
+        DATE(COALESCE(p.completed_at, p.failed_at, p.initiated_at)) AS payment_date,
+        SUM(
+            CASE
+                WHEN p.status IN ('CAPTURED', 'COMPLETED') THEN p.amount_cents
+                ELSE 0
+            END
+        ) / 100.0 AS collected_revenue_usd,
         COUNTIF(p.status = 'FAILED') AS failed_payments,
-        COUNTIF(p.status = 'REFUNDED') AS refunded_payments
+        COUNTIF(p.status IN ('REFUNDED', 'PARTIALLY_REFUNDED')) AS refunded_payments
     FROM payments p
     INNER JOIN {{ ref('stg_orders') }} o ON p.order_id = o.order_id
-    GROUP BY o.store_id, DATE(p.completed_at)
+    GROUP BY o.store_id, DATE(COALESCE(p.completed_at, p.failed_at, p.initiated_at))
 )
 SELECT
     so.store_id,

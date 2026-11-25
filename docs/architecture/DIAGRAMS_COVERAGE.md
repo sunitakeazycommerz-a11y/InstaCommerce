@@ -22,7 +22,7 @@ All services now have 7-diagram architecture documentation (HLD, LLD, Flowchart,
 - **warehouse-service** (7): Inventory locations, region constraints, capacity
 - **routing-eta-service** (7): ETA calculation, geographic routing, real-time updates
 - **dispatch-optimizer-service** (7): Route optimization, Haversine distance, assignment
-- **rider-assignment-service** (7): Rider matching, availability, skill-based routing
+- **rider-fleet-service** (7): Rider matching, availability, skill-based routing
 - **location-ingestion-service** (7): GPS event ingestion, deduplication, anomaly detection
 
 ### Tier 3: Platform (8 services) ✅ 56/56 diagrams
@@ -42,8 +42,8 @@ All services now have 7-diagram architecture documentation (HLD, LLD, Flowchart,
 - **notification-service** (7): Multi-channel notifications, delivery tracking
 - **config-feature-flag-service** (7): Feature flags, cache invalidation, Redis pub/sub
 - **wallet-loyalty-service** (7): Balance management, points redemption, tier progression
-- **search-service** (7): Full-text search, filtering, ranking (existing)
-- **recommendation-engine** (7): ML-based recommendations, A/B testing (existing)
+- **search-service** (7): Full-text search (PostgreSQL tsvector), filtering, ranking
+- **fraud-detection-service** (7): Fraud rule evaluation, velocity checks, risk scoring
 
 ### Tier 5: Data/ML/AI (2 services) ✅ 14/14 diagrams
 - **ai-inference-service** (7): Model inference, batch processing, feature engineering
@@ -131,9 +131,8 @@ All services now have 7-diagram architecture documentation (HLD, LLD, Flowchart,
 - Idempotent processing with consumer lag tracking
 
 ### Event-Driven Architecture
-- 28+ Kafka topics across all event domains
-- Topic naming: `{service-name}.{event-type}`
-- Dead-letter topics for failed processing
+- Canonical domain and operational topics defined in `TopicNames.java` (e.g., `orders.events`, `payments.events`, `rider.events`, `rider.location.updates`)
+- Dead-letter topics use the `.DLT` suffix per ADR-003 (e.g., `orders.events.DLT`)
 
 ### Cache Invalidation
 - config-feature-flag-service: Redis pub/sub <500ms propagation

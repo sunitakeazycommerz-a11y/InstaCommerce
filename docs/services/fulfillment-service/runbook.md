@@ -56,7 +56,7 @@ kubectl exec -n fulfillment deploy/fulfillment-service -- \
 kubectl get deploy -n fulfillment fulfillment-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Upgrade
-helm upgrade fulfillment-service deploy/helm/fulfillment-service \
+helm upgrade instacommerce deploy/helm \
   -n fulfillment \
   --values deploy/helm/values.yaml \
   --values deploy/helm/values-prod.yaml
@@ -169,7 +169,7 @@ kubectl exec -n fulfillment deploy/fulfillment-service -- \
 
 # Check warehouse-service availability
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -v http://warehouse-service:8085/health
+  curl -v http://warehouse-service:8092/health
 ```
 
 **Resolution**:
@@ -254,7 +254,7 @@ kubectl logs -n fulfillment deploy/fulfillment-service --tail=30 | grep "rebalan
 ```bash
 # Test warehouse-service connectivity
 kubectl exec -n fulfillment deploy/fulfillment-service -- \
-  curl -v http://warehouse-service:8085/v1/capacity
+  curl -v http://warehouse-service:8092/v1/capacity
 
 # Check network policy
 kubectl get networkpolicies -n fulfillment | grep warehouse
@@ -371,6 +371,6 @@ rate(warehouse_assignment_total{status="success"}[5m]) / rate(warehouse_assignme
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/fulfillment-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/fulfillment-service/README.md`
 - **SLO**: `/docs/slos/service-slos.md#fulfillment`

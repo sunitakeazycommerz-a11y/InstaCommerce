@@ -7,7 +7,7 @@
 | **Module** | `:services:pricing-service` |
 | **Port** | `8089` |
 | **Runtime** | Spring Boot 4.0 · Java 21 |
-| **Database** | PostgreSQL 15+ (Flyway-managed V1–V10, @Version locking) |
+| **Database** | PostgreSQL 16 (Flyway-managed V1–V10, @Version locking) |
 | **Messaging** | Kafka consumer (`catalog.events`), Outbox producer (`pricing.events`) |
 | **Resilience** | Resilience4j rate limiter, circuit breaker |
 | **Auth** | JWT RS256 |
@@ -620,14 +620,14 @@ WHERE mean_exec_time > 50
 ORDER BY mean_exec_time DESC;
 
 # Profile pricing service
-curl http://pricing-service:8087/admin/profiling/start
+curl http://pricing-service:8089/admin/profiling/start
 
 # Run test batch
-curl -X POST http://pricing-service:8087/admin/profiling/run-test \
+curl -X POST http://pricing-service:8089/admin/profiling/run-test \
   -d '{"iterations": 1000}'
 
 # Analyze results
-curl http://pricing-service:8087/admin/profiling/results
+curl http://pricing-service:8089/admin/profiling/results
 
 # Optimize if needed (add index, cache, etc.)
 ```
@@ -662,7 +662,7 @@ GROUP BY order_id, coupon_id
 HAVING COUNT(*) > 1;
 
 # Investigate and potentially refund duplicate charge
-curl -X POST http://pricing-service:8087/admin/coupon-redemption/{redemptionId}/reverse
+curl -X POST http://pricing-service:8089/admin/coupon-redemption/{redemptionId}/reverse
 ```
 
 ### Scenario 3: Surge Pricing Not Triggering (Despite high demand)
@@ -680,17 +680,17 @@ curl -X POST http://pricing-service:8087/admin/coupon-redemption/{redemptionId}/
 **Resolution:**
 ```bash
 # Check surge config
-curl http://pricing-service:8087/admin/config/surge-pricing
+curl http://pricing-service:8089/admin/config/surge-pricing
 
 # Manual demand count
 SELECT COUNT(*) FROM orders
 WHERE created_at > NOW() - INTERVAL '15 minutes';
 
 # Check surge state
-curl http://pricing-service:8087/admin/surge/status
+curl http://pricing-service:8089/admin/surge/status
 
 # Force surge activation for testing
-curl -X POST http://pricing-service:8087/admin/surge/activate \
+curl -X POST http://pricing-service:8089/admin/surge/activate \
   -d '{"multiplier": 1.20, "durationMinutes": 10}'
 
 # Check if configuration correct
@@ -712,20 +712,20 @@ PRICING_SURGE_THRESHOLD=1000 (threshold for HIGH demand)
 **Resolution:**
 ```bash
 # Test location lookup
-curl http://pricing-service:8087/admin/location/test \
+curl http://pricing-service:8089/admin/location/test \
   -d '{"storeId":"store-uuid"}'
 
 # Check location cache
 redis-cli GET pricing:location:store-uuid
 
 # Verify location configuration
-curl http://pricing-service:8087/admin/config/location-pricing
+curl http://pricing-service:8089/admin/config/location-pricing
 
 # Manually clear location cache
 redis-cli DEL pricing:location:*
 
 # Force cache refresh
-curl -X POST http://pricing-service:8087/admin/cache/refresh-locations
+curl -X POST http://pricing-service:8089/admin/cache/refresh-locations
 
 # Check if location data in database
 SELECT store_id, region, price_multiplier FROM location_pricing;
@@ -746,14 +746,14 @@ SELECT store_id, region, price_multiplier FROM location_pricing;
 **Resolution:**
 ```bash
 # Check HMAC key status
-curl http://pricing-service:8087/admin/hmac-key/status
+curl http://pricing-service:8089/admin/hmac-key/status
 
 # Verify key hasn't been rotated recently
 SELECT created_at, rotated_at FROM hmac_keys
 WHERE status = 'ACTIVE';
 
 # If key rotated, tokens need regeneration
-curl -X POST http://pricing-service:8087/admin/quotes/regenerate-all
+curl -X POST http://pricing-service:8089/admin/quotes/regenerate-all
 
 # Check for active tampering attempts
 SELECT COUNT(*) as attempt_count
@@ -779,10 +779,10 @@ AND failure_reason = 'HMAC_MISMATCH';
 **Resolution:**
 ```bash
 # Check active promotions
-curl http://pricing-service:8087/admin/promotions/active
+curl http://pricing-service:8089/admin/promotions/active
 
 # Test pricing with conflict scenario
-curl -X POST http://pricing-service:8087/admin/test-pricing \
+curl -X POST http://pricing-service:8089/admin/test-pricing \
   -d '{
     "items": [...],
     "promoCode": "BUNDLE10",
@@ -790,7 +790,7 @@ curl -X POST http://pricing-service:8087/admin/test-pricing \
   }'
 
 # Review promotion priority
-curl http://pricing-service:8087/admin/config/promotion-priority
+curl http://pricing-service:8089/admin/config/promotion-priority
 
 # Adjust if needed
 PROMOTION_PRIORITY=["BUNDLE", "THRESHOLD", "LOYALTY", "COUPON"]
@@ -821,7 +821,7 @@ WHERE experiment_name = 'surge_pricing_threshold_test'
 GROUP BY variant;
 
 # Verify hash distribution
-curl http://pricing-service:8087/admin/experiments/test-hash-distribution \
+curl http://pricing-service:8089/admin/experiments/test-hash-distribution \
   -d '{"experimentName":"surge_pricing_threshold_test","samples":10000}'
 
 # If hash function OK, check assignment logic
@@ -857,7 +857,7 @@ kafka-consumer-groups --bootstrap-server kafka:9092 \
   --group pricing-catalog-consumer --describe
 
 # Manually sync product
-curl -X POST http://pricing-service:8087/admin/catalog/sync \
+curl -X POST http://pricing-service:8089/admin/catalog/sync \
   -d '{"productId":"product-uuid"}'
 
 # Check if event was published
@@ -890,7 +890,7 @@ kafka-console-consumer --bootstrap-server kafka:9092 \
 
 1. **Immediate:** Disable coupon code
    ```bash
-   curl -X POST http://pricing-service:8087/admin/coupons/{couponId}/disable
+   curl -X POST http://pricing-service:8089/admin/coupons/{couponId}/disable
    ```
 2. **Communication:** Notify users "Coupon expired"
 3. **Audit:** Count affected orders, cost impact
@@ -906,7 +906,7 @@ kafka-console-consumer --bootstrap-server kafka:9092 \
 ## Configuration
 
 ```env
-SERVER_PORT=8087
+SERVER_PORT=8089
 
 PRICING_SURGE_ENABLED=true
 PRICING_SURGE_THRESHOLD=1000

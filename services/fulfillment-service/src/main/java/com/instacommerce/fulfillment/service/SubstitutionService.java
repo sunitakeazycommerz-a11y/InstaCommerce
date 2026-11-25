@@ -39,6 +39,13 @@ public class SubstitutionService {
     public void handleMissingItem(PickTask task, PickItem item, int missingQty) {
         boolean isSubstituted = item.getStatus() == PickItemStatus.SUBSTITUTED && item.getSubstituteProductId() != null;
         int substitutedQty = isSubstituted ? item.getPickedQty() : 0;
+        handleMissingItem(task, item, missingQty, substitutedQty);
+    }
+
+    @Transactional
+    public void handleMissingItem(PickTask task, PickItem item, int missingQty, int substitutedQtyDelta) {
+        boolean isSubstituted = item.getStatus() == PickItemStatus.SUBSTITUTED && item.getSubstituteProductId() != null;
+        int substitutedQty = isSubstituted ? Math.max(0, substitutedQtyDelta) : 0;
         if (missingQty <= 0 && substitutedQty <= 0) {
             return;
         }
@@ -131,7 +138,7 @@ public class SubstitutionService {
      * Makes HTTP calls to inventory and payment services outside any transaction.
      */
     public void releaseStockAndRefund(MissingItemEvent event) {
-        if (event.missingQty() > 0 && event.substituteProductId() == null) {
+        if (event.missingQty() > 0) {
             try {
                 inventoryClient.reserveOrDeductStock(
                     event.productId(),

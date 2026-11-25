@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.instacommerce.pricing.dto.request.QuoteValidationRequest;
 import com.instacommerce.pricing.dto.request.RedeemPromotionRequest;
 import com.instacommerce.pricing.dto.request.RollbackCouponUsageRequest;
 import com.instacommerce.pricing.dto.request.RollbackPromotionUsageRequest;
@@ -162,5 +163,38 @@ class PricingControllerTest {
                 .andExpect(jsonPath("$.items[0].productId").value(activeId.toString()))
                 .andExpect(jsonPath("$.items[0].unitPriceCents").value(1200))
                 .andExpect(jsonPath("$.unavailableProductIds[0]").value(inactiveId.toString()));
+    }
+
+    @Test
+    @DisplayName("GET /pricing/products/{id}?storeId=... applies store surge pricing")
+    void productPriceForwardsOptionalStoreId() throws Exception {
+        UUID productId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        when(pricingService.calculatePrice(productId, storeId)).thenReturn(1740L);
+
+        mockMvc.perform(get("/pricing/products/{id}", productId).param("storeId", storeId.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.unitPriceCents").value(1740));
+
+        verify(pricingService).calculatePrice(productId, storeId);
+    }
+
+    @Test
+    @DisplayName("POST /pricing/quotes/validate forwards userId to QuoteTokenService when supplied")
+    void validateQuoteForwardsUserId() throws Exception {
+        UUID quoteId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        when(quoteTokenService.validate(quoteId, "tok", 1000L, 1200L, 200L, userId))
+                .thenReturn(QuoteTokenService.ValidationResult.invalid("USER_MISMATCH"));
+
+        QuoteValidationRequest request = new QuoteValidationRequest(
+                quoteId, "tok", 1000L, 1200L, 200L, userId);
+
+        mockMvc.perform(post("/pricing/quotes/validate")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.valid").value(false))
+                .andExpect(jsonPath("$.reason").value("USER_MISMATCH"));
     }
 }

@@ -781,7 +781,7 @@ The warehouse-service covers the **store registry and operational capacity** lay
 # Docker build and run
 ./gradlew :services:warehouse-service:bootJar
 docker build -t warehouse-service services/warehouse-service
-docker run -p 8090:8090 \
+docker run -p 8092:8092 \
   -e WAREHOUSE_DB_URL=jdbc:postgresql://host.docker.internal:5432/warehouse \
   -e WAREHOUSE_JWT_PUBLIC_KEY="$(cat public-key.pem)" \
   warehouse-service

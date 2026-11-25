@@ -1,0 +1,23 @@
+flowchart TD
+    Req["Evaluate Flag Request<br/>GET /flags/{key} vs POST /flags/bulk"] --> Entry{"Call path"}
+    Entry -- "GET /flags/{key}" --> SelfCall["FlagEvaluationService.evaluate()<br/>this.loadFlag(key) self-invocation<br/>BYPASSES @Cacheable -> hits Postgres!"]
+    Entry -- "POST /flags/bulk or GET /flags" --> ProxyCall["BulkEvaluationService<br/>Calls proxy loadFlag() / loadAllFlags()<br/>Hits Caffeine 'flags' / 'flags-all' (30s)"]
+
+    SelfCall --> Found{"Flag found?"}
+    ProxyCall --> Found
+    Found -- "No" --> RetFalse["Return false (SOURCE_DEFAULT)"]
+    Found -- "Yes" --> OvrChk{"userId != null & active<br/>non-expired FlagOverride?"}
+
+    OvrChk -- "Yes" --> RetOvr["Return parsed overrideValue<br/>(SOURCE_OVERRIDE)"]
+    OvrChk -- "No" --> EnChk{"flag.isEnabled()?"}
+    EnChk -- "No" --> RetFalse
+    EnChk -- "Yes" --> SegChk["evaluateTargetSegments(metadata, context)<br/>Match ANY/ALL on segment/segments/tier/region/city"]
+
+    SegChk -- "Allowed = false" --> RetFalse
+    SegChk -- "segmentRolloutPercentage != null" --> PctEval["evaluateWithPercentage(key, userId, pct)<br/>Murmur3_32_fixed('userId:key') & 0x7FFFFFFF % 100 < pct"]
+    SegChk -- "No segment override" --> TypeSw{"flag.getFlagType()"}
+
+    TypeSw -- "BOOLEAN" --> RetBool["Return true (SOURCE_DEFAULT)"]
+    TypeSw -- "PERCENTAGE" --> PctEval
+    TypeSw -- "USER_LIST" --> ListEval["targetUsersCache.contains(userId)<br/>(SOURCE_USER_LIST or DEFAULT)"]
+    TypeSw -- "JSON" --> RetJson["parseValue(defaultValue)<br/>(SOURCE_DEFAULT)"]

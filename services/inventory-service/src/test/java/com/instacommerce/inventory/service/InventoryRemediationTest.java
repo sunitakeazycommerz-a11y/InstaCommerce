@@ -176,7 +176,7 @@ class InventoryRemediationTest {
         stock.setReserved(0);
 
         when(asnRepository.findByPalletBarcode("PALLET-PARTIAL")).thenReturn(Optional.of(asn));
-        when(stockItemRepository.findByStoreIdAndProductId(storeId, productId)).thenReturn(Optional.of(stock));
+        when(stockItemRepository.findByProductIdAndStoreIdForUpdate(productId, storeId)).thenReturn(Optional.of(stock));
         when(asnRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         InboundReceivingService receivingService = new InboundReceivingService(

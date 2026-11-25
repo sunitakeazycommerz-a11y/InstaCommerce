@@ -188,7 +188,7 @@ Search service consumer is **idempotent** because:
 **Verification:**
 ```bash
 # Send same event twice, verify same result
-$ curl -X POST http://localhost:8086/internal/event-replay \
+$ curl -X POST http://localhost:8088/internal/event-replay \
   -d '{"eventId": "...", "productId": "..."}'
 # Result: First call creates/updates, second call is no-op (same state)
 ```

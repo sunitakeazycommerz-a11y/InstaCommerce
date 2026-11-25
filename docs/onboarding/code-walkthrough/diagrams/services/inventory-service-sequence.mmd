@@ -1,0 +1,73 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Checkout / Fulfillment / Job
+    participant Auth as Security Chain<br/>(InternalAuth / JWT)
+    participant Ctrl as ReservationController
+    participant Svc as ReservationService
+    participant WH as RestWarehouseClient<br/>(-> warehouse :8092)
+    participant FEFO as FefoBatchAllocationService
+    participant Mon as StockLevelMonitor<br/>+ SafetyStockService
+    participant PG as PostgreSQL (inventory)
+    participant Relay as outbox-relay-inventory<br/>(-> inventory.events)
+
+    rect rgb(239, 246, 255)
+        Note over Caller,Relay: Flow A: Checkout Step 3 Stock Reservation (External Gate Outside TX + Sorted Locks)
+        Caller->>Auth: POST /api/inventory/reservations {idempotencyKey (~100c!), storeId, items[]}
+        Auth->>Ctrl: SharedInternalServiceAuthFilter -> ReservationController.reserve
+        Ctrl->>Svc: reserve(request)
+        Svc->>WH: validateStoreActive(storeId) [10m Caffeine cache, Retry->CB->Bulkhead]
+        Note over WH: Cache miss -> GET /stores/{id} -> requires status == ACTIVE
+        Svc->>WH: isStoreOpen(storeId) [uncached live GET /stores/{id}/open]
+        alt Store inactive / closed / warehouse unreachable
+            WH-->>Caller: 422 STORE_TEMPORARILY_CLOSED / 404 / 500 RestClientException
+        end
+        Svc->>PG: reserveTransactionTemplate (READ_COMMITTED) -> findByIdempotencyKey
+        Note over Svc,PG: Bug: idempotency_key is VARCHAR(64) & no DataIntegrityViolationException catch
+        Note over Svc: Sort items by productId ASC (deadlock prevention)
+        loop For each sorted item
+            Svc->>PG: SELECT s FROM StockItem FOR UPDATE (lock timeout 2000ms)
+            Svc->>FEFO: resolveSellableAvailable(stock) [excludes expired batches]
+            alt stock.isFrozen() or available < qty
+                Svc-->>Caller: 409 STOCK_FROZEN or 409 INSUFFICIENT_STOCK (TX rolls back)
+            end
+        end
+        Svc->>PG: UPDATE stock_items (reserved += qty) + INSERT reservations + line_items
+        Svc->>PG: OutboxService.publish("StockReserved") [MANDATORY]
+        Svc->>Mon: evaluateAfterStockDecrease [15m pod Caffeine + 4h DB ReorderPointReached]
+        Svc-->>Caller: 200 ReserveResponse(reservationId, expiresAt, items[], reserved=true)
+    end
+
+    rect rgb(236, 253, 245)
+        Note over Caller,Relay: Flow B: Checkout Step 9b Confirm (FEFO Deduction vs Expiry noRollbackFor)
+        Caller->>Ctrl: POST /api/inventory/reservations/{id}/confirm
+        Ctrl->>Svc: confirm(reservationId) [@Transactional(noRollbackFor=ReservationExpiredException)]
+        Svc->>PG: findByIdForUpdate(reservationId) [SELECT FOR UPDATE]
+        alt status == PENDING and expiresAt < now
+            Svc->>PG: releaseReserved + status = EXPIRED + INSERT StockReleased
+            Svc-->>Caller: Throw 409 RESERVATION_EXPIRED (EXPIRED commits due to noRollbackFor!)
+        else status == PENDING and valid
+            loop For each lineItem sorted by productId ASC
+                Svc->>PG: Lock StockItem FOR UPDATE
+                Svc->>FEFO: allocateFefoForConfirm(storeId, productId, qty)
+                FEFO->>PG: SELECT stock_batches FOR UPDATE ORDER BY expiry_date ASC, created_at ASC
+                Svc->>PG: stock.confirm(qty) [on_hand -= qty, reserved -= qty]
+                Svc->>Mon: evaluateAfterStockDecrease -> LowStockAlert / OutOfStock / ReorderPointReached
+            end
+            Svc->>PG: UPDATE reservation CONFIRMED + INSERT outbox_events (StockConfirmed)
+            Svc-->>Caller: 204 No Content
+            PG-->>Relay: Poll sent=false (FOR UPDATE SKIP LOCKED) -> Kafka inventory.events
+        end
+    end
+
+    rect rgb(254, 242, 242)
+        Note over Caller,Relay: Flow C: Confirmed Cancel Compensation & ShedLock Expiry Sweep
+        Caller->>Ctrl: DELETE /api/inventory/reservations/{id}
+        Ctrl->>Svc: cancel(reservationId)
+        Svc->>PG: findByIdForUpdate(id)
+        alt status == CONFIRMED (post-capture saga rollback)
+            Svc->>PG: Lock StockItem -> stock.releaseConfirmed(qty) [on_hand += qty]
+            Svc->>FEFO: restoreOnConfirmedCancel [silent no-op if all batches expired!]
+            Svc->>PG: status = CANCELLED + StockReleased outbox
+        end
+        Note over Caller,PG: ReservationExpiryJob (@Scheduled 30s, ShedLock) polls PENDING & expiresAt < now (batch 100) -> expireReservation(id)
+    end

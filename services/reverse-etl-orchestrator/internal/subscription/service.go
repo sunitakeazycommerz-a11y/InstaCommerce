@@ -4,6 +4,7 @@ package subscription
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/instacommerce/reverse-etl-orchestrator/db/migration"
 	"github.com/instacommerce/reverse-etl-orchestrator/internal/config"
 )
 
@@ -122,17 +124,32 @@ func NewService(cfg *config.Config) (*Service, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	return &Service{
+	svc := &Service{
 		db:  db,
 		cfg: cfg,
-	}, nil
+	}
+	if err := svc.EnsureSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to apply reverse ETL schema: %w", err)
+	}
+
+	return svc, nil
+}
+
+// EnsureSchema executes the embedded idempotent SQL migrations on startup.
+func (s *Service) EnsureSchema(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, migration.V1SchemaSQL)
+	return err
 }
 
 // NewServiceWithDB constructs a Service from an existing database handle.
@@ -173,13 +190,22 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, createdBy strin
 		return nil, errors.New("database not initialized")
 	}
 
+	sourceEvents := req.SourceEvents
+	if sourceEvents == nil {
+		sourceEvents = []string{}
+	}
+	sourceEventsJSON, err := json.Marshal(sourceEvents)
+	if err != nil {
+		return nil, fmt.Errorf("marshal source_events: %w", err)
+	}
+
 	now := time.Now().UTC()
 	sub := &Subscription{
 		ID:            uuid.New().String(),
 		Name:          strings.TrimSpace(req.Name),
 		Description:   req.Description,
 		SourceDomain:  strings.TrimSpace(req.SourceDomain),
-		SourceEvents:  req.SourceEvents,
+		SourceEvents:  sourceEvents,
 		SinkType:      strings.TrimSpace(req.SinkType),
 		SinkConfig:    req.SinkConfig,
 		TransformSpec: req.TransformSpec,
@@ -192,14 +218,14 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, createdBy strin
 
 	const query = `
 		INSERT INTO subscriptions (
-			subscription_id, name, description, source_domain,
+			subscription_id, name, description, source_domain, source_events,
 			sink_type, sink_config, transform_spec, schedule,
 			state, created_at, updated_at, created_by
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
-		sub.ID, sub.Name, sub.Description, sub.SourceDomain,
+	_, err = s.db.ExecContext(ctx, query,
+		sub.ID, sub.Name, sub.Description, sub.SourceDomain, string(sourceEventsJSON),
 		sub.SinkType, sub.SinkConfig, sub.TransformSpec, sub.Schedule,
 		sub.State, sub.CreatedAt, sub.UpdatedAt, sub.CreatedBy,
 	)
@@ -217,7 +243,7 @@ func (s *Service) Get(ctx context.Context, id string) (*Subscription, error) {
 	}
 
 	const query = `
-		SELECT subscription_id, name, description, source_domain,
+		SELECT subscription_id, name, description, source_domain, source_events,
 			sink_type, sink_config, transform_spec, schedule,
 			state, created_at, updated_at, created_by
 		FROM subscriptions
@@ -225,8 +251,9 @@ func (s *Service) Get(ctx context.Context, id string) (*Subscription, error) {
 	`
 
 	sub := &Subscription{}
+	var sourceEventsRaw string
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
-		&sub.ID, &sub.Name, &sub.Description, &sub.SourceDomain,
+		&sub.ID, &sub.Name, &sub.Description, &sub.SourceDomain, &sourceEventsRaw,
 		&sub.SinkType, &sub.SinkConfig, &sub.TransformSpec, &sub.Schedule,
 		&sub.State, &sub.CreatedAt, &sub.UpdatedAt, &sub.CreatedBy,
 	)
@@ -236,6 +263,7 @@ func (s *Service) Get(ctx context.Context, id string) (*Subscription, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get subscription: %w", err)
 	}
+	sub.SourceEvents = parseSourceEvents(sourceEventsRaw)
 
 	return sub, nil
 }
@@ -247,7 +275,7 @@ func (s *Service) List(ctx context.Context, sourceDomain, sinkType string, state
 	}
 
 	const query = `
-		SELECT subscription_id, name, description, source_domain,
+		SELECT subscription_id, name, description, source_domain, source_events,
 			sink_type, sink_config, transform_spec, schedule,
 			state, created_at, updated_at, created_by
 		FROM subscriptions
@@ -266,14 +294,16 @@ func (s *Service) List(ctx context.Context, sourceDomain, sinkType string, state
 	var subs []*Subscription
 	for rows.Next() {
 		sub := &Subscription{}
+		var sourceEventsRaw string
 		err := rows.Scan(
-			&sub.ID, &sub.Name, &sub.Description, &sub.SourceDomain,
+			&sub.ID, &sub.Name, &sub.Description, &sub.SourceDomain, &sourceEventsRaw,
 			&sub.SinkType, &sub.SinkConfig, &sub.TransformSpec, &sub.Schedule,
 			&sub.State, &sub.CreatedAt, &sub.UpdatedAt, &sub.CreatedBy,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan subscription: %w", err)
 		}
+		sub.SourceEvents = parseSourceEvents(sourceEventsRaw)
 		subs = append(subs, sub)
 	}
 	if err := rows.Err(); err != nil {
@@ -281,6 +311,18 @@ func (s *Service) List(ctx context.Context, sourceDomain, sinkType string, state
 	}
 
 	return subs, nil
+}
+
+func parseSourceEvents(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "null" {
+		return []string{}
+	}
+	var events []string
+	if err := json.Unmarshal([]byte(trimmed), &events); err == nil && events != nil {
+		return events
+	}
+	return []string{}
 }
 
 // Validate marks a DRAFT subscription as VALIDATED.

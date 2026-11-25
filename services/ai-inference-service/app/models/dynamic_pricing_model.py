@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import Field
 from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
@@ -41,7 +41,7 @@ PRICING_FEE_DIST = Histogram(
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
-class PricingFeatures(BaseModel):
+class PricingFeatures(MLBaseModel):
     """Input features for dynamic delivery-fee pricing."""
     # Order context
     order_amount_cents: int = Field(..., ge=0, description="Order subtotal in cents")
@@ -66,6 +66,7 @@ class PricingFeatures(BaseModel):
     cost_per_delivery_cents: int = Field(default=300, ge=0, description="Actual cost per delivery")
     min_margin_cents: int = Field(default=100, ge=0, description="Minimum margin per delivery")
     min_margin_pct: float = Field(default=0.0, ge=0.0, le=1.0, description="Minimum margin percentage")
+    model_version: Optional[str] = None
 
 
 class PricingResponse(MLBaseModel):
@@ -78,6 +79,9 @@ class PricingResponse(MLBaseModel):
     model_version: str
     feature_contributions: Dict[str, float] = Field(default_factory=dict)
     method: str = Field(default="rule_based")
+    is_cold_start: bool = False
+    drift_detected: bool = False
+    sla_breached: bool = False
 
 
 # ---------------------------------------------------------------------------

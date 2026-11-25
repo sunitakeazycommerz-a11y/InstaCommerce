@@ -1,0 +1,39 @@
+flowchart TB
+    classDef client fill:#F5F3FF,stroke:#6D28D9,stroke-width:1.6px,color:#1E1B4B
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef broker fill:#F8FAFC,stroke:#475569,stroke-width:2px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2.2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph EDGE["1. Edge Clients &amp; go-shared Middleware (:8105 · Helm: location-ingestion)"]
+        direction LR
+        CALLERS["Istio AllowFrom Callers<br/>istio-ingressgateway, mobile-bff,<br/>rider-fleet, routing-eta, admin-gateway"]:::client
+        MW["otelhttp.NewHandler -&gt; correlation.Middleware -&gt; ServeMux<br/>Unauth: /health (Redis Ping + Kafka TCP 2s), /health/ready,<br/>/ready (main.go:204), /health/live, /metrics (location_handler_*)<br/>Auth (InternalAuthMiddleware): POST /ingest, /ingest/location,<br/>/ingest/batch, /batch, GET /ingest/ws (HandleHTTP test-only!)"]:::prod
+        CALLERS --> MW
+    end
+
+    subgraph PIPE["2. Rate Limit, Kalman Preview/Commit, Axial Hex &amp; Batch/Geofence Workers"]
+        direction LR
+        HAND["LocationHandler (http.go / ws.go / ingest.go)<br/>ConnectionRateLimiter (100/s, 200 burst, 20k max)<br/>WS: 25s ping ticker + 60s pong read deadline<br/>NormalizeLocation (acc &le; 50m, ts &le; now+1m)"]:::prod
+        KALMAN["RiderTelemetrySmoother (kalman.go)<br/>50k LRU / 1h TTL · Preview (RLock) + Commit (Lock)<br/>&gt;150 km/h teleport / &gt;80 km/h outlier (422)<br/>&le;15m &amp; &le;1.5 km/h drift clamp · coordGain 0.5..1.0"]:::prod
+        HEX["Spatial Indexer (handler/h3.go &amp; store/h3.go)<br/>Custom planar axial hex (0x88... ~0.8km res-8)<br/>NOT Uber H3! H3_RESOLUTION=0 default skips<br/>update.H3Index before Kafka batcher"]:::warn
+        BATCH["LocationBatcher (batcher.go)<br/>Reserve/Commit/Abort (buffer+reserved &lt; 2000)<br/>1 flusher goroutine (200 msgs or 1s)<br/>3 retries (50ms*n), Hash{} key=rider_id, RequireAll"]:::prod
+        GEO["GeofenceChecker + geofenceQueue (1024)<br/>1 worker goroutine -&gt; KafkaGeofencePublisher<br/>IDLE IN PROD: main.go:99 initializes<br/>empty zones map (AddZone in tests only!)"]:::broken
+        HAND --> KALMAN --> HEX --> BATCH
+        HEX --> GEO
+    end
+
+    subgraph SINKS["3. Redis Lua CAS, Kafka Topics &amp; Verified Split-Brain / Drift"]
+        direction LR
+        REDIS[("LatestPositionStore (store/redis.go)<br/>Lua CAS updatePositionScript:<br/>HSET rider:location:{id} (10m TTL)<br/>SREM/SADD riders:h3:{idx} (20m TTL)<br/>Rejects ts_ms &le; existing (200 ignored)")]:::warn
+        K_LOC["Kafka: rider.location.updates<br/>{rider_id, lat, lng, timestamp_ms, flags}<br/>h3_index? (omitted at default H3_RESOLUTION=0)<br/>Consumed by routing-eta &amp; stream-processor"]:::broker
+        K_GEO["Kafka: rider.geofence.events<br/>GeofenceEventEnvelope (EventEnvelope.v1)<br/>0 events emitted in production"]:::broken
+        DRIFT["VERIFIED SPLIT-BRAIN &amp; DRIFT<br/>1. rider-fleet (:8093) reads GEORADIUS riders:active<br/>   &amp; emits {latitude, longitude, timestamp}<br/>   (never reads riders:h3:{idx}!)<br/>2. Helm values.yaml omits REDIS_ADDR, KAFKA_BROKERS,<br/>   INTERNAL_SERVICE_* (403/503 if unset)<br/>3. wave-40 queries Spring http_server_requests_*"]:::broken
+    end
+
+    MW --> HAND
+    HEX -->|"Lua CAS"| REDIS
+    BATCH -->|"RequireAll"| K_LOC
+    GEO -.->|"Empty zones map"| K_GEO
+    REDIS -.- DRIFT

@@ -5,7 +5,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 @Component
-@Profile("test")
+@Profile({"test", "local"})
 public class MockPaymentGateway implements PaymentGateway {
     @Override
     public GatewayAuthResult authorize(GatewayAuthRequest request) {

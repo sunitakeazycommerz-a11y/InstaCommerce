@@ -55,7 +55,7 @@ public class RiderService {
         availabilityRepository.save(availability);
 
         outboxService.publish("Rider", rider.getId().toString(), "RiderCreated", toResponse(rider));
-        logger.info("Created rider id={} phone={}", rider.getId(), rider.getPhone());
+        logger.info("Created rider id={} storeId={}", rider.getId(), rider.getStoreId());
         return toResponse(rider);
     }
 

@@ -115,8 +115,9 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 	manualReviewCount := 0
 	failedCount := 0
 	var firstProcessErr error
+	var committedMismatches []MismatchDetail
 	for _, mismatch := range mismatches {
-		if err := r.processMismatch(ctx, tx, runID, mismatch); err != nil {
+		if err := r.processMismatchIsolated(ctx, tx, runID, mismatch); err != nil {
 			failedCount++
 			if firstProcessErr == nil {
 				firstProcessErr = err
@@ -129,17 +130,7 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 		} else {
 			manualReviewCount++
 		}
-
-		if r.pubsub != nil {
-			if err := r.pubsub.PublishMismatchEvent(ctx, runID, mismatch); err != nil {
-				logger.WarnContext(ctx, "failed to publish mismatch event", "error", err, "run_id", runID)
-			}
-			if mismatch.DiscrepancyCents > 0 {
-				if err := r.pubsub.PublishDiscrepancyAlert(ctx, runID, mismatch, mismatch.DiscrepancyCents); err != nil {
-					logger.WarnContext(ctx, "failed to publish discrepancy alert", "error", err, "run_id", runID, "transaction_id", mismatch.TransactionID)
-				}
-			}
-		}
+		committedMismatches = append(committedMismatches, mismatch)
 	}
 
 	runStatus := "COMPLETED"
@@ -160,6 +151,22 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	if r.pubsub != nil {
+		for _, mismatch := range committedMismatches {
+			if err := r.pubsub.PublishMismatchEvent(ctx, runID, mismatch); err != nil {
+				logger.WarnContext(ctx, "failed to publish mismatch event", "error", err, "run_id", runID)
+			}
+			if mismatch.DiscrepancyCents > 0 {
+				if err := r.pubsub.PublishDiscrepancyAlert(ctx, runID, mismatch, mismatch.DiscrepancyCents); err != nil {
+					logger.WarnContext(ctx, "failed to publish discrepancy alert", "error", err, "run_id", runID, "transaction_id", mismatch.TransactionID)
+				}
+			}
+		}
+		if err := r.pubsub.PublishCompletionEvent(ctx, runID, len(mismatches), autoFixedCount, manualReviewCount); err != nil {
+			logger.WarnContext(ctx, "failed to publish completion event", "error", err, "run_id", runID)
+		}
+	}
+
 	duration := time.Since(startTime)
 	span.SetAttributes(
 		attribute.Int("reconciliation.mismatches", len(mismatches)),
@@ -168,12 +175,6 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 		attribute.Int("reconciliation.failed", failedCount),
 		attribute.Float64("reconciliation.duration_seconds", duration.Seconds()),
 	)
-
-	if r.pubsub != nil {
-		if err := r.pubsub.PublishCompletionEvent(ctx, runID, len(mismatches), autoFixedCount, manualReviewCount); err != nil {
-			logger.WarnContext(ctx, "failed to publish completion event", "error", err, "run_id", runID)
-		}
-	}
 
 	res := &ReconciliationResult{
 		RunID:             runID,
@@ -188,6 +189,18 @@ func (r *DBReconciler) ReconcileRange(ctx context.Context, start, end time.Time)
 		return res, err
 	}
 	return res, nil
+}
+
+func (r *DBReconciler) processMismatchIsolated(ctx context.Context, tx *sql.Tx, runID int64, mismatch MismatchDetail) error {
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT mismatch_sp"); err != nil {
+		return fmt.Errorf("create mismatch savepoint: %w", err)
+	}
+	if err := r.processMismatch(ctx, tx, runID, mismatch); err != nil {
+		_, _ = tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT mismatch_sp")
+		return err
+	}
+	_, _ = tx.ExecContext(ctx, "RELEASE SAVEPOINT mismatch_sp")
+	return nil
 }
 
 func (r *DBReconciler) getOrCreateRun(ctx context.Context, tx *sql.Tx, runDate time.Time) (int64, bool, error) {

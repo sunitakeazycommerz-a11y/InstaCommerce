@@ -34,9 +34,10 @@ public class RestPricingQuoteClient implements PricingQuoteClient {
     @CircuitBreaker(name = "pricingService", fallbackMethod = "validateQuoteFallback")
     @Retry(name = "pricingService")
     @Bulkhead(name = "pricingService", fallbackMethod = "validateQuoteFallback")
-    public boolean validateQuote(UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents) {
+    public boolean validateQuote(UUID userId, UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents) {
         try {
-            QuoteValidateRequest request = new QuoteValidateRequest(quoteId, quoteToken, totalCents, subtotalCents, discountCents);
+            QuoteValidateRequest request = new QuoteValidateRequest(
+                quoteId, quoteToken, totalCents, subtotalCents, discountCents, userId);
             restClient.post()
                 .uri(baseUrl + "/pricing/quotes/validate")
                 .body(request)
@@ -54,7 +55,7 @@ public class RestPricingQuoteClient implements PricingQuoteClient {
     }
 
     @SuppressWarnings("unused")
-    private boolean validateQuoteFallback(UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents, Throwable t) {
+    private boolean validateQuoteFallback(UUID userId, UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents, Throwable t) {
         logger.warn("Resilience fallback for pricingService validateQuote quoteId={}: {}", quoteId, t.getMessage());
         return false;
     }
@@ -66,7 +67,7 @@ public class RestPricingQuoteClient implements PricingQuoteClient {
         return factory;
     }
 
-    record QuoteValidateRequest(UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents) {}
+    record QuoteValidateRequest(UUID quoteId, String quoteToken, long totalCents, long subtotalCents, long discountCents, UUID userId) {}
 
     private static class QuoteValidationConflictException extends RuntimeException {
         QuoteValidationConflictException(String message) {

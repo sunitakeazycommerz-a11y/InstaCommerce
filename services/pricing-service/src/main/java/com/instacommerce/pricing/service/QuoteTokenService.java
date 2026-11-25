@@ -61,8 +61,17 @@ public class QuoteTokenService {
 
     public ValidationResult validate(UUID quoteId, String token,
                                      long claimedTotal, long claimedSubtotal, long claimedDiscount) {
+        return validate(quoteId, token, claimedTotal, claimedSubtotal, claimedDiscount, null);
+    }
+
+    public ValidationResult validate(UUID quoteId, String token,
+                                     long claimedTotal, long claimedSubtotal, long claimedDiscount,
+                                     UUID claimedUserId) {
         if (!properties.isValidationEnabled()) {
             return ValidationResult.valid();
+        }
+        if (quoteId == null || token == null || token.isBlank()) {
+            return ValidationResult.invalid("MISSING_TOKEN");
         }
 
         PriceQuote quote = priceQuoteRepository.findById(quoteId).orElse(null);
@@ -72,6 +81,10 @@ public class QuoteTokenService {
 
         if (Instant.now().isAfter(quote.getExpiresAt())) {
             return ValidationResult.invalid("EXPIRED");
+        }
+
+        if (claimedUserId != null && !claimedUserId.equals(quote.getUserId())) {
+            return ValidationResult.invalid("USER_MISMATCH");
         }
 
         String expectedToken = computeHmac(quoteId, quote.getContentHash());

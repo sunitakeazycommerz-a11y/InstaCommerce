@@ -1,0 +1,49 @@
+flowchart TD
+    classDef svc fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef cache fill:#FFF7ED,stroke:#EA580C,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph CalcFlow["1. Cart Price Calculation, Promo Arbitration &amp; Quote Signing (POST /pricing/calculate)"]
+        direction TB
+        In["POST /pricing/calculate {items, userId, couponCode, storeId}<br/>RateLimiter pricingLimiter (100/60s)"]:::svc
+        Rules["loadActiveRules(productIds, now) from price_rules<br/>unitPrice = basePriceCents * multiplier (HALF_UP)<br/>Missing rule -> ProductPriceLookupService -> 404"]:::db
+        Elig["findActivePromotions (@Cacheable activePromotions)<br/>+ countByUserIdAndPromotionIds -> filter isEligibleAt"]:::svc
+        PreStack["Compute preliminaryStackablePromoDiscount on subtotalCents<br/>netBase = max(0, subtotalCents - preliminaryStackable)"]:::svc
+        CpnChk{"couponCode non-blank<br/>AND userId != null?"}:::svc
+        CpnVal["CouponService.validateCoupon(code, userId, netBase)<br/>Check active, promo window, maxUses, totalLimit, perUserLimit"]:::db
+        Arb["DiscountCalculator.calculateDiscounts:<br/>bestExclusivePromo vs (bestStackablePromo + coupon)<br/>Tie-break: discount DESC, priority DESC, name ASC"]:::svc
+        ExclWin{"bestExclusive != null AND<br/>exclusive &ge; stackable+coupon?"}:::svc
+        WinExcl["Apply exclusive promo<br/>couponDiscountCents = 0, appliedCoupon = null"]:::svc
+        WinStack["Apply stackable promo (if any)<br/>couponDiscount = min(couponValidation, netSubtotalPostBundle)"]:::svc
+        Surge["SurgePricingService.evaluateSurge(storeId)<br/>max(staticSignal, StoreSurgeStateStore live) cap 2.00x<br/>deliveryFeeCents = active ? 3000*mult : 0"]:::warn
+        TaxMeta["TaxCalculationService.calculateTaxForSubtotal(netGoods, 0.18)<br/>HALF_EVEN advisory metadata (NOT added to totalCents)"]:::svc
+        IssueQ["QuoteTokenService.issueQuote (@Transactional)<br/>INSERT price_quotes (300s TTL)<br/>HMAC-SHA256(quoteId + ':' + SHA256(sub:disc:tot:cnt))"]:::db
+
+        In --> Rules --> Elig --> PreStack --> CpnChk
+        CpnChk -->|"Yes"| CpnVal --> Arb
+        CpnChk -->|"No (anon skips coupon!)"| Arb
+        Arb --> ExclWin
+        ExclWin -->|"Yes"| WinExcl --> Surge
+        ExclWin -->|"No"| WinStack --> Surge
+        Surge --> TaxMeta --> IssueQ
+    end
+
+    subgraph RedeemFlow["2. Atomic Coupon Redemption &amp; Lock Ordering (POST /pricing/coupons/redeem)"]
+        direction TB
+        RIn["CouponService.redeemCoupon<br/>@Retryable(OptimisticLock, 3x, 100ms*2) @Transactional"]:::svc
+        NX{"PromoReservationService.tryAcquire<br/>Redis SET promo:{CODE}:{userId} '1' NX EX 300<br/>(CHM fallback on DataAccessException)"}:::cache
+        ErrBusy["400 InvalidCouponException<br/>'redemption currently in progress'"]:::warn
+        ForUpd["SELECT * FROM coupons WHERE UPPER(code)=UPPER(:code) FOR UPDATE<br/>Idempotent check: exists (coupon_id, user_id, order_id)?"]:::db
+        Idem{"Already redeemed<br/>for orderId?"}:::svc
+        Replay["200 OK (idempotent replay)<br/>finally: release Redis NX lock"]:::svc
+        PromoUse["PromotionService.recordPromotionUsage<br/>findByIdForUpdate -> perUserLimit -> INSERT promotion_redemptions<br/>-> UPDATE promotions SET current_uses + 1"]:::db
+        SaveCpn["INSERT coupon_redemptions (partial unique single_use)<br/>UPDATE coupons SET total_redeemed + 1<br/>OutboxService.recordEvent('pricing', 'CouponRedeemed', MANDATORY)"]:::db
+        Fin["finally: delete promo:{CODE}:{userId}<br/>(runs BEFORE @Transactional commit!)"]:::warn
+
+        RIn --> NX
+        NX -->|"False"| ErrBusy
+        NX -->|"True"| ForUpd --> Idem
+        Idem -->|"Yes"| Replay
+        Idem -->|"No"| PromoUse --> SaveCpn --> Fin
+    end

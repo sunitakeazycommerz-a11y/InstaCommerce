@@ -13,6 +13,7 @@ import com.instacommerce.inventory.repository.InboundAsnRepository;
 import com.instacommerce.inventory.repository.StockBatchRepository;
 import com.instacommerce.inventory.repository.StockItemRepository;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -107,8 +108,11 @@ public class InboundReceivingService {
 
         final UUID storeId = asn.getStoreId();
 
-        // Reconcile and update available inventory using verified received quantities
-        for (AsnLineItem item : asn.getLineItems()) {
+        // Reconcile and update available inventory using verified received quantities in productId order
+        List<AsnLineItem> sortedItems = asn.getLineItems().stream()
+            .sorted(Comparator.comparing(item -> item.getProductId().toString()))
+            .toList();
+        for (AsnLineItem item : sortedItems) {
             int acceptedQty = resolveAcceptedQuantity(item, receivedQuantities);
             item.setReceivedQuantity(acceptedQty);
 
@@ -116,8 +120,9 @@ public class InboundReceivingService {
                 continue;
             }
 
-            // 1. Update on-hand inventory in store
-            StockItem stockItem = stockItemRepository.findByStoreIdAndProductId(storeId, item.getProductId())
+            // 1. Lock row in deterministic productId order and update on-hand inventory
+            StockItem stockItem = stockItemRepository
+                .findByProductIdAndStoreIdForUpdate(item.getProductId(), storeId)
                 .orElseGet(() -> {
                     StockItem newStock = new StockItem();
                     newStock.setStoreId(storeId);

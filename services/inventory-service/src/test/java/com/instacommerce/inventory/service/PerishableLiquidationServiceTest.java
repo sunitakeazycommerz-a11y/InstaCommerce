@@ -1,6 +1,7 @@
 package com.instacommerce.inventory.service;
 
 import com.instacommerce.inventory.domain.model.StockBatch;
+import com.instacommerce.inventory.domain.model.StockItem;
 import com.instacommerce.inventory.dto.request.CreateBatchRequest;
 import com.instacommerce.inventory.dto.response.StockBatchResponse;
 import com.instacommerce.inventory.repository.StockBatchRepository;
@@ -66,6 +67,8 @@ class PerishableLiquidationServiceTest {
             .thenAnswer(invocation -> invocation.getArgument(0));
         when(stockItemRepository.findByStoreIdAndProductId(storeId, productId))
             .thenReturn(Optional.empty());
+        when(stockItemRepository.save(any(StockItem.class)))
+            .thenAnswer(invocation -> invocation.getArgument(0));
 
         StockBatchResponse response = liquidationService.createOrUpdateBatch(storeId, request);
 
@@ -73,6 +76,10 @@ class PerishableLiquidationServiceTest {
         assertEquals("BATCH-101", response.batchNumber());
         assertEquals(50, response.quantity());
         assertFalse(response.isDiscounted());
+
+        ArgumentCaptor<StockItem> stockCaptor = ArgumentCaptor.forClass(StockItem.class);
+        verify(stockItemRepository).save(stockCaptor.capture());
+        assertEquals(50, stockCaptor.getValue().getOnHand());
     }
 
     @Test

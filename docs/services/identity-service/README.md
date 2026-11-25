@@ -8,7 +8,7 @@ The identity-service is the core authentication and authorization provider for I
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8080
 **Status**: Tier 1 Critical (Authentication backbone)
-**Database**: PostgreSQL 15+ (encrypted user store with read replicas)
+**Database**: PostgreSQL 16 (encrypted user store with read replicas)
 
 ## SLOs & Availability
 
@@ -77,7 +77,7 @@ spec:
         image: us-central1-docker.pkg.dev/instacommerce/auth/identity-service:v1.4.0
         ports:
         - name: http
-          containerPort: 8080
+          containerPort: 8081
           protocol: TCP
         resources:
           requests:
@@ -89,7 +89,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8080
+            port: 8081
           initialDelaySeconds: 15
           periodSeconds: 10
           timeoutSeconds: 5
@@ -97,7 +97,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8080
+            port: 8081
           initialDelaySeconds: 10
           periodSeconds: 5
           timeoutSeconds: 3
@@ -149,8 +149,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 8080
-    targetPort: 8080
+  - port: 8081
+    targetPort: 8081
     name: http
   selector:
     app: identity-service
@@ -168,7 +168,7 @@ spec:
 
 ### Database
 
-- **Name**: `identity` (PostgreSQL 15+)
+- **Name**: `identity` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V10)
   - V1: user_account table (core schema)
   - V2: session_cache table (Redis fallback)
@@ -233,12 +233,12 @@ spec:
                 ┌────────▼──────────────┐
                 │ Downstream Services   │
                 │ (all verify sig via   │
-                │  /jwt/jwks)           │
+                │  /.well-known/jwks.json)│
                 │                       │
                 │ - order-service       │
                 │ - payment-service     │
                 │ - admin-gateway       │
-                │ - (28 total)          │
+                │ - (30 total)          │
                 └──────────────────────┘
 ```
 
@@ -346,7 +346,7 @@ spec:
 1. Cart service initialization: Get service token from Kubernetes secret
 2. Service-to-service call: Cart calls Inventory API
 3. Cart includes: Authorization header with service JWT (aud: instacommerce-internal)
-4. Inventory validates: Extract JWT; verify signature via /jwt/jwks
+4. Inventory validates: Extract JWT; verify signature via /.well-known/jwks.json
 5. Inventory checks audience: Must contain "instacommerce-internal"
 6. Inventory allows request: Executes API call with service context
 7. All calls logged with source/destination service names
@@ -357,7 +357,7 @@ spec:
 1. Security team: Initiate key rotation (scheduled monthly)
 2. Identity service: Generate new RS256 key pair
 3. Service: Mark new key as PRIMARY; old key as DEPRECATED (30-day grace)
-4. Service: Update /jwt/jwks endpoint (includes both keys)
+4. Service: Update /.well-known/jwks.json endpoint (includes both keys)
 5. Downstream services: Fetch new JWKS; cache updated
 6. New tokens signed with new key (old tokens still valid)
 7. After 30 days: Remove DEPRECATED key from JWKS endpoint
@@ -530,7 +530,7 @@ alerts:
 **Resolution**:
 ```bash
 # Check PostgreSQL connection pool
-curl http://identity-service:8080/actuator/metrics/datasource_hikaricp_connections_active
+curl http://identity-service:8081/actuator/metrics/datasource_hikaricp_connections_active
 
 # Check Redis connectivity
 kubectl exec -it deployment/identity-service -- redis-cli -h redis ping
@@ -539,7 +539,7 @@ kubectl exec -it deployment/identity-service -- redis-cli -h redis ping
 kubectl top pod -l app=identity-service
 
 # Check failed auth breakdown
-curl http://identity-service:8080/actuator/metrics/identity_login_failure_total | grep -o '"reason":"[^"]*"'
+curl http://identity-service:8081/actuator/metrics/identity_login_failure_total | grep -o '"reason":"[^"]*"'
 
 # If PostgreSQL slow: check query performance
 SELECT COUNT(*), MAX(duration_ms) FROM slow_query_log WHERE created_at > NOW() - INTERVAL '5 minutes';
@@ -561,10 +561,10 @@ SELECT COUNT(*), MAX(duration_ms) FROM slow_query_log WHERE created_at > NOW() -
 **Resolution**:
 ```bash
 # Verify JWKS endpoint is reachable
-curl -s http://identity-service:8080/jwt/jwks | jq '.keys | length'
+curl -s http://identity-service:8081/.well-known/jwks.json | jq '.keys | length'
 
 # Check if new key was added
-curl -s http://identity-service:8080/jwt/jwks | jq '.keys[].kty'
+curl -s http://identity-service:8081/.well-known/jwks.json | jq '.keys[].kty'
 
 # Verify downstream service is using fresh JWKS cache
 kubectl exec -it deployment/cart-service -- \
@@ -574,10 +574,10 @@ kubectl exec -it deployment/cart-service -- \
 ntpdate -u ntp.ubuntu.com
 
 # Test token verification manually
-JWT_TOKEN=$(curl -X POST http://identity-service:8080/jwt/login \
+JWT_TOKEN=$(curl -X POST http://identity-service:8081/jwt/login \
   -d '{"email":"test@example.com","password":"..."}' | jq -r '.token')
 
-curl -H "Authorization: Bearer $JWT_TOKEN" http://order-service:8085/orders/me
+curl -H "Authorization: Bearer $JWT_TOKEN" http://order-service:8084/orders/me
 ```
 
 ### Scenario 3: Session Cache Misses (Redis Down)
@@ -678,7 +678,7 @@ spec:
     - namespaceSelector: {}
     ports:
     - protocol: TCP
-      port: 8080
+      port: 8081
 EOF
 
 # Manually unlock legitimate user (if accidentally rate-limited)
@@ -705,11 +705,11 @@ kubectl autoscale deployment identity-service -n auth --min=3 --max=10 --cpu-per
 
 # Check if key is cached in memory
 kubectl exec -it deployment/identity-service -- \
-  curl -s http://localhost:8080/actuator/metrics/rs256_key_cache_hits
+  curl -s http://localhost:8081/actuator/metrics/rs256_key_cache_hits
 
 # Warm up JVM before peak traffic (run synthetic login requests)
 for i in {1..1000}; do
-  curl -X POST http://localhost:8080/jwt/login \
+  curl -X POST http://localhost:8081/jwt/login \
     -d '{"email":"test-'"$i"'@example.com","password":"..."}' &
 done
 
@@ -736,11 +736,11 @@ jstat -gc <pid> 1000 | grep "YGCT\|FGCT"
 kubectl rollout status deployment/identity-service -n auth
 
 # Verify JWKS endpoint responds
-curl -s -w "\nHTTP %{http_code}\n" http://identity-service:8080/jwt/jwks
+curl -s -w "\nHTTP %{http_code}\n" http://identity-service:8081/.well-known/jwks.json
 
 # Check network connectivity from order-service
 kubectl exec -it deployment/order-service -- \
-  curl -v http://identity-service:8080/jwt/jwks
+  curl -v http://identity-service:8081/.well-known/jwks.json
 
 # If JWKS missing keys: manually restore from backup
 kubectl scale deployment identity-service -n auth --replicas=0
@@ -834,10 +834,10 @@ DELETE FROM shedlock WHERE name = 'jwt-key-rotation' AND locked_at < NOW() - INT
 
 # Manually trigger key rotation (if automated job fails)
 kubectl exec -it deployment/identity-service -- \
-  curl -X POST http://localhost:8080/admin/jwt/rotate-keys
+  curl -X POST http://localhost:8081/admin/jwt/rotate-keys
 
 # Verify new keys in JWKS
-curl -s http://identity-service:8080/jwt/jwks | jq '.keys | map({kid, kty, status})'
+curl -s http://identity-service:8081/.well-known/jwks.json | jq '.keys | map({kid, kty, status})'
 
 # Monitor key rotation completion
 kubectl logs -f deployment/identity-service | grep -i "key.*rotation\|jwks.*updated"
@@ -903,7 +903,7 @@ kubectl logs -f deployment/identity-service | grep -i "key.*rotation\|jwks.*upda
    - Trigger: `POST /identity/admin/jwt/rotate-keys` (requires admin JWT)
    - Monitor: `kubectl logs -f deployment/identity-service | grep -i "rotation"`
 4. **Verify**:
-   - Fetch JWKS: `curl http://identity-service:8080/jwt/jwks | jq '.keys | length'`
+   - Fetch JWKS: `curl http://identity-service:8081/.well-known/jwks.json | jq '.keys | length'`
    - Should have 2 keys: new (PRIMARY) + old (DEPRECATED)
 5. **Grace Period** (30 days):
    - Old tokens continue to verify with DEPRECATED key
@@ -930,7 +930,7 @@ kubectl logs -f deployment/identity-service | grep -i "key.*rotation\|jwks.*upda
 
 ### JWKS Consumption (by downstream services)
 
-- **Endpoint**: http://identity-service:8080/jwt/jwks
+- **Endpoint**: http://identity-service:8081/.well-known/jwks.json
 - **Refresh**: 5-minute TTL (Spring HTTP client caching)
 - **Fallback**: Cached keys valid for signed tokens
 - **Validation**: RSA public key must match issued JWT signature
@@ -940,7 +940,7 @@ kubectl logs -f deployment/identity-service | grep -i "key.*rotation\|jwks.*upda
 ### Public (Unauthenticated)
 - `GET /actuator/health` - Liveness probe
 - `GET /actuator/metrics` - Prometheus metrics
-- `GET /jwt/jwks` - Public JWKS (RSA keys for signature verification)
+- `GET /.well-known/jwks.json` - Public JWKS (RSA keys for signature verification)
 - `POST /jwt/login` - Authenticate and get JWT token
 - `POST /jwt/refresh` - Refresh expired token
 - `POST /jwt/register` - User registration
@@ -960,27 +960,27 @@ kubectl logs -f deployment/identity-service | grep -i "key.*rotation\|jwks.*upda
 
 ```bash
 # Standard user login
-curl -X POST http://identity-service:8080/jwt/login \
+curl -X POST http://identity-service:8081/jwt/login \
   -H "Content-Type: application/json" \
   -d '{"email":"user@instacommerce.com","password":"secure-pass","tenantId":"tenant-123"}'
 
 # Response: {"token":"eyJhbGciOiJSUzI1NiIs...","refreshToken":"...","expiresIn":3600}
 
 # Fetch JWKS for token verification
-curl -X GET http://identity-service:8080/jwt/jwks | jq '.keys'
+curl -X GET http://identity-service:8081/.well-known/jwks.json | jq '.keys'
 
 # Refresh token
-curl -X POST http://identity-service:8080/jwt/refresh \
+curl -X POST http://identity-service:8081/jwt/refresh \
   -H "Authorization: Bearer <refresh_token>"
 
 # Issue service-to-service token (admin only)
-curl -X POST http://identity-service:8080/jwt/issue \
+curl -X POST http://identity-service:8081/jwt/issue \
   -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
   -d '{"service":"cart-service","aud":"instacommerce-internal","durationSeconds":86400}'
 
 # Revoke session (logout)
-curl -X POST http://identity-service:8080/jwt/revoke \
+curl -X POST http://identity-service:8081/jwt/revoke \
   -H "Authorization: Bearer <access_token>"
 ```
 
@@ -988,7 +988,7 @@ curl -X POST http://identity-service:8080/jwt/revoke \
 
 ### Environment Variables
 ```env
-SERVER_PORT=8080
+SERVER_PORT=8081
 SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/identity
 SPRING_DATASOURCE_USERNAME=identity_user
 SPRING_DATASOURCE_PASSWORD=<postgres_password>

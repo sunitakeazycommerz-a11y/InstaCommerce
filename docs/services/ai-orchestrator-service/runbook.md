@@ -46,7 +46,7 @@ kubectl get deploy ai-orchestrator-service -o jsonpath='{.spec.replicas}'
 ### Rolling Update Deployment
 
 ```bash
-helm upgrade ai-orchestrator-service deploy/helm/ai-orchestrator-service
+helm upgrade instacommerce deploy/helm
 kubectl rollout status deploy/ai-orchestrator-service --timeout=10m
 
 # Smoke test agent assist endpoint
@@ -170,7 +170,7 @@ kubectl exec -n ai deploy/ai-orchestrator-service -- \
   curl -s http://localhost:8100/metrics/active-workflows-count | jq '.value'
 
 # If > 1000: Increase memory limit
-helm upgrade ai-orchestrator-service deploy/helm/ai-orchestrator-service \
+helm upgrade instacommerce deploy/helm \
   -n ai \
   --set resources.limits.memory=4Gi
 
@@ -196,7 +196,7 @@ kubectl set env deploy/ai-orchestrator-service -n ai \
 
 ```bash
 # Optimize workflow state storage
-helm upgrade ai-orchestrator-service deploy/helm/ai-orchestrator-service \
+helm upgrade instacommerce deploy/helm \
   -n ai \
   --set db.stateCompression=enabled \
   --set db.archiveTtlDays=7
@@ -234,6 +234,6 @@ ai_inference_step_latency_seconds_p99
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/ai-orchestrator-service/`
+- **Deployment**: `deploy/helm/`
 - **Workflow Definitions**: `/deploy/ai-workflows/`
 - **Integration**: AI Inference Service, Order Service, Fraud Detection Service

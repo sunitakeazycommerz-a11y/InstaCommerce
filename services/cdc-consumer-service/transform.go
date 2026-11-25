@@ -139,6 +139,12 @@ func transformMessage(msg kafka.Message) (bigquery.ValueSaver, error) {
 	if err := json.Unmarshal(msg.Value, &payload); err != nil {
 		return nil, err
 	}
+	return transformParsedMessage(msg, payload)
+}
+
+func transformParsedMessage(msg kafka.Message, payload map[string]any) (bigquery.ValueSaver, error) {
+	insertID := fmt.Sprintf("%s-%d-%d", msg.Topic, msg.Partition, msg.Offset)
+	headersValue := mustJSONValue(headersToMap(msg.Headers))
 
 	var op string
 	var tsValue, beforeValue, afterValue, sourceValue, payloadValue bigquery.Value

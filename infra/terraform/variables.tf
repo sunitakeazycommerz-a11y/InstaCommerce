@@ -1,7 +1,7 @@
 variable "reconciliation_db_host" {
   description = "PostgreSQL hostname for reconciliation database"
   type        = string
-  default     = "reconciliation-db.default.svc.cluster.local"
+  default     = "reconciliation-db.instacommerce.svc.cluster.local"
 }
 
 variable "reconciliation_db_port" {
@@ -25,7 +25,7 @@ variable "reconciliation_db_password" {
 variable "kafka_brokers" {
   description = "List of Kafka broker addresses"
   type        = list(string)
-  default     = ["kafka-0:9092", "kafka-1:9092", "kafka-2:9092"]
+  default     = ["kafka.default.svc.cluster.local:9092"]
 }
 
 variable "cdc_replication_factor" {

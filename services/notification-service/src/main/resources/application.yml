@@ -134,6 +134,7 @@ resilience4j:
           - java.io.IOException
           - java.net.SocketTimeoutException
           - org.springframework.web.client.RestClientException
+          - com.instacommerce.notification.service.PreferenceLookupException
       orderService:
         slidingWindowType: COUNT_BASED
         slidingWindowSize: 20
@@ -155,6 +156,8 @@ resilience4j:
         retryExceptions:
           - java.io.IOException
           - java.net.SocketTimeoutException
+          - org.springframework.web.client.ResourceAccessException
+          - com.instacommerce.notification.service.PreferenceLookupException
       orderService:
         maxAttempts: 3
         waitDuration: 500ms

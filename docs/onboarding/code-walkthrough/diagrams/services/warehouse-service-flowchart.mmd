@@ -1,0 +1,37 @@
+flowchart TD
+    classDef start fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef step fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.5px,color:#0F172A
+
+    subgraph ZONERES["1. Zone Resolution & Capacity Locking"]
+        direction TB
+        Z_IN(["resolveStoresForOrder(pincode, lat, lng)"]):::start --> PRIM["Evaluate ACTIVE stores mapped to pincode<br/>isStoreOpen (blackouts + overnight hours) &amp; canAcceptOrders"]:::step
+        PRIM --> PRIM_OK{"Any eligible<br/>PRIMARY_PINCODE?"}:::dec
+        PRIM_OK -->|Yes| SORT_Z["Sort by throttlePriority:<br/>NORMAL -&gt; SURGE -&gt; THROTTLED, then etaExtension"]:::ok
+        PRIM_OK -->|No| H_FB["FALLBACK_NEAREST: Haversine 15km (max 10)<br/>or findByStatus(ACTIVE) if coords null"]:::step
+        H_FB --> SORT_Z
+
+        ACQ(["acquireOrderSlot(storeId)"]):::start --> LOCK_S["SELECT s FROM stores FOR UPDATE"]:::step
+        LOCK_S --> OPEN_CHK{"ACTIVE &amp; not in<br/>blackout window?"}:::dec
+        OPEN_CHK -->|No| ERR_CL["Throw StoreClosedException (409/423)"]:::err
+        OPEN_CHK -->|Yes| CONC_CHK{"currentPending<br/>&gt;= maxConcurrent?"}:::dec
+        CONC_CHK -->|Yes| PAUSE1["REQUIRES_NEW: publishCapacityPaused<br/>throw CapacityExceededException (429)"]:::err
+        CONC_CHK -->|No| SURGE_CHK["If surgeMode OR pending+1 &gt;= ceil(max*pct):<br/>emit StoreCapacityThrottled; pending++"]:::step
+        SURGE_CHK --> HR_UP["store_capacity ON CONFLICT DO UPDATE<br/>WHERE current_orders &lt; max_orders"]:::step
+        HR_UP --> HR_OK{"rows &gt; 0?"}:::dec
+        HR_OK -->|Yes| ACQ_OK["Return true (slot acquired)"]:::ok
+        HR_OK -->|No| PAUSE2["REQUIRES_NEW: publishCapacityPaused<br/>throw CapacityExceededException (outer TX rolls back!)"]:::err
+    end
+
+    subgraph DIJK["2. Dijkstra Floorplan & Cold-Chain Gate"]
+        direction TB
+        D_IN(["optimizePickPath(items)"]):::start --> WT["Sort by ItemCategory.weightOrder<br/>(HEAVY 1 -&gt; AMBIENT 2 -&gt; CHILLED 3 -&gt; FROZEN 4 -&gt; FRAGILE 5)<br/>then aisle"]:::step
+        WT --> GRAPH["Dijkstra across default A1..A10 graph<br/>ENTRANCE -&gt; items -&gt; PACKING (3.5m cross-aisles)<br/>est = round(dist / 1.2 + items * 15s)"]:::ok
+        T_IN(["recordTelemetry / validateDispatch"]):::start --> BREACH{"CHILLED &gt; 4.00C<br/>or FROZEN &gt; -18.00C?"}:::dec
+        BREACH -->|Yes &amp; priorBreaches &gt;= 1 in 5m| ALERT["Set alertTriggered=true<br/>emit ColdChainBreachAlert"]:::err
+        BREACH -->|Dispatch CHILLED/FROZEN| BAG{"hasInsulatedThermalBag<br/>&amp;&amp; hasColdPacks?"}:::dec
+        BAG -->|No| PKG_ERR["Throw ColdChainPackagingViolationException"]:::err
+        BAG -->|Yes| PKG_OK["DispatchPackagingResponse(valid=true)"]:::ok
+    end

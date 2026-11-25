@@ -1,6 +1,6 @@
 # Wallet & Loyalty Service
 
-> **Module path:** `services/wallet-loyalty-service` · **Port:** 8095 · **Stack:** Spring Boot 3 / Java 21 · **DB:** PostgreSQL (`wallets`)
+> **Module path:** `services/wallet-loyalty-service` · **Port:** 8095 · **Stack:** Spring Boot 4.0.0 / Java 21 · **DB:** PostgreSQL (`wallets`)
 
 Digital wallet, loyalty-points engine, and referral programme for InstaCommerce.
 Every monetary mutation is recorded via a **double-entry ledger** so wallet balances are provably correct and auditable.
@@ -570,7 +570,7 @@ All errors follow a consistent envelope:
 | `wallet.loyalty.points-per-rupee` | `1` | — | Points earned per ₹1 spent (`orderTotalCents / 100 × pointsPerRupee`) |
 | `wallet.loyalty.points-expiry-months` | `12` | — | Months before EARN points become eligible for expiry |
 | `wallet.referral.reward-cents` | `5000` | — | Default reward per referral (₹50) |
-| `payment-service.base-url` | `http://payment-service:8080` | `PAYMENT_SERVICE_URL` | Payment verification endpoint base |
+| `payment-service.base-url` | `http://payment-service:8085` | `PAYMENT_SERVICE_URL` | Payment verification endpoint base |
 | `management.tracing.sampling.probability` | `1.0` | `TRACING_PROBABILITY` | OTEL trace sampling rate |
 
 ---
@@ -582,7 +582,7 @@ All errors follow a consistent envelope:
 | Dependency | Version | Purpose |
 |---|---|---|
 | Java | 21 (Temurin JRE Alpine) | Runtime — Dockerfile uses `eclipse-temurin:21-jre-alpine` with ZGC |
-| Spring Boot 3 | (managed by root `build.gradle.kts`) | Web, JPA, Security, Validation, Actuator, Cache |
+| Spring Boot 4.0.0 | (managed by root `build.gradle.kts`) | Web, JPA, Security, Validation, Actuator, Cache |
 | Spring Kafka | (managed) | Kafka consumer for order/payment events |
 | PostgreSQL | 15+ | Primary datastore; `CHECK` constraints, partial indexes |
 | Flyway | (managed) | Schema migration (12 versioned migrations) |
@@ -749,7 +749,7 @@ The consumer itself is gated by an independent feature flag `WALLET_CONSUMER_PAY
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ORDER_SERVICE_URL` | `http://order-service:8080` | Base URL for order-service REST lookups |
+| `ORDER_SERVICE_URL` | `http://order-service:8084` | Base URL for order-service REST lookups |
 | `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Shared token for `X-Internal-Token` header on internal service calls |
 | `WALLET_CONSUMER_PAYMENT_REFUND_ENABLED` | `false` | Independent feature flag for the `PaymentEventConsumer` bean |
 
@@ -765,7 +765,7 @@ docker compose up -d postgres kafka
 ./gradlew :services:wallet-loyalty-service:bootRun
 
 # Health check
-curl -s http://localhost:8093/actuator/health | jq .
+curl -s http://localhost:8095/actuator/health | jq .
 
 # Run tests
 ./gradlew :services:wallet-loyalty-service:test

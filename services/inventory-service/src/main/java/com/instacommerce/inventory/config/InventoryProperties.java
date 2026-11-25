@@ -7,6 +7,7 @@ public class InventoryProperties {
     private final Jwt jwt = new Jwt();
     private int lowStockThreshold = 10;
     private int lockTimeoutMs = 2000;
+    private int alertCooldownMinutes = 15;
 
     public Jwt getJwt() {
         return jwt;
@@ -26,6 +27,14 @@ public class InventoryProperties {
 
     public void setLockTimeoutMs(int lockTimeoutMs) {
         this.lockTimeoutMs = lockTimeoutMs;
+    }
+
+    public int getAlertCooldownMinutes() {
+        return alertCooldownMinutes;
+    }
+
+    public void setAlertCooldownMinutes(int alertCooldownMinutes) {
+        this.alertCooldownMinutes = alertCooldownMinutes;
     }
 
     public static class Jwt {

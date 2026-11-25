@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -475,6 +476,38 @@ class FraudScoringServiceTest {
         assertThat(captor.getValue().getUserId()).isEqualTo(userId);
         assertThat(captor.getValue().getOrderId()).isEqualTo(orderId);
         assertThat(captor.getValue().getRulesTriggered()).containsExactly("USER_REPORT:account takeover");
+    }
+
+    @Test
+    @DisplayName("Fails closed to BLOCK when allowlist check throws and handles null userId/orderId in outbox")
+    void shouldFailClosedWhenAllowlistThrowsAndHandleNullIdsInOutbox() {
+        AllowlistService allowlistService = mock(AllowlistService.class);
+        FraudScoringService serviceWithAllowlist = new FraudScoringService(
+                fraudRuleRepository,
+                fraudSignalRepository,
+                ruleEvaluationService,
+                blocklistService,
+                allowlistService,
+                outboxService,
+                redisTemplate,
+                null,
+                meterRegistry,
+                null,
+                FraudOperationalMode.AUTO_BLOCK.name());
+
+        FraudCheckRequest request = new FraudCheckRequest(
+                null, null, 25000L, "device-null-ids", "198.51.100.2",
+                12.9716, 77.5946, 1, "CARD", false);
+        when(blocklistService.isBlocked(anyString(), anyString())).thenReturn(false);
+        when(allowlistService.isAllowlisted("DEVICE", "device-null-ids"))
+                .thenThrow(new RuntimeException("Allowlist DB unavailable"));
+
+        FraudCheckResponse response = serviceWithAllowlist.scoreTransaction(request);
+
+        assertThat(response.action()).isEqualTo(FraudAction.BLOCK.name());
+        assertThat(response.riskLevel()).isEqualTo(RiskLevel.CRITICAL.name());
+        assertThat(response.rulesTriggered()).contains("ALLOWLIST_EVALUATION_ERROR");
+        verify(outboxService).publish(eq("Fraud"), anyString(), eq("FraudDetected"), anyMap());
     }
 
     private static FraudCheckRequest sampleRequest() {

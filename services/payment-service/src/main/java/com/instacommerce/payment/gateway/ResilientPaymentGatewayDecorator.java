@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @Primary
-@Profile("!test")
+@Profile("!test & !local")
 public class ResilientPaymentGatewayDecorator implements PaymentGateway {
 
     private static final Logger log = LoggerFactory.getLogger(ResilientPaymentGatewayDecorator.class);

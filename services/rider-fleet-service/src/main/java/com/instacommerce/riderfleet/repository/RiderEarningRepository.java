@@ -3,12 +3,15 @@ package com.instacommerce.riderfleet.repository;
 import com.instacommerce.riderfleet.domain.model.RiderEarning;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RiderEarningRepository extends JpaRepository<RiderEarning, UUID> {
+
+    Optional<RiderEarning> findByOrderId(UUID orderId);
 
     List<RiderEarning> findByRiderIdAndEarnedAtBetween(UUID riderId, Instant from, Instant to);
 

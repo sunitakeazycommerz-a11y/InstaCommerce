@@ -1,0 +1,26 @@
+sequenceDiagram
+    autonumber
+    participant Dev as Author / PR Change
+    participant CI as GitHub Actions (contracts job)
+    participant Relay as Producer / outbox-relay-service
+    participant Kafka as Kafka (TopicNames.*)
+    participant JavaCon as Java Consumer (EventEnvelope)
+    participant GoCon as Go Consumer (go-shared/pkg/kafka)
+
+    Note over Dev,CI: Track 1 — Build & CI Verification Gate (.github/workflows/ci.yml)
+    Dev->>CI: Modify contracts/src/main/{proto,resources/schemas,java}
+    CI->>CI: protolint lint contracts/src/main/proto/
+    CI->>CI: ./gradlew :contracts:build :contracts:test
+    Note right of CI: 46 JUnit tests: SchemaValidity, Uniqueness,<br/>TopicSchemaAlignment, EventEnvelopeContract,<br/>DomainPayloadContract, SchemaCompatibility
+    CI->>CI: ./scripts/generate-proto.sh
+    CI->>CI: Fail if git status --porcelain services/go-shared/pkg/proto/ != empty
+    CI->>CI: python3 -m json.tool + duplicate title check on 91 schemas
+
+    Note over Relay,GoCon: Track 2 — Runtime Wire Envelope Dual-Emit & Alias Normalization
+    Relay->>Relay: outbox-relay buildEventMessage() or go-shared MarshalJSON()
+    Relay->>Kafka: Publish dual-key JSON (id+eventId, eventTime+timestamp) + headers
+    Kafka->>JavaCon: Deliver record on canonical TopicNames.*
+    JavaCon->>JavaCon: Jackson @JsonAlias maps id/eventId/event_id & eventTime/timestamp/occurred_at/event_timestamp
+    Kafka->>GoCon: Deliver record to Go consumer
+    GoCon->>GoCon: UnmarshalJSON() syncs camelCase & snake_case -> Validate() checks schemaVersion
+    Note right of GoCon: Gap: Go UnmarshalJSON omits occurred_at & event_timestamp<br/>aliases accepted by Java EventEnvelope.java & EventEnvelope.v1.json

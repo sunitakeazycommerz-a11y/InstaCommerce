@@ -8,7 +8,7 @@ The payment-service is the critical financial authority in InstaCommerce, respon
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8085
 **Status**: Tier 1 Critical (payment processing)
-**Database**: PostgreSQL 15+ (financial ledger, PCI DSS compliant)
+**Database**: PostgreSQL 16 (financial ledger, PCI DSS compliant)
 
 ## SLOs & Availability
 
@@ -45,7 +45,7 @@ The payment-service is the critical financial authority in InstaCommerce, respon
 - **Readiness Probe**: `/actuator/health/readiness` (checks DB + Stripe API connectivity)
 
 ### Database
-- **Name**: `payments` (PostgreSQL 15+)
+- **Name**: `payments` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V20) - auto-applied on startup
 - **Connection Pool**: HikariCP 50 connections (highest of all services; financial workload)
 - **Replication**: Synchronous streaming replication to standby (RTO <1s)
@@ -137,8 +137,8 @@ The payment-service is the critical financial authority in InstaCommerce, respon
 | Service | Endpoint | Timeout | Purpose | Retry | CB Threshold |
 |---------|----------|---------|---------|-------|-------------|
 | Stripe API | https://api.stripe.com/v1/charges | 5s | Authorize, Capture, Refund | 3 retries (500ms backoff) | 50% fail rate, 30s open |
-| order-service | http://order-service:8085/orders/{id} | 3s | Verify order for capture | None (async) | N/A |
-| fulfillment-service | http://fulfillment-service:8080/fulfillment/{id} | 3s | Query fulfillment status | None (async) | N/A |
+| order-service | http://order-service:8084/orders/{id} | 3s | Verify order for capture | None (async) | N/A |
+| fulfillment-service | http://fulfillment-service:8086/fulfillment/{id} | 3s | Query fulfillment status | None (async) | N/A |
 
 ### Asynchronous Event Channels
 | Topic | Direction | Events | Format | Guarantee |
@@ -438,7 +438,7 @@ resilience4j:
 ### Environment Variables
 ```env
 # Server
-SERVER_PORT=8080
+SERVER_PORT=8085
 SPRING_PROFILES_ACTIVE=gcp
 
 # Database (PCI DSS)
@@ -473,7 +473,7 @@ OTEL_TRACES_SAMPLER=always_on  # 100% sampling for financial data
 ### application.yml
 ```yaml
 server:
-  port: 8080
+  port: 8085
   compression:
     enabled: true
     min-response-size: 1024
@@ -618,7 +618,7 @@ alerts:
 **Resolution**:
 ```bash
 # Check circuit breaker state
-curl http://localhost:8080/actuator/health/circuitbreakers | jq '..'
+curl http://localhost:8085/actuator/health/circuitbreakers | jq '..'
 
 # Test Stripe connectivity
 curl -H "Authorization: Bearer $STRIPE_KEY" https://api.stripe.com/v1/account
@@ -627,7 +627,7 @@ curl -H "Authorization: Bearer $STRIPE_KEY" https://api.stripe.com/v1/account
 kubectl logs -n money-path deploy/payment-service | grep -i "stripe\|circuit\|timeout"
 
 # If circuit open: Wait 60s for auto half-open or manually reset
-curl -X POST http://payment-service:8080/admin/circuit-breaker/reset/stripe
+curl -X POST http://payment-service:8085/admin/circuit-breaker/reset/stripe
 
 # If rate limited: Check Stripe rate limit status
 curl -H "Authorization: Bearer $STRIPE_KEY" https://api.stripe.com/v1/rate_limit
@@ -662,7 +662,7 @@ kafka-consumer-groups --bootstrap-server kafka:9092 \
   --group order-service-payment-consumer --describe
 
 # Manually trigger order status update
-curl -X POST http://order-service:8085/admin/orders/{order_id}/confirm-payment \
+curl -X POST http://order-service:8084/admin/orders/{order_id}/confirm-payment \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # Check CDC relay health
@@ -774,7 +774,7 @@ WHERE status = 'AUTHORIZED'
 AND created_at < NOW() - INTERVAL '24 hours';
 
 # Re-authorize expired payment
-curl -X POST http://payment-service:8080/payments/authorize \
+curl -X POST http://payment-service:8085/payments/authorize \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{
@@ -805,14 +805,14 @@ curl -X POST http://payment-service:8080/payments/authorize \
 **Resolution**:
 ```bash
 # Check webhook endpoint health
-curl -X GET http://payment-service:8080/payments/webhooks/health
+curl -X GET http://payment-service:8085/payments/webhooks/health
 
 # Verify webhook signature verification is working
 # Check logs for "Webhook signature verification failed"
 kubectl logs -n money-path deploy/payment-service | grep -i webhook
 
 # Manual webhook re-processing (if webhook lost)
-curl -X POST http://payment-service:8080/admin/webhooks/replay \
+curl -X POST http://payment-service:8085/admin/webhooks/replay \
   -d '{"stripe_event_id": "evt_1234567890"}'
 
 # Check Stripe webhook delivery status
@@ -842,10 +842,10 @@ kafka-consumer-groups --bootstrap-server kafka:9092 \
   --group payment-service-webhooks --describe
 
 # Monitor webhook queue depth
-curl http://payment-service:8080/actuator/metrics/webhook_queue_depth
+curl http://payment-service:8085/actuator/metrics/webhook_queue_depth
 
 # Check webhook handler latency
-curl http://payment-service:8080/actuator/metrics/webhook_processing_latency_ms
+curl http://payment-service:8085/actuator/metrics/webhook_processing_latency_ms
 
 # Scale payment-service replicas
 kubectl scale deployment payment-service --replicas=6
@@ -885,7 +885,7 @@ gcloud kms keys versions create \
 kubectl restart deployment payment-service -n money-path
 
 # Verify TLS version
-openssl s_client -connect payment-service:8080 -tls1_2
+openssl s_client -connect payment-service:8085 -tls1_2
 
 # Audit trail check
 SELECT COUNT(*) as audit_log_count
@@ -915,7 +915,7 @@ AND created_at > NOW() - INTERVAL '7 years';
 **Resolution**:
 ```bash
 # Check connection pool status
-curl http://payment-service:8080/actuator/metrics/db.hikari.connections.active
+curl http://payment-service:8085/actuator/metrics/db.hikari.connections.active
 
 # Identify idle connections in database
 SELECT datname, usename, application_name, query, query_start
@@ -963,7 +963,7 @@ kubectl scale deployment payment-service --replicas=6 -n money-path
 kubectl logs -n money-path deploy/payment-service | grep -i "rate_limit" | tail -20
 
 # Check if retries are happening
-curl http://payment-service:8080/actuator/metrics/stripe_retry_total
+curl http://payment-service:8085/actuator/metrics/stripe_retry_total
 
 # Contact Stripe support to increase rate limit
 # Current plan: 100 req/s, request upgrade to 200 req/s

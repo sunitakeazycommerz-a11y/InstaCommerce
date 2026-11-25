@@ -129,8 +129,8 @@ CATALOG_SERVICE_URL=http://catalog-service:8082
 SEARCH_SERVICE_URL=http://search-service:8088
 FLAG_SERVICE_URL=http://config-feature-flag-service:8098
 CART_SERVICE_URL=http://cart-service:8090
-ORDER_SERVICE_URL=http://order-service:8087
-PAYMENT_SERVICE_URL=http://payment-service:8083
+ORDER_SERVICE_URL=http://order-service:8084
+PAYMENT_SERVICE_URL=http://payment-service:8085
 DEDUP_CACHE_TTL_SECONDS=5
 RESPONSE_CACHE_TTL_MINUTES=1
 REQUEST_TIMEOUT_MS=2000
@@ -541,7 +541,7 @@ redis-cli GET test  # Returns "value"
 **Diagnosis**:
 ```bash
 # Check which backend is slow
-curl -X GET http://mobile-bff-service:8081/actuator/metrics/mobile_bff_backend_latency_ms \
+curl -X GET http://mobile-bff-service:8080/actuator/metrics/mobile_bff_backend_latency_ms \
   | jq '.[] | select(.mean > 500)'
 
 # Example output:

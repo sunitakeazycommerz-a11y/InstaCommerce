@@ -64,10 +64,10 @@ isolation.
 | **Audit** | Mutating flag override endpoints in place | Every mutating admin action emitted to `audit-trail-service` |
 | **Tests** | 21 unit and integration tests across `AdminGatewayIntegrationTest`, `AdminJwtAuthenticationFilterTest`, `AdminDashboardControllerTest` | Controller, RBAC policy, JWT rejection, and downstream error-propagation coverage |
 
-**Source references:**
-- [`docs/reviews/iter3/services/edge-identity.md` §2.3, §8](../../docs/reviews/iter3/services/edge-identity.md) — scaffold assessment & planned RBAC config
+**Design references:**
+- [`docs/reviews/iter3/services/edge-identity.md` §2.3, §8](../../docs/reviews/iter3/services/edge-identity.md) — RBAC and gateway architecture
 - [`docs/reviews/api-gateway-bff-design.md` §5](../../docs/reviews/api-gateway-bff-design.md) — admin gateway service overview, RBAC model, key endpoints
-- [`docs/reviews/iter3/master-review.md` §5](../../docs/reviews/iter3/master-review.md) — P0 issue register
+- [`docs/adr/011-admin-gateway-auth-model.md`](../../docs/adr/011-admin-gateway-auth-model.md) — Admin Gateway RS256 JWT + audience scoping model
 
 ---
 
@@ -107,7 +107,7 @@ graph TB
     CTRL -->|pending mismatches| RECON
 ```
 
-### Target-state architecture (not yet implemented)
+### Target-state expansion (multi-domain admin aggregation)
 
 ```mermaid
 flowchart TB
@@ -156,46 +156,60 @@ flowchart TB
 
 ## Low-Level Design
 
-### Current component diagram (UML)
+### Implemented component diagram (UML)
 
 ```mermaid
 classDiagram
     class AdminGatewayServiceApplication {
         +main(String[] args)
     }
-    class AdminGatewayController {
-        +Map~String, Object~ dashboard()
+    class SecurityConfig {
+        +SecurityFilterChain securityFilterChain()
     }
-    class ActuatorAutoConfiguration {
-        <<Spring Boot auto-config>>
+    class AdminJwtAuthenticationFilter {
+        +doFilterInternal(HttpServletRequest, HttpServletResponse, FilterChain)
+    }
+    class AdminSecurityAuditFilter {
+        +doFilterInternal(HttpServletRequest, HttpServletResponse, FilterChain)
+    }
+    class AdminDashboardController {
+        +ResponseEntity dashboard()
+        +ResponseEntity listFlags()
+        +ResponseEntity overrideFlag()
+        +ResponseEntity pendingReconciliation()
+    }
+    class DashboardAggregationService {
+        +Map~String, Object~ aggregateDashboard()
+    }
+    class AdminAuditClient {
+        +void emitAuditEvent(...)
     }
 
-    AdminGatewayServiceApplication ..> AdminGatewayController : component scan
-    AdminGatewayServiceApplication ..> ActuatorAutoConfiguration : auto-config
-    AdminGatewayController : @RestController
-    AdminGatewayController : @RequestMapping /admin/v1
-
-    note for AdminGatewayController "Only implemented endpoint.\nReturns Map.of('status','ok').\nNo auth, no downstream calls."
+    AdminGatewayServiceApplication ..> SecurityConfig
+    SecurityConfig ..> AdminJwtAuthenticationFilter
+    SecurityConfig ..> AdminSecurityAuditFilter
+    AdminSecurityAuditFilter --> AdminAuditClient
+    AdminDashboardController --> DashboardAggregationService
 ```
 
-### Current request sequence
+### Implemented request sequence
 
 ```mermaid
 sequenceDiagram
     actor Admin as Admin User
     participant Istio as Istio Gateway
-    participant AGW as AdminGatewayController
-    participant Act as Actuator
+    participant JWT as AdminJwtAuthenticationFilter
+    participant AGW as AdminDashboardController
+    participant Audit as AdminAuditClient
 
-    Admin->>Istio: GET admin.instacommerce.dev/admin/v1/dashboard
-    Note over Istio: No RequestAuthentication<br/>configured for this service
-    Istio->>AGW: route /admin/v1/* → :8099
-    AGW-->>Istio: 200 {"status":"ok"}
-    Istio-->>Admin: 200 {"status":"ok"}
+    Admin->>Istio: GET admin.instacommerce.dev/admin/v1/dashboard (Bearer JWT)
+    Istio->>JWT: route /admin/v1/* → :8099
+    JWT->>JWT: Validate RS256 signature & aud=instacommerce-admin & ROLE_ADMIN
+    JWT->>AGW: Authenticated request
+    AGW-->>Istio: 200 dashboard JSON
+    Istio-->>Admin: 200 dashboard JSON
 
-    Note over Admin,Act: Health probe flow
-    Istio->>Act: GET /actuator/health/liveness
-    Act-->>Istio: 200 {"status":"UP"}
+    Note over Admin,Audit: Mutating admin actions emit audit events asynchronously
 ```
 
 ---
@@ -314,7 +328,7 @@ internal:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `SERVER_PORT` | `8099` | HTTP listen port |
-| `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Configured but **unused** until downstream forwarding is implemented |
+| `INTERNAL_SERVICE_TOKEN` | — | Per-service or shared internal service token forwarded on downstream calls |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` | OTLP collector for distributed traces |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` | OTLP collector for metrics |
 | `TRACING_PROBABILITY` | `1.0` | Trace sampling ratio (1.0 = 100%) |
@@ -338,7 +352,7 @@ internal:
 Multi-stage build (`Dockerfile`):
 
 - **Build stage:** `gradle:9.4-jdk21` — `gradle clean build -x test --no-daemon`
-- **Runtime stage:** `eclipse-temurin:25-jre-alpine`
+- **Runtime stage:** `eclipse-temurin:21-jre-alpine`
 - Non-root user `app` (UID 1001)
 - Port 8099
 - Healthcheck: `wget -qO- http://localhost:8099/actuator/health/liveness`
@@ -353,9 +367,8 @@ Multi-stage build (`Dockerfile`):
 # Run
 ./gradlew :services:admin-gateway-service:bootRun
 
-# Smoke test
-curl -s http://localhost:8099/admin/v1/dashboard
-# → {"status":"ok"}
+# Smoke test (authenticated admin JWT required for /admin/v1/**)
+curl -s -H "Authorization: Bearer $ADMIN_JWT" http://localhost:8099/admin/v1/dashboard
 
 curl -s http://localhost:8099/actuator/health/readiness
 # → {"status":"UP","groups":["liveness","readiness"]}
@@ -377,44 +390,32 @@ cache, or message-broker connections.
 | **Logs** | Logstash-logback-encoder (JSON) | Structured JSON logs with trace/span IDs when tracing is active. |
 | **Health** | Spring Actuator liveness + readiness | K8s probe-compatible groups. |
 
-### What is missing
+### Observability & Testing Gaps
 
-- No custom admin-action metrics (request counts per admin role, per endpoint, per downstream service)
-- No alerting rules in `monitoring/` specific to admin-gateway
-- No dashboard definitions
-- No audit-event emission to `audit-trail-service`
+- Custom business metrics and service-specific Grafana dashboards are expanded iteratively alongside downstream admin endpoints
+- Istio `RequestAuthentication` / `AuthorizationPolicy` overlays for `admin-gateway-service` are being aligned with app-layer RS256 JWT enforcement
 
 ---
 
 ## Testing
 
-**Current state:** `spring-boot-starter-test` is declared in `build.gradle.kts`
-and JUnit Platform is configured. **No test classes exist** under `src/test/`.
+**Current state:** Unit and integration tests cover RS256 JWT validation, audience enforcement, RBAC, rate limiting, security audit filtering, dashboard aggregation, and upstream clients (`AdminGatewayIntegrationTest`, `AdminJwtAuthenticationFilterTest`, `AdminDashboardControllerTest`, `AdminRateLimitFilterTest`, `AdminSecurityAuditFilterTest`, `AdminAuditClientTest`).
 
 ```bash
-# Would run tests if any existed
 ./gradlew :services:admin-gateway-service:test
 ```
-
-**Required before production traffic (per Iter-3 edge-identity review §8):**
-
-1. Controller tests — verify stub endpoint and future route responses
-2. JWT rejection tests — consumer tokens with `aud: instacommerce-api` must be rejected; only `aud: instacommerce-admin` accepted
-3. RBAC policy tests — role-to-endpoint mapping (`SUPPORT` cannot access `/admin/v1/feature-flags`, etc.)
-4. Downstream error propagation — 5xx from domain services returns structured admin error, not raw upstream body
-5. Integration tests with Testcontainers (once downstream calls exist)
 
 ---
 
 ## Failure Modes & Mitigations
 
-| Failure mode | Impact | Current mitigation | Required mitigation |
+| Failure mode | Impact | Current mitigation | Follow-up hardening |
 |--------------|--------|-------------------|---------------------|
-| **Unauthenticated admin access** | Unauthorized operations on all admin endpoints | **None** — no auth layer exists | `AdminSecurityConfig` + Istio `RequestAuthentication` with admin audience (see edge-identity §8) |
-| **Privilege escalation via internal token** | Any service holding `INTERNAL_SERVICE_TOKEN` can call `/admin/**` | **None** — token is configured but unused; once forwarding is added, the flat token grants `ROLE_ADMIN` to all callers | Scope `InternalServiceAuthFilter` roles per caller name; add Istio `AuthorizationPolicy` restricting `/admin/**` to admin-gateway SA only |
-| **Stub endpoint in production** | Admin dashboard shows `{"status":"ok"}` instead of real data | Low impact while scaffold | Replace stub with real aggregation before enabling admin UI traffic |
-| **Pod crash / OOM** | 2-replica HPA absorbs single-pod failure; ZGC + 75% RAM cap reduces OOM risk | HPA 2–6 pods; graceful shutdown with 30s drain | Add PodDisruptionBudget (minAvailable: 1) |
-| **Downstream service unavailable** | Not applicable yet — no downstream calls | — | Circuit breaker + timeout per downstream; graceful degradation returning partial dashboard |
+| **Invalid / wrong-audience JWT** | Unauthorized operations on `/admin/v1/**` | `SecurityConfig` + `AdminJwtAuthenticationFilter` (`aud=instacommerce-admin`, `ROLE_ADMIN`) | Add Istio `RequestAuthentication` + `AuthorizationPolicy` overlay for defense-in-depth |
+| **Admin rate abuse / IP spoofing** | Brute-force or spoofing attempts | `AdminRateLimitFilter` + `ClientIpResolver` + `AdminSecurityAuditFilter` | Add distributed Redis rate limiting for multi-replica HPA |
+| **Audit downstream unavailable** | Audit trail delay | `AdminAuditClient` non-blocking forwarding + Resilience4j timeouts | Emit dead-letter metric & alert on audit drops |
+| **Pod crash / OOM** | 2-replica HPA absorbs single-pod failure | HPA 2–6 pods; graceful shutdown with 30s drain | Add PodDisruptionBudget (`minAvailable: 1`) |
+| **Downstream service unavailable** | Partial dashboard / proxy failure | `UpstreamRestClientConfig` timeouts & graceful degradation | Per-downstream circuit breaker alerting |
 
 ---
 
@@ -426,16 +427,11 @@ and JUnit Platform is configured. **No test classes exist** under `src/test/`.
 2. Docker image pushed; tag updated in `values-dev.yaml` → ArgoCD syncs to dev cluster
 3. Prod: `values-prod.yaml` tag updated; ArgoCD syncs with 2 replicas
 
-### Pre-production hardening checklist (from Iter-3 Wave 1, steps 1.2–1.4)
+### Defense-in-depth mesh checklist
 
-1. Add `spring-boot-starter-security` + JJWT → `build.gradle.kts`
-2. Implement `AdminSecurityConfig` (default-deny, role whitelist)
-3. Implement `AdminJwtAuthenticationFilter` (JWKS from identity-service, `aud: instacommerce-admin`)
-4. Add `IDENTITY_JWKS_URI` env to Helm values
-5. Deploy Istio `RequestAuthentication` for admin-gateway **first** (allows existing traffic)
-6. Deploy `AuthorizationPolicy` **second** (begins denying unauthenticated traffic) — must be separate Helm release
-7. Add `NetworkPolicy` allowing ingress only from Istio gateway pod
-8. Validate: consumer token → 401; admin token → 200; no-token → 403
+1. Deploy Istio `RequestAuthentication` for `admin-gateway-service` (`aud: instacommerce-admin`)
+2. Deploy `AuthorizationPolicy` restricting `/admin/v1/**` to authorized ingress principals
+3. Add `NetworkPolicy` allowing ingress only from Istio ingress gateway pods
 
 ### Rollback
 
@@ -447,14 +443,9 @@ and JUnit Platform is configured. **No test classes exist** under `src/test/`.
 
 ## Known Limitations
 
-1. **No authentication or authorization** — the service accepts any HTTP request without validation
-2. **No downstream routing** — cannot proxy or aggregate from domain services
-3. **Internal service token is configured but unused** — will grant overbroad `ROLE_ADMIN` to all callers once forwarding is wired in (see edge-identity §6.2)
-4. **No test coverage** — zero test classes
-5. **No NetworkPolicy** — reachable from any pod in the namespace, not just Istio ingress
-6. **No admin-specific Istio `RequestAuthentication`** — the admin host route exists but is unprotected at the mesh layer
-7. **No audit trail integration** — admin actions are not logged to `audit-trail-service`
-8. **No runbook** — the service does not own live control-plane behavior beyond the stub
+1. **Istio mesh overlay** — app-layer JWT + RBAC is enforced (`AdminJwtAuthenticationFilter`), while mesh-layer `RequestAuthentication` / `AuthorizationPolicy` overlays remain to be tightened in Helm production values
+2. **Pod-local rate limiting** — `AdminRateLimitFilter` is in-process; distributed rate limiting is recommended before scaling beyond small replica counts
+3. **Downstream endpoint breadth** — core dashboard, flags, reconciliation, and audit forwarding are implemented; additional fraud/order/catalog admin endpoints expand iteratively
 
 ---
 
@@ -464,13 +455,13 @@ The admin-gateway pattern is standard in q-commerce and rapid-delivery
 platforms. Observations grounded in public architecture disclosures and the
 InstaCommerce design docs:
 
-| Aspect | InstaCommerce (target) | Industry pattern |
-|--------|----------------------|------------------|
+| Aspect | InstaCommerce (current & target) | Industry pattern |
+|--------|----------------------------------|------------------|
 | **Dedicated admin ingress** | Separate `admin.instacommerce.dev` host + Istio VirtualService | Common — Zepto and Blinkit use isolated admin domains behind Cloud IAP or VPN; DoorDash routes admin traffic through a separate BFF layer |
-| **RBAC granularity** | Role hierarchy (SUPER_ADMIN → OPS_MANAGER / FINANCE / PRODUCT_MGR → STORE_MGR / SUPPORT) with per-endpoint enforcement | Comparable — Instacart's retailer portal and DoorDash's merchant dashboard use fine-grained permission models with store-scoped access |
-| **Audit trail** | Planned: every mutating admin action → audit-trail-service | Industry baseline — mandatory for SOC 2 / PCI-DSS compliance; Instacart and DoorDash publish audit logs to immutable stores |
+| **RBAC & JWT enforcement** | RS256 JWT (`aud: instacommerce-admin`) + `ROLE_ADMIN` + `AdminSecurityAuditFilter` | Comparable — Instacart's retailer portal and DoorDash's merchant dashboard enforce scoped tokens and role checks at the gateway |
+| **Audit trail** | `AdminSecurityAuditFilter` + `AdminAuditClient` forwarding to `audit-trail-service` | Industry baseline — mandatory for SOC 2 / PCI-DSS compliance; Instacart and DoorDash publish audit logs to immutable stores |
 | **Network isolation** | Target: Istio AuthorizationPolicy + NetworkPolicy restricting admin surface to gateway SA | Best practice — defense-in-depth; public q-commerce platforms typically use Cloud IAP + mTLS + network policy |
-| **Current maturity** | Scaffold — stub endpoint, no auth | Below production bar — all referenced platforms ship admin gateways with auth, RBAC, and audit before accepting traffic |
+| **Current maturity** | Hardened gateway — RS256 JWT, RBAC, rate limit, audit, 21+ tests | Aligned with production gateway baseline; expanding endpoint coverage |
 
 > **Note:** Comparisons are based on publicly available engineering blog posts
 > and conference talks. No proprietary information is referenced.

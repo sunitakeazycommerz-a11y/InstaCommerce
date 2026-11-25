@@ -30,8 +30,8 @@ In repository terms, InstaCommerce is a polyglot monorepo with:
 
 1. The checkout core is real: `checkout-orchestrator-service`, `order-service`, `inventory-service`, and `payment-service` contain substantial code and form the strongest implemented path in the repo.
 2. The repo is event-driven in a serious way, not just on paper. Outbox tables, relay code, Kafka consumers, CDC ingestion, and downstream consumers are all checked in.
-3. The edge layer is uneven. `mobile-bff-service` and `admin-gateway-service` are mostly scaffold and should be treated as target-state shells, not production-complete gateways.
-4. The AI layer is partially transitional. `ai-orchestrator-service` has both a legacy `app/main.py` flow and a newer `/v2` LangGraph path.
+3. The edge layer is implemented and hardened: `mobile-bff-service` (`8080`) and `admin-gateway-service` (`8099`) enforce RS256 JWT validation, resilience timeouts/fallbacks, and downstream proxying/aggregation, with Wave-5 expanding additional BFF and admin endpoints.
+4. The AI orchestrator unifies v1 and v2 routes over a shared runtime: `ai-orchestrator-service` (`8100`) mounts both `v1_router` (`app/api/v1.py`) and `v2_router` (`app/api/handlers.py`) over `ExecutionService` (`app/api/execution.py`), LangGraph (`app/graph/graph.py`), and wired guardrails (`app/guardrails/`).
 5. Several high-level docs are aspirational. Some HLD/README claims overstate what the code currently enforces or ships.
 
 ## Reading Order
@@ -46,8 +46,8 @@ In repository terms, InstaCommerce is a polyglot monorepo with:
 ```mermaid
 flowchart TB
     subgraph Edge["Edge Plane"]
-        MBFF["mobile-bff-service\nscaffold"]
-        AGW["admin-gateway-service\nscaffold"]
+        MBFF["mobile-bff-service"]
+        AGW["admin-gateway-service"]
         ID["identity-service"]
     end
 
@@ -78,6 +78,7 @@ flowchart TB
         PWH["payment-webhook-service"]
         REC["reconciliation-engine"]
         LOC["location-ingestion-service"]
+        RETL["reverse-etl-orchestrator"]
     end
 
     subgraph AIData["AI / Data / ML"]

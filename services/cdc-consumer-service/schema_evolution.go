@@ -10,20 +10,64 @@ import (
 	"cloud.google.com/go/bigquery"
 )
 
+const defaultSchemaFailureTTL = 30 * time.Second
+
+type schemaTable interface {
+	TableName() string
+	Metadata(ctx context.Context) (*bigquery.TableMetadata, error)
+	Update(ctx context.Context, update bigquery.TableMetadataToUpdate, etag string, opts ...bigquery.TableUpdateOption) (*bigquery.TableMetadata, error)
+}
+
+type bqSchemaTable struct {
+	table *bigquery.Table
+}
+
+func (t bqSchemaTable) TableName() string {
+	if t.table == nil {
+		return ""
+	}
+	return t.table.TableID
+}
+
+func (t bqSchemaTable) Metadata(ctx context.Context) (*bigquery.TableMetadata, error) {
+	return t.table.Metadata(ctx)
+}
+
+func (t bqSchemaTable) Update(ctx context.Context, update bigquery.TableMetadataToUpdate, etag string, opts ...bigquery.TableUpdateOption) (*bigquery.TableMetadata, error) {
+	return t.table.Update(ctx, update, etag, opts...)
+}
+
 // SchemaEvolutionHandler dynamically detects altered Postgres columns
 // from Debezium CDC messages and evolves the BigQuery table schema.
 type SchemaEvolutionHandler struct {
-	table       *bigquery.Table
-	knownFields sync.Map // map[string]bool
-	logger      *slog.Logger
-	mu          sync.Mutex
+	table         schemaTable
+	knownFields   sync.Map // map[string]bool
+	logger        *slog.Logger
+	mu            sync.Mutex
+	failureTTL    time.Duration
+	now           func() time.Time
+	lastFailureAt time.Time
+	lastFailure   error
 }
 
 // NewSchemaEvolutionHandler creates a new SchemaEvolutionHandler.
 func NewSchemaEvolutionHandler(table *bigquery.Table, logger *slog.Logger) *SchemaEvolutionHandler {
+	var st schemaTable
+	if table != nil {
+		st = bqSchemaTable{table: table}
+	}
+	return newSchemaEvolutionHandlerWithTable(st, logger, defaultSchemaFailureTTL)
+}
+
+func newSchemaEvolutionHandlerWithTable(table schemaTable, logger *slog.Logger, failureTTL time.Duration) *SchemaEvolutionHandler {
+	if failureTTL <= 0 {
+		failureTTL = defaultSchemaFailureTTL
+	}
 	return &SchemaEvolutionHandler{
-		table:  table,
-		logger: logger,
+		table:      table,
+		logger:     logger,
+		failureTTL: failureTTL,
+		now:        time.Now,
 	}
 }
 
@@ -59,19 +103,26 @@ func ExtractCDCFields(data []byte) (map[string]any, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, err
 	}
+	return ExtractCDCFieldsFromMap(raw), nil
+}
 
+// ExtractCDCFieldsFromMap extracts altered field candidates from an already-decoded CDC envelope.
+func ExtractCDCFieldsFromMap(raw map[string]any) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
 	if inner, ok := raw["payload"].(map[string]any); ok {
 		if after, ok := inner["after"].(map[string]any); ok {
-			return after, nil
+			return after
 		}
-		return inner, nil
+		return inner
 	}
 
 	if after, ok := raw["after"].(map[string]any); ok {
-		return after, nil
+		return after
 	}
 
-	return raw, nil
+	return raw
 }
 
 // DetectAndEvolveSchema checks for newly altered or added Postgres columns and
@@ -99,6 +150,10 @@ func (h *SchemaEvolutionHandler) DetectAndEvolveSchema(ctx context.Context, fiel
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	if !h.lastFailureAt.IsZero() && h.now().Sub(h.lastFailureAt) < h.failureTTL {
+		return h.lastFailure
+	}
+
 	var toAdd []*bigquery.FieldSchema
 	for _, f := range newFields {
 		if _, known := h.knownFields.Load(f.Name); !known {
@@ -111,10 +166,12 @@ func (h *SchemaEvolutionHandler) DetectAndEvolveSchema(ctx context.Context, fiel
 
 	md, err := h.table.Metadata(ctx)
 	if err != nil {
+		h.lastFailureAt = h.now()
+		h.lastFailure = err
 		if h.logger != nil {
 			h.logger.Warn("unable to read BigQuery table metadata for schema evolution", "error", err)
 		}
-		return nil
+		return err
 	}
 
 	existing := make(map[string]bool)
@@ -132,6 +189,8 @@ func (h *SchemaEvolutionHandler) DetectAndEvolveSchema(ctx context.Context, fiel
 	}
 
 	if len(filteredAdd) == 0 {
+		h.lastFailureAt = time.Time{}
+		h.lastFailure = nil
 		return nil
 	}
 
@@ -144,25 +203,29 @@ func (h *SchemaEvolutionHandler) DetectAndEvolveSchema(ctx context.Context, fiel
 
 	if h.logger != nil {
 		h.logger.Info("evolving BigQuery table schema for altered Postgres columns",
-			"table", h.table.TableID,
+			"table", h.table.TableName(),
 			"added_fields", len(filteredAdd),
 		)
 	}
 
 	_, err = h.table.Update(ctx, update, md.ETag, bigquery.WithAutoDetectSchema(true))
 	if err != nil {
+		h.lastFailureAt = h.now()
+		h.lastFailure = err
 		if h.logger != nil {
 			h.logger.Warn("BigQuery schema update warning; continuing with tolerant inserter", "error", err)
 		}
 		return err
 	}
 
+	h.lastFailureAt = time.Time{}
+	h.lastFailure = nil
 	for _, f := range filteredAdd {
 		h.knownFields.Store(f.Name, true)
 	}
 
 	if h.logger != nil {
-		h.logger.Info("BigQuery table schema successfully evolved", "table", h.table.TableID)
+		h.logger.Info("BigQuery table schema successfully evolved", "table", h.table.TableName())
 	}
 	return nil
 }

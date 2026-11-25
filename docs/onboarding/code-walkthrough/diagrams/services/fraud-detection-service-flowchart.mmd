@@ -1,0 +1,33 @@
+flowchart TD
+    classDef start fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef step fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.5px,color:#0F172A
+
+    REQ(["FraudScoringService.scoreTransaction(req)"]):::start --> MODE{"FraudOperationalMode?"}:::dec
+    MODE -->|PASS_THROUGH| ALLOW0["Immediate ALLOW (score=0, unpersisted)"]:::ok
+    MODE -->|AUTO_BLOCK / MANUAL_REVIEW / SHADOW| BLK{"1. BlocklistService.isBlocked<br/>(USER / DEVICE / IP)"}:::dec
+
+    BLK -->|Hit| BLK_ACT["score=100 CRITICAL<br/>BLOCK (or REVIEW / SHADOW allow)"]:::err
+    BLK -->|Exception| FC_ERR["failClosedOnDependencyError:<br/>score=100 CRITICAL BLOCK/REVIEW"]:::err
+    BLK -->|Miss| ALW{"2. AllowlistService.isAllowlisted<br/>(uncached PG lookup)"}:::dec
+
+    ALW -->|Hit| ALW_OK["score=0 LOW ALLOW<br/>(ALLOWLIST_BYPASS)"]:::ok
+    ALW -->|Exception| FC_ERR
+    ALW -->|Miss| REDIS{"3. Redis fraud:score:{userId}<br/>&gt; 0.85?"}:::dec
+
+    REDIS -->|gt 0.85| ML_BLK["score=round(s*100) CRITICAL<br/>BLOCK / REVIEW (SHADOW allow)"]:::err
+    REDIS -->|Err / Conn Refused| ML_FB["metric: redis_cache / FALLBACK_RULES<br/>continue to rule evaluation"]:::step
+    REDIS -->|Miss / le 0.85| RULES["4. Load fraudRules (Caffeine 300s)<br/>Evaluate priority-ordered rules"]:::step
+
+    RULES --> RLOOP["Sum scoreImpact + escalate action<br/>ALLOW rule decrements score;<br/>Rule exception -&gt; floor 51/76 (HIGH/CRITICAL)<br/>+ DefaultCombo (+35..80 COD/high-risk)"]:::step
+    RLOOP --> CLAMP["clamp 0..100 -&gt; RiskLevel.fromScore<br/>escalate(fromRiskLevel, highestAction)<br/>REQUIRES_NEW save fraud_signals +<br/>(if action != ALLOW) outbox FraudDetected"]:::ok
+
+    subgraph VEL["5. Async Velocity Feedback & Chargeback Auto-Block"]
+        direction LR
+        ORD_P["OrderPlaced -&gt; USER/DEVICE/IP<br/>ORDERS_5M(60s), 1H(300s), 24H(3600s)<br/>+ AMOUNT_24H(3600s)"]:::step
+        PAY_E["PaymentFailed -&gt; FAILED_PAYMENTS_5M/1H<br/>PaymentRefundFailed -&gt; REFUND_FAILURES_24H<br/>PaymentDisputed -&gt; CHARGEBACKS_30D(86400s)"]:::step
+        PAY_E --> CB_CHK{"CHARGEBACKS_30D &gt;= 2?"}:::dec
+        CB_CHK -->|Yes| AUTO_BLK["BlocklistService.block('USER', userId,<br/>expiresAt=null, 'system:payment-disputed')"]:::err
+    end

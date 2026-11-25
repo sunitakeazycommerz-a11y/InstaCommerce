@@ -9,6 +9,8 @@ import com.instacommerce.payment.exception.PaymentNotFoundException;
 import com.instacommerce.payment.repository.LedgerEntryRepository;
 import com.instacommerce.payment.repository.PaymentRepository;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -59,8 +61,17 @@ public class PaymentTransactionHelper {
         payment.setStatus(PaymentStatus.AUTHORIZE_PENDING);
         payment.setIdempotencyKey(normalizedKey);
         payment.setPaymentMethod(request.effectivePaymentMethod());
+        Map<String, Object> metadata = new LinkedHashMap<>();
         if (request.userId() != null) {
-            payment.setMetadata(Map.of("userId", request.userId().toString()));
+            metadata.put("userId", request.userId().toString());
+        }
+        if (request.purpose() != null && !request.purpose().isBlank()) {
+            metadata.put("purpose", request.purpose().trim().toUpperCase(Locale.ROOT));
+        } else if (request.orderId() != null) {
+            metadata.put("purpose", "ORDER_CHECKOUT");
+        }
+        if (!metadata.isEmpty()) {
+            payment.setMetadata(metadata);
         }
         return paymentRepository.save(payment);
     }

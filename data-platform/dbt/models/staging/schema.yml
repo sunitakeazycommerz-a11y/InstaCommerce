@@ -25,7 +25,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['PENDING', 'CONFIRMED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'REFUNDED']
+              values: ['PENDING', 'PLACED', 'PACKING', 'PACKED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'FAILED', 'REFUNDED']
       - name: total_cents
         description: "Order total in cents"
         tests:
@@ -73,7 +73,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['INITIATED', 'COMPLETED', 'FAILED', 'REFUNDED']
+              values: ['AUTHORIZE_PENDING', 'AUTHORIZED', 'CAPTURE_PENDING', 'CAPTURED', 'VOID_PENDING', 'VOIDED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'FAILED', 'DISPUTED']
       - name: amount_cents
         description: "Payment amount in cents"
         tests:
@@ -153,7 +153,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['ASSIGNED', 'EN_ROUTE_PICKUP', 'AT_STORE', 'PICKED_UP', 'EN_ROUTE_DROP', 'DELIVERED', 'CANCELLED']
+              values: ['PENDING', 'ASSIGNED', 'RIDER_ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'EN_ROUTE', 'NEAR_DESTINATION', 'DELIVERED', 'FAILED']
       - name: distance_meters
         description: "Delivery distance in meters"
       - name: assigned_at

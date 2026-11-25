@@ -57,6 +57,7 @@ wallet:
   loyalty:
     points-per-rupee: 1
     points-expiry-months: 12
+    points-to-paise-rate: ${LOYALTY_POINTS_TO_PAISE_RATE:100}
   referral:
     reward-cents: 5000
 

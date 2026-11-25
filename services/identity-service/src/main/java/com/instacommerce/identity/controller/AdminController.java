@@ -6,6 +6,7 @@ import com.instacommerce.identity.exception.TraceIdProvider;
 import com.instacommerce.identity.service.NotificationPreferenceService;
 import com.instacommerce.identity.service.UserService;
 import com.instacommerce.identity.util.RequestContextUtil;
+import com.instacommerce.platform.web.PageableUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
@@ -39,25 +40,25 @@ public class AdminController {
     }
 
     @GetMapping({"/admin/users", "/api/v1/admin/users"})
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public Page<UserResponse> listUsers(@PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
-        return userService.listUsers(pageable);
+        return userService.listUsers(PageableUtils.sanitize(pageable));
     }
 
     @GetMapping({"/admin/users/{id}", "/users/{id}", "/api/v1/users/{id}"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN', 'INTERNAL_SERVICE')")
     public UserResponse getUser(@PathVariable UUID id) {
         return userService.getUserById(id);
     }
 
     @GetMapping({"/admin/users/{id}/notification-preferences", "/users/{id}/notification-preferences", "/api/v1/users/{id}/notification-preferences"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'INTERNAL_SERVICE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN', 'INTERNAL_SERVICE')")
     public NotificationPreferenceResponse getNotificationPreferences(@PathVariable UUID id) {
         return notificationPreferenceService.getPreferences(id);
     }
 
     @PostMapping({"/admin/users/{id}/unlock", "/api/v1/admin/users/{id}/unlock"})
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public ResponseEntity<Void> unlockUser(@PathVariable UUID id, HttpServletRequest request) {
         String traceId = traceIdProvider != null ? traceIdProvider.resolveTraceId(request) : UUID.randomUUID().toString();
         userService.unlockUser(id, RequestContextUtil.resolveIp(request), RequestContextUtil.resolveUserAgent(request), traceId);
@@ -65,7 +66,7 @@ public class AdminController {
     }
 
     @PostMapping({"/admin/users/{id}/revoke-sessions", "/api/v1/admin/users/{id}/revoke-sessions"})
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public ResponseEntity<Void> revokeSessions(@PathVariable UUID id, HttpServletRequest request) {
         String traceId = traceIdProvider != null ? traceIdProvider.resolveTraceId(request) : UUID.randomUUID().toString();
         userService.revokeUserSessions(id, RequestContextUtil.resolveIp(request), RequestContextUtil.resolveUserAgent(request), traceId);
@@ -75,7 +76,7 @@ public class AdminController {
     public record UpdateRolesRequest(@NotEmpty List<String> roles) {}
 
     @PutMapping({"/admin/users/{id}/roles", "/api/v1/admin/users/{id}/roles"})
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public UserResponse updateUserRoles(@PathVariable UUID id,
                                         @Valid @RequestBody UpdateRolesRequest body,
                                         HttpServletRequest request) {

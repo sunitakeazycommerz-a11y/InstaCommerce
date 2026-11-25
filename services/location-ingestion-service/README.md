@@ -67,7 +67,7 @@ location-ingestion-service/
 ├── store/
 │   └── redis.go            # LatestPositionStore — Redis SET/GET/GetNearby (SCAN-based)
 ├── Dockerfile              # Multi-stage alpine build, non-root user, HEALTHCHECK
-└── go.mod                  # Go 1.24, direct deps listed below
+└── go.mod                  # Go 1.25, direct deps listed below
 ```
 
 `main.go` contains a self-contained implementation (`IngestService`, `KafkaBatcher`,
@@ -611,14 +611,9 @@ consistency gap where analytics show a position that dispatch cannot query.
    not enqueued to Kafka. This prevents analytics/position divergence but means
    a Redis outage stops all data flow, not just dispatch queries.
 
-7. **`Dockerfile` Go version mismatch.** `go.mod` specifies Go 1.24;
-   `Dockerfile` uses `golang:1.22-alpine`. The build image should be updated
-   to match.
+7. **Resolved: `Dockerfile` Go version & port alignment.** `go.mod` specifies Go 1.25.0 and `Dockerfile` builds with `golang:1.25-alpine` / `alpine:3.23` exposing `PORT=8105`.
 
-8. **`Dockerfile` port mismatch.** `EXPOSE 8120` does not match the default
-   `PORT=8105`. The `EXPOSE` directive should be corrected.
-
-9. **No backpressure signaling to WebSocket clients.** When the Kafka buffer
+8. **No backpressure signaling to WebSocket clients.** When the Kafka buffer
    is full, HTTP clients receive a 503 but WebSocket clients only get a
    server-side log warning. The connection stays open and subsequent updates
    continue to be attempted.

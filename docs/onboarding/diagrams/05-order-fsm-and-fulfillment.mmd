@@ -1,0 +1,59 @@
+flowchart TB
+    classDef state fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef done fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef term fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+    classDef guard fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef exec fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef event fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+
+    subgraph S1["Stage 1: Order Placement &amp; Dark-Store Prep"]
+        direction TB
+        Saga["Checkout Saga (checkout-orchestrator :8091)<br/>Step 6: Create PENDING · Step 9c: Confirm PLACED"]:::guard
+        PENDING["OrderStatus: PENDING<br/>OrderCreationService (SHA-256 key + Quote check)"]:::state
+        PLACED["OrderStatus: PLACED<br/>User cancel &amp; amend window: PENDING | PLACED"]:::state
+        Guards["order-service (:8084) Guards &amp; Truth:<br/>findByIdForUpdate + @Version (3x retry)<br/>fulfillment-consumer-enabled=false (sync HTTP)<br/>Temporal deleted: LegacyCheckoutController &rarr; 410 GONE<br/>outbox_events &rarr; outbox-relay &rarr; orders.events"]:::guard
+        WH["warehouse-service (:8092)<br/>PRIMARY_PINCODE + 15km Haversine<br/>acquireOrderSlot: stores FOR UPDATE (max=100)<br/>10-aisle Dijkstra · warehouse_bins FOR UPDATE<br/>Cold chain: CHILLED &gt; 4C / FROZEN &gt; -18C (&ge; 2 in 5m)"]:::exec
+
+        Saga --> PENDING -->|"Step 9c"| PLACED
+        Saga -->|"Acquire slot"| WH
+        PENDING -.- Guards
+    end
+
+    subgraph S2["Stage 2: Dark-Store Pick, Wave Batch &amp; OrderPacked Trigger"]
+        direction TB
+        PACKING["OrderStatus: PACKING<br/>Picking active"]:::state
+        Pick["fulfillment-service (:8086) — Pick &amp; Wave<br/>Consumes OrderPlaced &rarr; PickTask (PENDING)<br/>AisleRoutingOptimizer: S-curve serpentine (fragile last)<br/>BatchPickingService: 4-task wave totes (RED/BLUE/GREEN/YELLOW)<br/>PickService: 1s debounce + &plusmn;5% tare · SubstitutionService"]:::exec
+        PACKED["OrderStatus: PACKED<br/>Packed &amp; ready for rider"]:::state
+        Packed["OrderPacked Dual Trigger<br/>1. Sync HTTP callback &rarr; order-service (PACKED)<br/>2. Outbox fulfillment.events (OrderPacked):<br/>   pickup/dropoff coords, weight, coldChain, fragile"]:::event
+        PayCap["payment-service (:8085)<br/>OrderPackedEventConsumer:<br/>captures AUTHORIZED payment"]:::event
+        RiderAssign["rider-fleet (:8093)<br/>Assigns rider &rarr; RiderAssigned<br/>(outbox rider.events)"]:::event
+
+        PACKING -->|"Items packed"| PACKED
+        Pick --> Packed
+        Packed ==>|"HTTP OrderStatusUpdateEvent(PACKED)"| PACKED
+        Packed -->|"fulfillment.events"| PayCap
+        Packed -->|"fulfillment.events"| RiderAssign
+    end
+
+    subgraph S3["Stage 3: Last-Mile Handoff, POD &amp; Terminal Order States"]
+        direction TB
+        OUT["OrderStatus: OUT_FOR_DELIVERY<br/>Rider picked up order"]:::state
+        Handoff["Last-Mile Handoff &amp; POD (DeliveryService)<br/>RiderAssigned &rarr; Delivery + 6-digit dispatchOtp<br/>verifyRiderHandoff (riderId + OTP) &rarr; PICKED_UP<br/>recordProofOfDelivery: WEBP &le; 200KB masked=true<br/>markDelivered &rarr; OrderDelivered outbox"]:::exec
+        DEL["OrderStatus: DELIVERED (Terminal)"]:::done
+        Term["Terminal Failure / Cancel / Refund Sinks:<br/>CANCELLED · FAILED · REFUNDED<br/>PENDING &rarr; CANCELLED / FAILED only<br/>PLACED / PACKING / PACKED / OUT_FOR_DELIVERY &rarr; all 3"]:::term
+
+        OUT -->|"POD verified"| DEL
+        OUT -.-|"RiderHandoffCompleted"| Handoff
+        Handoff -.->|"OrderDelivered"| DEL
+        OUT -.->|"CANCELLED / FAILED / REFUNDED"| Term
+    end
+
+    PLACED -->|"Picking started"| PACKING
+    PLACED -.->|"orders.events (OrderPlaced)"| Pick
+    WH -->|"slot + store coords"| Pick
+    PACKED -->|"Rider handoff"| OUT
+    RiderAssign -->|"rider.events"| Handoff
+    PENDING -.->|"CANCELLED / FAILED"| Term
+    PLACED -.->|"CANCELLED / FAILED / REFUNDED"| Term
+    PACKING -.->|"CANCELLED / FAILED / REFUNDED"| Term
+    PACKED -.->|"CANCELLED / FAILED / REFUNDED"| Term

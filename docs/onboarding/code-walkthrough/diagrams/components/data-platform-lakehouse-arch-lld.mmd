@@ -1,0 +1,72 @@
+flowchart TB
+    subgraph Sources["Operational Sources & Event Producers"]
+        PG["20 DB-Backed Services (18 Flyway Java + 2 Go SQL)<br/>(Terraform CloudSQL: 17 *_db · init-dbs.sql: 39 DBs/aliases)"]
+        Outbox["outbox-relay-service (:8103)<br/>13 Java services → EventEnvelope.v1<br/>(orders.events, payments.events,<br/>inventory.events, cart.events)"]
+        LocIngest["location-ingestion-service (:8105)<br/>Flat LocationEvent JSON (no zone_id)<br/>→ rider.location.updates"]
+        Debezium["Debezium Terraform<br/>(debezium-connector-reconciliation.tf)<br/>ONLY reconciliation.cdc provisioned"]
+    end
+
+    subgraph Streaming["Apache Beam on Dataflow (data-platform/streaming/pipelines/)"]
+        direction TB
+        BeamCore["common.py · validation.py · order_schemas.py · dataflow_template.yaml (VPC/SA drift vs TF)"]
+        subgraph StreamRow1["Windowed Domain Pipelines"]
+            PipeOrder["order_events_pipeline<br/>1m Fixed (Volume) + 30m Sliding (SLA)<br/>late above 3600s → late_order_events"]
+            PipePay["payment_events_pipeline<br/>1m Fixed (Legacy BQ write)<br/>failed_rows → payment_insert_failures"]
+            PipeCart["cart_events_pipeline<br/>15m Session (user_id) → 1m Fixed<br/>→ analytics.cart_abandonment"]
+        end
+        subgraph StreamRow2["Inventory, Spatial & Stateful Join Pipelines"]
+            PipeInv["inventory_events_pipeline<br/>5m Fixed (velocity) + per-event<br/>StockoutDetector → stockout_alerts"]
+            PipeRider["rider_location_pipeline<br/>10s spatial cell → 1m zone sum<br/>(zone_id missing in live pings → DLQ)"]
+            PipeJoin["order_payment_join_pipeline<br/>Flatten + GlobalWindows + Stateful DoFn<br/>(ReadModifyWriteState + 600s Watermark Timer)"]
+        end
+        BeamCore --> StreamRow1
+        BeamCore --> StreamRow2
+    end
+
+    subgraph CDC["CDC & Shadow Batch Ingestion"]
+        CDCConsumer["cdc-consumer-service (:8104)<br/>batchCh (cap 1000) + SchemaEvolution<br/>Writes ONE {BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}<br/>(Not 8 raw_cdc.* tables)"]
+        ShadowJobs["data-platform-jobs (CLI / Cron)<br/>etl.py · features.py · kafka_to_bigquery.py<br/>Collides with staging.stg_*, marts.mart_daily_revenue,<br/>features.* + writes raw.kafka_events"]
+    end
+
+    subgraph Warehouse["BigQuery Lakehouse & dbt (data-platform/dbt/)"]
+        TFBQ["Terraform modules/bigquery<br/>Creates ONLY datasets: analytics, ml<br/>+ unused analytics_raw_* tables<br/>+ Data Catalog pii_taxonomy"]
+        RawCDC["dbt sources.yml (default project: instacommerce)<br/>raw_cdc: 8 tables (_cdc_updated_at)<br/>analytics.fact_experiment_exposures"]
+        DbtStg["Staging Views (+schema: staging)<br/>8 stg_* models (schema.yml tests)<br/>Column drift vs PG Flyway schemas"]
+        DbtInt["Intermediate Tables (+schema: intermediate)<br/>int_order_deliveries · int_user_order_history<br/>int_product_performance"]
+        DbtMarts["Marts Tables (+schema: marts)<br/>9 table + 1 incremental (mart_order_fulfillment)<br/>5 partitioned · 2 clustered · 1 policy_tag"]
+        RawCDC --> DbtStg --> DbtInt --> DbtMarts
+    end
+
+    subgraph OrchQual["Airflow Orchestration (8 DAGs) & Data Quality"]
+        AirflowDAGs["Cloud Composer (Airflow 2.11+)<br/>dbt_staging (2h) · data_quality (2h) · dbt_marts (02:00)<br/>ml_feature_refresh (4h) · ml_training (04:00)<br/>monitoring_alerts (15m) · historical_backfill · search_ranking (Sun)"]
+        Plugins["Airflow Plugins & Lineage<br/>KafkaLagSensor (all CGs) · ExternalTaskSensor<br/>slack_alerts (Block Kit) · OpenLineage → Marquez"]
+        Quality["data-platform/quality/<br/>run_quality_checks.py · 5 expectations/*_suite.yaml<br/>column_validators.py · table_validators.py · 5 JSON fixtures"]
+        AirflowDAGs --> Plugins
+        AirflowDAGs -->|"GE checkpoint"| Quality
+    end
+
+    subgraph Consumers["Downstream Consumers & Feature Store"]
+        FeatureSQL["ml/feature_store/sql/*.sql (5 queries)<br/>Queries missing analytics.fact_*/dim_*<br/>Missing entity_id & _updated_at columns"]
+        VertexFS["Vertex AI Feature Store (asia-south1)<br/>+ Terraform feature_store dataset & Redis"]
+        BI["BI / BI Engine (10 GB reservation)<br/>mart_daily_sales + missing mart_realtime_kpis"]
+    end
+
+    PG --> Debezium
+    PG --> Outbox
+    Outbox --> StreamRow1
+    Outbox --> PipeInv & PipeJoin
+    LocIngest --> PipeRider
+    Debezium -.->|"reconciliation.cdc only"| CDCConsumer
+    Outbox -.->|"if subscribed"| ShadowJobs
+
+    StreamRow1 -->|"WriteToBigQuery (analytics.*)"| TFBQ
+    StreamRow2 -->|"WriteToBigQuery (analytics.*)"| TFBQ
+    CDCConsumer -.->|"single table mismatch"| RawCDC
+    ShadowJobs -.->|"colliding CTAS overwrites"| DbtStg
+    ShadowJobs -.->|"colliding CTAS overwrites"| DbtMarts
+
+    AirflowDAGs -->|"dbt run/test"| DbtStg & DbtMarts
+    AirflowDAGs -->|"WRITE_TRUNCATE"| FeatureSQL
+    FeatureSQL -.->|"broken schema seam"| VertexFS
+    DbtMarts --> BI
+    DbtMarts -.->|"no fact_* bridge"| FeatureSQL

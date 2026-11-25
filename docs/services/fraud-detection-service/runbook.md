@@ -49,7 +49,7 @@ kubectl exec -n engagement deploy/fraud-detection-service -- \
 ### Blue-Green Deployment
 
 ```bash
-helm upgrade fraud-detection-service deploy/helm/fraud-detection-service -n engagement
+helm upgrade instacommerce deploy/helm -n engagement
 kubectl rollout status deploy/fraud-detection-service -n engagement --timeout=10m
 
 # Verify model still loaded
@@ -144,7 +144,7 @@ kubectl exec -n engagement deploy/fraud-detection-service -- \
   curl -s http://localhost:8097/v1/admin/model-stats | jq '.inference_time_ms'
 
 # If >100ms, increase GPU resources or use quantized model
-helm upgrade fraud-detection-service deploy/helm/fraud-detection-service \
+helm upgrade instacommerce deploy/helm \
   -n engagement \
   --set gpu.enabled=true \
   --set gpu.count=1
@@ -185,7 +185,7 @@ kubectl rollout restart deploy/fraud-detection-service -n engagement
 
 ```bash
 # Use quantized model for faster inference
-helm upgrade fraud-detection-service deploy/helm/fraud-detection-service \
+helm upgrade instacommerce deploy/helm \
   -n engagement \
   --set model.quantized=true \
   --set model.precisionType=int8
@@ -195,7 +195,7 @@ helm upgrade fraud-detection-service deploy/helm/fraud-detection-service \
 
 ```bash
 # Increase rule cache
-helm upgrade fraud-detection-service deploy/helm/fraud-detection-service \
+helm upgrade instacommerce deploy/helm \
   -n engagement \
   --set cache.maxSize=50000 \
   --set cache.ttlMinutes=60
@@ -233,6 +233,6 @@ rate(fraud_transactions_detected_total[5m])
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/fraud-detection-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/fraud-detection-service/README.md`
 - **ML Model**: `/deploy/ml/fraud-detection-model/`

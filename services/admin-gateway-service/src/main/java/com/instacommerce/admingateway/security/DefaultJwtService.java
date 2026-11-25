@@ -1,5 +1,6 @@
 package com.instacommerce.admingateway.security;
 
+import com.instacommerce.platform.security.SecurityRoleUtils;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;
@@ -7,13 +8,10 @@ import io.jsonwebtoken.Jwts;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -67,7 +65,7 @@ public class DefaultJwtService implements JwtService {
         Claims claims = jws.getPayload();
         Set<String> audiences = claims.getAudience();
 
-        if (audiences == null || audiences.stream().noneMatch(acceptedAudiences::contains)) {
+        if (!SecurityRoleUtils.hasAcceptedAudience(audiences, acceptedAudiences)) {
             throw new JwtException("Token audience '" + audiences + "' does not match accepted audiences " + acceptedAudiences);
         }
 
@@ -76,22 +74,6 @@ public class DefaultJwtService implements JwtService {
 
     @Override
     public Collection<? extends GrantedAuthority> extractAuthorities(Claims claims) {
-        Object rolesClaim = claims.get("roles");
-        if (rolesClaim instanceof List<?> list) {
-            return list.stream()
-                .map(role -> Objects.toString(role, null))
-                .filter(Objects::nonNull)
-                .map(this::toAuthority)
-                .collect(Collectors.toList());
-        }
-        if (rolesClaim instanceof String role) {
-            return List.of(toAuthority(role));
-        }
-        return List.of();
-    }
-
-    private SimpleGrantedAuthority toAuthority(String role) {
-        String normalized = role.startsWith("ROLE_") ? role : "ROLE_" + role;
-        return new SimpleGrantedAuthority(normalized);
+        return SecurityRoleUtils.extractAuthorities(claims.get("roles"));
     }
 }

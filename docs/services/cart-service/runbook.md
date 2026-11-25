@@ -49,7 +49,7 @@ kubectl exec -n engagement deploy/cart-service -- \
 kubectl get deploy -n engagement cart-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Upgrade
-helm upgrade cart-service deploy/helm/cart-service -n engagement
+helm upgrade instacommerce deploy/helm -n engagement
 
 # 3. Monitor rollout
 kubectl rollout status deploy/cart-service -n engagement --timeout=10m
@@ -159,5 +159,5 @@ histogram_quantile(0.99, rate(cart_session_duration_seconds_bucket[5m]))
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/cart-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/cart-service/README.md`

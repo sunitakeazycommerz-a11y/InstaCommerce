@@ -8,7 +8,7 @@ The catalog-service is the single source of truth for product master data in Ins
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8082
 **Status**: Tier 2 Critical (master data SoT; impacts all read-planes)
-**Database**: PostgreSQL 15+ (products, categories, pricing rules)
+**Database**: PostgreSQL 16 (products, categories, pricing rules)
 **Messaging**: Kafka producer (catalog.events via outbox/CDC)
 
 ## SLOs & Availability
@@ -41,7 +41,7 @@ The catalog-service is the single source of truth for product master data in Ins
 - **Readiness Probe**: `/actuator/health/readiness` (checks DB + Kafka producer)
 
 ### Database
-- **Name**: `catalog` (PostgreSQL 15+)
+- **Name**: `catalog` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V14) auto-applied
 - **Connection Pool**: HikariCP 15 connections
 - **Replication**: Async (eventual consistency acceptable for products)
@@ -351,7 +351,7 @@ Response (200):
 
 ```bash
 # 1. Create product
-curl -s -X POST http://catalog-service:8088/products \
+curl -s -X POST http://catalog-service:8082/products \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -362,17 +362,17 @@ curl -s -X POST http://catalog-service:8088/products \
   }' | jq '.id'
 
 # 2. Get product
-curl -s http://catalog-service:8088/products/prod-uuid \
+curl -s http://catalog-service:8082/products/prod-uuid \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.name'
 
 # 3. Update product
-curl -s -X PUT http://catalog-service:8088/products/prod-uuid \
+curl -s -X PUT http://catalog-service:8082/products/prod-uuid \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"priceCents": 5500}' | jq '.updatedAt'
 
 # 4. List products by category
-curl -s 'http://catalog-service:8088/products?category=dairy&page=0&size=20' \
+curl -s 'http://catalog-service:8082/products?category=dairy&page=0&size=20' \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.content | length'
 ```
 
@@ -562,7 +562,7 @@ kubectl exec -n default pod/cdc-relay-0 -- \
 ### Environment Variables
 ```env
 # Server
-SERVER_PORT=8088
+SERVER_PORT=8082
 SPRING_PROFILES_ACTIVE=gcp
 
 # Database
@@ -586,7 +586,7 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://otel-collector.monitoring:4318/v1/trac
 ### application.yml
 ```yaml
 server:
-  port: 8088
+  port: 8082
 spring:
   jpa:
     hibernate:
@@ -624,13 +624,13 @@ spec:
         app: catalog-service
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8088"
+        prometheus.io/port: "8082"
     spec:
       containers:
       - name: catalog-service
         image: catalog-service:v1.2.3
         ports:
-        - containerPort: 8088
+        - containerPort: 8082
         env:
         - name: SPRING_PROFILES_ACTIVE
           value: gcp
@@ -644,12 +644,12 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/live
-            port: 8088
+            port: 8082
           initialDelaySeconds: 10
         readinessProbe:
           httpGet:
             path: /actuator/health/ready
-            port: 8088
+            port: 8082
           initialDelaySeconds: 15
 ---
 apiVersion: v1
@@ -661,8 +661,8 @@ spec:
   selector:
     app: catalog-service
   ports:
-  - port: 8088
-    targetPort: 8088
+  - port: 8082
+    targetPort: 8082
   type: ClusterIP
 ```
 
@@ -828,7 +828,7 @@ SELECT COUNT(*) FROM audit_log WHERE resource_type='Product';
 
 1. **Immediate (< 2 min)**:
    ```bash
-   curl -X PUT http://catalog-service:8088/products/prod-uuid \
+   curl -X PUT http://catalog-service:8082/products/prod-uuid \
      -d '{"status":"DELISTED","reason":"Quality recall - batch ABC123"}'
    ```
 2. **Verification** (< 1 min):
@@ -856,7 +856,7 @@ SELECT COUNT(*) FROM audit_log WHERE resource_type='Product';
 2. **Execution**:
    ```bash
    # Upload bulk update
-   curl -X POST http://catalog-service:8088/admin/bulk-update \
+   curl -X POST http://catalog-service:8082/admin/bulk-update \
      -F "file=@pricing_update.csv"
    ```
 
@@ -891,11 +891,11 @@ SELECT COUNT(*) FROM audit_log WHERE resource_type='Product';
 3. **Execution**:
    ```bash
    # Step 1: Create new parent category
-   curl -X POST http://catalog-service:8088/categories \
+   curl -X POST http://catalog-service:8082/categories \
      -d '{"name":"Grocery Essentials","slug":"grocery-essentials"}'
 
    # Step 2: Reparent subcategories
-   curl -X PUT http://catalog-service:8088/categories/dairy \
+   curl -X PUT http://catalog-service:8082/categories/dairy \
      -d '{"parentId":"grocery-essentials-uuid"}'
    ```
 
@@ -922,17 +922,17 @@ spec:
       - name: catalog-service
         image: catalog-service:v1.2.3
         ports:
-        - containerPort: 8088
+        - containerPort: 8082
         livenessProbe:
           httpGet:
             path: /actuator/health/live
-            port: 8088
+            port: 8082
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /actuator/health/ready
-            port: 8088
+            port: 8082
           initialDelaySeconds: 20
           periodSeconds: 5
 ```

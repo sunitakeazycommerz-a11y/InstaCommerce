@@ -8,7 +8,7 @@ The audit-trail-service is the **immutable, compliance-grade event repository** 
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8089 (dev), 8080 (container)
 **Status**: Tier 1 Critical (Compliance backbone - regulatory requirement)
-**Database**: PostgreSQL 15+ (partitioned, immutable schema)
+**Database**: PostgreSQL 16 (partitioned, immutable schema)
 **Message Queue**: Apache Kafka (14+ event topics)
 **Storage Archive**: AWS S3 Glacier (immutable, object-locked)
 **Cache**: None (append-only, no caching needed)
@@ -79,7 +79,7 @@ spec:
         imagePullPolicy: IfNotPresent
         ports:
         - name: http
-          containerPort: 8080
+          containerPort: 8096
           protocol: TCP
         resources:
           requests:
@@ -91,7 +91,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8080
+            port: 8096
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -99,7 +99,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8080
+            port: 8096
           initialDelaySeconds: 20
           periodSeconds: 5
           timeoutSeconds: 3
@@ -149,8 +149,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 8089
-    targetPort: 8080
+  - port: 8096
+    targetPort: 8096
     name: http
   selector:
     app: audit-trail-service
@@ -353,21 +353,21 @@ GET /admin/audit/stats
 
 ```bash
 # Query all payments by a specific user (compliance investigation)
-curl -X GET "http://audit-trail-service:8089/admin/audit/events" \
+curl -X GET "http://audit-trail-service:8096/admin/audit/events" \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Accept: application/json" \
   -d '{"actorId":"user-456","resourceType":"Payment","fromDate":"2025-01-01","toDate":"2025-01-31"}' \
   | jq '.events[] | {eventType, resourceId, timestamp_ms, details}'
 
 # Export all order events for 30 days (SOC 2 audit)
-curl -X GET "http://audit-trail-service:8089/admin/audit/export" \
+curl -X GET "http://audit-trail-service:8096/admin/audit/export" \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Accept: text/csv" \
   -d '{"resourceType":"Order","fromDate":"2025-01-01","toDate":"2025-01-31"}' \
   > order-audit-jan.csv
 
 # Check audit statistics
-curl -X GET "http://audit-trail-service:8089/admin/audit/stats" \
+curl -X GET "http://audit-trail-service:8096/admin/audit/stats" \
   -H "Authorization: Bearer $ADMIN_JWT" | jq '.stats_by_type'
 ```
 
@@ -397,10 +397,10 @@ curl -X GET "http://audit-trail-service:8089/admin/audit/stats" \
 ```bash
 # Monitor DLQ topic (events that failed processing)
 kubectl exec -n audit deploy/audit-trail-service -- \
-  curl -s http://localhost:8080/admin/dlq/stats | jq '.total_dlq_messages'
+  curl -s http://localhost:8096/admin/dlq/stats | jq '.total_dlq_messages'
 
 # Replay specific DLQ messages
-curl -X POST "http://audit-trail-service:8089/admin/dlq/replay" \
+curl -X POST "http://audit-trail-service:8096/admin/dlq/replay" \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
   -d '{"offsets":[0,1,2,3]}' | jq '.replayed_count'
@@ -525,11 +525,11 @@ kubectl logs -n audit deploy/audit-trail-service --tail=100 | grep -i "error\|ex
 
 # Check consumer thread pool utilization
 kubectl exec -n audit deploy/audit-trail-service -- \
-  curl -s http://localhost:8080/metrics | grep "jvm_threads_live"
+  curl -s http://localhost:8096/metrics | grep "jvm_threads_live"
 
 # Check Kafka broker connectivity
 kubectl exec -n audit deploy/audit-trail-service -- \
-  curl -s http://localhost:8080/actuator/health | jq '.components.kafka'
+  curl -s http://localhost:8096/actuator/health | jq '.components.kafka'
 ```
 
 **Resolution**:
@@ -549,7 +549,7 @@ kubectl exec -n audit postgres-0 -- \
 
 # Check connection pool settings
 kubectl exec -n audit deploy/audit-trail-service -- \
-  curl -s http://localhost:8080/actuator/dbhealth | jq '.active_connections'
+  curl -s http://localhost:8096/actuator/dbhealth | jq '.active_connections'
 ```
 
 **Resolution**:
@@ -574,7 +574,7 @@ kubectl exec -n audit postgres-0 -- \
 **Resolution**:
 1. Check ShedLock table for stuck locks: `DELETE FROM shedlock WHERE name='partition-maintenance' AND locked_at < now() - interval '1 hour'`
 2. Manually create future partitions: SQL script in `/deploy/scripts/create-audit-partitions.sql`
-3. Archive old records: `kubectl exec deploy/audit-trail-service -- curl -X POST http://localhost:8080/admin/partition/archive`
+3. Archive old records: `kubectl exec deploy/audit-trail-service -- curl -X POST http://localhost:8096/admin/partition/archive`
 
 ## Related Documentation
 

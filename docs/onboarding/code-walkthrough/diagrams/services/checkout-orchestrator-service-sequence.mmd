@@ -1,0 +1,76 @@
+sequenceDiagram
+    autonumber
+    participant Cli as Client / BFF
+    participant Ctrl as CheckoutController<br/>:8091 (Semaphore 1500)
+    participant Idemp as CheckoutIdempotencyService<br/>(checkout DB)
+    participant WF as CheckoutWorkflowImpl<br/>(Temporal 10m)
+    participant Cart as CartActivity<br/>(cart :8090)
+    participant Price as Pricing/Coupon/Promo<br/>(pricing :8089)
+    participant Inv as InventoryActivity<br/>(inventory :8083)
+    participant Wal as WalletActivity<br/>(wallet :8095)
+    participant Pay as PaymentActivity<br/>(payment :8085)
+    participant Ord as OrderActivity<br/>(order :8084)
+    participant DLQ as CompensationDlqActivity<br/>(compensation_dlq)
+
+    Cli->>Ctrl: POST /checkout (Idempotency-Key, X-Tenant-Id, X-Store-Id)
+    Ctrl->>Ctrl: checkoutRateLimiter.tryAcquire() + TemporalHeaderInterceptor.setTenantContext()
+    Ctrl->>Idemp: findValidResponse("{principal}:{key}") [short @Transactional]
+    Idemp-->>Ctrl: Optional.empty()
+    Ctrl->>WF: workflow.checkout(request) [workflowId=checkout-{principal}-{key}]
+
+    rect rgb(239, 246, 255)
+        WF->>Cart: 1. VALIDATING_CART: GET /api/carts/{userId}/validate (10s, 3x)
+        Cart-->>WF: CartValidationResult (items, storeId or DEFAULT_STORE_ID)
+        WF->>Price: 2. CALCULATING_PRICES: POST /pricing/calculate (10s, 3x)
+        Price-->>WF: PricingResult (subtotal, discount, total, quoteId, quoteToken)
+        Note over WF: PriceDriftEvaluator.evaluate() · expectedOrderId = UUIDv3("order-" + wfId)
+        WF->>Inv: 3. RESERVING_INVENTORY: POST /api/inventory/reservations<br/>idempotencyKey={wfId}:inventory:reserve (15s, 3x) [reg: safeReleaseStock]
+        Inv-->>WF: InventoryReservationResult(reservationId)
+        opt requestedWalletCents > 0
+            WF->>Wal: 4. DEBITING_WALLET: POST /wallet/debit ({wfId}:wallet:debit)
+            Wal-->>WF: WalletDebitResult [reg: safeRefundWallet]
+        end
+        opt totalAmountCents - walletDebitedCents > 0
+            WF->>Pay: 5. AUTHORIZING_PAYMENT: POST /payments/authorize<br/>({wfId}:pay:auth, 30s/45s, 3x, MANUAL capture)
+            Pay-->>WF: PaymentAuthResult(authorized=true, paymentId)
+        end
+        WF->>Ord: 6. CREATING_ORDER: POST /api/orders (PENDING, expectedOrderId)<br/>idempotencyKey={wfId}:order:create [reg: safeCancelOrder]
+        Ord-->>WF: OrderCreationResult(orderId, 15)
+        opt appliedCoupon != null and couponDiscountCents > 0
+            WF->>Price: 7. REDEEMING_COUPON: POST /pricing/coupons/redeem [reg: safeRollbackCoupon]
+        end
+        opt appliedPromotionDetails non-empty
+            WF->>Price: 8. REDEEMING_PROMOTION: POST /pricing/promotions/redeem [reg: safeRollbackPromotion]
+        end
+        WF->>Pay: 9a. CONFIRMING: paymentCaptureAttempted=true -> POST /payments/{id}/capture
+        Pay-->>WF: 200 OK -> paymentCaptured=true
+        WF->>Inv: 9b. CONFIRMING: POST /api/inventory/reservations/{id}/confirm
+        WF->>Ord: 9c. CONFIRMING: POST /admin/orders/{id}/status PLACED (Idempotency-Key hdr)
+        WF-->>Cart: 10. CLEARING_CART: DELETE /api/carts/{userId} (best-effort)
+        WF-->>Ctrl: CheckoutResponse(COMPLETED, orderId, totalCents, 15, workflowId)
+        Ctrl->>Idemp: recordResponse(scopedKey, COMPLETED) [30m TTL]
+        Ctrl-->>Cli: 200 OK CheckoutResponse
+    end
+
+    rect rgb(254, 242, 242)
+        Note over WF,DLQ: Compensation & DLQ Path on Exception in Steps 1..9
+        WF->>WF: currentStatus = "COMPENSATING"
+        alt paymentCaptured == true
+            WF->>Pay: refundPayment({wfId}:pay:{id}:refund, 45s, 5x)
+        else paymentAuthorized == true
+            WF->>Pay: voidPayment({wfId}:pay:{id}:void, 45s, 5x)
+            opt voidPayment throws AND paymentCaptureAttempted == true
+                WF->>Pay: fallback refundPayment({wfId}:pay:{id}:refund)
+            end
+        end
+        WF->>Price: LIFO: rollbackPromotion -> unredeemCoupon / rollbackUsage
+        WF->>Ord: LIFO: cancelOrder (reason=CHECKOUT_SAGA_ROLLBACK)
+        WF->>Wal: LIFO: refundWallet ({wfId}:wallet:refund)
+        WF->>Inv: LIFO: releaseStock (DELETE /api/inventory/reservations/{id})
+        opt Any compensation activity exhausts 5x Temporal retries
+            WF->>DLQ: recordFailedCompensation(wfId, step, targetId, reason, payload)
+        end
+        WF-->>Ctrl: CheckoutResponse("FAILED: ...", workflowId)
+        Ctrl->>Idemp: recordResponse(scopedKey, FAILED) [blocks retry 30m!]
+        Ctrl-->>Cli: 200 OK FAILED
+    end

@@ -132,7 +132,7 @@ class OrderDiscountValidationTest {
             .idempotencyKey("idem-3")
             .build();
 
-        when(pricingQuoteClient.validateQuote(quoteId, quoteToken, 800L, 1000L, 200L)).thenReturn(false);
+        when(pricingQuoteClient.validateQuote(userId, quoteId, quoteToken, 800L, 1000L, 200L)).thenReturn(false);
 
         assertThatThrownBy(() -> orderService.createOrder(command))
             .isInstanceOf(ApiException.class)
@@ -164,7 +164,7 @@ class OrderDiscountValidationTest {
             .idempotencyKey("idem-4")
             .build();
 
-        when(pricingQuoteClient.validateQuote(quoteId, quoteToken, 800L, 1000L, 200L)).thenReturn(true);
+        when(pricingQuoteClient.validateQuote(userId, quoteId, quoteToken, 800L, 1000L, 200L)).thenReturn(true);
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
             Order o = inv.getArgument(0);
             o.setId(orderId);
@@ -197,7 +197,7 @@ class OrderDiscountValidationTest {
             .idempotencyKey("idem-zero")
             .build();
 
-        when(pricingQuoteClient.validateQuote(quoteId, "valid-token", 0L, 1000L, 1000L)).thenReturn(true);
+        when(pricingQuoteClient.validateQuote(userId, quoteId, "valid-token", 0L, 1000L, 1000L)).thenReturn(true);
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
 
         String createdId = orderService.createOrder(command);
@@ -222,7 +222,7 @@ class OrderDiscountValidationTest {
             .idempotencyKey("idem-fee")
             .build();
 
-        when(pricingQuoteClient.validateQuote(quoteId, "valid-token", 850L, 1000L, 200L)).thenReturn(true);
+        when(pricingQuoteClient.validateQuote(userId, quoteId, "valid-token", 850L, 1000L, 200L)).thenReturn(true);
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
             Order o = inv.getArgument(0);
             o.setId(UUID.randomUUID());
@@ -231,5 +231,74 @@ class OrderDiscountValidationTest {
 
         String createdId = orderService.createOrder(command);
         assertThat(createdId).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("Rejects order when subtotal does not match sum of item line totals or lineTotal mismatches unitPrice*qty")
+    void rejectsSubtotalAndLineTotalTampering() {
+        CreateOrderCommand mismatchedSubtotal = CreateOrderCommand.builder()
+            .userId(userId)
+            .storeId("store-1")
+            .items(List.of(new CartItem(productId, 2, 1000L)))
+            .subtotalCents(500L)
+            .totalCents(500L)
+            .idempotencyKey("idem-tampered-subtotal")
+            .build();
+
+        assertThatThrownBy(() -> orderService.createOrder(mismatchedSubtotal))
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getCode()).isEqualTo("INVALID_ORDER_TOTAL"));
+
+        CreateOrderCommand mismatchedLineTotal = CreateOrderCommand.builder()
+            .userId(userId)
+            .storeId("store-1")
+            .items(List.of(new CartItem(productId, "Item", "SKU-1", 2, 1000L, 1500L)))
+            .subtotalCents(1500L)
+            .totalCents(1500L)
+            .idempotencyKey("idem-tampered-line")
+            .build();
+
+        assertThatThrownBy(() -> orderService.createOrder(mismatchedLineTotal))
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getCode()).isEqualTo("INVALID_ORDER_TOTAL"));
+    }
+
+    @Test
+    @DisplayName("Rejects half-present quote without discount and validates full quote even when discountCents == 0")
+    void enforcesQuoteIntegrityEvenWhenDiscountIsZero() {
+        UUID quoteId = UUID.randomUUID();
+        CreateOrderCommand halfQuote = CreateOrderCommand.builder()
+            .userId(userId)
+            .storeId("store-1")
+            .items(List.of(new CartItem(productId, 1, 1000L)))
+            .subtotalCents(1000L)
+            .discountCents(0L)
+            .totalCents(1000L)
+            .quoteId(quoteId)
+            .idempotencyKey("idem-half-quote")
+            .build();
+
+        assertThatThrownBy(() -> orderService.createOrder(halfQuote))
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getCode()).isEqualTo("INVALID_QUOTE"));
+
+        CreateOrderCommand fullZeroDiscountQuote = CreateOrderCommand.builder()
+            .userId(userId)
+            .storeId("store-1")
+            .items(List.of(new CartItem(productId, 1, 1000L)))
+            .subtotalCents(1000L)
+            .discountCents(0L)
+            .totalCents(1000L)
+            .quoteId(quoteId)
+            .quoteToken("zero-discount-token")
+            .idempotencyKey("idem-zero-disc-quote")
+            .build();
+
+        when(pricingQuoteClient.validateQuote(userId, quoteId, "zero-discount-token", 1000L, 1000L, 0L))
+            .thenReturn(false);
+
+        assertThatThrownBy(() -> orderService.createOrder(fullZeroDiscountQuote))
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getCode()).isEqualTo("QUOTE_VALIDATION_FAILED"));
     }
 }

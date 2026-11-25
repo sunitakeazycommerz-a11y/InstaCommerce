@@ -15,6 +15,10 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -77,12 +81,34 @@ public class TrackingService {
             .map(this::toResponse);
     }
 
+    private static final int DEFAULT_HISTORY_PAGE_SIZE = 50;
+    private static final int MAX_HISTORY_PAGE_SIZE = 100;
+
     @Transactional(readOnly = true)
     public List<TrackingResponse> getTrackingHistory(UUID deliveryId) {
-        return trackingRepository.findByDeliveryIdOrderByRecordedAtDesc(deliveryId)
-            .stream()
-            .map(this::toResponse)
-            .toList();
+        return getTrackingHistory(
+            deliveryId,
+            PageRequest.of(0, DEFAULT_HISTORY_PAGE_SIZE, Sort.by(Sort.Direction.DESC, "recordedAt")))
+            .getContent();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<TrackingResponse> getTrackingHistory(UUID deliveryId, Pageable pageable) {
+        Pageable effective = clampPageable(pageable);
+        return trackingRepository.findByDeliveryIdOrderByRecordedAtDesc(deliveryId, effective)
+            .map(this::toResponse);
+    }
+
+    private Pageable clampPageable(Pageable pageable) {
+        if (pageable == null || pageable.isUnpaged()) {
+            return PageRequest.of(0, DEFAULT_HISTORY_PAGE_SIZE, Sort.by(Sort.Direction.DESC, "recordedAt"));
+        }
+        int page = Math.max(0, pageable.getPageNumber());
+        int size = Math.min(Math.max(1, pageable.getPageSize()), MAX_HISTORY_PAGE_SIZE);
+        Sort sort = pageable.getSort().isSorted()
+            ? pageable.getSort()
+            : Sort.by(Sort.Direction.DESC, "recordedAt");
+        return PageRequest.of(page, size, sort);
     }
 
     private TrackingResponse toResponse(DeliveryTracking t) {

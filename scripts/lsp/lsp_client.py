@@ -6,6 +6,7 @@ Supports Go (gopls), Python (pyright-langserver / pyright), and Java (jdtls).
 
 import json
 import os
+import select
 import shutil
 import subprocess
 import sys
@@ -13,15 +14,77 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    _fcntl = None
+
+_F_GETPATH = getattr(_fcntl, "F_GETPATH", 50) if (_fcntl is not None and sys.platform == "darwin") else None
+
+
+def _walk_true_case(path: Path) -> Path:
+    """Resolve exact directory entry casing component-by-component on case-insensitive filesystems."""
+    parts = path.parts
+    if not parts:
+        return path
+    current = Path(parts[0])
+    for part in parts[1:]:
+        candidate = current / part
+        if current.is_dir():
+            try:
+                entries = list(os.scandir(current))
+                exact = next((e.name for e in entries if e.name == part), None)
+                if exact is not None:
+                    current = current / exact
+                    continue
+                lowered = part.lower()
+                matched = next((e.name for e in entries if e.name.lower() == lowered), None)
+                if matched is not None:
+                    current = current / matched
+                    continue
+            except OSError:
+                pass
+        current = candidate
+    return current
+
+
+def canonicalize_path(path: str | os.PathLike[str]) -> str:
+    """Return canonical path with symlinks resolved and true macOS filesystem casing."""
+    real = os.path.realpath(os.path.abspath(os.fspath(path)))
+    if _F_GETPATH is not None and _fcntl is not None:
+        p = Path(real)
+        suffix_parts: List[str] = []
+        probe = p
+        while not probe.exists() and probe != probe.parent:
+            suffix_parts.append(probe.name)
+            probe = probe.parent
+        if probe.exists():
+            try:
+                fd = os.open(str(probe), os.O_RDONLY)
+                try:
+                    raw_path = _fcntl.fcntl(fd, _F_GETPATH, b"\x00" * 1024)
+                    resolved_base = os.fsdecode(bytes(raw_path).split(b"\x00", 1)[0])
+                    if resolved_base:
+                        out = Path(resolved_base)
+                        for part in reversed(suffix_parts):
+                            out = out / part
+                        return str(_walk_true_case(out))
+                finally:
+                    os.close(fd)
+            except OSError:
+                pass
+    return str(_walk_true_case(Path(real)))
+
 
 class LSPClient:
     """Manages LSP JSON-RPC communication over stdio."""
 
     def __init__(self, command: List[str], root_dir: str):
         self.command = command
-        self.root_dir = os.path.abspath(root_dir)
-        self.process: Optional[subprocess.Popen] = None
+        self.root_dir = canonicalize_path(root_dir)
+        self.process: Optional[subprocess.Popen[bytes]] = None
         self._msg_id = 0
+        self._read_buf = bytearray()
 
     def start(self, timeout: float = 10.0) -> bool:
         """Starts the language server process."""
@@ -33,12 +96,18 @@ class LSPClient:
                 stderr=subprocess.PIPE,
                 bufsize=0,
             )
+            self._read_buf.clear()
             return True
         except Exception as e:
             sys.stderr.write(f"Failed to start LSP process {self.command}: {e}\n")
             return False
 
-    def send_request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    def send_request(
+        self,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: float = 8.0,
+    ) -> Optional[Dict[str, Any]]:
         """Sends a JSON-RPC request and waits for response."""
         if not self.process or not self.process.stdin:
             return None
@@ -56,7 +125,7 @@ class LSPClient:
         try:
             self.process.stdin.write(header + content)
             self.process.stdin.flush()
-            return self._read_response(expected_id=self._msg_id)
+            return self._read_response(expected_id=self._msg_id, timeout=timeout)
         except Exception as e:
             sys.stderr.write(f"LSP request error ({method}): {e}\n")
             return None
@@ -80,32 +149,85 @@ class LSPClient:
         except Exception:
             pass
 
+    def _read_chunk(self, deadline: float) -> bytes:
+        """Read available bytes from stdout pipe without blocking past deadline."""
+        if not self.process or not self.process.stdout:
+            return b""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return b""
+        stdout = self.process.stdout
+        try:
+            fd = stdout.fileno()
+        except (AttributeError, OSError, ValueError):
+            return stdout.read(65536)
+        ready, _, _ = select.select([fd], [], [], remaining)
+        if not ready:
+            return b""
+        return os.read(fd, 65536)
+
+    @staticmethod
+    def _find_header_end(buf: bytearray) -> tuple[int, int]:
+        crlf = buf.find(b"\r\n\r\n")
+        lf = buf.find(b"\n\n")
+        if crlf != -1 and (lf == -1 or crlf < lf):
+            return crlf, 4
+        if lf != -1:
+            return lf, 2
+        return -1, 0
+
+    @staticmethod
+    def _parse_content_length(header_bytes: bytes) -> Optional[int]:
+        for raw_line in header_bytes.decode("ascii", errors="ignore").splitlines():
+            if ":" not in raw_line:
+                continue
+            name, value = raw_line.split(":", 1)
+            if name.strip().lower() == "content-length":
+                try:
+                    length = int(value.strip())
+                    return length if length >= 0 else None
+                except ValueError:
+                    return None
+        return None
+
     def _read_response(self, expected_id: int, timeout: float = 8.0) -> Optional[Dict[str, Any]]:
-        """Reads JSON-RPC message from stdout matching expected_id."""
+        """Reads framed JSON-RPC messages from stdout until expected_id arrives or timeout expires."""
         if not self.process or not self.process.stdout:
             return None
 
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            header_line = self.process.stdout.readline()
-            if not header_line:
-                break
-            header_str = header_line.decode("utf-8", errors="ignore")
-            if header_str.startswith("Content-Length:"):
-                try:
-                    content_len = int(header_str.split(":")[1].strip())
-                    # Consume remaining empty header lines
-                    while True:
-                        empty_line = self.process.stdout.readline()
-                        if empty_line in (b"\r\n", b"\n", b""):
-                            break
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            header_end, sep_len = self._find_header_end(self._read_buf)
+            while header_end == -1:
+                chunk = self._read_chunk(deadline)
+                if not chunk:
+                    return None
+                self._read_buf.extend(chunk)
+                header_end, sep_len = self._find_header_end(self._read_buf)
 
-                    body = self.process.stdout.read(content_len)
-                    msg = json.loads(body.decode("utf-8", errors="ignore"))
-                    if msg.get("id") == expected_id:
-                        return msg
-                except Exception:
-                    continue
+            header_bytes = bytes(self._read_buf[:header_end])
+            del self._read_buf[: header_end + sep_len]
+
+            content_len = self._parse_content_length(header_bytes)
+            if content_len is None:
+                continue
+
+            while len(self._read_buf) < content_len:
+                chunk = self._read_chunk(deadline)
+                if not chunk:
+                    return None
+                self._read_buf.extend(chunk)
+
+            body_bytes = bytes(self._read_buf[:content_len])
+            del self._read_buf[:content_len]
+
+            try:
+                msg = json.loads(body_bytes.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(msg, dict) and msg.get("id") == expected_id:
+                return msg
 
         return None
 
@@ -139,6 +261,12 @@ class LSPClient:
             except Exception:
                 pass
             finally:
+                for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
                 if self.process.poll() is None:
                     self.process.terminate()
                     try:
@@ -195,14 +323,25 @@ def get_lsp_status() -> Dict[str, Any]:
     return status
 
 
+def _gopls_env(cwd: Optional[str]) -> Dict[str, str]:
+    env = dict(os.environ)
+    if cwd:
+        env["PWD"] = cwd
+    return env
+
+
 def query_gopls_definition(file_path: str, line: int, col: int) -> Optional[str]:
     """Queries gopls definition using built-in CLI."""
     gopls_bin = shutil.which("gopls")
     if not gopls_bin:
         return None
     try:
-        target = f"{os.path.abspath(file_path)}:{line}:{col}"
-        out = subprocess.check_output([gopls_bin, "definition", target], text=True, timeout=5)
+        canon_file = canonicalize_path(file_path)
+        target = f"{canon_file}:{line}:{col}"
+        cwd = os.path.dirname(canon_file) if os.path.exists(os.path.dirname(canon_file)) else None
+        out = subprocess.check_output(
+            [gopls_bin, "definition", target], cwd=cwd, env=_gopls_env(cwd), text=True, timeout=5
+        )
         return out.strip()
     except Exception as e:
         return f"Error querying gopls definition: {e}"
@@ -214,8 +353,12 @@ def query_gopls_references(file_path: str, line: int, col: int) -> Optional[str]
     if not gopls_bin:
         return None
     try:
-        target = f"{os.path.abspath(file_path)}:{line}:{col}"
-        out = subprocess.check_output([gopls_bin, "references", target], text=True, timeout=5)
+        canon_file = canonicalize_path(file_path)
+        target = f"{canon_file}:{line}:{col}"
+        cwd = os.path.dirname(canon_file) if os.path.exists(os.path.dirname(canon_file)) else None
+        out = subprocess.check_output(
+            [gopls_bin, "references", target], cwd=cwd, env=_gopls_env(cwd), text=True, timeout=5
+        )
         return out.strip()
     except Exception as e:
         return f"Error querying gopls references: {e}"
@@ -227,7 +370,11 @@ def query_gopls_symbols(file_path: str) -> Optional[str]:
     if not gopls_bin:
         return None
     try:
-        out = subprocess.check_output([gopls_bin, "symbols", os.path.abspath(file_path)], text=True, timeout=5)
+        canon_file = canonicalize_path(file_path)
+        cwd = os.path.dirname(canon_file) if os.path.exists(os.path.dirname(canon_file)) else None
+        out = subprocess.check_output(
+            [gopls_bin, "symbols", canon_file], cwd=cwd, env=_gopls_env(cwd), text=True, timeout=5
+        )
         return out.strip()
     except Exception as e:
         return f"Error querying gopls symbols: {e}"

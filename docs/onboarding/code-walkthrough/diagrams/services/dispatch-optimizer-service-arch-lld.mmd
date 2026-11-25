@@ -1,0 +1,38 @@
+flowchart LR
+    subgraph Callers["Istio allowFrom Callers & Fleet Authority Seam"]
+        RF["rider-fleet-service :8093<br/>DispatchOptimizerClient<br/>(optimizer-enabled=false default!<br/>Sends id+position only)"]
+        OTHER["fulfillment / routing-eta<br/>admin-gateway"]
+    end
+
+    subgraph HTTP["dispatch-optimizer-service :8102 (main.go)"]
+        direction TB
+        MUX["correlation.Middleware -> http.ServeMux<br/>Open: /health, /health/ready, /health/live, /metrics"]
+        AUTH["auth.InternalAuthMiddleware.Wrap<br/>-> otelhttp -> instrumentHandler"]
+        V1["POST /optimize/assign<br/>handleAssign (v1_assign.go)<br/>DISPATCH_CONSTRAINTS=zone,capacity"]
+        V2["POST /v2/optimize/assign<br/>HandleAssignV2 (assign_v2.go)<br/>Strict DecodePostJSON + req.Config"]
+        DISP["POST /dispatch/assign & /response<br/>HandleDispatchAssignWithLocker<br/>(UNUSED by fleet; panic recover)"]
+        MUX --> AUTH
+        AUTH --> V1
+        AUTH --> V2
+        AUTH --> DISP
+    end
+
+    subgraph Engine["optimizer/ Package (Pure In-Memory)"]
+        MATCHER["BipartiteMatcher.Match<br/>5.0km radius filter<br/>30s retry, 3m SLA escalation"]
+        SOLVER["Solver.Solve (TimeoutMs=5000ms)<br/>buildCostMatrix + buildFeasibilityMask<br/>BatchCompatibleWithDetour<br/>hungarianAssign (greedy!) + postOptimise"]
+        CHECK["ConstraintChecker.CheckAll<br/>8 hard constraints (capacity, zone,<br/>battery, consecutive, new_rider,<br/>vehicle, bag_capacity, cold_chain)"]
+        MATCHER --> SOLVER
+        SOLVER --> CHECK
+    end
+
+    subgraph Optional["Optional State (Active Only on Unused /dispatch/*)"]
+        LOCK["RiderMutex Interface<br/>RedisRiderMutex (SETNX 30s + Lua CAS)<br/>or inMemoryRiderMutex"]
+        PUB["EventPublisher Interface<br/>KafkaEventPublisher (rider.events)<br/>or NoopEventPublisher"]
+    end
+
+    RF -.->|"when toggled on"| AUTH
+    OTHER -.-> AUTH
+    V2 --> SOLVER
+    DISP --> MATCHER
+    DISP --> LOCK
+    DISP --> PUB

@@ -1,0 +1,57 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef sec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph CALLERS["Inbound Kafka Streams & Mobile/Picker/Rider HTTP"]
+        direction LR
+        PICK_APP["Picker App<br/>ROLE_PICKER"]:::caller
+        RIDER_APP["Rider / Tracking<br/>ROLE_RIDER / Customer"]:::caller
+        K_IN["Kafka Consumers:<br/>orders.events · rider.events · identity.events"]:::caller
+    end
+
+    subgraph FUL["fulfillment-service :8086 (Java 21 · Spring Boot 4.0.0 · Hikari max=20)"]
+        direction TB
+        SEC["SecurityConfig (@Import InternalServiceSecurityConfiguration)<br/>/admin/**: ROLE_ADMIN only! · /picklist &amp; /batches: ROLE_PICKER<br/>/handoff: PICKER | ADMIN · /pod &amp; /delivered &amp; /failed: RIDER | ADMIN | INTERNAL"]:::sec
+
+        subgraph CTRLS["controller/ (3 Controllers)"]
+            direction LR
+            PC["PickController<br/>/fulfillment/picklist · /orders/{id}/packed<br/>/fulfillment/batches/**"]:::ctrl
+            DC["DeliveryController<br/>/orders/{id}/tracking<br/>/handoff · /proof-of-delivery · /delivered · /failed"]:::ctrl
+            AFC["AdminFulfillmentController<br/>POST/GET /admin/fulfillment/riders<br/>POST /orders/{id}/assign"]:::ctrl
+        end
+
+        subgraph CORE["service/ & Caffeine Caches"]
+            direction LR
+            PS["PickService + PickTaskSupport<br/>Caffeine scanDebounceCache (10K, 10s; 1000ms window)<br/>5% tare weight audit · auto-pack"]:::svc
+            ARO["AisleRoutingOptimizer<br/>TreeMap aisle -&gt; S-curve (even ASC / odd DESC)<br/>fragile items moved to tail"]:::svc
+            BPS["BatchPickingService<br/>max 4 orders, SKIP LOCKED (-2), color totes<br/>(readOnly getBatch mutates pickSequence!)"]:::warn
+            SS["SubstitutionService (Phase 1 TX)<br/>MissingItemEventListener (AFTER_COMMIT)<br/>RestPaymentClient wired but UNUSED!"]:::warn
+            DS["DeliveryService + UserErasureService<br/>6-digit SecureRandom OTP · WEBP &lt;=200KB POD<br/>GDPR placeholder UUID not skipped in markDelivered!"]:::warn
+        end
+
+        subgraph INT["Consumers, Outbound Clients & Jobs"]
+            direction LR
+            CONS["OrderEventConsumer · RiderEventConsumer<br/>IdentityEventConsumer (fulfillment-service-erasure)<br/>KafkaErrorConfig (3x 1s -&gt; {topic}.DLT)"]:::svc
+            CLIENTS["WarehouseClient (Caffeine storeCoordinates)<br/>RestOrderClient (AFTER_COMMIT callback ON)<br/>RestInventoryClient · RestPaymentClient (5s/10s + R4j)"]:::sec
+            JOBS["OutboxService (MANDATORY)<br/>OutboxCleanupJob (0 */6h, 7d retention)"]:::svc
+        end
+    end
+
+    subgraph DATA["PostgreSQL fulfillment DB (V1..V16) & Outbox"]
+        direction LR
+        PG["PostgreSQL Tables:<br/>pick_tasks (@Version, store_id UUID V13, user_erased)<br/>pick_items · pick_batches (V11)<br/>deliveries (@Version, dispatch_otp, pod_*)<br/>riders (projection via RiderAssigned)<br/>outbox_events (V9 v1) · audit_log · shedlock"]:::db
+        RELAY["outbox-relay-fulfillment :8103 (Go)<br/>polls outbox_events -&gt; fulfillment.events"]:::db
+    end
+
+    PICK_APP & RIDER_APP --> SEC --> CTRLS
+    PC --> PS & BPS
+    PS --> ARO & SS & CLIENTS & JOBS
+    BPS --> ARO & PS
+    DC & AFC --> DS --> JOBS
+    K_IN --> CONS --> PS & DS
+    JOBS --> PG
+    PG --> RELAY

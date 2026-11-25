@@ -45,7 +45,7 @@ kubectl exec -n engagement deploy/pricing-service -- \
 ### Blue-Green Deployment
 
 ```bash
-helm upgrade pricing-service deploy/helm/pricing-service -n engagement
+helm upgrade instacommerce deploy/helm -n engagement
 kubectl rollout status deploy/pricing-service -n engagement --timeout=10m
 
 # Verify pricing accuracy still OK
@@ -125,7 +125,7 @@ kubectl exec -n engagement deploy/pricing-service -- \
   curl -s http://localhost:8089/v1/admin/tax-rules | jq '.rules'
 
 # Test calculation
-curl -s http://pricing-service:8112/v1/calculate/tax \
+curl -s http://pricing-service:8089/v1/calculate/tax \
   -d '{"state":"CA","amount":100}'
 ```
 
@@ -154,5 +154,5 @@ histogram_quantile(0.99, rate(pricing_calculation_seconds_bucket[5m]))
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/pricing-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/pricing-service/README.md`

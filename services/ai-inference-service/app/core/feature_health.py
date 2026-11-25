@@ -42,6 +42,32 @@ DEFAULT_FEATURE_BASELINES: Dict[str, Dict[str, FeatureBaseline]] = {
         "device_risk": FeatureBaseline(0.10, 0.15, 0.0, 1.0),
         "account_age_days": FeatureBaseline(180.0, 160.0, 0.0, 36500.0),
     },
+    "demand": {
+        "sales_same_hour_last_week": FeatureBaseline(10.0, 12.0, 0.0, 5000.0),
+        "sales_avg_7d": FeatureBaseline(9.0, 10.0, 0.0, 5000.0),
+        "sales_avg_30d": FeatureBaseline(8.5, 9.5, 0.0, 5000.0),
+        "temperature_celsius": FeatureBaseline(26.0, 7.0, -10.0, 55.0),
+        "discount_percent": FeatureBaseline(10.0, 12.0, 0.0, 100.0),
+    },
+    "personalization": {
+        "user_avg_order_value": FeatureBaseline(350.0, 250.0, 0.0, 50000.0),
+        "user_order_frequency_7d": FeatureBaseline(2.5, 2.0, 0.0, 100.0),
+        "time_of_day_hour": FeatureBaseline(13.0, 6.0, 0.0, 23.0),
+    },
+    "clv": {
+        "recency_days": FeatureBaseline(12.0, 15.0, 0.0, 3650.0),
+        "frequency_total": FeatureBaseline(10.0, 12.0, 0.0, 5000.0),
+        "frequency_30d": FeatureBaseline(2.5, 2.5, 0.0, 500.0),
+        "monetary_avg_cents": FeatureBaseline(3500.0, 2500.0, 0.0, 500000.0),
+        "tenure_days": FeatureBaseline(180.0, 150.0, 0.0, 3650.0),
+    },
+    "pricing": {
+        "order_amount_cents": FeatureBaseline(2000.0, 1500.0, 0.0, 500000.0),
+        "distance_km": FeatureBaseline(3.5, 2.5, 0.0, 200.0),
+        "active_riders_in_zone": FeatureBaseline(10.0, 6.0, 0.0, 500.0),
+        "pending_orders_in_zone": FeatureBaseline(6.0, 5.0, 0.0, 500.0),
+        "surge_multiplier": FeatureBaseline(1.15, 0.4, 0.5, 5.0),
+    },
 }
 
 

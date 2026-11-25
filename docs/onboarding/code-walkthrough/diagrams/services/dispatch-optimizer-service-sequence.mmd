@@ -1,0 +1,42 @@
+sequenceDiagram
+    autonumber
+    participant RF as Caller (rider-fleet / dispatch)
+    participant MW as InternalAuth + otelhttp<br/>(:8102 main.go)
+    participant H2 as HandleAssignV2<br/>(assign_v2.go)
+    participant HD as executeDispatchAssign<br/>(handler/dispatch.go - UNUSED)
+    participant Eng as BipartiteMatcher / Solver<br/>(optimizer/)
+    participant Lock as RedisRiderMutex<br/>(dispatch:rider:lock:{id})
+    participant K as KafkaEventPublisher<br/>(rider.events)
+
+    Note over RF,Eng: Path A: Target ADR-008 Route (/v2/optimize/assign)
+    RF->>MW: POST /v2/optimize/assign (X-Internal-Service/Token)
+    MW->>H2: Validate JSON (1 MiB, DisallowUnknownFields) & bounds
+    H2->>Eng: activeSolver.Solve(ctx, riders, orders)
+    Eng->>Eng: buildCostMatrix -> CheckAll (8 rules) -> Batch -> hungarianAssign -> postOptimise
+    Eng-->>H2: SolverResult (assignments, unassigned, waypoints)
+    H2-->>RF: 200 OK JSON
+
+    Note over RF,K: Path B: Unused Direct Dispatch (/dispatch/assign) & Lock Bug
+    RF->>MW: POST /dispatch/assign
+    MW->>HD: executeDispatchAssign(ctx, req)
+    HD->>HD: defer releaseAll() registered at entry!
+    loop While candidate riders remain
+        HD->>Eng: matcher.Match(ctx, eligibleRiders, [order])
+        alt 0 riders within 5 km
+            Eng-->>HD: ErrNoRidersAvailable
+            HD-->>RF: 200 QUEUED_NO_RIDERS or ESCALATED
+        else Candidate rider found
+            Eng-->>HD: MatchResult{candidate.RiderID}
+            HD->>Lock: Lock(ctx, riderID, 30s) via Redis SETNX
+            alt ErrRiderAlreadyLocked
+                Lock-->>HD: conflict -> exclude rider & continue loop
+            else Redis backend error
+                Lock-->>HD: error -> abort 503
+            else Acquired
+                Lock-->>HD: unlockFn (appended to locks slice)
+            end
+        end
+    end
+    HD->>K: Publish("rider.events", key=riderID, EventEnvelope{RiderAssigned})
+    HD->>Lock: defer releaseAll() runs BEFORE HTTP response returns (Lua CAS DEL)!
+    HD-->>RF: 200 ASSIGNED (lock already released!)

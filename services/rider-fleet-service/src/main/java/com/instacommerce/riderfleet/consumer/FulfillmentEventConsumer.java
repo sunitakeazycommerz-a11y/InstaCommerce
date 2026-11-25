@@ -53,7 +53,12 @@ public class FulfillmentEventConsumer {
         } else if ("OrderDelivered".equals(envelope.eventType()) || "DeliveryCompleted".equals(envelope.eventType())) {
             UUID orderId = resolveOrderId(envelope);
             if (orderId != null) {
-                riderAssignmentService.completeDelivery(orderId);
+                long tipCents = resolveTipCents(envelope);
+                if (tipCents > 0) {
+                    riderAssignmentService.completeDelivery(orderId, tipCents);
+                } else {
+                    riderAssignmentService.completeDelivery(orderId);
+                }
                 logger.info("Rider delivery completed for order={}", orderId);
             }
         } else if ("OrderCancelled".equals(envelope.eventType())
@@ -84,5 +89,18 @@ public class FulfillmentEventConsumer {
             }
         }
         return null;
+    }
+
+    private long resolveTipCents(EventEnvelope envelope) {
+        if (envelope.payload() == null || envelope.payload().isNull()) {
+            return 0L;
+        }
+        if (envelope.payload().hasNonNull("tipCents")) {
+            return Math.max(0L, envelope.payload().get("tipCents").asLong(0L));
+        }
+        if (envelope.payload().hasNonNull("tip_cents")) {
+            return Math.max(0L, envelope.payload().get("tip_cents").asLong(0L));
+        }
+        return 0L;
     }
 }

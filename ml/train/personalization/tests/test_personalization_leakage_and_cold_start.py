@@ -26,7 +26,7 @@ def test_split_train_test_zero_label_leakage():
 
     assert len(train_df) > 0
     assert len(test_df) > 0
-    assert train_df["timestamp"].max() < test_df["timestamp"].min()
+    assert pd.to_datetime(train_df["timestamp"]).max() < pd.to_datetime(test_df["timestamp"]).min()
     assert set(train_df["event_id"]).isdisjoint(set(test_df["event_id"]))
 
 

@@ -1,0 +1,28 @@
+flowchart TD
+    subgraph ReadAndRate["Product Read & Two-Level Cache Flow"]
+        GetReq["GET /products/{id}"] --> IpRes["ClientIpResolver.resolve(req)<br/>Right-to-left X-Forwarded-For"]
+        IpRes --> Lim{"RateLimitService<br/>productLimiter (100/60s)?"}
+        Lim -- "Rejected" --> E429["429 RATE_LIMIT_EXCEEDED<br/>ProblemDetail"]
+        Lim -- "Permitted" --> L1{"TwoLevelCache L1 Caffeine<br/>('products', 15s, 5k) hit?"}
+        L1 -- "Hit" --> Ret200["200 ProductResponse"]
+        L1 -- "Miss" --> L2{"TwoLevelCache L2 Redis<br/>('catalog:products::{id}', 5m)?"}
+        L2 -- "Hit" --> FillL1["Backfill L1 -> 200"]
+        L2 -- "Miss / Error" --> DbGet["ProductRepository.findByIdAndIsActiveTrue(id)"]
+        DbGet -- "Not found" --> E404["404 ProductNotFoundException"]
+        DbGet -- "Found" --> PopBoth["Write L1 + L2 -> 200"]
+    end
+
+    subgraph CategoryGuard["Category Hierarchy Guard & Kafka Invalidation"]
+        CatMut["PUT /admin/categories/{id}"] --> SelfChk{"selfId == parentId or<br/>cycle in visited?"}
+        SelfChk -- "Yes" --> E400Cat["400 InvalidCategoryHierarchyException"]
+        SelfChk -- "No" --> DepthChk{"depth + maxSubtreeOffset > 5?"}
+        DepthChk -- "Yes" --> E400Cat
+        DepthChk -- "No" --> Bfs["Save Category + BFS recomputeDescendantPaths()<br/>@CacheEvict('categories', allEntries=true)<br/>(No outbox_events written!)"]
+
+        KMsg["Kafka Consumer: onEvent(envelope)"] --> EvType{"eventType"}
+        EvType -- "ProductCreated/Updated/Deactivated" --> Ev1["Evict 'products' (String & UUID)<br/>Clear 'categories' & 'search'"]
+        EvType -- "PriceUpdated" --> Ev2["Evict 'products' (String & UUID)<br/>Clear 'search'"]
+        EvType -- "LowStockAlert / Stock* / OutOfStock" --> Ev3["Evict 'products' (String & UUID)"]
+        EvType -- "Deserialize / Handler Error" --> Retry["FixedBackOff(1s, 3 attempts)<br/>Not retryable: JsonProcessing / IllegalArg"]
+        Retry -- "Exhausted" --> Dlt["DeadLetterPublishingRecoverer<br/>Publish to {topic}.DLT"]
+    end

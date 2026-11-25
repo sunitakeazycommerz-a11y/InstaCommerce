@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/instacommerce/go-shared/pkg/correlation"
 	"github.com/instacommerce/go-shared/pkg/health"
+	"github.com/instacommerce/go-shared/pkg/observability"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
@@ -41,9 +43,21 @@ func loadConfig() Config {
 		KafkaBrokers: getEnv("KAFKA_BROKERS", "localhost:9092"),
 		RedisAddr:    getEnv("REDIS_ADDR", "localhost:6379"),
 		RedisPass:    getEnv("REDIS_PASSWORD", ""),
-		HTTPPort:     getEnv("HTTP_PORT", "8108"),
+		HTTPPort:     firstNonEmptyEnv("PORT", "SERVER_PORT", "HTTP_PORT", "8108"),
 		GroupID:      getEnv("CONSUMER_GROUP_ID", "stream-processor"),
 	}
+}
+
+func firstNonEmptyEnv(keysAndFallback ...string) string {
+	if len(keysAndFallback) == 0 {
+		return ""
+	}
+	for i := 0; i < len(keysAndFallback)-1; i++ {
+		if v := strings.TrimSpace(os.Getenv(keysAndFallback[i])); v != "" {
+			return v
+		}
+	}
+	return keysAndFallback[len(keysAndFallback)-1]
 }
 
 func getEnv(key, fallback string) string {
@@ -111,9 +125,47 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	otelProviders, otelErr := observability.InitOTel(ctx, observability.OTelConfig{
+		ServiceName:      "stream-processor-service",
+		Protocol:         observability.OTelProtocolGRPC,
+		ResolveEnv:       true,
+		NoopIfNoEndpoint: true,
+		FallbackNoop:     true,
+	}, logger)
+	if otelErr != nil {
+		logger.Warn("otel initialization failed; continuing without tracing", "error", otelErr)
+	} else if otelProviders != nil {
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if err := otelProviders.Shutdown(shutdownCtx); err != nil {
+				logger.Warn("otel shutdown failed", "error", err)
+			}
+		}()
+	}
+
 	var wg sync.WaitGroup
 
-	brokers := strings.Split(cfg.KafkaBrokers, ",")
+	var brokers []string
+	for _, b := range strings.Split(cfg.KafkaBrokers, ",") {
+		if trimmed := strings.TrimSpace(b); trimmed != "" {
+			brokers = append(brokers, trimmed)
+		}
+	}
+
+	var dltWriter *kafka.Writer
+	if len(brokers) > 0 {
+		dltWriter = &kafka.Writer{
+			Addr:         kafka.TCP(brokers...),
+			Balancer:     &kafka.LeastBytes{},
+			RequiredAcks: kafka.RequireAll,
+		}
+		defer func() {
+			if err := dltWriter.Close(); err != nil {
+				logger.Error("dlt writer close error", "error", err)
+			}
+		}()
+	}
 
 	handleOrderEvent := func(ctx context.Context, msg kafka.Message) error {
 		var event processor.OrderEvent
@@ -123,9 +175,9 @@ func main() {
 		return orderProc.Process(ctx, event)
 	}
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "order.events", deduper, handleOrderEvent)
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "orders.events", deduper, handleOrderEvent)
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "fulfillment.events", deduper, func(ctx context.Context, msg kafka.Message) error {
+	startConsumerWithDLQ(ctx, &wg, logger, brokers, cfg.GroupID, "order.events", deduper, dltWriter, handleOrderEvent)
+	startConsumerWithDLQ(ctx, &wg, logger, brokers, cfg.GroupID, "orders.events", deduper, dltWriter, handleOrderEvent)
+	startConsumerWithDLQ(ctx, &wg, logger, brokers, cfg.GroupID, "fulfillment.events", deduper, dltWriter, func(ctx context.Context, msg kafka.Message) error {
 		var event processor.OrderEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			return fmt.Errorf("unmarshal fulfillment event: %w", err)
@@ -136,7 +188,7 @@ func main() {
 		return nil
 	})
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "rider.events", deduper, func(ctx context.Context, msg kafka.Message) error {
+	startConsumerWithDLQ(ctx, &wg, logger, brokers, cfg.GroupID, "rider.events", deduper, dltWriter, func(ctx context.Context, msg kafka.Message) error {
 		var event processor.RiderEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			return fmt.Errorf("unmarshal rider event: %w", err)
@@ -144,7 +196,7 @@ func main() {
 		return riderProc.ProcessRiderEvent(ctx, event)
 	})
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "rider.location.updates", deduper, func(ctx context.Context, msg kafka.Message) error {
+	startConsumerWithDLQ(ctx, &wg, logger, brokers, cfg.GroupID, "rider.location.updates", deduper, dltWriter, func(ctx context.Context, msg kafka.Message) error {
 		var update processor.LocationUpdate
 		if err := json.Unmarshal(msg.Value, &update); err != nil {
 			return fmt.Errorf("unmarshal location update: %w", err)
@@ -160,10 +212,10 @@ func main() {
 		return paymentProc.Process(ctx, event)
 	}
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payment.events", deduper, handlePaymentEvent)
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "payments.events", deduper, handlePaymentEvent)
+	startConsumerWithDLQ(ctx, &wg, logger, brokers, cfg.GroupID, "payment.events", deduper, dltWriter, handlePaymentEvent)
+	startConsumerWithDLQ(ctx, &wg, logger, brokers, cfg.GroupID, "payments.events", deduper, dltWriter, handlePaymentEvent)
 
-	startConsumer(ctx, &wg, logger, brokers, cfg.GroupID, "inventory.events", deduper, func(ctx context.Context, msg kafka.Message) error {
+	startConsumerWithDLQ(ctx, &wg, logger, brokers, cfg.GroupID, "inventory.events", deduper, dltWriter, func(ctx context.Context, msg kafka.Message) error {
 		var event processor.InventoryEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			return fmt.Errorf("unmarshal inventory event: %w", err)
@@ -220,9 +272,13 @@ func main() {
 	logger.Info("stream processor stopped")
 }
 
-// startConsumer launches a goroutine that reads from a Kafka topic and calls handler for each message.
+type dltWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+}
+
+// startConsumerWithDLQ launches a goroutine that reads from a Kafka topic and calls handler for each message.
 // Duplicate messages (identified by event_id/id or topic:partition:offset) are skipped but their offsets are still committed.
-func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, brokers []string, groupID, topic string, deduper *dedup.Checker, handler func(context.Context, kafka.Message) error) {
+func startConsumerWithDLQ(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, brokers []string, groupID, topic string, deduper *dedup.Checker, dlqWriter dltWriter, handler func(context.Context, kafka.Message) error) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:           brokers,
 		GroupID:           groupID,
@@ -241,8 +297,11 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 		},
 	})
 
+	streamCfg := processor.DefaultStreamConfig()
+	streamCfg.DLQHandler = newDLQHandler(dlqWriter, logger)
+
 	dispatcher := processor.NewStreamDispatcher(
-		processor.DefaultStreamConfig(),
+		streamCfg,
 		logger,
 		wrapHandlerWithDedup(deduper, logger, handler),
 		func(ctx context.Context, msg kafka.Message) error {
@@ -271,7 +330,10 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 					return
 				}
 				logger.Error("fetch message error", "topic", topic, "error", err)
-				time.Sleep(time.Second)
+				if !waitForRetry(ctx, time.Second) {
+					logger.Info("consumer stopping during retry backoff", "topic", topic)
+					return
+				}
 				continue
 			}
 
@@ -283,6 +345,71 @@ func startConsumer(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger,
 			}
 		}
 	}()
+}
+
+func waitForRetry(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func newDLQHandler(writer dltWriter, logger *slog.Logger) func(context.Context, kafka.Message, error) error {
+	return func(ctx context.Context, msg kafka.Message, procErr error) error {
+		if !isPermanentStreamError(procErr) {
+			return procErr
+		}
+		if writer == nil {
+			return errors.New("dlt writer not configured")
+		}
+		dltTopic := msg.Topic + ".DLT"
+		headers := append([]kafka.Header(nil), msg.Headers...)
+		headers = append(headers,
+			kafka.Header{Key: "dlt_original_topic", Value: []byte(msg.Topic)},
+			kafka.Header{Key: "dlt_original_partition", Value: []byte(strconv.Itoa(msg.Partition))},
+			kafka.Header{Key: "dlt_original_offset", Value: []byte(strconv.FormatInt(msg.Offset, 10))},
+			kafka.Header{Key: "dlt_error", Value: []byte(procErr.Error())},
+			kafka.Header{Key: "dlt_failed_at", Value: []byte(time.Now().UTC().Format(time.RFC3339))},
+		)
+		dltCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := writer.WriteMessages(dltCtx, kafka.Message{
+			Topic:   dltTopic,
+			Key:     msg.Key,
+			Value:   msg.Value,
+			Headers: headers,
+			Time:    time.Now().UTC(),
+		}); err != nil {
+			return err
+		}
+		if logger != nil {
+			logger.Warn("routed poison message to DLT",
+				"topic", msg.Topic,
+				"dlt_topic", dltTopic,
+				"partition", msg.Partition,
+				"offset", msg.Offset,
+				"error", procErr,
+			)
+		}
+		return nil
+	}
+}
+
+func isPermanentStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "unmarshal ") || strings.Contains(lower, "panic:")
 }
 
 func wrapHandlerWithDedup(deduper *dedup.Checker, logger *slog.Logger, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {

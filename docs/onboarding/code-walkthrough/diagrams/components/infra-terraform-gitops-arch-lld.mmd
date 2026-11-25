@@ -1,0 +1,80 @@
+flowchart TB
+    classDef tf fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef data fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef helm fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef istio fill:#EEF2FF,stroke:#4338CA,stroke-width:1.6px,color:#1E1B4B
+    classDef argo fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.7px,color:#7F1D1D
+
+    subgraph TF["1. Terraform Infrastructure Layer (infra/terraform/)"]
+        direction TB
+        subgraph TF_ENV["Root Composition & Remote State"]
+            direction LR
+            BACKEND["backend.tf<br/>GCS: instacommerce-terraform-state/environments"]:::tf
+            DEV_ROOT["environments/dev/main.tf<br/>11 modules (incl. kubernetes_secrets)<br/>10.20/10.21/10.22 CIDRs · asia-south1"]:::tf
+            PROD_ROOT["environments/prod/main.tf<br/>10 modules (OMITS kubernetes_secrets)<br/>10.30/10.31/10.32 CIDRs · asia-south1"]:::tf
+            DEBEZ["debezium-connector-reconciliation.tf<br/>topic: reconciliation.cdc (12 partitions)<br/>2 Debezium PG connectors (standalone root)"]:::tf
+        end
+
+        subgraph TF_CORE["Core Platform Modules (modules/)"]
+            direction LR
+            VPC["vpc<br/>network + subnet + pods/services ranges<br/>Cloud Router + NAT (NO PSA peering)"]:::tf
+            GKE["gke<br/>VPC_NATIVE + Workload Identity pool<br/>general-pool: 2-6 e2-standard-4 (GKE_METADATA)"]:::tf
+            SQL["cloudsql<br/>POSTGRES_16 (db-custom-2-8192 · private IP)<br/>17 *_db DBs (NO checkout_db/recon/rev_etl)"]:::gap
+            REDIS["memorystore<br/>STANDARD_HA 4GB Redis<br/>enable_auth=false · enable_tls=false"]:::tf
+            IAM["iam + secret-manager + k8s-secrets<br/>7 SAs ONLY · 0 IAM/WI bindings<br/>18 SM secrets (16 unused; 25 sm:// missing)<br/>service-tokens K8s Secret (dev-only, 30 keys)"]:::gap
+        end
+
+        subgraph TF_DATA["Data, ML & Uninstantiated Compliance / Phase-2 Modules"]
+            direction LR
+            BQ["bigquery + data-lake + dataflow<br/>datasets: analytics, ml · 4 raw 90d tables<br/>BI Engine marts ref · Data Catalog PII mask<br/>dataflow SA: 4 IAM roles (only IAM module)"]:::data
+            FS["feature-store<br/>2nd Redis online store (4GB HA)<br/>BQ feature_store (5 tables)"]:::data
+            UNWIRED["Uninstantiated Audit & Phase-2 TF<br/>gcs-audit-archive (7y WORM, invalid block)<br/>gcs-kms-audit-archive (90d KMS)<br/>phases/phase-2/ sf-canary GKE+ILB+FW+SLO"]:::gap
+        end
+
+        DEV_ROOT --> VPC
+        PROD_ROOT --> VPC
+        VPC --> GKE
+        VPC --> SQL
+        VPC --> REDIS
+        VPC --> FS
+        DEV_ROOT --> IAM
+        PROD_ROOT --> IAM
+        PROD_ROOT --> BQ
+    end
+
+    subgraph HELM["2. Umbrella Helm Chart & Zero-Trust Mesh (deploy/helm/ + deploy/istio/)"]
+        direction TB
+        subgraph HELM_TMPL["Chart Templates & Value Overlays (43 .Values.services keys)"]
+            direction LR
+            VALUES["values.yaml (1,491 lines) + overlays<br/>values-{dev,staging,prod,canary-sf/seattle/austin}<br/>43 entries: 20 Java + 14 outbox-relay* + 7 Go + 2 Py"]:::helm
+            WORKLOADS["Unconditional Loop Templates (NO .enabled check)<br/>deployment.yaml (44 incl. otel-collector) · service.yaml (port: http only)<br/>serviceaccount.yaml (wave 0 WI) · hpa (29) · vpa (8 prod) · pdb (43)<br/>otel-collector (env=production) + beyla eBPF DaemonSet"]:::helm
+            HELM_GAPS["Helm Runtime Gaps<br/>1. Literal PROJECT:REGION:INSTANCE on 18 DB URLs<br/>2. NetworkPolicy scrapes port: metrics (pods expose http)<br/>3. OTel collector blocked by default-deny-ingress<br/>4. canary .enabled + analysis templates are no-ops<br/>5. 5x sm://internal-service-token; 38x omitted; prod stream-proc uses dev Redis"]:::gap
+        end
+
+        subgraph MESH["Istio Service Mesh & NetworkPolicy Enforcement"]
+            direction LR
+            GATEWAY["gateway.yaml + virtual-service.yaml<br/>HTTPS 443 (instacommerce-tls)<br/>24 HTTP prefix routes -> 18 cluster services"]:::istio
+            AUTHN["peer-authentication + request-authentication<br/>Mesh mTLS: STRICT<br/>7 RequestAuth (base/dev/stg) vs 3 (prod replaces list!)"]:::istio
+            AUTHZ["authorization-policy + deny-default + service-allow-policies<br/>Base: 1 deny-default + 43 allow-{svc} + 6 custom = 50<br/>Prod: 1 + 43 + 3 = 47 (drops payment/inventory/admin DENY)"]:::istio
+            ENVOY["EnvoyFilter<br/>security-headers.yaml (chart ROUTE_CONFIGURATION)<br/>deploy/istio/envoy-filter-strip-internal-headers.yaml (standalone)"]:::gap
+        end
+
+        VALUES --> WORKLOADS --> HELM_GAPS
+        VALUES --> GATEWAY
+        VALUES --> AUTHN
+        VALUES --> AUTHZ
+    end
+
+    subgraph GITOPS["3. ArgoCD GitOps & Standalone Manifests (argocd/ + infra/kubernetes/ + k8s/)"]
+        direction LR
+        ARGO_APPS["argocd/ Applications<br/>app-of-apps.yaml (instacommerce -> values-dev)<br/>staging.yaml · monitoring*.yaml<br/>5 canary-*.yaml (raw Rollout+Analysis+VS appended)<br/>applications-stale-bak/ (untracked local backup)"]:::argo
+        ROLLOUTS["argocd/rollouts/<br/>canary-rollout-template.yaml (order-service 10/25/50)<br/>analysis-template-error-rate.yaml (5xx lt 1%, p99 lt 1s)<br/>PromQL: http_server_requests_seconds_*"]:::argo
+        STANDALONE["Standalone K8s Manifests<br/>infra/kubernetes/phases/phase-2/ (sf-canary 01..05, 5-rep dark-store)<br/>k8s/reverse-etl-{orchestrator-deployment,secrets}.yaml<br/>(reverse-etl ns, Snowflake/Segment, literal placeholders)"]:::gap
+    end
+
+    GKE -->|"Hosts Workloads"| WORKLOADS
+    IAM -. "Missing WI + SM perms" .-> WORKLOADS
+    ARGO_APPS -->|"Syncs deploy/helm"| VALUES
+    ARGO_APPS -->|"Traffic Split & Gates"| ROLLOUTS
+    ROLLOUTS -. "Istio VirtualService" .-> GATEWAY

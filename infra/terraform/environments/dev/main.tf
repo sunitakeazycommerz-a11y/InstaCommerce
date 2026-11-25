@@ -86,7 +86,7 @@ module "dataflow" {
 
 module "kubernetes_secrets" {
   source    = "../../modules/kubernetes-secrets"
-  namespace = "default"
+  namespace = var.k8s_namespace
 
   depends_on = [module.gke]
 }

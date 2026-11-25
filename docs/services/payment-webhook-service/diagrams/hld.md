@@ -121,7 +121,7 @@ err := producer.WriteMessages(context.Background(),
 
 ```bash
 # Environment Variables
-PORT=8120                    # Server port
+PORT=8106                    # Server port
 STRIPE_WEBHOOK_SECRET=whsec_... # From Stripe dashboard
 KAFKA_BROKERS=kafka:9092,kafka2:9092,kafka3:9092
 KAFKA_TOPIC=payment.webhooks

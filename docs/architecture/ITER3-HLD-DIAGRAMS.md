@@ -261,11 +261,11 @@ flowchart LR
 
         subgraph BFFS["BFF & Gateway Services"]
             BFF[mobile-bff-service<br/>:8080<br/>REST → internal gRPC/REST<br/>Customer + Rider surfaces]:::svc
-            AGW[admin-gateway-service<br/>:8081<br/>Admin + ops surfaces<br/>Auth-Z: role-based]:::svc
+            AGW[admin-gateway-service<br/>:8099<br/>Admin + ops surfaces<br/>Auth-Z: role-based]:::svc
         end
 
         subgraph IDENTITY["Identity"]
-            IDS[identity-service<br/>:8082<br/>JWT issue/verify<br/>OAuth2 Google/Apple<br/>JWKS endpoint]:::svc
+            IDS[identity-service<br/>:8081<br/>JWT issue/verify<br/>OAuth2 Google/Apple<br/>JWKS endpoint]:::svc
         end
     end
 
@@ -312,7 +312,7 @@ flowchart TD
     subgraph BD["Browse & Discover"]
         CAT[catalog-service\ncatalog_db]:::svc
         INV[inventory-service\ninventory_db\n⟨gRPC: stock reserve/confirm/cancel⟩]:::svc
-        SCH[search-service\nsearch_db\n⟨Elasticsearch-backed⟩]:::svc
+        SCH[search-service\nsearch_db\n⟨PostgreSQL tsvector FTS + Caffeine⟩]:::svc
         PRC[pricing-service\npricing_db\n⟨surge + AI dynamic price⟩]:::svc
     end
 
@@ -360,7 +360,7 @@ flowchart TD
     FUL -->|"assign rider\nevent"| RFL
     DIS -->|"optimise dispatch\nREST"| RFL
     DIS -->|"ETA input\nREST"| ETA
-    LOC -->|"rider position\nKafka: rider.location"| RFL
+    LOC -->|"rider position\nKafka: rider.location.updates"| RFL
     PWH -->|"payment callback\nREST"| PAY
     REC -->|"settlement match\nREST"| PAY & ORD
     ORD -->|"wallet credit on delivery"| WAL
@@ -420,7 +420,7 @@ flowchart LR
         T7["warehouse.events\nStoreCreated · StoreStatusChanged\nStoreDeleted"]:::broker
         T8["fraud.events\nFraudDetected"]:::broker
         T9["identity.events\nUserErased"]:::broker
-        T10["rider.location\n⟨high-freq GPS, non-durable⟩"]:::broker
+        T10["rider.location.updates\n⟨high-freq GPS, non-durable⟩"]:::broker
     end
 
     %% Consumers
@@ -452,7 +452,7 @@ flowchart LR
 
 > **Key constraints:**
 > - The **outbox-relay-service** (Go, `ShedLock`-backed) is the primary forward path from domain DBs to Kafka. Debezium acts as a secondary/parallel CDC path for the data platform; having two paths to the broker for the same row is an **at-least-once delivery** guarantee but requires idempotent consumer logic.
-> - `rider.location` is a high-volume, low-durability topic (location pings); it must be treated differently from domain-event topics (shorter retention, no guaranteed delivery SLA).
+> - `rider.location.updates` is a high-volume, low-durability topic (location pings); it must be treated differently from domain-event topics (shorter retention, no guaranteed delivery SLA).
 > - `audit-trail-service` subscribes to **all** topics as a fan-out consumer group; it must not be in the critical consumer-group path for any saga compensation.
 > - Schema evolution is contract-first: additive changes stay on `v1`; breaking changes create a new `{Event}.v2.json` and a 90-day dual-publish window.
 
@@ -478,8 +478,8 @@ flowchart TD
 
     %% Sources
     subgraph SRC["Sources"]
-        KFK[Kafka\ndomain.events + rider.location]:::src
-        PGDB[PostgreSQL\n17 operational DBs\n⟨Debezium CDC⟩]:::src
+        KFK[Kafka\ndomain.events + rider.location.updates]:::src
+        PGDB[PostgreSQL 16\n20+ operational DBs (39 init entries)\n⟨Debezium CDC⟩]:::src
     end
 
     %% Ingestion
@@ -722,7 +722,7 @@ flowchart TB
 | Plane | What it owns | What crosses its boundary | Failure mode |
 |---|---|---|---|
 | **① Edge** | Protocol termination, JWT validation, rate limiting, BFF shaping | Authenticated REST/gRPC calls inbound; webhook ingress to Go handlers | Auth outage → 401 all requests; BFF crash → that surface dark |
-| **② Core Domains** | Business state (PostgreSQL, 17 DBs), synchronous gRPC contracts, Temporal saga state | Outbox events outbound; gRPC calls to inventory/catalog/payment inbound | DB outage → that bounded context unavailable; Temporal handles saga compensation |
+| **② Core Domains** | Business state (PostgreSQL 16, 20+ operational DBs), synchronous gRPC contracts, Temporal saga state | Outbox events outbound; gRPC calls to inventory/catalog/payment inbound | DB outage → that bounded context unavailable; Temporal handles saga compensation |
 | **③ Async / Event Bus** | Kafka topics, Debezium CDC, outbox relay, consumer group offsets | Domain events inbound from outbox; enriched data outbound to data plane and audit | Consumer lag → eventual inconsistency; relay crash → events queue in outbox (durable) |
 | **④ Data & ML** | BigQuery warehouse, dbt transformations, Feature Store, Vertex AI training, ONNX artefacts | Kafka events inbound; trained model artefacts outbound to AI plane; marts outbound to BI | Pipeline lag → stale features / stale models; quality gate failure → blocks downstream mart consumers |
 | **⑤ AI Plane** | LangGraph agent state, ONNX model serving, guardrail policies, shadow mode results | BFF calls inbound; tool calls to core domain services; LLM API calls outbound; feature vectors from Feature Store | LLM outage → agent degraded (fallback to ONNX-only path); ONNX failure → feature unavailable |
@@ -761,9 +761,9 @@ flowchart TB
 | **Temporal workflow detail** | The saga compensation paths (inventory release, payment void, rider unassign) are not shown in any diagram | Add a dedicated Temporal saga flow diagram (sequence or state-machine) to `docs/architecture/` |
 | **gRPC service mesh topology** | The service communication matrix in `HLD.md §10` is prose; no diagram shows which services call which others synchronously | Generate a service dependency graph from Helm/config values |
 | **Data mesh ownership** | dbt models don't yet have explicit domain ownership annotations (`meta.owner`); the data mesh boundary is aspirational | Add `meta: owner:` to all mart models; document the data product contract in `data-platform/dbt/` |
-| **GDPR erasure pipeline** | UserErased event is defined; downstream per-service field purge logic is not yet documented or verified for all 17 DBs | Audit each service's erasure handler; create a runbook in `docs/reviews/` |
+| **GDPR erasure pipeline** | UserErased event is defined; downstream per-service field purge logic is not yet documented or verified across all service DBs | Audit each service's erasure handler; create a runbook in `docs/reviews/` |
 | **LLM cost/budget control** | Token budget tracker exists in `app/graph/budgets.py` but there is no infrastructure-level spend alert or circuit breaker on the LLM API call | Wire a GCP billing alert + a kill-switch feature flag to the ai-orchestrator-service |
-| **Rider location topic SLA** | `rider.location` retention policy, compaction strategy, and consumer lag SLO are not documented anywhere | Add Kafka topic config (`retention.ms`, `segment.ms`) to the contracts README or a dedicated ops runbook |
+| **Rider location topic SLA** | `rider.location.updates` retention policy, compaction strategy, and consumer lag SLO are not documented anywhere | Add Kafka topic config (`retention.ms`, `segment.ms`) to the contracts README or a dedicated ops runbook |
 | **Reconciliation engine scope** | `reconciliation-engine` (Go) purpose is clear but its interaction with external settlement files / bank feeds is not captured in any diagram | Add reconciliation flow to the payment plane or create a dedicated payment operations diagram |
 
 ### 🚧 Blockers / Questions for Principal Review
@@ -776,7 +776,7 @@ flowchart TB
 
 4. **Feature flag in critical path**: If `config-feature-flag-service` is queried synchronously on every checkout request, its p99 must be < 5 ms or be cached with a circuit breaker. Current service code does not show explicit local caching of evaluated flags. This is a latency and availability risk.
 
-5. **AI inference service port / routing**: `ai-inference-service` (port 8000) and `ai-orchestrator-service` (port 8100) are both in-cluster. The Helm `values-dev.yaml` confirms they are deployed, but no Istio `VirtualService` or `DestinationRule` is visible in the review. Confirm mTLS policy applies to Python pods (requires Istio sidecar injection on the Python namespace).
+5. **AI inference service port / routing**: `ai-inference-service` (port 8101) and `ai-orchestrator-service` (port 8100) are both in-cluster. The Helm `values-dev.yaml` confirms they are deployed, but no Istio `VirtualService` or `DestinationRule` is visible in the review. Confirm mTLS policy applies to Python pods (requires Istio sidecar injection on the Python namespace).
 
 ---
 

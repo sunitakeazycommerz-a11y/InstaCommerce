@@ -15,6 +15,7 @@
 
 ## Table of Contents
 
+0. [New Engineer Onboarding](#new-engineer-onboarding)
 1. [Recommended Reading Order](#1-recommended-reading-order)
 2. [Documentation Flow — How This Hub Connects](#2-documentation-flow--how-this-hub-connects)
 3. [Architecture Documents (HLD / LLD)](#3-architecture-documents-hld--lld)
@@ -24,9 +25,24 @@
 7. [Service Review Reports](#7-service-review-reports)
 8. [Infrastructure & Cross-Cutting Reviews](#8-infrastructure--cross-cutting-reviews)
 9. [Related Documentation (Repo-Wide)](#9-related-documentation-repo-wide)
-10. [Rollout & Ownership Guidance](#10-rollout--ownership-guidance)
-11. [Known Limitations](#11-known-limitations)
-12. [Comparison Note — Q-Commerce Documentation Programs](#12-comparison-note--q-commerce-documentation-programs)
+10. [Validation & Maintenance Workflow](#10-validation--maintenance-workflow)
+11. [Rollout & Ownership Guidance](#11-rollout--ownership-guidance)
+12. [Known Limitations](#12-known-limitations)
+13. [Comparison Note — Q-Commerce Documentation Programs](#13-comparison-note--q-commerce-documentation-programs)
+14. [Documentation Archive](#14-documentation-archive)
+
+---
+
+## New Engineer Onboarding
+
+> [!TIP]
+> **Joining InstaCommerce?** Start with the structured onboarding suite before diving into historical architecture reviews:
+> - **[Engineering Onboarding Hub](onboarding/README.md)** — Day-1 jump table, 30-service port & Helm key card, local Docker Compose bootstrap (`dev-local.sh`), and repo-truth warnings (plus **[Day 0–5 Curriculum](onboarding/01-day0-to-day5-curriculum.md)**, **[Hands-On Labs](onboarding/02-hands-on-labs.md)**, and **[Role Learning Tracks](onboarding/03-role-learning-tracks.md)**).
+> - **[Whole-System Code Walkthrough Atlas](onboarding/code-walkthrough/README.md)** — Ground-truth HLD/LLD/E2E walkthroughs, `7` shared component guides, and `30` per-service code walkthroughs with rendered diagrams.
+> - **[First-PR Playbook & Troubleshooting](onboarding/04-first-pr-and-troubleshooting.md)** — Step-by-step safe change checklists (Flyway, contracts/proto, new service onboarding, Helm/Istio/SLO traps) and local/CI debugging FAQ.
+> - **[Domain Model, Event & Redis Catalog](onboarding/05-domain-model-and-event-catalog.md)** — Cross-service ER diagram, Flyway schemas, canonical Kafka `TopicNames.java` / `.DLT` / `.dlq` topology, and Redis keyspace/TTL/Lua inventory.
+> - **[Incident Drills & Readiness Exam](onboarding/06-incident-drills-and-readiness-exam.md)** — `5` code-grounded on-call incident drills (`CheckoutBurnRate_Critical`, stuck payments, outbox/stream lag, dark-store/dispatch split-brain, DB failover/JWKS) and `10`-question Day-5 readiness exam.
+> - **[30-Service Dependency & CLI Cheatsheet](onboarding/07-service-dependency-and-command-cheatsheet.md)** — Complete `30`-service inbound/outbound runtime dependency matrix, "Where Does This Change Go?" ownership map, and daily `scripts/` / `psql` / `redis-cli` / Kafka / Gradle / Go / pytest commands.
 
 ---
 
@@ -55,6 +71,8 @@ flowchart LR
 
 | Step | Document | Why Read It |
 |------|----------|-------------|
+| 0 | [`onboarding/README.md`](onboarding/README.md) | New-engineer Day-1 hub, Week-1 curriculum (`01`–`07`), labs, role tracks, domain catalog, incident drills, and dependency/CLI cheatsheet |
+| 0b | [`onboarding/code-walkthrough/README.md`](onboarding/code-walkthrough/README.md) | Code-verified walkthrough atlas across whole-system flows, `7` platform components, and `30` services |
 | 1 | [`../README.md`](../README.md) | Service inventory, tech stack, quick-start commands, top-level architecture diagram |
 | 2 | **This file** | Navigation hub — you are here |
 | 2b | [`repo-truth/README.md`](repo-truth/README.md) | Ground truth reality audit — implemented runtime truth vs aspirational target design |
@@ -77,13 +95,20 @@ flowchart TB
     subgraph repo["Repository Root"]
         root_readme["README.md\n(getting started, inventory)"]
         ci[".github/workflows/ci.yml\n(CI source of truth)"]
-        settings["settings.gradle.kts\n(20 Java modules)"]
+        settings["settings.gradle.kts\n(22 Gradle modules)"]
         contracts_readme["contracts/README.md\n(event envelope, schemas)"]
         monitoring_readme["monitoring/README.md\n(alerts, SLOs)"]
     end
 
     subgraph hub["docs/ — This Hub"]
         this["docs/README.md ★"]
+    end
+
+    subgraph onboarding["docs/onboarding/"]
+        onb_hub["README.md\n(Onboarding Hub)"]
+        onb_01_04["01–04: Curriculum, Labs,\nRole Tracks, First-PR"]
+        onb_05_07["05–07: Domain Catalog, Drills/Exam\n& Service Dependency Cheatsheet"]
+        onb_cw["code-walkthrough/\n(HLD/LLD/Flows, 7 comp, 30 svcs)"]
     end
 
     subgraph arch["docs/architecture/"]
@@ -122,6 +147,8 @@ flowchart TB
     contracts_readme --> this
     monitoring_readme --> this
 
+    this --> onb_hub
+    onb_hub --> onb_01_04 & onb_05_07 & onb_cw
     this --> hld & lld & dataflow & infra_doc & iter3_hld & wave2 & future
     this --> service_reviews & infra_review & contracts_review & api_bff & data_ml_design
     this --> master & svc_guide & plat_guide & impl_program
@@ -176,7 +203,7 @@ flowchart TB
 
 ## 4. Domain Map — Service Clusters
 
-The 30-service fleet (20 Java · 7 Go + `go-shared` · 2 Python) decomposes into
+The 30-service fleet (20 Java · 8 Go + `go-shared` · 2 Python) decomposes into
 nine clusters. This mapping originates from the iteration-3 service-wise guide
 ([`reviews/iter3/service-wise-guide.md`](reviews/iter3/service-wise-guide.md) § 2)
 and aligns with `settings.gradle.kts` (Java) and `services/*/go.mod` (Go).
@@ -185,8 +212,8 @@ and aligns with `settings.gradle.kts` (Java) and `services/*/go.mod` (Go).
 graph TB
     subgraph C1["C1 — Edge & Identity"]
         identity["identity-service ☕"]
-        mobile_bff["mobile-bff-service ☕ 🟡"]
-        admin_gw["admin-gateway-service ☕ 🟡"]
+        mobile_bff["mobile-bff-service ☕"]
+        admin_gw["admin-gateway-service ☕"]
     end
 
     subgraph C2["C2 — Transactional Core"]
@@ -253,7 +280,7 @@ graph TB
     C7 -->|flags/audit| C1 & C2 & C5
 ```
 
-> ☕ = Java/Spring Boot &nbsp; 🔵 = Go &nbsp; 🐍 = Python/FastAPI &nbsp; 🟡 = scaffold (not yet a full aggregator)
+> ☕ = Java/Spring Boot &nbsp; 🔵 = Go &nbsp; 🐍 = Python/FastAPI
 
 ---
 
@@ -438,7 +465,7 @@ graph LR
 |------|----------|-------------|
 | Root repository guide | [`../README.md`](../README.md) | Service inventory (30 services), tech stack, quick start, architecture overview |
 | Docker Compose | [`../docker-compose.yml`](../docker-compose.yml) | Local infra: PostgreSQL, Redis, Kafka, Debezium, Temporal |
-| Gradle settings | [`../settings.gradle.kts`](../settings.gradle.kts) | Canonical list of 20 Java modules (`contracts` + 19 `services:*`) |
+| Gradle settings | [`../settings.gradle.kts`](../settings.gradle.kts) | Canonical list of 22 Gradle modules (`contracts` + `libs:platform-common` + 20 `services:*`) |
 | Contracts | [`../contracts/README.md`](../contracts/README.md) | Event envelope, JSON Schema, Protobuf definitions, topic naming |
 | Topic & schema registry | [`../contracts/src/main/resources/schemas/README.md`](../contracts/src/main/resources/schemas/README.md) | Canonical Kafka topic names, per-domain schema inventory, and legacy-vs-canonical topic aliases |
 | Helm charts | [`../deploy/helm/README.md`](../deploy/helm/README.md) | Kubernetes deployment, environment values |
@@ -502,14 +529,14 @@ yet resolved at the time of writing.
 
 | # | Limitation | Source | Impact |
 |---|-----------|--------|--------|
-| 1 | **Shared internal service token grants overbroad privilege.** A single `INTERNAL_SERVICE_TOKEN` is used across all 28 deployed services; compromise of one pod enables lateral movement across the full mesh. | [`issue-register.md`](reviews/iter3/appendices/issue-register.md) C1-P0-01 | P0 — security, PCI/GDPR risk |
-| 2 | **Admin gateway has no application-layer auth.** `admin-gateway-service` exposes admin routes without JWT validation or RBAC. | [`issue-register.md`](reviews/iter3/appendices/issue-register.md) C1-P0-02 | P0 — admin impersonation risk |
-| 3 | **BFF services are scaffolds.** `mobile-bff-service` and `admin-gateway-service` are stubs, not full aggregators (noted in [`../README.md`](../README.md)). | Root README § Architecture Overview | Edge facades are incomplete |
+| 1 | **Per-service token rollout in migration.** Per-service token scoping (`INTERNAL_SERVICE_ALLOWED_CALLERS`) is rolled out across the 30 deployed services per ADR-010/012; shared-token fallback removal across remaining callers is tracked per environment. | [`010-per-service-token-rollout.md`](adr/010-per-service-token-rollout.md), [`012-per-service-token-scoping.md`](adr/012-per-service-token-scoping.md) | P0 — complete Phase 2 fallback retirement |
+| 2 | **Admin gateway mesh policy alignment.** `admin-gateway-service` (`8099`) enforces RS256 JWT + `ROLE_ADMIN` RBAC at the application layer (`AdminJwtAuthenticationFilter`); production Istio `AuthorizationPolicy` overlays continue to be tightened alongside it. | [`011-admin-gateway-auth-model.md`](adr/011-admin-gateway-auth-model.md) | P1 — defense-in-depth hardening |
+| 3 | **BFF aggregation expansion.** `mobile-bff-service` (`8080`) and `admin-gateway-service` (`8099`) are hardened RS256 JWT + Resilience4j gateways; additional BFF screen aggregations and admin endpoints are expanded iteratively. | [`repo-truth/04-risks-gaps-and-readiness.md`](repo-truth/04-risks-gaps-and-readiness.md) | Edge aggregation coverage |
 | 4 | **Checkout authority is split.** Both `checkout-orchestrator-service` and `order-service` can reference cart items, creating dual authority over checkout state. | [`master-review.md`](reviews/iter3/master-review.md) § 4 | Correctness risk on money path |
 | 5 | **Event contracts lack runtime enforcement.** Schemas exist in `contracts/` but schema validation is not wired into the Kafka producer/consumer hot path. | [`platform-wise-guide.md`](reviews/iter3/platform-wise-guide.md) § 0 | Contract drift escapes to production |
 | 6 | **No per-service CODEOWNERS file.** Ownership is implicit rather than enforced by GitHub `CODEOWNERS`. | [`platform/repo-truth-ownership.md`](reviews/iter3/platform/repo-truth-ownership.md) | Unclear change-review authority |
 | 7 | **Single-region deployment.** The platform runs in one GCP region (multi-zone). No active-active or cross-region DR is in place. | [`architecture/INFRASTRUCTURE.md`](architecture/INFRASTRUCTURE.md) § 1 | Regional outage = full downtime |
-| 8 | **AI governance is documented but not runtime-enforced.** LangGraph agent policy stubs exist, but HITL gates and fail-safe controls are not yet wired. | [`platform/ai-agent-governance.md`](reviews/iter3/platform/ai-agent-governance.md) | AI cannot safely make production mutations |
+| 8 | **AI governance runtime vs. centralized PDP.** `ai-orchestrator-service` enforces runtime guardrails (`InjectionDetector`, `PIIVault`, `OutputPolicy`, `EscalationPolicy`, `TokenBucketRateLimiter` in `app/guardrails/` and `app/middleware.py`); broader Governance PDP and HITL approval dashboards remain roadmap items. | [`platform/ai-agent-governance.md`](reviews/iter3/platform/ai-agent-governance.md) | Governed production rollout |
 
 ---
 

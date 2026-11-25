@@ -1,0 +1,43 @@
+sequenceDiagram
+    autonumber
+    actor Admin as Admin Client
+    participant JwtFlt as AdminJwtAuthenticationFilter
+    participant RateFlt as AdminRateLimitFilter
+    participant AuditFlt as AdminSecurityAuditFilter
+    participant Ctrl as AdminDashboardController
+    participant Dash as DashboardAggregationService
+    participant Rest as RestTemplate (Interceptor)
+    participant FF as feature-flag-service (:8098)
+    participant Recon as reconciliation-engine (:8107)
+    participant AuditSvc as audit-trail-service (:8096)
+
+    Note over Admin,AuditSvc: Flow 1: Privileged Flag Override + Synchronous Audit Emission
+    Admin->>JwtFlt: POST /admin/v1/flags/checkout_v2/override {ttlSeconds: 300}
+    JwtFlt->>JwtFlt: Strip x-admin-*/x-internal-*, validate RSA & ROLE_SUPER_ADMIN
+    JwtFlt->>RateFlt: doFilter
+    RateFlt->>RateFlt: WindowCounter.tryAcquire("user:{sub}", 120)
+    RateFlt->>AuditFlt: doFilter (startTime = now)
+    AuditFlt->>Ctrl: overrideFlag("checkout_v2", body)
+    Ctrl->>Ctrl: requireSafeIdentifier() & convert ttlSeconds -> expiresAt
+    Ctrl->>Rest: POST /admin/flags/checkout_v2/overrides (no caller Authorization)
+    Rest->>FF: Inject X-Internal-Service, X-Internal-Token, X-Correlation-ID
+    FF-->>Ctrl: 201 Created
+    Ctrl-->>AuditFlt: 200 OK {status: "applied"}
+    Note right of AuditFlt: finally block executes synchronously before response returns
+    AuditFlt->>Rest: AdminAuditClient -> POST /audit/events (eventType="ADMIN_MUTATION")
+    Rest->>AuditSvc: Persist hash-chained ADMIN_MUTATION row
+    AuditSvc-->>AuditFlt: 201 Created (or catch -> admin.audit.failures++)
+    AuditFlt-->>Admin: 200 OK
+
+    Note over Admin,AuditSvc: Flow 2: Bounded Parallel Dashboard Aggregation
+    Admin->>Ctrl: GET /admin/v1/dashboard (via JwtFlt -> RateFlt -> AuditFlt)
+    Ctrl->>Dash: aggregate()
+    par 8-thread dashboard-probe-* pool (1000ms per-svc / 2000ms overall)
+        Dash->>Rest: GET feature-flag/actuator/health + metrics
+        Rest-->>Dash: UP + measurements
+    and
+        Note right of Dash: application.yml sets health-path: /ready (Go exposes /health/ready!)
+        Dash->>Recon: GET http://reconciliation-engine:8107/ready
+        Recon-->>Dash: 404 Not Found -> status="DEGRADED"
+    end
+    Dash-->>Admin: 200 OK {status: "degraded", summary, services}

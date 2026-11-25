@@ -5,12 +5,18 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.instacommerce.notification.config.InternalServiceAuthInterceptor;
 import com.instacommerce.notification.config.NotificationProperties;
 import com.instacommerce.notification.domain.model.NotificationChannel;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -19,6 +25,7 @@ import org.springframework.web.client.RestTemplate;
 
 @Service
 public class UserPreferenceService {
+    private static final Logger logger = LoggerFactory.getLogger(UserPreferenceService.class);
     private static final int MAX_CACHE_ENTRIES = 10_000;
     private static final Duration DEFAULT_CACHE_TTL = Duration.ofMinutes(5);
     private static final LocalTime DEFAULT_QUIET_START = LocalTime.of(22, 0);
@@ -28,11 +35,21 @@ public class UserPreferenceService {
     private final String baseUrl;
     private final Cache<UUID, Preferences> preferenceCache;
     private final Clock clock;
+    private final ObjectProvider<UserPreferenceService> selfProvider;
 
     public UserPreferenceService(NotificationProperties notificationProperties,
                                  @Value("${internal.service.name:${spring.application.name}}") String serviceName,
                                  @Value("${internal.service.token}") String serviceToken,
                                  Clock clock) {
+        this(notificationProperties, serviceName, serviceToken, clock, null);
+    }
+
+    @Autowired
+    public UserPreferenceService(NotificationProperties notificationProperties,
+                                 @Value("${internal.service.name:${spring.application.name}}") String serviceName,
+                                 @Value("${internal.service.token}") String serviceToken,
+                                 Clock clock,
+                                 ObjectProvider<UserPreferenceService> selfProvider) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofSeconds(3));
         requestFactory.setReadTimeout(Duration.ofSeconds(5));
@@ -50,6 +67,7 @@ public class UserPreferenceService {
                 .build();
         }
         this.clock = clock != null ? clock : Clock.systemUTC();
+        this.selfProvider = selfProvider;
     }
 
     public Preferences getPreferences(UUID userId) {
@@ -57,12 +75,8 @@ public class UserPreferenceService {
         if (cached != null) {
             return cached;
         }
-        Preferences preference = fetchPreferences(userId);
-        if (preference == null || preference.userId() == null) {
-            throw new PreferenceLookupException("Notification preferences unavailable for user " + userId);
-        }
-        cachePreference(userId, preference);
-        return preference;
+        UserPreferenceService proxy = selfProvider != null ? selfProvider.getIfAvailable(() -> this) : this;
+        return proxy.fetchPreferences(userId);
     }
 
     public boolean allowNotification(Preferences preference, NotificationChannel channel, boolean marketing) {
@@ -128,14 +142,28 @@ public class UserPreferenceService {
         }
     }
 
-    private Preferences fetchPreferences(UUID userId) {
+    @CircuitBreaker(name = "identityService", fallbackMethod = "fetchPreferencesFallback")
+    @Retry(name = "identityService")
+    public Preferences fetchPreferences(UUID userId) {
         try {
-            return restTemplate.getForObject(
+            Preferences preference = restTemplate.getForObject(
                 baseUrl + "/admin/users/" + userId + "/notification-preferences",
                 Preferences.class);
+            if (preference == null || preference.userId() == null) {
+                throw new PreferenceLookupException("Notification preferences unavailable for user " + userId);
+            }
+            cachePreference(userId, preference);
+            return preference;
         } catch (RestClientException ex) {
             throw new PreferenceLookupException("Failed to fetch notification preferences for user " + userId, ex);
         }
+    }
+
+    @SuppressWarnings("unused")
+    private Preferences fetchPreferencesFallback(UUID userId, Exception ex) {
+        logger.warn("Identity service unavailable fetching preferences for user={} ({}); using fail-open transactional defaults",
+            userId, ex.getMessage());
+        return new Preferences(userId, false, false, false, true);
     }
 
     public record Preferences(

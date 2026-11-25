@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -161,20 +162,25 @@ func (c *crudStubConnector) ExecContext(_ context.Context, query string, args []
 	if c.execErr != nil {
 		return nil, c.execErr
 	}
-	if strings.Contains(query, "INSERT INTO subscriptions") && len(args) == 12 {
+	if strings.Contains(query, "INSERT INTO subscriptions") && len(args) == 13 {
+		var events []string
+		if rawEvents, ok := args[4].Value.(string); ok {
+			events = parseSourceEvents(rawEvents)
+		}
 		c.subs[args[0].Value.(string)] = &Subscription{
 			ID:            args[0].Value.(string),
 			Name:          args[1].Value.(string),
 			Description:   args[2].Value.(string),
 			SourceDomain:  args[3].Value.(string),
-			SinkType:      args[4].Value.(string),
-			SinkConfig:    args[5].Value.(string),
-			TransformSpec: args[6].Value.(string),
-			Schedule:      args[7].Value.(string),
-			State:         State(args[8].Value.(string)),
-			CreatedAt:     args[9].Value.(time.Time),
-			UpdatedAt:     args[10].Value.(time.Time),
-			CreatedBy:     args[11].Value.(string),
+			SourceEvents:  events,
+			SinkType:      args[5].Value.(string),
+			SinkConfig:    args[6].Value.(string),
+			TransformSpec: args[7].Value.(string),
+			Schedule:      args[8].Value.(string),
+			State:         State(args[9].Value.(string)),
+			CreatedAt:     args[10].Value.(time.Time),
+			UpdatedAt:     args[11].Value.(time.Time),
+			CreatedBy:     args[12].Value.(string),
 		}
 		return driver.RowsAffected(1), nil
 	}
@@ -219,7 +225,7 @@ type subRows struct {
 
 func (r *subRows) Columns() []string {
 	return []string{
-		"subscription_id", "name", "description", "source_domain",
+		"subscription_id", "name", "description", "source_domain", "source_events",
 		"sink_type", "sink_config", "transform_spec", "schedule",
 		"state", "created_at", "updated_at", "created_by",
 	}
@@ -231,18 +237,20 @@ func (r *subRows) Next(dest []driver.Value) error {
 	}
 	s := r.items[r.idx]
 	r.idx++
+	rawEvents, _ := json.Marshal(s.SourceEvents)
 	dest[0] = s.ID
 	dest[1] = s.Name
 	dest[2] = s.Description
 	dest[3] = s.SourceDomain
-	dest[4] = s.SinkType
-	dest[5] = s.SinkConfig
-	dest[6] = s.TransformSpec
-	dest[7] = s.Schedule
-	dest[8] = string(s.State)
-	dest[9] = s.CreatedAt
-	dest[10] = s.UpdatedAt
-	dest[11] = s.CreatedBy
+	dest[4] = string(rawEvents)
+	dest[5] = s.SinkType
+	dest[6] = s.SinkConfig
+	dest[7] = s.TransformSpec
+	dest[8] = s.Schedule
+	dest[9] = string(s.State)
+	dest[10] = s.CreatedAt
+	dest[11] = s.UpdatedAt
+	dest[12] = s.CreatedBy
 	return nil
 }
 
@@ -271,17 +279,20 @@ func TestServiceCRUDAndNilGuards(t *testing.T) {
 		Name:         "  User CLV Sync ",
 		Description:  "sync clv",
 		SourceDomain: "analytics",
+		SourceEvents: []string{"user.updated", "order.completed"},
 		SinkType:     "redis",
 		Schedule:     "0 * * * *",
 	}, "alice@instacommerce.com")
 	require.NoError(t, err)
 	assert.Equal(t, "User CLV Sync", created.Name)
 	assert.Equal(t, StateDraft, created.State)
+	assert.Equal(t, []string{"user.updated", "order.completed"}, created.SourceEvents)
 
 	got, err := svc.Get(context.Background(), created.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, created.ID, got.ID)
+	assert.Equal(t, []string{"user.updated", "order.completed"}, got.SourceEvents)
 
 	missing, err := svc.Get(context.Background(), "does-not-exist")
 	require.NoError(t, err)
@@ -290,6 +301,7 @@ func TestServiceCRUDAndNilGuards(t *testing.T) {
 	list, err := svc.List(context.Background(), "analytics", "redis", StateDraft)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
+	assert.Equal(t, []string{"user.updated", "order.completed"}, list[0].SourceEvents)
 
 	emptyList, err := svc.List(context.Background(), "orders", "redis", StateDraft)
 	require.NoError(t, err)

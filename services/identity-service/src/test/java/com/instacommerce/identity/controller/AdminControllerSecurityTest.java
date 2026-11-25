@@ -131,4 +131,22 @@ class AdminControllerSecurityTest {
                 .header("X-Internal-Token", "test-internal-secret"))
             .andExpect(status().isForbidden());
     }
+
+    @Test
+    @DisplayName("SUPER_ADMIN role can read users and invoke admin mutations")
+    void superAdminCanInvokeAdminEndpoints() throws Exception {
+        UUID userId = UUID.randomUUID();
+        when(userService.getUserById(userId)).thenReturn(new UserResponse(
+            userId, "super@example.com", "Super", "Admin", "+911234567890",
+            List.of("SUPER_ADMIN"), "ACTIVE", Instant.now()));
+
+        mockMvc.perform(get("/admin/users/{id}", userId)
+                .with(user("superadmin").roles("SUPER_ADMIN")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.roles[0]").value("SUPER_ADMIN"));
+
+        mockMvc.perform(post("/admin/users/{id}/unlock", userId)
+                .with(user("superadmin").roles("SUPER_ADMIN")))
+            .andExpect(status().isNoContent());
+    }
 }

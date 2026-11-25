@@ -1,0 +1,69 @@
+sequenceDiagram
+    autonumber
+    participant Kafka as Kafka<br/>(rider.events / location)
+    participant REC as RiderEventConsumer
+    participant LUC as LocationUpdateConsumer<br/>(concurrency=3)
+    participant TS as TrackingService
+    participant ETA as ETAService
+    participant DS as DeliveryService
+    participant PG as PostgreSQL (routing)
+    participant STOMP as STOMP SimpleBroker<br/>(/ws/tracking)
+    participant Relay as outbox-relay-routing-eta<br/>(:8103 -> delivery.events)
+
+    Note over Kafka,Relay: Flow A — Delivery Creation on RiderAssigned
+    Kafka->>REC: RiderAssigned (orderId, riderId, storeId, pickup/dropoff, vehicleType)
+    REC->>DS: createDelivery(...)
+    DS->>PG: SELECT * FROM deliveries WHERE order_id = ?
+    alt Already exists
+        PG-->>DS: existing Delivery
+        DS-->>REC: return DeliveryResponse (idempotent)
+    else New delivery
+        DS->>ETA: calculateETAWithConfidence(pickup, dropoff, storeId, vehicle, 0.0)
+        ETA->>PG: Load active routing_barriers, weather_conditions, traffic_congestion_feeds
+        ETA-->>DS: ETAEstimate (etaMinutes, low/high, breachProbability)
+        DS->>PG: INSERT INTO deliveries (status=RIDER_ASSIGNED) + INSERT outbox_events (DeliveryCreated)
+        DS-->>REC: DeliveryResponse
+    end
+
+    Note over Kafka,Relay: Flow B — Live GPS Update, Recalc & Breach Compensation
+    Kafka->>LUC: GPS ping (Go {lat,lng} or Java {latitude,longitude})
+    LUC->>PG: findByRiderIdAndStatusIn(riderId, ACTIVE_STATUSES)
+    loop For each active deliveryId
+        LUC->>TS: recordLocation(LocationUpdateRequest)
+        Note over TS,PG: @Transactional begins
+        TS->>PG: INSERT INTO delivery_tracking (monthly partition)
+        TS->>STOMP: convertAndSend("/topic/tracking/{deliveryId}", TrackingResponse)
+        Note over TS,STOMP: Note: STOMP send happens inside TX before commit
+        opt EN_ROUTE or IN_TRANSIT and haversine(pos, dropoff) <= 0.2 km
+            TS->>DS: updateStatus(deliveryId, NEAR_DESTINATION)
+            DS->>PG: UPDATE deliveries + INSERT outbox_events (DeliveryStatusUpdated)
+        end
+        Note over TS,PG: @Transactional commits
+
+        opt recalcOnLocationUpdateEnabled == true
+            LUC->>DS: countPrecedingStops(delivery, lat, lng)
+            LUC->>ETA: calculateETAWithConfidence(..., batchStops)
+            Note over ETA: Bypasses @Cacheable (only 4-arg calculateETA is cached)
+            alt Delta >= 2m OR (!compensationTriggered && breach crossed)
+                LUC->>DS: updateETA(deliveryId, estimate)
+                DS->>PG: UPDATE deliveries + INSERT outbox_events (EtaUpdated)
+                DS->>STOMP: convertAndSend("/topic/deliveries/{id}/eta" & "/topic/orders/{orderId}/eta")
+                opt breachProbability > 0.7 || etaMinutes > 30
+                    alt compensationTriggered == false
+                        DS->>PG: SET is_breach_risk=true, compensation_triggered=true, amt=5000
+                        DS->>PG: INSERT outbox_events (ETABreachRisk)
+                        DS->>STOMP: convertAndSend("/topic/deliveries/{id}/breach-risk")
+                    end
+                end
+            end
+        end
+    end
+
+    opt Exception during Kafka handling
+        LUC-->>Kafka: KafkaConfig DefaultErrorHandler retries 3x (1s) -> {topic}.DLT
+        Note over LUC,Kafka: JsonProcessingException / IllegalArgumentException skip retries straight to DLT
+    end
+
+    Relay->>PG: Poll outbox_events FOR UPDATE SKIP LOCKED (500ms)
+    Relay->>Kafka: Produce DeliveryCreated / DeliveryStatusUpdated / EtaUpdated / ETABreachRisk
+    Relay->>PG: UPDATE outbox_events SET sent=true

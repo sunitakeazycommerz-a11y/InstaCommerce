@@ -7,6 +7,7 @@ import com.instacommerce.pricing.dto.request.PriceCalculationRequest;
 import com.instacommerce.pricing.dto.request.TaxCalculationRequest;
 import com.instacommerce.pricing.dto.response.BatchPriceResponse;
 import com.instacommerce.pricing.dto.response.PriceCalculationResponse;
+import com.instacommerce.pricing.dto.response.PriceCalculationResponse.AppliedPromotionDetail;
 import com.instacommerce.pricing.dto.response.PricedItem;
 import com.instacommerce.pricing.dto.response.TaxCalculationResponse;
 import com.instacommerce.pricing.repository.PriceRuleRepository;
@@ -65,10 +66,7 @@ public class PricingService {
 
     public long calculatePrice(UUID productId, UUID storeId) {
         long baseCalculated = productPriceLookupService.calculateBasePrice(productId);
-        if (storeId == null || surgePricingService == null) {
-            return baseCalculated;
-        }
-        SurgePricingService.SurgeAssessment surge = surgePricingService.evaluateSurge(storeId);
+        SurgePricingService.SurgeAssessment surge = resolveStoreSurge(storeId);
         if (surge == null || !surge.isSurgeActive() || surge.surgeMultiplier() == null
                 || surge.surgeMultiplier().compareTo(BigDecimal.ONE) <= 0) {
             return baseCalculated;
@@ -183,6 +181,9 @@ public class PricingService {
         long totalCents = Math.addExact(netGoodsTotal, deliveryFeeCents);
         String appliedCoupon = couponDiscountCents > 0 ? validatedCouponCode : null;
         List<String> appliedPromotions = calcResult.appliedPromotionNames();
+        List<AppliedPromotionDetail> appliedPromotionDetails = calcResult.appliedPromotionDetails().stream()
+                .map(detail -> new AppliedPromotionDetail(detail.promotionId(), detail.name(), detail.discountCents()))
+                .toList();
         long estimatedTaxCents = taxCalculationService.calculateTaxForSubtotal(
                 netGoodsTotal, TaxCalculationService.DEFAULT_TAX_RATE);
         BigDecimal taxRate = TaxCalculationService.DEFAULT_TAX_RATE;
@@ -203,7 +204,8 @@ public class PricingService {
                 null,
                 estimatedTaxCents,
                 taxRate,
-                couponDiscountCents);
+                couponDiscountCents,
+                appliedPromotionDetails);
 
         QuoteTokenService.QuoteResult quoteResult = quoteTokenService.issueQuote(
                 request.userId(), intermediateResponse, appliedCoupon);
@@ -221,12 +223,13 @@ public class PricingService {
                 quoteResult.quoteToken(),
                 estimatedTaxCents,
                 taxRate,
-                couponDiscountCents);
+                couponDiscountCents,
+                appliedPromotionDetails);
     }
 
     private Map<UUID, PriceRule> loadActiveRules(Collection<UUID> productIds, Instant now) {
         Map<UUID, PriceRule> rules = new LinkedHashMap<>();
-        if (productIds.size() > 1) {
+        if (productIds != null && !productIds.isEmpty()) {
             for (PriceRule rule : priceRuleRepository.findActiveRulesByProductIds(productIds, now)) {
                 rules.putIfAbsent(rule.getProductId(), rule);
             }
@@ -262,13 +265,17 @@ public class PricingService {
     }
 
     private long resolveDeliveryFeeCents(UUID storeId) {
-        if (storeId == null || surgePricingService == null) {
-            return 0L;
-        }
-        SurgePricingService.SurgeAssessment surge = surgePricingService.evaluateSurge(storeId);
+        SurgePricingService.SurgeAssessment surge = resolveStoreSurge(storeId);
         if (surge != null && surge.isSurgeActive()) {
             return surge.surgeDeliveryFeeCents();
         }
         return 0L;
+    }
+
+    private SurgePricingService.SurgeAssessment resolveStoreSurge(UUID storeId) {
+        if (storeId == null || surgePricingService == null) {
+            return null;
+        }
+        return surgePricingService.evaluateSurge(storeId);
     }
 }

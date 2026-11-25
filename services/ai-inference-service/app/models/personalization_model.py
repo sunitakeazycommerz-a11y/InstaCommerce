@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import Field
 from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 
@@ -42,7 +42,7 @@ class RecommendationSurface(str, Enum):
     FREQUENTLY_BOUGHT_TOGETHER = "frequently_bought_together"
 
 
-class PersonalizationFeatures(BaseModel):
+class PersonalizationFeatures(MLBaseModel):
     """Input features for personalization."""
     user_id: str = Field(..., description="User identifier")
     surface: RecommendationSurface = Field(
@@ -73,6 +73,7 @@ class PersonalizationFeatures(BaseModel):
         default=None, description="Anchor product for FBT surface"
     )
     max_results: int = Field(default=20, ge=1, le=100, description="Max items to return")
+    model_version: Optional[str] = None
 
 
 class PersonalizationResponse(MLBaseModel):
@@ -85,6 +86,9 @@ class PersonalizationResponse(MLBaseModel):
     surface: str
     model_version: str
     method: str = Field(default="rule_based")
+    is_cold_start: bool = False
+    drift_detected: bool = False
+    sla_breached: bool = False
 
 
 # ---------------------------------------------------------------------------

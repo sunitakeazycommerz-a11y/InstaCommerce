@@ -133,7 +133,12 @@ func (s *RiderTelemetrySmoother) evictExpiredLocked(now time.Time) {
 	}
 	for back := s.lru.Back(); back != nil; {
 		prev := back.Prev()
-		riderID := back.Value.(string)
+		riderID, ok := back.Value.(string)
+		if !ok {
+			s.lru.Remove(back)
+			back = prev
+			continue
+		}
 		st := s.states[riderID]
 		if st == nil || now.Sub(st.LastSeenAt) > s.stateTTL {
 			s.lru.Remove(back)
@@ -153,9 +158,10 @@ func (s *RiderTelemetrySmoother) evictOldestLocked() {
 	if back == nil {
 		return
 	}
-	riderID := back.Value.(string)
 	s.lru.Remove(back)
-	delete(s.states, riderID)
+	if riderID, ok := back.Value.(string); ok {
+		delete(s.states, riderID)
+	}
 }
 
 func (s *RiderTelemetrySmoother) commitLocked(riderID string, candidate RiderKalmanState, now time.Time) {

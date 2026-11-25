@@ -123,6 +123,9 @@ func validateV2Request(req V2AssignRequest) error {
 		if err := optimizer.ValidatePosition(rider.Position); err != nil {
 			return fmt.Errorf("rider %s: %w", rider.ID, err)
 		}
+		if err := validateNonNegativeFinite("avg_rating", rider.AvgRating); err != nil {
+			return fmt.Errorf("rider %s: %w", rider.ID, err)
+		}
 		if err := validateNonNegativeFinite("current_bag_weight_kg", rider.CurrentBagWeightKg); err != nil {
 			return fmt.Errorf("rider %s: %w", rider.ID, err)
 		}

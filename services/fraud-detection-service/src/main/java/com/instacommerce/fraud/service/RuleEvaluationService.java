@@ -43,10 +43,10 @@ public class RuleEvaluationService {
     }
 
     private boolean evaluateVelocity(FraudRule rule, FraudCheckRequest request) {
-        Map<String, Object> condition = rule.getConditionJson();
-        String entityType = (String) condition.getOrDefault("entityType", "USER");
-        String counterType = (String) condition.getOrDefault("counterType", "ORDERS_1H");
-        int threshold = ((Number) condition.getOrDefault("threshold", 10)).intValue();
+        Map<String, Object> condition = conditionOf(rule);
+        String entityType = condition.get("entityType") instanceof String s ? s : "USER";
+        String counterType = condition.get("counterType") instanceof String s ? s : "ORDERS_1H";
+        int threshold = numberOrDefault(condition.get("threshold"), 10).intValue();
 
         String entityId = resolveEntityId(entityType, request);
         if (entityId == null) {
@@ -58,9 +58,9 @@ public class RuleEvaluationService {
     }
 
     private boolean evaluateAmount(FraudRule rule, FraudCheckRequest request) {
-        Map<String, Object> condition = rule.getConditionJson();
-        long threshold = ((Number) condition.getOrDefault("maxAmountCents", 500000)).longValue();
-        boolean newUsersOnly = (boolean) condition.getOrDefault("newUsersOnly", false);
+        Map<String, Object> condition = conditionOf(rule);
+        long threshold = numberOrDefault(condition.get("maxAmountCents"), 500000).longValue();
+        boolean newUsersOnly = asBoolean(condition.get("newUsersOnly"));
 
         if (newUsersOnly && !request.isNewUser()) {
             return false;
@@ -74,8 +74,8 @@ public class RuleEvaluationService {
             return false;
         }
 
-        Map<String, Object> condition = rule.getConditionJson();
-        int maxAccounts = ((Number) condition.getOrDefault("maxAccountsPerDevice", 3)).intValue();
+        Map<String, Object> condition = conditionOf(rule);
+        int maxAccounts = numberOrDefault(condition.get("maxAccountsPerDevice"), 3).intValue();
 
         long count = velocityService.getCount("DEVICE", request.deviceFingerprint(), "ORDERS_24H");
         return count >= maxAccounts;
@@ -86,10 +86,10 @@ public class RuleEvaluationService {
             return false;
         }
 
-        Map<String, Object> condition = rule.getConditionJson();
-        double maxDistanceKm = ((Number) condition.getOrDefault("maxDistanceKm", 50.0)).doubleValue();
-        double expectedLat = ((Number) condition.getOrDefault("expectedLat", 0.0)).doubleValue();
-        double expectedLng = ((Number) condition.getOrDefault("expectedLng", 0.0)).doubleValue();
+        Map<String, Object> condition = conditionOf(rule);
+        double maxDistanceKm = numberOrDefault(condition.get("maxDistanceKm"), 50.0).doubleValue();
+        double expectedLat = numberOrDefault(condition.get("expectedLat"), 0.0).doubleValue();
+        double expectedLng = numberOrDefault(condition.get("expectedLng"), 0.0).doubleValue();
 
         // Skip if no expected location configured (no baseline yet)
         if (expectedLat == 0.0 && expectedLng == 0.0) {
@@ -102,32 +102,62 @@ public class RuleEvaluationService {
     }
 
     private boolean evaluatePattern(FraudRule rule, FraudCheckRequest request) {
-        Map<String, Object> condition = rule.getConditionJson();
-        String pattern = (String) condition.getOrDefault("pattern", "");
+        Map<String, Object> condition = conditionOf(rule);
+        String pattern = condition.get("pattern") instanceof String s ? s : "";
 
         return switch (pattern) {
             case "HIGH_VALUE_NEW_USER" ->
                     request.isNewUser() && request.totalCents() > 200000;
             case "HIGH_ITEM_COUNT" ->
-                    request.itemCount() > ((Number) condition.getOrDefault("maxItems", 20)).intValue();
+                    request.itemCount() > numberOrDefault(condition.get("maxItems"), 20).intValue();
             case "RAPID_RETRY" -> {
-                long failedCount = velocityService.getCount("USER", request.userId().toString(),
-                        "FAILED_PAYMENTS_1H");
-                long burstFailedCount = velocityService.getCount("USER", request.userId().toString(),
-                        "FAILED_PAYMENTS_5M");
-                int maxFailures = ((Number) condition.getOrDefault("maxFailures", 3)).intValue();
+                if (request.userId() == null) {
+                    yield false;
+                }
+                String userId = request.userId().toString();
+                long failedCount = velocityService.getCount("USER", userId, "FAILED_PAYMENTS_1H");
+                long burstFailedCount = velocityService.getCount("USER", userId, "FAILED_PAYMENTS_5M");
+                int maxFailures = numberOrDefault(condition.get("maxFailures"), 3).intValue();
                 yield Math.max(failedCount, burstFailedCount) >= maxFailures;
             }
             case "VELOCITY_BURST" -> {
-                String entityType = (String) condition.getOrDefault("entityType", "USER");
-                String counterType = (String) condition.getOrDefault("counterType", "ORDERS_5M");
-                int threshold = ((Number) condition.getOrDefault("threshold", 4)).intValue();
+                String entityType = condition.get("entityType") instanceof String s ? s : "USER";
+                String counterType = condition.get("counterType") instanceof String s ? s : "ORDERS_5M";
+                int threshold = numberOrDefault(condition.get("threshold"), 4).intValue();
                 String entityId = resolveEntityId(entityType, request);
                 yield entityId != null && velocityService.getCount(entityType, entityId, counterType) >= threshold;
             }
             case "HIGH_RISK_PAYMENT_NEW_DEVICE" -> evaluateCombination(rule, request);
             default -> false;
         };
+    }
+
+    private static Map<String, Object> conditionOf(FraudRule rule) {
+        return rule != null && rule.getConditionJson() != null ? rule.getConditionJson() : Map.of();
+    }
+
+    private static Number numberOrDefault(Object raw, Number fallback) {
+        if (raw instanceof Number number) {
+            return number;
+        }
+        if (raw instanceof String text) {
+            try {
+                return Double.valueOf(text.trim());
+            } catch (NumberFormatException ignored) {
+                return fallback;
+            }
+        }
+        return fallback;
+    }
+
+    private static boolean asBoolean(Object raw) {
+        if (raw instanceof Boolean bool) {
+            return bool;
+        }
+        if (raw instanceof String text) {
+            return Boolean.parseBoolean(text.trim());
+        }
+        return false;
     }
 
     private boolean evaluateCombination(FraudRule rule, FraudCheckRequest request) {

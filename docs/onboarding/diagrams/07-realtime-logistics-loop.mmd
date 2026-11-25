@@ -1,0 +1,76 @@
+flowchart TB
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef broker fill:#F8FAFC,stroke:#475569,stroke-width:2px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2.2px,stroke-dasharray:6 4,color:#7F1D1D
+    classDef client fill:#F5F3FF,stroke:#6D28D9,stroke-width:1.6px,color:#1E1B4B
+
+    subgraph TELEMETRY["1. Dark-Store Trigger, Dual GPS Ingest & Split Geo State"]
+        direction TB
+        RiderApp["Rider Mobile App<br/>GPS Telemetry Pings"]:::client
+        FulfillPack["fulfillment-service (:8086)<br/>S-curve pick, 4-task wave totes<br/>Emits OrderPacked outbox"]:::prod
+
+        LocIngest["location-ingestion-service<br/>Go :8105 | /ingest/* &amp; /ingest/ws<br/>Rejects acc &gt;50m, &gt;150km/h<br/>Accuracy-weighted Kalman filter"]:::prod
+        FleetIngest["rider-fleet-service (:8093)<br/>POST /riders/{id}/location<br/>Separate ingest (no Kalman/CAS)"]:::warn
+        KafkaFulfill["Kafka: fulfillment.events<br/>OrderPacked (pickup/dropoff,<br/>weight, coldChain, fragile)"]:::broker
+
+        RedisH3["Redis: location-ingestion<br/>Lua CAS (ts_ms &gt; prev), 10m TTL<br/>rider:location:{id} + custom axial<br/>riders:h3:{idx} (NOT Uber H3/GEO)"]:::warn
+        KafkaGeo["Kafka: rider.geofence.events<br/>BROKEN: GeofenceChecker zones<br/>map empty in main.go → 0 events"]:::broken
+        KafkaLoc["Kafka: rider.location.updates<br/>Go: {lat, lng, timestamp_ms}<br/>Java: {latitude, longitude, ts}"]:::broker
+        RedisGeo["Redis: rider-fleet State<br/>GEOADD riders:active + hash<br/>rider:location:{id} (no CAS/TTL)"]:::warn
+    end
+
+    subgraph DISPATCH["2. Dispatch Split-Brain (rider-fleet vs dispatch-optimizer)"]
+        direction TB
+        FleetAssign["rider-fleet-service (:8093)<br/>DEFAULT: optimizer-enabled=false<br/>GEORADIUS riders:active (5km)<br/>+ SQL Haversine + SKIP LOCKED"]:::prod
+        OptSolver["dispatch-optimizer (Go :8102)<br/>BYPASSED BY DEFAULT (/v2/optimize)<br/>DRIFT: docs say Kuhn-Munkres;<br/>runs greedy edge + 1-opt + EV/cap"]:::warn
+        OptDead["POST /dispatch/assign (:8102)<br/>UNUSED by Java; releases Redis<br/>dispatch:rider:lock:{id} in defer"]:::broken
+        KafkaRider["Kafka: rider.events<br/>RiderAssigned (outbox)"]:::broker
+    end
+
+    subgraph HANDOFF_ETA["3. Physical Handoff, Live ETA Loop & Notification Fallback"]
+        direction TB
+        FulfillHandoff["fulfillment-service (:8086)<br/>6-digit dispatchOtp handoff<br/>WEBP ≤200KB POD → OrderDelivered"]:::prod
+        RoutingETA["routing-eta-service (:8094)<br/>0 OSRM/Google Maps clients!<br/>Haversine × 1.4 + routing_barriers<br/>+ IST peak (0.6×)/night (1.2×) + 3m"]:::warn
+        ClientWS["Customer / mobile-bff (:8080)<br/>STOMP /ws/tracking<br/>(/deliveries/{id}/eta)<br/>GOTCHA: passes orderId as {id}"]:::warn
+        KafkaDeliv["Kafka: delivery.events<br/>ETABreachRisk (prob ≥0.7 / 30m<br/>→ 5000 paise compensation)"]:::broker
+        NotifySvc["notification-service (:8087)<br/>7 topics, (event_id,channel) dedup<br/>22:00–07:00 quiet; 5s→30s→5m<br/>PUSH→SMS→EMAIL (no FCM→SMS)"]:::warn
+        NotifyDLT["Kafka: notification.events.DLT<br/>Permanent / exhausted failures"]:::broker
+    end
+
+    subgraph LEGEND["Legend"]
+        L1["Active / Production Path"]:::prod
+        L2["Kafka Topic / Broker"]:::broker
+        L3["Split-Brain / Fallback / Drift"]:::warn
+        L4["Broken / Empty / Unused"]:::broken
+    end
+
+    RiderApp -->|"Primary HTTP/WS"| LocIngest
+    RiderApp -.->|"Alternate POST"| FleetIngest
+    FulfillPack -->|"Outbox relay"| KafkaFulfill
+
+    LocIngest -->|"Lua CAS + hex"| RedisH3
+    LocIngest -. "Empty zones map" .-> KafkaGeo
+    LocIngest -->|"200-batch / 1s"| KafkaLoc
+    FleetIngest -->|"GEOADD active"| RedisGeo
+    FleetIngest -.->|"Dual JSON keys"| KafkaLoc
+
+    RedisGeo -->|"GEORADIUS 5km (default)"| FleetAssign
+    KafkaFulfill -->|"OrderPacked"| FleetAssign
+    FleetAssign -. "Bypassed by default" .-> OptSolver
+    OptSolver -. "Unused endpoint" .- OptDead
+    FleetAssign -->|"Outbox RiderAssigned"| KafkaRider
+
+    KafkaRider -->|"Create Delivery + OTP"| FulfillHandoff
+    KafkaRider -->|"Init ETA"| RoutingETA
+    KafkaLoc -->|"Recalc Δ≥2m (both schemas)"| RoutingETA
+    KafkaGeo -. "0 events" .-> RoutingETA
+
+    RoutingETA -->|"STOMP push"| ClientWS
+    RoutingETA -->|"ETABreachRisk"| KafkaDeliv
+    KafkaDeliv --> NotifySvc
+    KafkaRider --> NotifySvc
+    KafkaFulfill --> NotifySvc
+    NotifySvc -->|"Exhausted fallback"| NotifyDLT
+    FulfillHandoff ~~~ LEGEND

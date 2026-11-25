@@ -1,0 +1,43 @@
+sequenceDiagram
+    autonumber
+    participant Caller as Caller (mobile-bff / admin-gw)
+    participant MW as Auth + Guardrails Middleware<br/>(auth.py, middleware.py)
+    participant Exec as ExecutionService + PIIVault<br/>(execution.py, pii.py)
+    participant Run as AgentExecutionRunner<br/>(runner.py, budgets.py)
+    participant Redis as Redis<br/>(budget & checkpoint)
+    participant Graph as 7-Node LangGraph<br/>(graph.py, planning.py)
+    participant Tools as ToolRegistry + Java Svc<br/>(tools.py, tool_validation.py)
+    participant Kafka as AuditEventPublisher<br/>(ai-orchestrator.events)
+
+    Caller->>MW: POST /v2/agent/invoke + X-Internal-Service/Token
+    MW->>MW: Verify token (401/403), IP/User TokenBucket (429), Semaphore(200) (503)
+    MW->>Exec: invoke_agent -> ExecutionService.execute()
+    Exec->>Exec: InjectionDetector.check(query)
+    alt Prompt injection detected
+        Exec-->>Caller: PolicyViolationOutcome (escalated=true, CRITICAL)
+    else Clean query
+        Exec->>Exec: PIIVault.redact(query, context, history)
+        Exec->>Run: runner.run(compiled_graph, initial_state, checkpointer)
+        Run->>Redis: HGETALL instacommerce:agent:budget:{session_id}
+        Run->>Run: Check session + request BudgetTracker ($0.50, 25 calls)
+        Run->>Redis: GET instacommerce:agent:checkpoint:{thread_id} (prior history)
+        Run->>Graph: ainvoke(state_to_run)
+        Graph->>Graph: classify_intent -> check_policy (EscalationPolicy)
+        alt Escalated at check_policy
+            Graph->>Graph: escalate node -> specialist handoff message
+        else Policy passed
+            Graph->>Graph: retrieve_context (_KB + CachedRetrievalProvider)
+            Graph->>Tools: execute_tools (6s aggregate deadline, 2.5s per tool)
+            Tools->>Tools: _validate_and_build_url (SSRF/traversal) + CircuitBreaker + pre-BOLA
+            Tools->>Tools: httpx.get/post (token only if AI_ORCHESTRATOR_INTERNAL_SERVICE_TOKEN set!)
+            Tools->>Tools: Post-call BOLA ownership check (order.get / cart.get)
+            Graph->>Graph: respond / respond_with_llm -> validate_output (OutputPolicy)
+        end
+        Graph-->>Run: final AgentState dict
+        Run->>Redis: SETEX checkpoint (3600s) + HINCRBYFLOAT budget delta
+        Run-->>Exec: result AgentState
+        Exec->>Exec: evaluate_output_policy -> PIIVault.restore(EMAIL/PHONE/ADDRESS)
+        Exec-->>MW: CompletedOutcome
+        MW->>Kafka: publish_audit_events(AI_INTENT_CLASSIFIED, [ESCALATION], AI_AGENT_INVOKED)
+        MW-->>Caller: 200 AgentResponse
+    end

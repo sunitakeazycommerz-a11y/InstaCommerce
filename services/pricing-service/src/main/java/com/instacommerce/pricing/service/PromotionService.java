@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -172,7 +173,8 @@ public class PromotionService {
         Promotion saved = promotionRepository.save(p);
         log.info("Created promotion id={} name={}", saved.getId(), saved.getName());
         PromotionResponse response = toResponse(saved);
-        outboxService.recordEvent("pricing", saved.getId().toString(), "PROMOTION_CREATED", response);
+        outboxService.recordEvent("pricing", saved.getId().toString(), "PromotionCreated",
+                buildPromotionOutboxPayload(saved, null, false));
         return response;
     }
 
@@ -215,7 +217,8 @@ public class PromotionService {
         Promotion saved = promotionRepository.save(p);
         log.info("Updated promotion id={}", saved.getId());
         PromotionResponse response = toResponse(saved);
-        outboxService.recordEvent("pricing", saved.getId().toString(), "PROMOTION_UPDATED", response);
+        outboxService.recordEvent("pricing", saved.getId().toString(), "PromotionUpdated",
+                buildPromotionOutboxPayload(saved, Instant.now(), true));
         return response;
     }
 
@@ -322,7 +325,12 @@ public class PromotionService {
                 .orElseThrow(() -> new PromotionNotFoundException(id.toString()));
         p.setActive(false);
         Promotion saved = promotionRepository.save(p);
-        outboxService.recordEvent("pricing", id.toString(), "PROMOTION_DEACTIVATED", toResponse(saved));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", saved.getId());
+        payload.put("name", saved.getName());
+        payload.put("active", saved.isActive());
+        payload.put("deactivatedAt", Instant.now());
+        outboxService.recordEvent("pricing", id.toString(), "PromotionDeactivated", payload);
         log.info("Deactivated promotion id={}", id);
     }
 
@@ -386,5 +394,27 @@ public class PromotionService {
                 p.isStackableWithCoupon(),
                 p.getPriority(),
                 p.getCreatedAt());
+    }
+
+    private Map<String, Object> buildPromotionOutboxPayload(Promotion p, Instant updatedAt, boolean isUpdate) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", p.getId());
+        payload.put("name", p.getName());
+        payload.put("description", p.getDescription());
+        payload.put("discountType", p.getDiscountType());
+        payload.put("discountValue", p.getDiscountValue());
+        payload.put("minOrderCents", p.getMinOrderCents());
+        payload.put("maxDiscountCents", p.getMaxDiscountCents());
+        payload.put("startAt", p.getStartAt());
+        payload.put("endAt", p.getEndAt());
+        payload.put("active", p.isActive());
+        payload.put("maxUses", p.getMaxUses());
+        payload.put("currentUses", p.getCurrentUses());
+        if (isUpdate) {
+            payload.put("updatedAt", updatedAt != null ? updatedAt : Instant.now());
+        } else {
+            payload.put("createdAt", p.getCreatedAt() != null ? p.getCreatedAt() : Instant.now());
+        }
+        return payload;
     }
 }

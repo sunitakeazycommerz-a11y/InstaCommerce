@@ -1,5 +1,6 @@
 package com.instacommerce.payment.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -12,16 +13,21 @@ import static org.mockito.Mockito.when;
 import com.instacommerce.payment.domain.model.Payment;
 import com.instacommerce.payment.domain.model.PaymentStatus;
 import com.instacommerce.payment.dto.request.AuthorizeRequest;
+import com.instacommerce.payment.dto.response.PaymentResponse;
 import com.instacommerce.payment.exception.PaymentGatewayException;
 import com.instacommerce.payment.exception.PaymentGatewayTransientException;
+import com.instacommerce.payment.gateway.GatewayAuthRequest;
+import com.instacommerce.payment.gateway.GatewayAuthResult;
 import com.instacommerce.payment.gateway.PaymentGateway;
 import com.instacommerce.payment.repository.PaymentRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -137,5 +143,39 @@ class PaymentServiceTimeoutTest {
 
         // Revert void must NOT be called on transient timeout
         verify(txHelper, never()).revertVoidToAuthorized(any());
+    }
+
+    @Test
+    @DisplayName("Idempotent retry re-invokes gateway when AUTHORIZE_PENDING row has null pspReference")
+    void authorizeRetryReinvokesGatewayWhenPspReferenceMissing() {
+        AuthorizeRequest request = new AuthorizeRequest(
+            pendingPayment.getOrderId(),
+            5000L,
+            "INR",
+            "idem-key-retry",
+            "pm_card_visa"
+        );
+        Payment completed = new Payment();
+        completed.setId(paymentId);
+        completed.setOrderId(pendingPayment.getOrderId());
+        completed.setAmountCents(5000L);
+        completed.setCurrency("INR");
+        completed.setStatus(PaymentStatus.AUTHORIZED);
+        completed.setPspReference("pi_recovered");
+
+        when(txHelper.savePendingAuthorization(eq(request), eq("idem-key-retry"))).thenReturn(null);
+        when(paymentRepository.findByIdempotencyKey("idem-key-retry")).thenReturn(Optional.of(pendingPayment));
+        when(paymentGateway.authorize(any())).thenReturn(GatewayAuthResult.success("pi_recovered"));
+        when(txHelper.completeAuthorization(paymentId, "pi_recovered")).thenReturn(completed);
+
+        PaymentResponse response = paymentService.authorize(request);
+
+        assertThat(response.authorized()).isTrue();
+        assertThat(response.status()).isEqualTo("AUTHORIZED");
+        assertThat(response.paymentId()).isEqualTo(paymentId);
+        ArgumentCaptor<GatewayAuthRequest> captor = ArgumentCaptor.forClass(GatewayAuthRequest.class);
+        verify(paymentGateway).authorize(captor.capture());
+        assertThat(captor.getValue().idempotencyKey()).isEqualTo("idem-key-retry");
+        verify(paymentGateway, never()).getStatus(anyString());
     }
 }

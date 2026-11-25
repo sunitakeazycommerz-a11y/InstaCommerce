@@ -1,0 +1,62 @@
+flowchart LR
+    subgraph Edge["Ingress & Mesh Perimeter"]
+        Client["Mobile Client<br/>/bff/mobile/v1 or /m/v1"]
+        Envoy["Istio ingressgateway EnvoyFilter<br/>strips x-internal-*, x-user-*"]
+        Client --> Envoy
+    end
+
+    subgraph SecurityChain["WebFlux Security & Filter Chain (:8080)"]
+        Corr["CorrelationIdWebFilter<br/>@Order(HIGHEST_PRECEDENCE)<br/>SAFE_ID or UUID -> Reactor ctx"]
+        SecCfg["MobileBffSecurityConfig<br/>permitAll: /home, GET /products/**, /actuator/**<br/>authenticated: /cart/**, /orders/**, /checkout/**, /profile"]
+        Prop["UserContextPropagationFilter<br/>@ SecurityWebFiltersOrder.AUTHENTICATION<br/>strips X-Internal-*, injects X-User-*, baggage"]
+        JwtSvc["DefaultJwtService + JwtKeyLoader<br/>Single static RS256 key, iss check only"]
+        Err["MobileBffAccessDeniedHandler +<br/>GlobalExceptionHandler (RFC 7807)"]
+        Envoy --> Corr --> SecCfg --> Prop
+        Prop --> JwtSvc
+        SecCfg -. "403 / 400 / 5xx" .-> Err
+    end
+
+    subgraph Core["Controllers, Aggregators & Live SSE"]
+        Ctrl["MobileBffController<br/>7 dual-mounted endpoints<br/>SAFE_STORE_ID & BOLA guards"]
+        HomeAgg["HomeAggregator<br/>5 Resilience4j CBs (soft fallback)"]
+        ScreenAgg["ScreenAggregator<br/>9 Resilience4j CBs (critical vs soft)"]
+        CartSync["CartSyncService<br/>ConcurrentHashMap(userId -> Sinks.Many(256))"]
+        Prop --> Ctrl
+        Ctrl --> HomeAgg
+        Ctrl --> ScreenAgg
+        Ctrl --> CartSync
+    end
+
+    subgraph Downstreams["UpstreamClientFactory (Shared ConnectionProvider 500s idle, 2000ms timeout)"]
+        Cat["catalog-service :8082"]
+        Search["search-service :8088"]
+        Flags["config-feature-flag :8098"]
+        Price["pricing-service :8089"]
+        Inv["inventory-service :8083"]
+        Cart["cart-service :8090"]
+        Wallet["wallet-loyalty :8095"]
+        Ident["identity-service :8081"]
+        Order["order-service :8084"]
+        Fulfill["fulfillment-service :8086"]
+        Routing["routing-eta-service :8094"]
+        Checkout["checkout-orchestrator :8091"]
+        Redis["Redis Pub/Sub (cart:events)<br/>No spring.data.redis in yml"]
+    end
+
+    HomeAgg --> Cat
+    HomeAgg --> Search
+    HomeAgg --> Flags
+    HomeAgg --> Ident
+    HomeAgg --> Wallet
+
+    ScreenAgg --> Cat
+    ScreenAgg --> Price
+    ScreenAgg --> Inv
+    ScreenAgg --> Cart
+    ScreenAgg --> Wallet
+    ScreenAgg --> Order
+    ScreenAgg --> Fulfill
+    ScreenAgg --> Routing
+    ScreenAgg --> Checkout
+
+    Redis -. "MessageListener (if wired)" .-> CartSync

@@ -1,5 +1,6 @@
 package com.instacommerce.checkout.workflow;
 
+import static com.instacommerce.checkout.workflow.CheckoutWorkflowSupport.CHECKOUT_EXCEPTION;
 import static com.instacommerce.checkout.workflow.CheckoutWorkflowSupport.COUPON_NOT_FOUND_EXCEPTION;
 import static com.instacommerce.checkout.workflow.CheckoutWorkflowSupport.INSUFFICIENT_STOCK_EXCEPTION;
 import static com.instacommerce.checkout.workflow.CheckoutWorkflowSupport.INVALID_COUPON_EXCEPTION;
@@ -33,6 +34,7 @@ import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
 import com.instacommerce.checkout.workflow.activity.PricingActivity;
+import com.instacommerce.checkout.workflow.activity.PromotionActivity;
 import com.instacommerce.checkout.workflow.activity.WalletActivity;
 import io.temporal.workflow.Saga;
 import io.temporal.workflow.Workflow;
@@ -63,6 +65,8 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
     private CheckoutResponse lastResponse;
     private WalletActivity walletActivity;
     private WalletActivity compensationWalletActivity;
+    private PromotionActivity promotionActivity;
+    private PromotionActivity compensationPromotionActivity;
 
     private WalletActivity walletActivity() {
         if (walletActivity == null) {
@@ -76,6 +80,20 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             compensationWalletActivity = activityStub(WalletActivity.class, 30, 2, 5, 0);
         }
         return compensationWalletActivity;
+    }
+
+    private PromotionActivity promotionActivity() {
+        if (promotionActivity == null) {
+            promotionActivity = activityStub(PromotionActivity.class, 10, 1, 3, 0, CHECKOUT_EXCEPTION);
+        }
+        return promotionActivity;
+    }
+
+    private PromotionActivity compensationPromotionActivity() {
+        if (compensationPromotionActivity == null) {
+            compensationPromotionActivity = activityStub(PromotionActivity.class, 20, 2, 5, 0);
+        }
+        return compensationPromotionActivity;
     }
 
     @Override
@@ -216,8 +234,28 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                     orderResult.orderId()));
             }
 
+            if (pricingResult.appliedPromotionDetails() != null && !pricingResult.appliedPromotionDetails().isEmpty()) {
+                for (PricingResult.AppliedPromotionDetail promo : pricingResult.appliedPromotionDetails()) {
+                    if (promo == null || promo.promotionId() == null || promo.promotionId().isBlank()) {
+                        continue;
+                    }
+                    currentStatus = "REDEEMING_PROMOTION";
+                    promotionActivity().redeemPromotion(
+                        promo.promotionId(),
+                        request.userId(),
+                        orderResult.orderId(),
+                        promo.discountCents());
+                    saga.addCompensation(() -> CheckoutWorkflowSupport.safeRollbackPromotion(
+                        workflowId,
+                        dlqActivity,
+                        compensationPromotionActivity(),
+                        promo.promotionId(),
+                        request.userId(),
+                        orderResult.orderId()));
+                }
+            }
+
             currentStatus = "CONFIRMING";
-            inventoryActivity.confirmStock(reservationResult.reservationId());
             if (paymentAmountCents > 0 && paymentResult != null) {
                 paymentCaptureAttempted = true;
                 paymentActivity.capturePayment(
@@ -225,6 +263,7 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
                     paymentKeys.capture(paymentResult.paymentId()));
                 paymentCaptured = true;
             }
+            inventoryActivity.confirmStock(reservationResult.reservationId());
             orderActivity.confirmOrder(orderResult.orderId(), workflowId + ":order:confirm");
 
             clearCartSafely(request.userId());
@@ -233,7 +272,8 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
             lastResponse = CheckoutResponse.success(
                 orderResult.orderId(),
                 pricingResult.totalCents(),
-                orderResult.estimatedDeliveryMinutes());
+                orderResult.estimatedDeliveryMinutes(),
+                workflowId);
             return lastResponse;
         } catch (Exception e) {
             String failedStep = currentStatus;
@@ -267,7 +307,7 @@ public class CheckoutWorkflowImpl implements CheckoutWorkflow {
 
     private CheckoutResponse fail(String reason) {
         currentStatus = "FAILED";
-        lastResponse = CheckoutResponse.failed(reason);
+        lastResponse = CheckoutResponse.failed(reason, workflowId);
         return lastResponse;
     }
 

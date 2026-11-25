@@ -8,7 +8,7 @@ This cluster comprises two **data plane** services handling observability and an
 2. **cdc-consumer-service**: Debezium CDC → BigQuery ingestion for data warehouse (Tier 2)
 
 **Service Ownership**: Platform Team - Data & Observability
-**Languages**: Java 21 / Spring Boot 4.0 (audit-trail), Go 1.24 (cdc-consumer)
+**Languages**: Java 21 / Spring Boot 4.0 (audit-trail), Go 1.25 (cdc-consumer)
 **Default Ports**: 8089/8080 (audit-trail), 8104/8080 (cdc-consumer, container)
 **Status**: Tier 2 Critical (Data plane)
 
@@ -55,7 +55,7 @@ This document covers the **cluster architecture & inter-service communication**.
 - **BigQuery Ingestion**: Batch insert via Google Cloud client library
 - **DLQ Routing**: Failed records → Kafka DLQ topic with error metadata
 - **Port**: 8104 (dev), 8080 (container)
-- **Runtime**: Go 1.24 (lightweight, fast batch processing)
+- **Runtime**: Go 1.25 (lightweight, fast batch processing)
 
 ## Key Technologies
 

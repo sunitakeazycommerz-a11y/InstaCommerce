@@ -52,13 +52,13 @@ public class PerishableLiquidationService {
         batch.setExpiryDate(request.expiryDate());
         batch = batchRepository.save(batch);
 
-        // Ensure stock item exists in store
+        // Ensure stock item exists in store and sync initial onHand when created
         StockItem stockItem = stockItemRepository.findByStoreIdAndProductId(storeId, request.productId())
             .orElseGet(() -> {
                 StockItem item = new StockItem();
                 item.setStoreId(storeId);
                 item.setProductId(request.productId());
-                item.setOnHand(0);
+                item.setOnHand(Math.max(0, request.quantity()));
                 item.setReserved(0);
                 return item;
             });

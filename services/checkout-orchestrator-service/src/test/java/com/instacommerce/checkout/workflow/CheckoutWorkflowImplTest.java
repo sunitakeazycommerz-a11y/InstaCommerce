@@ -31,6 +31,7 @@ import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
 import com.instacommerce.checkout.workflow.activity.PricingActivity;
+import com.instacommerce.checkout.workflow.activity.PromotionActivity;
 import io.temporal.workflow.Async;
 import io.temporal.workflow.Functions;
 import io.temporal.workflow.Promise;
@@ -78,6 +79,7 @@ class CheckoutWorkflowImplTest {
     @Mock private PaymentActivity paymentActivity;
     @Mock private OrderActivity orderActivity;
     @Mock private CouponActivity couponActivity;
+    @Mock private PromotionActivity promotionActivity;
     @Mock private CompensationDlqActivity dlqActivity;
 
     private MockedStatic<Workflow> workflowMock;
@@ -133,6 +135,8 @@ class CheckoutWorkflowImplTest {
             .thenReturn(orderActivity);
         workflowMock.when(() -> Workflow.newActivityStub(eq(CouponActivity.class), any()))
             .thenReturn(couponActivity);
+        workflowMock.when(() -> Workflow.newActivityStub(eq(PromotionActivity.class), any()))
+            .thenReturn(promotionActivity);
         workflowMock.when(() -> Workflow.newActivityStub(eq(CompensationDlqActivity.class), any()))
             .thenReturn(dlqActivity);
 
@@ -181,12 +185,13 @@ class CheckoutWorkflowImplTest {
         assertThat(response.orderId()).isEqualTo(ORDER_ID);
         assertThat(response.totalCents()).isEqualTo(15000L);
         assertThat(response.estimatedDeliveryMinutes()).isEqualTo(15);
+        assertThat(response.workflowId()).isEqualTo(WORKFLOW_ID);
 
         String expectedOrderId = UUID.nameUUIDFromBytes(("order-" + WORKFLOW_ID).getBytes(StandardCharsets.UTF_8)).toString();
         InventoryReserveRequest expectedReserveRequest =
             new InventoryReserveRequest(WORKFLOW_ID + ":inventory:reserve", STORE_ID, cartItems);
 
-        // Verify activities were called in the correct order
+        // Verify activities were called in the correct order (capturePayment before confirmStock)
         InOrder inOrder = inOrder(cartActivity, pricingActivity, inventoryActivity,
             paymentActivity, orderActivity);
         inOrder.verify(cartActivity).validateCart(USER_ID);
@@ -194,8 +199,8 @@ class CheckoutWorkflowImplTest {
         inOrder.verify(inventoryActivity).reserveStock(expectedReserveRequest);
         inOrder.verify(paymentActivity).authorizePayment(eq(expectedOrderId), eq(15000L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString(), eq(USER_ID));
         inOrder.verify(orderActivity).createOrder(any());
-        inOrder.verify(inventoryActivity).confirmStock(RESERVATION_ID);
         inOrder.verify(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
+        inOrder.verify(inventoryActivity).confirmStock(RESERVATION_ID);
         inOrder.verify(orderActivity).confirmOrder(ORDER_ID, WORKFLOW_ID + ":order:confirm");
 
         // Cart clear is best-effort but should be called
@@ -459,11 +464,11 @@ class CheckoutWorkflowImplTest {
         assertThat(response.status()).startsWith("FAILED: Order confirmation failed");
         assertThat(response.status()).doesNotContain("Warehouse unreachable");
 
-        // Verify coupon unredeem was triggered
+        // Verify coupon unredeem and captured payment refund were triggered
         verify(couponActivity).unredeemCoupon(couponCode, USER_ID, ORDER_ID);
         verify(orderActivity).cancelOrder(ORDER_ID);
         verify(inventoryActivity).releaseStock(RESERVATION_ID);
-        verify(paymentActivity).voidPayment(eq(PAYMENT_ID), anyString());
+        verify(paymentActivity).refundPayment(eq(PAYMENT_ID), eq(8000L), anyString());
     }
 
     @Test
@@ -672,6 +677,7 @@ class CheckoutWorkflowImplTest {
         CheckoutResponse response = workflow.checkout(request);
 
         assertThat(response.status()).startsWith("FAILED");
+        verify(inventoryActivity, never()).confirmStock(anyString());
         verify(orderActivity, never()).confirmOrder(anyString(), anyString());
     }
 
@@ -781,5 +787,38 @@ class CheckoutWorkflowImplTest {
             StandardCharsets.UTF_8);
         assertThat(yaml).contains("http://localhost:8095");
         assertThat(yaml).doesNotContain("http://localhost:8088");
+    }
+
+    @Test
+    void shouldRedeemPromotionsAndRollbackWhenCaptureFailsWithoutConfirmingStock() {
+        CheckoutRequest request = new CheckoutRequest(USER_ID, PAYMENT_METHOD_ID, null, DELIVERY_ADDRESS_ID);
+        List<CartItem> cartItems = List.of(new CartItem("prod-1", 1, 10000L));
+
+        PricingResult pricing = new PricingResult(
+            10000L, 1500L, 0L, 8500L, "INR", "quote-p", "tok-p", null, 0L,
+            List.of("FLASH15"),
+            List.of(new PricingResult.AppliedPromotionDetail("promo-uuid-1", "FLASH15", 1500L)));
+
+        when(cartActivity.validateCart(USER_ID))
+            .thenReturn(new CartValidationResult(USER_ID, cartItems, true, STORE_ID));
+        when(pricingActivity.calculatePrice(any())).thenReturn(pricing);
+        when(inventoryActivity.reserveStock(any(InventoryReserveRequest.class)))
+            .thenReturn(new InventoryReservationResult(RESERVATION_ID, true));
+        when(paymentActivity.authorizePayment(anyString(), eq(8500L), eq("INR"), eq(PAYMENT_METHOD_ID), anyString(), eq(USER_ID)))
+            .thenReturn(new PaymentAuthResult(PAYMENT_ID, true, null));
+        when(orderActivity.createOrder(any())).thenReturn(new OrderCreationResult(ORDER_ID, 12));
+        doThrow(new RuntimeException("PSP timeout"))
+            .when(paymentActivity).capturePayment(eq(PAYMENT_ID), anyString());
+
+        CheckoutResponse response = workflow.checkout(request);
+
+        assertThat(response.status()).startsWith("FAILED: Order confirmation failed");
+        assertThat(response.workflowId()).isEqualTo(WORKFLOW_ID);
+        assertThat(workflow.getResultSnapshot()).isEqualTo(response);
+        verify(promotionActivity).redeemPromotion("promo-uuid-1", USER_ID, ORDER_ID, 1500L);
+        verify(promotionActivity).rollbackPromotion("promo-uuid-1", USER_ID, ORDER_ID);
+        verify(inventoryActivity, never()).confirmStock(anyString());
+        verify(inventoryActivity).releaseStock(RESERVATION_ID);
+        verify(orderActivity).cancelOrder(ORDER_ID);
     }
 }

@@ -119,7 +119,8 @@ class RiderFleetRemediationTest {
         assertThat(activeRider.getTotalDeliveries()).isEqualTo(5);
         assertThat(activeRider.getStatus()).isEqualTo(RiderStatus.ACTIVE);
         assertThat(availability.isAvailable()).isTrue();
-        verify(riderEarningsService, times(1)).recordEarning(orderId, riderId, 3000L, 0L);
+        verify(riderEarningsService, times(1)).recordDeliveryEarning(
+            eq(orderId), eq(activeRider), eq(null), eq(null), eq(0L), any());
 
         UUID suspendedOrderId = UUID.randomUUID();
         UUID suspendedRiderId = UUID.randomUUID();

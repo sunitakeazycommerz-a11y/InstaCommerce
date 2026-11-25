@@ -1,0 +1,56 @@
+flowchart TB
+    classDef role1 fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef role2 fill:#F5F3FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef role3 fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef role4 fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#0F172A
+    classDef role5 fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef seam fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph ROW1["Product & Transaction Engineering Tracks"]
+        direction LR
+        subgraph T1["1. Core Commerce Java"]
+            direction TB
+            T1_SVC["mobile-bff :8080 · identity :8081<br/>catalog :8082 · search :8088 · pricing :8089<br/>cart :8090 · inventory :8083 · order :8084<br/>checkout-orchestrator :8091 · notification :8087<br/>config-feature-flag :8098"]:::role1
+            T1_LAB["Labs 1-4 · ADR-001 / ADR-005 / ADR-013"]:::role1
+            T1_SVC --> T1_LAB
+        end
+
+        subgraph T2["2. Payments, Risk & Ledger"]
+            direction TB
+            T2_SVC["payment-service :8085<br/>payment-webhook-service :8106 (Go)<br/>wallet-loyalty-service :8095<br/>fraud-detection-service :8097<br/>reconciliation-engine :8107 (Go)<br/>audit-trail :8096 · admin-gateway :8099"]:::role2
+            T2_LAB["Labs 2, 3, 5 · ADR-011 / ADR-014"]:::role2
+            T2_SVC --> T2_LAB
+        end
+
+        subgraph T3["3. Fulfillment, Logistics & Geo"]
+            direction TB
+            T3_SVC["warehouse-service :8092<br/>fulfillment-service :8086<br/>rider-fleet-service :8093<br/>routing-eta-service :8094<br/>dispatch-optimizer-service :8102 (Go)<br/>location-ingestion-service :8105 (Go)"]:::role3
+            T3_LAB["Labs 1, 3, 4 · ADR-002 / ADR-008"]:::role3
+            T3_SVC --> T3_LAB
+        end
+
+        T1 ~~~ T2 ~~~ T3
+    end
+
+    SEAM["Shared Monorepo Convergence Seams<br/>EventEnvelope.v1.json · TopicNames.java (.events / .DLT) · outbox_events<br/>SharedInternalServiceAuthFilter & go-shared/pkg/auth · check-monorepo-consistency.sh"]:::seam
+
+    subgraph ROW2["Data, AI & Platform Reliability Tracks"]
+        direction LR
+        subgraph T4["4. Data, ML & GenAI"]
+            direction TB
+            T4_SVC["outbox-relay :8103 · cdc-consumer :8104<br/>stream-processor :8108 · reverse-etl :8109<br/>data-platform/ (dbt, Airflow, Beam, GE)<br/>ml/ (train, eval, feature_store)<br/>ai-orchestrator :8100 · ai-inference :8101"]:::role4
+            T4_LAB["Labs 3, 4 · ADR-004 / ADR-007 / ADR-009"]:::role4
+            T4_SVC --> T4_LAB
+        end
+
+        subgraph T5["5. Platform, SRE & Infra"]
+            direction TB
+            T5_SVC["libs/platform-common · services/go-shared<br/>contracts/ (Proto & JSON Schemas)<br/>infra/terraform/ · deploy/helm/ · argocd/<br/>monitoring/ (SLO & Burn Rates)<br/>scripts/ · .github/workflows/ci.yml"]:::role5
+            T5_LAB["Labs 1, 2, 4, 5 · ADR-003 / ADR-006 / ADR-010 / ADR-012 / ADR-015"]:::role5
+            T5_SVC --> T5_LAB
+        end
+
+        T4 ~~~ T5
+    end
+
+    ROW1 <--> SEAM <--> ROW2

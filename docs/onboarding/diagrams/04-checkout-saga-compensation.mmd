@@ -1,0 +1,73 @@
+sequenceDiagram
+    autonumber
+    participant Cli as Client / BFF
+    participant Orch as checkout-orchestrator<br/>:8091 (Temporal)
+    participant Cart as cart-service<br/>:8090
+    participant Price as pricing-service<br/>:8089
+    participant Inv as inventory-service<br/>:8083
+    participant Wal as wallet-loyalty<br/>:8095
+    participant Pay as payment-service<br/>:8085
+    participant Ord as order-service<br/>:8084
+
+    Cli->>Orch: POST /checkout (Idempotency-Key)<br/>Semaphore(1500) · checkout_idempotency_keys (30m TTL) · 10m wf timeout
+
+    rect rgb(239, 246, 255)
+        Orch->>Cart: 1. VALIDATING_CART: GET /api/carts/{userId}/validate (10s, 3x)
+        Cart-->>Orch: valid cart items + storeId
+        Orch->>Price: 2. CALCULATING_PRICES: POST /pricing/calculate (10s, 3x)<br/>PriceDriftEvaluator rejects drift (maxPriceDriftCents=0)
+        Price-->>Orch: totalCents + PriceQuote + HmacSHA256 quoteToken
+        Note over Orch: expectedOrderId = UUID.nameUUIDFromBytes('order-' + workflowId)
+
+        Orch->>Inv: 3. RESERVING_INVENTORY: POST /api/inventory/reservations<br/>key = workflowId:inventory:reserve (~100c vs VARCHAR(64)!) [reg: releaseStock]
+        Inv-->>Orch: reservationId (5m TTL, sorted FOR UPDATE)
+
+        opt walletAmountCents greater than 0
+            Orch->>Wal: 4. DEBITING_WALLET: POST /wallet/debit<br/>{workflowId}:wallet:debit [reg: refundWallet]
+            Wal-->>Orch: debited=true (SELECT FOR UPDATE)
+        end
+
+        opt remainder (totalCents - walletDebitedCents) greater than 0
+            Orch->>Pay: 5. AUTHORIZING_PAYMENT: POST /payments/authorize<br/>MANUAL capture, {workflowId}:pay:auth (30s/45s)
+            Pay-->>Orch: authorized=true, paymentId
+        end
+
+        Orch->>Ord: 6. CREATING_ORDER: POST /api/orders (PENDING, expectedOrderId)<br/>idempotencyKey = {workflowId}:order:create [reg: cancelOrder]
+        Ord-->>Orch: orderId (PENDING + outbox_events)
+
+        opt appliedCoupon != null
+            Orch->>Price: 7. REDEEMING_COUPON: POST /pricing/coupons/redeem<br/>[reg: safeRollbackCoupon]
+        end
+
+        opt appliedPromotionDetails non-empty
+            Orch->>Price: 8. REDEEMING_PROMOTION: POST /pricing/promotions/redeem<br/>[reg: safeRollbackPromotion]
+        end
+
+        Orch->>Pay: 9a. CONFIRMING: paymentCaptureAttempted=true → POST /payments/{id}/capture<br/>{workflowId}:pay:{id}:capture → paymentCaptured=true
+        Orch->>Inv: 9b. CONFIRMING: POST /api/inventory/reservations/{id}/confirm (FEFO deduct)
+        Orch->>Ord: 9c. CONFIRMING: POST /admin/orders/{id}/status → PLACED<br/>(sends Idempotency-Key hdr, ignored by AdminOrderController)
+        Orch-->>Cart: 10. CLEARING_CART: DELETE /api/carts/{userId} (best-effort) → COMPLETED
+        Orch-->>Cli: 200 CheckoutResponse (orderId, totalCents, workflowId)
+    end
+
+    rect rgb(254, 242, 242)
+        opt On Exception in Steps 1..9 → COMPENSATING
+            Note over Orch,Pay: 3-Tier Payment Compensation (CheckoutWorkflowSupport.compensatePayment)
+            alt paymentCaptured == true
+                Orch->>Pay: refundPayment ({workflowId}:pay:{id}:refund, 5x retries)
+            else paymentAuthorized == true
+                Orch->>Pay: voidPayment ({workflowId}:pay:{id}:void, 5x retries)
+                Note over Orch,Pay: If voidPayment fails AND paymentCaptureAttempted == true → fallback to refundPayment!
+            end
+
+            Note over Orch,Inv: LIFO Saga.compensate() (parallel=false, continueWithError=true, 5x retries)
+            Orch->>Price: L1-L2. rollbackPromotion → unredeemCoupon / rollbackUsage
+            Orch->>Ord: L3. cancelOrder (reason=CHECKOUT_SAGA_ROLLBACK → prevents duplicate wallet refund)
+            Orch->>Wal: L4. refundWallet ({workflowId}:wallet:refund)
+            Orch->>Inv: L5. releaseStock (DELETE /api/inventory/reservations/{id}, PENDING & CONFIRMED)
+
+            opt Any compensation exhausts 5 retries
+                Note right of Orch: Write PG compensation_dlq (FAILED)<br/>Replay: POST /checkout/dlq/{id}/retry<br/>Seam: SecurityConfig lacks InternalServiceAuthFilter
+            end
+            Orch-->>Cli: FAILED (cached 30m in checkout_idempotency_keys — blocks same-key retry!)
+        end
+    end

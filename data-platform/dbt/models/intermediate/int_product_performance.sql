@@ -14,11 +14,12 @@ inventory AS (
 product_cart_metrics AS (
     SELECT
         product_id,
+        store_id,
         COUNTIF(event_type = 'ADD') AS add_to_cart_count,
         COUNTIF(event_type = 'REMOVE') AS remove_from_cart_count,
         COUNT(DISTINCT user_id) AS unique_cart_users
     FROM cart_events
-    GROUP BY product_id
+    GROUP BY product_id, store_id
 ),
 product_search_clicks AS (
     SELECT
@@ -58,7 +59,7 @@ SELECT
     COALESCE(pi.total_write_off, 0) AS total_write_off,
     COALESCE(pi.total_inbound, 0) - COALESCE(pi.total_outbound, 0) - COALESCE(pi.total_write_off, 0) AS estimated_stock
 FROM products p
-LEFT JOIN product_cart_metrics pcm ON p.product_id = pcm.product_id
+LEFT JOIN product_cart_metrics pcm ON p.product_id = pcm.product_id AND p.store_id = pcm.store_id
 LEFT JOIN product_search_clicks psc ON p.product_id = psc.product_id
 LEFT JOIN product_inventory pi ON p.product_id = pi.product_id AND p.store_id = pi.store_id
 WHERE p.is_active = TRUE

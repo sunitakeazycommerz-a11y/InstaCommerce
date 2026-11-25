@@ -1,0 +1,57 @@
+flowchart LR
+    subgraph Ingress["Security Filter Chain (:8081)"]
+        Corr["CorrelationIdFilter<br/>@Order(HIGHEST_PRECEDENCE)<br/>MDC correlationId + X-Correlation-ID"]
+        Internal["SharedInternalServiceAuthFilter<br/>(platform-common)<br/>30 allowed-callers -> ROLE_SERVICE_*"]
+        JwtFilt["JwtAuthenticationFilter<br/>Jwks verify + TokenBlocklistService<br/>+ mergeInternalAuthorities()"]
+        SecCfg["SecurityConfig<br/>@EnableMethodSecurity, CORS, STATELESS<br/>permitAll: /auth/{login,register,refresh}, /.well-known/**"]
+        Corr --> Internal --> JwtFilt --> SecCfg
+    end
+
+    subgraph Controllers["MVC Controllers"]
+        AuthCtrl["AuthController<br/>/auth & /api/v1/auth<br/>register, login, refresh, revoke, logout"]
+        UserCtrl["UserController<br/>/users/me & /api/v1/users/me<br/>profile, prefs, password, deleteMe"]
+        AdminCtrl["AdminController<br/>/admin/users/** & /users/{id}<br/>list, getUser, unlock, revoke, roles"]
+        JwksCtrl["JwksController<br/>GET /.well-known/jwks.json<br/>active + previousPublicKeys"]
+        SecCfg --> AuthCtrl
+        SecCfg --> UserCtrl
+        SecCfg --> AdminCtrl
+        SecCfg --> JwksCtrl
+    end
+
+    subgraph DomainServices["Domain Services & Helpers"]
+        AuthSvc["AuthService<br/>BCrypt(12), lockout, refresh rotation"]
+        UserSvc["UserService + UserDeletionService<br/>GDPR erasure, role update, unlock"]
+        RateSvc["RateLimitService<br/>Redis Lua + Caffeine Resilience4j fallback"]
+        BlockSvc["TokenBlocklistService<br/>Redis + local 4096 map (fail-closed)"]
+        JwtSvc["TokenService + DefaultJwtService + JwtKeyLoader<br/>RS256 kid, aud=instacommerce-api"]
+        OutboxSvc["OutboxService (MANDATORY)"]
+        AuditSvc["AuditService (@Async auditExecutor, REQUIRES_NEW)"]
+        Jobs["Cleanup Jobs<br/>RefreshToken & Outbox (@SchedulerLock)<br/>AuditLogCleanupJob (NO @SchedulerLock)"]
+    end
+
+    subgraph Storage["PostgreSQL identity_db (V1-V13) + Redis + Outbox Relay"]
+        PG["PostgreSQL identity_db<br/>users, refresh_tokens, audit_log,<br/>outbox_events, notification_preferences, shedlock"]
+        Redis["Redis<br/>identity:ratelimit:*<br/>identity:failed_logins:{email}:{ip}<br/>identity:revoked_jti:* & revoked_user_before:*"]
+        Relay["outbox-relay-identity<br/>-> Kafka identity.events"]
+    end
+
+    AuthCtrl --> AuthSvc
+    UserCtrl --> UserSvc
+    AdminCtrl --> UserSvc
+    JwksCtrl --> JwtSvc
+    AuthSvc --> RateSvc
+    AuthSvc --> BlockSvc
+    AuthSvc --> JwtSvc
+    AuthSvc --> OutboxSvc
+    AuthSvc --> AuditSvc
+    UserSvc --> BlockSvc
+    UserSvc --> OutboxSvc
+    UserSvc --> AuditSvc
+    RateSvc --> Redis
+    BlockSvc --> Redis
+    AuthSvc --> PG
+    UserSvc --> PG
+    OutboxSvc --> PG
+    AuditSvc --> PG
+    Jobs --> PG
+    PG -. "SKIP LOCKED CDC/Poll" .-> Relay

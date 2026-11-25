@@ -1,0 +1,119 @@
+flowchart LR
+    %% 30-Service Runtime Dependency Matrix (5 Planes, Sync vs. Async Paths & Repo-Truth Gaps)
+    classDef edge fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef browse fill:#F0FDF4,stroke:#16A34A,stroke-width:1.6px,color:#0F172A
+    classDef core fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef fulfill fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef dataai fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef infra fill:#F8FAFC,stroke:#475569,stroke-width:1.8px,color:#0F172A
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph COL1["Ingress &amp; Plane 1 · Edge &amp; Governance (5 Java)"]
+        direction TB
+        ING(["External Callers &amp; Ingress<br/>Mobile · Admin · Rider · PSP Webhooks<br/>Istio Gateway (JWKS :8081)"]):::infra
+        MBFF["mobile-bff-service :8080<br/>WebFlux · SSE /cart/stream<br/>12 WebClients · Redis PubSub"]:::edge
+        AGW["admin-gateway-service :8099<br/>MVC Proxy · Dashboard Health/Metrics<br/>Sync AdminAuditClient -&gt; :8096"]:::edge
+        ID["identity-service :8081<br/>RS256/JWKS · Redis Blocklist<br/>PG + Outbox (identity.events)"]:::edge
+        FF["config-feature-flag-service :8098<br/>Murmur3 Flags · SSE /flags/stream<br/>PG + Caffeine + Redis PubSub"]:::edge
+        AUD["audit-trail-service :8096<br/>21-Topic Kafka + /audit/events<br/>PG SHA-256 Chain + Nightly GCS"]:::edge
+        ING -->|"Customer JWT"| MBFF
+        ING -->|"Admin JWT"| AGW
+        ING -->|"Auth / JWKS"| ID
+        AGW -->|"Flags"| FF
+        AGW -->|"Sync Audit"| AUD
+    end
+
+    subgraph COL2["Planes 2 &amp; 3 · Browse, Cart, Core Order &amp; Money (13 Svcs)"]
+        direction TB
+        subgraph P2["Plane 2 · Browse &amp; Cart (4 Java)"]
+            direction TB
+            CAT["catalog-service :8082<br/>SKUs · PG + Redis L2<br/>OutboxPublishJob + Relay"]:::browse
+            SRCH["search-service :8088<br/>PG tsvector GIN + Redis L2<br/>Consumes catalog/inventory"]:::browse
+            PRC["pricing-service :8089<br/>HMAC Quotes · Redis L2 + NX<br/>Consumes catalog/warehouse"]:::browse
+            CART["cart-service :8090<br/>JpaCartStore + PricingClient<br/>PG + Redis L2 + PubSub"]:::browse
+            CAT -.->|"catalog.events"| SRCH
+            CART -->|"RestClient /pricing"| PRC
+        end
+
+        subgraph P3["Plane 3 · Core Order &amp; Money (6 Java + 2 Go)"]
+            direction TB
+            CHK["checkout-orchestrator :8091<br/>10-Step Temporal Saga + DLQ<br/>6 Activity RestTemplates"]:::core
+            ORD["order-service :8084<br/>9-State FSM (Legacy 410 GONE)<br/>RestPricingQuoteClient only"]:::core
+            INV["inventory-service :8083<br/>Sorted Lock + FEFO (VARCHAR64 bug)<br/>RestWarehouseClient + Outbox"]:::core
+            PAY["payment-service :8085<br/>2-TX Pending + Ledger + Stripe<br/>OrderPacked Cap (Recovery OFF)"]:::core
+            WAL["wallet-loyalty-service :8095<br/>FOR UPDATE + Pay/Order Clients<br/>(Refund consumer OFF in base)"]:::core
+            FRD["fraud-detection-service :8097<br/>Fail-Closed + OrderClient + Redis<br/>Consumes orders/payments"]:::core
+            PWH["payment-webhook-service :8106 (Go)<br/>Stripe/Razorpay/PhonePe HMAC<br/>Redis SETNX -&gt; payment.webhooks"]:::core
+            REC["reconciliation-engine :8107 (Go)<br/>CDC Upsert + T+1 Matcher<br/>(psp_export_snapshot empty)"]:::gap
+            CHK -->|"Saga Activities"| ORD
+            CHK -->|"Reserve / Pay / Wallet"| INV
+            ORD -->|"Validate Quote"| PRC
+        end
+    end
+
+    subgraph COL3["Shared State, Event Backbone &amp; External APIs"]
+        direction TB
+        TMP(("Temporal :7233<br/>instacommerce (live)<br/>reverse-etl (unused)")):::infra
+        PG[("PostgreSQL 16 :5432<br/>20 DBs (39 local aliases)<br/>Domain + outbox_events")]:::infra
+        RED[("Redis 7 :6379<br/>L2 · PubSub · Blocklist<br/>GEO/H3 · Dedup · Features")]:::infra
+        KAF(("Kafka KRaft :9092 + Debezium :18083<br/>21 .events + .DLT / .dlq<br/>reconciliation.cdc (no payments.cdc)")):::infra
+        EXT(("External &amp; GCP<br/>Stripe · FCM/SendGrid/Twilio<br/>LLM API · GCS · BigQuery")):::infra
+        TMP ~~~ PG ~~~ RED ~~~ KAF ~~~ EXT
+    end
+
+    subgraph COL4["Planes 4 &amp; 5 · Fulfillment, Logistics, Data &amp; AI (13 Svcs)"]
+        direction TB
+        subgraph P4["Plane 4 · Fulfillment &amp; Logistics (5 Java + 2 Go)"]
+            direction TB
+            WH["warehouse-service :8092<br/>15km Stores · Capacity (100)<br/>PG + Caffeine + Outbox"]:::fulfill
+            FUL["fulfillment-service :8086<br/>S-Curve Pick + OrderPacked + OTP<br/>Calls Order/Pay/Inv/WH"]:::fulfill
+            NOTIF["notification-service :8087<br/>7-Topic Fanout + Id/Order Clients<br/>FCM/SendGrid/Twilio + PG"]:::fulfill
+            RF["rider-fleet-service :8093<br/>PG SKIP LOCKED + GEORADIUS<br/>(optimizer-enabled=false)"]:::fulfill
+            RETA["routing-eta-service :8094<br/>Haversine x1.4 + STOMP /ws<br/>(No OSRM/Google Maps)"]:::fulfill
+            DOPT["dispatch-optimizer :8102 (Go)<br/>Greedy 1-Opt + Redis Mutex<br/>(/dispatch/assign unused)"]:::gap
+            LOC["location-ingestion :8105 (Go)<br/>Kalman + Lua CAS riders:h3:*<br/>(zones map empty)"]:::gap
+            FUL -->|"Store / Coords"| WH
+            RF -. "Flagged OFF (false)" .-> DOPT
+        end
+
+        subgraph P5["Plane 5 · Event, Data, ML &amp; GenAI (4 Go + 2 Py)"]
+            direction TB
+            OBR["outbox-relay-service :8103 (Go)<br/>14 Helm Keys (13 DBs) SKIP LOCKED<br/>PG -&gt; Kafka / outbox.relay.dlq"]:::dataai
+            CDCC["cdc-consumer-service :8104 (Go)<br/>Kafka -&gt; BigQuery Stream<br/>(Base Helm omits env vars)"]:::gap
+            STRM["stream-processor :8108 (Go)<br/>Bloom/Redis Dedup -&gt; Redis/Prom<br/>(No BigQuery sink)"]:::dataai
+            RETL["reverse-etl-orchestrator :8109 (Go)<br/>HTTP Push WorkerPool (:8110/:9090)<br/>(Helm REDIS_ADDR='')"]:::gap
+            AIO["ai-orchestrator-service :8100 (Py)<br/>LangGraph + 6 httpx Tool Clients<br/>Redis + ai-orchestrator.events"]:::dataai
+            AII["ai-inference-service :8101 (Py)<br/>7 ML Routes (Rule Fallback)<br/>Redis Features (0 callers)"]:::gap
+        end
+    end
+
+    %% Clean Cross-Column Flows (No redundant multi-target lines)
+    MBFF -->|"Aggregate (12 Clients)"| P2
+    MBFF -->|"POST /checkout"| CHK
+    AGW -->|"Ops / Fraud / Recon"| P3
+    ING -.->|"PSP Webhooks (:8106)"| PWH
+
+    CHK <-->|"gRPC"| TMP
+    P2 -->|"PG + L2 Cache"| RED
+    P3 -->|"ACID + Outbox"| PG
+    P3 -->|"Stripe SDK"| EXT
+    PWH -->|"SETNX Dedup"| RED
+    PWH -->|"payment.webhooks"| KAF
+    AUD -.->|"21 Topics"| KAF
+    AUD -->|"Nightly Archive"| EXT
+
+    PG -->|"Poll outbox_events"| OBR
+    OBR -->|"Sarama WaitForAll"| KAF
+    KAF <-->|"Domain &amp; Rider Events"| P4
+    P4 -->|"GEO / H3 / STOMP"| RED
+    NOTIF -->|"FCM / SendGrid / Twilio"| EXT
+
+    KAF -->|"Topics &amp; CDC"| CDCC
+    KAF -->|"Windows &amp; SLA"| STRM
+    CDCC -.->|"BQ Insert"| EXT
+    STRM -->|"Counters &amp; GEO"| RED
+    RETL -.->|"Lua Swap (when configured)"| RED
+    AIO <-->|"Checkpoints &amp; Budgets"| RED
+    AII <-->|"Features (default: none)"| RED
+    AIO -.->|"6 httpx Tools (Browse/Order)"| P2
+    AIO -.->|"Audit / LLM"| EXT

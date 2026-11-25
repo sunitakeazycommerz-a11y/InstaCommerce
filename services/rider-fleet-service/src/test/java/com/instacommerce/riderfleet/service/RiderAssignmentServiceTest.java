@@ -11,6 +11,7 @@ import com.instacommerce.riderfleet.domain.model.Rider;
 import com.instacommerce.riderfleet.domain.model.RiderAssignment;
 import com.instacommerce.riderfleet.domain.model.RiderAvailability;
 import com.instacommerce.riderfleet.domain.model.RiderStatus;
+import com.instacommerce.riderfleet.domain.model.VehicleType;
 import com.instacommerce.riderfleet.repository.RiderAssignmentRepository;
 import com.instacommerce.riderfleet.repository.RiderAvailabilityRepository;
 import com.instacommerce.riderfleet.repository.RiderRepository;
@@ -28,6 +29,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.geo.Circle;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.GeoResult;
+import org.springframework.data.geo.GeoResults;
+import org.springframework.data.geo.Metrics;
+import org.springframework.data.redis.connection.RedisGeoCommands;
+import org.springframework.data.redis.core.GeoOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 @ExtendWith(MockitoExtension.class)
 class RiderAssignmentServiceTest {
@@ -225,6 +234,7 @@ class RiderAssignmentServiceTest {
         rider.setId(riderId);
         rider.setName("Vikram Rider");
         rider.setStatus(RiderStatus.ACTIVE);
+        rider.setVehicleType(VehicleType.BICYCLE);
 
         when(assignmentRepository.existsByOrderId(orderId)).thenReturn(false);
         when(availabilityRepository.findEligibleNearestCandidates(
@@ -246,9 +256,107 @@ class RiderAssignmentServiceTest {
             .containsEntry("riderId", riderId)
             .containsEntry("orderId", orderId)
             .containsEntry("storeId", storeId)
+            .containsEntry("vehicleType", "BICYCLE")
             .containsEntry("pickupLat", pickupLat)
             .containsEntry("pickupLng", pickupLng)
             .containsEntry("dropoffLat", dropoffLat)
             .containsEntry("dropoffLng", dropoffLng);
+    }
+
+    @Test
+    @DisplayName("assignRider queries Redis GEORADIUS riders:active before DB fallback")
+    @SuppressWarnings("unchecked")
+    void assignRiderUsesRedisGeoRadiusBeforeDbFallback() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        GeoOperations<String, String> geoOps = mock(GeoOperations.class);
+        when(redisTemplate.opsForGeo()).thenReturn(geoOps);
+
+        RiderAssignmentService redisBackedService = new RiderAssignmentService(
+            riderRepository, availabilityRepository, assignmentRepository,
+            outboxService, properties, dispatchOptimizerClient,
+            null, redisTemplate, null, Clock.systemUTC());
+
+        UUID orderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        BigDecimal pickupLat = new BigDecimal("12.9716");
+        BigDecimal pickupLng = new BigDecimal("77.5946");
+
+        RiderAvailability availability = new RiderAvailability();
+        availability.setRiderId(riderId);
+        availability.setStoreId(storeId);
+        availability.setAvailable(true);
+
+        Rider rider = new Rider();
+        rider.setId(riderId);
+        rider.setName("Geo Rider");
+        rider.setStatus(RiderStatus.ACTIVE);
+        rider.setVehicleType(VehicleType.CAR);
+
+        GeoResult<RedisGeoCommands.GeoLocation<String>> geoResult = new GeoResult<>(
+            new RedisGeoCommands.GeoLocation<>(riderId.toString(), null),
+            new Distance(0.4, Metrics.KILOMETERS));
+        when(geoOps.radius(eq("riders:active"), any(Circle.class), any(RedisGeoCommands.GeoRadiusCommandArgs.class)))
+            .thenReturn(new GeoResults<>(List.of(geoResult)));
+        when(assignmentRepository.existsByOrderId(orderId)).thenReturn(false);
+        when(availabilityRepository.findByStoreIdAndIsAvailableTrueAndRiderIdIn(storeId, List.of(riderId)))
+            .thenReturn(List.of(availability));
+        when(riderRepository.findAllById(any())).thenReturn(List.of(rider));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(riderId))
+            .thenReturn(Optional.of(availability));
+
+        UUID assigned = redisBackedService.assignRider(orderId, storeId, pickupLat, pickupLng);
+
+        assertThat(assigned).isEqualTo(riderId);
+        verify(availabilityRepository, never()).findEligibleNearestCandidates(
+            any(), any(), anyDouble(), any(), anyInt(), anyInt(), anyInt(), any(), anyBoolean(), any(), anyInt());
+        verify(outboxService).publish(
+            eq("Rider"), eq(riderId.toString()), eq("RiderAssigned"), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).containsEntry("vehicleType", "CAR");
+    }
+
+    @Test
+    @DisplayName("assignRider falls back to PostgreSQL when Redis GEORADIUS fails")
+    @SuppressWarnings("unchecked")
+    void assignRiderFallsBackToPostgresWhenRedisErrors() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        GeoOperations<String, String> geoOps = mock(GeoOperations.class);
+        when(redisTemplate.opsForGeo()).thenReturn(geoOps);
+        when(geoOps.radius(eq("riders:active"), any(Circle.class), any(RedisGeoCommands.GeoRadiusCommandArgs.class)))
+            .thenThrow(new RuntimeException("Redis timeout"));
+
+        RiderAssignmentService redisBackedService = new RiderAssignmentService(
+            riderRepository, availabilityRepository, assignmentRepository,
+            outboxService, properties, dispatchOptimizerClient,
+            null, redisTemplate, null, Clock.systemUTC());
+
+        UUID orderId = UUID.randomUUID();
+        UUID storeId = UUID.randomUUID();
+        UUID riderId = UUID.randomUUID();
+        BigDecimal pickupLat = new BigDecimal("12.9716");
+        BigDecimal pickupLng = new BigDecimal("77.5946");
+
+        RiderAvailability availability = new RiderAvailability();
+        availability.setRiderId(riderId);
+        availability.setStoreId(storeId);
+        availability.setAvailable(true);
+
+        Rider rider = new Rider();
+        rider.setId(riderId);
+        rider.setName("PG Fallback Rider");
+        rider.setStatus(RiderStatus.ACTIVE);
+
+        when(assignmentRepository.existsByOrderId(orderId)).thenReturn(false);
+        when(availabilityRepository.findEligibleNearestCandidates(
+            eq(pickupLat), eq(pickupLng), eq(5.0), eq(storeId), eq(0),
+            anyInt(), anyInt(), any(), eq(false), any(), anyInt()))
+            .thenReturn(List.of(availability));
+        when(riderRepository.findAllById(List.of(riderId))).thenReturn(List.of(rider));
+        when(availabilityRepository.findAvailableByRiderIdForUpdateSkipLocked(riderId))
+            .thenReturn(Optional.of(availability));
+
+        UUID assigned = redisBackedService.assignRider(orderId, storeId, pickupLat, pickupLng);
+
+        assertThat(assigned).isEqualTo(riderId);
     }
 }

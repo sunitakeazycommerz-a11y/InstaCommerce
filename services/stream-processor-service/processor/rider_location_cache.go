@@ -27,7 +27,12 @@ func (p *RiderProcessor) recordLocationTimestampLocked(riderID string, eventTime
 
 	for back := p.lastLocationLRU.Back(); back != nil; {
 		prev := back.Prev()
-		id := back.Value.(string)
+		id, ok := back.Value.(string)
+		if !ok {
+			p.lastLocationLRU.Remove(back)
+			back = prev
+			continue
+		}
 		entry := p.lastLocationAt[id]
 		if entry == nil || now.Sub(entry.seenAt) > ttl {
 			p.lastLocationLRU.Remove(back)
@@ -57,9 +62,10 @@ func (p *RiderProcessor) recordLocationTimestampLocked(riderID string, eventTime
 		if back == nil {
 			break
 		}
-		id := back.Value.(string)
 		p.lastLocationLRU.Remove(back)
-		delete(p.lastLocationAt, id)
+		if id, ok := back.Value.(string); ok {
+			delete(p.lastLocationAt, id)
+		}
 	}
 
 	entry := &riderLocationEntry{

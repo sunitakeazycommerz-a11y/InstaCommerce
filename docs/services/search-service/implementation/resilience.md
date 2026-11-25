@@ -245,10 +245,10 @@ SELECT pg_terminate_backend(pid);
 **Diagnosis:**
 ```bash
 # Check Prometheus metrics
-curl http://localhost:8086/actuator/metrics/cache.caffeine.hitRate
+curl http://localhost:8088/actuator/metrics/cache.caffeine.hitRate
 
 # Check JVM heap
-curl http://localhost:8086/actuator/metrics/jvm.memory.used
+curl http://localhost:8088/actuator/metrics/jvm.memory.used
 ```
 
 **Root Cause Possibilities:**
@@ -266,7 +266,7 @@ spring.cache.caffeine.spec: maximumSize=20000,expireAfterWrite=300s
 kubectl set image deployment/search-service search-service=search-service:v1.2.4
 
 # Monitor hit rate recovery
-watch -n 1 'curl -s http://localhost:8086/actuator/metrics/cache.caffeine.hitRate | jq .measurements'
+watch -n 1 'curl -s http://localhost:8088/actuator/metrics/cache.caffeine.hitRate | jq .measurements'
 ```
 
 ---

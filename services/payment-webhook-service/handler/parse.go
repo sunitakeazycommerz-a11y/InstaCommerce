@@ -3,11 +3,18 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
 // ParseEvent converts a raw PSP payload into a canonical WebhookEvent.
 func ParseEvent(psp PSPType, payload []byte) (WebhookEvent, error) {
+	return ParseEventWithHeaderID(psp, payload, "")
+}
+
+// ParseEventWithHeaderID converts a raw PSP payload into a canonical WebhookEvent,
+// using headerEventID (such as X-Razorpay-Event-Id) when provided.
+func ParseEventWithHeaderID(psp PSPType, payload []byte, headerEventID string) (WebhookEvent, error) {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return WebhookEvent{}, fmt.Errorf("handler: unmarshal payload: %w", err)
@@ -36,26 +43,51 @@ func ParseEvent(psp PSPType, payload []byte) (WebhookEvent, error) {
 		}
 	case Razorpay:
 		event.EventType, _ = jsonString(raw, "event")
+		var entityID string
 		if p, ok := raw["payload"].(map[string]interface{}); ok {
 			if payment, ok := p["payment"].(map[string]interface{}); ok {
 				if entity, ok := payment["entity"].(map[string]interface{}); ok {
-					event.ID, _ = jsonString(entity, "id")
-					event.PaymentID, _ = jsonString(entity, "id")
+					entityID, _ = jsonString(entity, "id")
+					event.PaymentID = entityID
 					event.OrderID, _ = jsonString(entity, "order_id")
 					event.AmountCents = jsonInt64(entity, "amount")
 					event.Currency, _ = jsonString(entity, "currency")
 					event.Status, _ = jsonString(entity, "status")
 				}
 			}
+			if event.PaymentID == "" {
+				if refund, ok := p["refund"].(map[string]interface{}); ok {
+					if entity, ok := refund["entity"].(map[string]interface{}); ok {
+						entityID, _ = jsonString(entity, "id")
+						event.PaymentID, _ = jsonString(entity, "payment_id")
+						if event.PaymentID == "" {
+							event.PaymentID = entityID
+						}
+						event.OrderID, _ = jsonString(entity, "order_id")
+						event.AmountCents = jsonInt64(entity, "amount")
+						event.Currency, _ = jsonString(entity, "currency")
+						event.Status, _ = jsonString(entity, "status")
+					}
+				}
+			}
+		}
+		if hdr := strings.TrimSpace(headerEventID); hdr != "" {
+			event.ID = hdr
+		} else if event.PaymentID != "" {
+			event.ID = compositeWebhookEventID(string(Razorpay), event.EventType, event.PaymentID, event.Status)
 		}
 	case PhonePe:
-		event.ID, _ = jsonString(raw, "transactionId")
 		event.EventType, _ = jsonString(raw, "event")
 		event.PaymentID, _ = jsonString(raw, "transactionId")
 		event.OrderID, _ = jsonString(raw, "merchantOrderId")
 		event.AmountCents = jsonInt64(raw, "amount")
 		event.Currency = "INR"
 		event.Status, _ = jsonString(raw, "state")
+		if hdr := strings.TrimSpace(headerEventID); hdr != "" {
+			event.ID = hdr
+		} else if event.PaymentID != "" {
+			event.ID = compositeWebhookEventID(string(PhonePe), event.EventType, event.PaymentID, event.Status)
+		}
 	default:
 		return WebhookEvent{}, fmt.Errorf("handler: unsupported PSP %q", psp)
 	}
@@ -64,6 +96,10 @@ func ParseEvent(psp PSPType, payload []byte) (WebhookEvent, error) {
 		return WebhookEvent{}, ErrMissingEventID
 	}
 	return event, nil
+}
+
+func compositeWebhookEventID(psp, eventType, paymentID, status string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", psp, strings.TrimSpace(eventType), strings.TrimSpace(paymentID), strings.TrimSpace(status))
 }
 
 func jsonString(m map[string]interface{}, keys ...string) (string, bool) {

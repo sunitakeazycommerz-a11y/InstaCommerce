@@ -67,12 +67,12 @@ graph TB
 ```yaml
 Egress:
   - PostgreSQL (search DB, port 5432)
-  - Kafka brokers (ports 9092, 9093)
+  - Kafka brokers (port 9092)
   - OpenTelemetry collector (port 4318)
 
 Ingress:
-  - mobile-bff-service (port 8086)
-  - admin-gateway-service (port 8086)
+  - mobile-bff-service (port 8080)
+  - admin-gateway-service (port 8099)
   - Istio sidecar mesh
 
 DNS:

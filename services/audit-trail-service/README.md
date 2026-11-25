@@ -28,7 +28,7 @@ Ingests domain events from **14 Kafka topics** plus a REST ingestion API, stores
 ```
   Kafka (14 domain topics) ──▶ ┌──────────────────────────────┐   JPA    ┌────────────────────┐
                                 │  audit-trail-service          │ ───────▶│ PostgreSQL         │
-  ┌──────────────┐   REST      │  (Spring Boot 3 / Java)       │         │ (partitioned table)│
+  ┌──────────────┐   REST      │  (Spring Boot 4.0.0 / Java)       │         │ (partitioned table)│
   │  API Gateway │ ──────────▶ │                                │         └────────────────────┘
   └──────────────┘             │  DomainEventConsumer           │
                                 │  AuditIngestionController     │
@@ -415,8 +415,8 @@ Key properties in `application.yml` / environment:
 
 ### Dependencies
 
-- Java 17+, Spring Boot 3, Spring Kafka
-- PostgreSQL 15+ (native range partitioning)
+- Java 21, Spring Boot 4.0.0, Spring Kafka
+- PostgreSQL 16 (native range partitioning)
 - Flyway, ShedLock 5.10.2
 - Resilience4j 2.2.0
 - JJWT 0.12.5 (RSA JWT)
@@ -445,7 +445,7 @@ curl -X POST http://localhost:8096/audit/events \
   -d '{"eventType":"ORDER_PLACED","sourceService":"order-service","action":"CREATE"}'
 
 # Search events
-curl "http://localhost:8080/admin/audit/events?sourceService=order-service&size=10" \
+curl "http://localhost:8096/admin/audit/events?sourceService=order-service&size=10" \
   -H "Authorization: Bearer <admin-token>"
 ```
 

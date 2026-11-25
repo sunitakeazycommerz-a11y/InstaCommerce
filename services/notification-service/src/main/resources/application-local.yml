@@ -1,0 +1,52 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  datasource:
+    url: ${NOTIFICATION_DB_URL:jdbc:postgresql://localhost:5432/notification}
+    username: ${NOTIFICATION_DB_USER:postgres}
+    password: ${NOTIFICATION_DB_PASSWORD:devpass}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+notification:
+  jwt:
+    issuer: ${NOTIFICATION_JWT_ISSUER:instacommerce-identity}
+    public-key: ${NOTIFICATION_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwLQ9ItN2Ynh6wOZ43vBR+mwBiITyLugZCLnF20z7D/g17KhgeM3D6JfexegX/Gtekt+Oha2/1KcSAwRwsDZZ7CU8gYFWb+TKwrWTJd8efMlhUxeTQvIS3DlOxw5QuWh6wB5FsOmMchqehTGtOcB6VQ6yqNwfq4RZtb8LdK0mOyGGSZT8xVCVVL1Z8XNPqveKauyJmedzKTUyssWLdJe3QyXUggGR9rdcanfBjapvguHFhoxeXfqW+CxU7ilk1KuNGcj9VDhx92OKugJAjrPYFsFZ2LlcpTlxCUPsAOoqdi0mM4dK+HH7mKgMwza36AipDi1tWhlzFMqTRG9MjZw8WQIDAQAB}}
+  providers:
+    sendgrid:
+      api-key: ${SENDGRID_API_KEY:SG.local_placeholder}
+      from-email: ${SENDGRID_FROM_EMAIL:no-reply@localhost.instacommerce.dev}
+    twilio:
+      account-sid: ${TWILIO_ACCOUNT_SID:local_twilio_placeholder}
+      auth-token: ${TWILIO_AUTH_TOKEN:local_twilio_placeholder}
+      from-number: ${TWILIO_FROM_NUMBER:+15005550006}
+    fcm:
+      project-id: ${FCM_PROJECT_ID:local-dev}
+      access-token: ${FCM_ACCESS_TOKEN:local_fcm_placeholder}
+  identity:
+    base-url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+  order:
+    base-url: ${ORDER_SERVICE_URL:http://localhost:8084}
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:0.0}
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

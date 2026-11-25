@@ -1,0 +1,43 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  datasource:
+    url: ${ROUTING_DB_URL:jdbc:postgresql://localhost:5432/routing}
+    username: ${ROUTING_DB_USER:postgres}
+    password: ${ROUTING_DB_PASSWORD:devpass}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+routing:
+  jwt:
+    issuer: ${ROUTING_JWT_ISSUER:instacommerce-identity}
+    public-key: ${ROUTING_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwLQ9ItN2Ynh6wOZ43vBR+mwBiITyLugZCLnF20z7D/g17KhgeM3D6JfexegX/Gtekt+Oha2/1KcSAwRwsDZZ7CU8gYFWb+TKwrWTJd8efMlhUxeTQvIS3DlOxw5QuWh6wB5FsOmMchqehTGtOcB6VQ6yqNwfq4RZtb8LdK0mOyGGSZT8xVCVVL1Z8XNPqveKauyJmedzKTUyssWLdJe3QyXUggGR9rdcanfBjapvguHFhoxeXfqW+CxU7ilk1KuNGcj9VDhx92OKugJAjrPYFsFZ2LlcpTlxCUPsAOoqdi0mM4dK+HH7mKgMwza36AipDi1tWhlzFMqTRG9MjZw8WQIDAQAB}}
+  ws:
+    allowed-origins: ${ROUTING_WS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+
+google:
+  maps:
+    api-key: ${GOOGLE_MAPS_API_KEY:local-dev-disabled}
+
+internal:
+  service:
+    name: ${spring.application.name}
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:0.0}
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

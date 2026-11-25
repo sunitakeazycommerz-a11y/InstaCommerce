@@ -1,0 +1,52 @@
+flowchart TB
+    classDef prom fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef route fill:#FFFBEB,stroke:#D97706,stroke-width:1.7px,color:#78350F
+    classDef page fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,color:#7F1D1D
+    classDef triage fill:#F5F3FF,stroke:#7C3AED,stroke-width:1.6px,color:#1E1B4B
+    classDef fix fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef trap fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+
+    subgraph PROM["1. Prometheus Rules (monitoring/prometheus-rules.yaml)"]
+        direction LR
+        OPS["Operational Alerts<br/>HighErrorRate (&gt; 1% 5m) · HikariPoolDeadlock (&gt; 5)<br/>KafkaPartitionLagHigh (&gt; 500) · Starved (offset = 0)<br/>SyntheticCanaryFailed (2x) · FrequentPodRestarts (&gt; 3)"]:::prom
+        subgraph BURN_PIPE["SLI Recording &amp; Multi-Window Burn Rates"]
+            direction TB
+            SLI["SLI Recording Rules (30s interval)<br/>sli:http_availability:rate5m..6h<br/>sli:checkout_success:rate5m..6h<br/>sli:http_latency:rate5m,1h · kafka_consumer_lag"]:::prom
+            BURN["Multi-Window Burn-Rate Alerts<br/>14.4x (5m &amp; 1h, 2m): BurnRate_Tier0..2_Critical<br/>CheckoutBurnRate_Critical · LatencyBurnRate_Tier0<br/>6x (30m &amp; 6h, 5m): *_High · 3x (1h): Medium<br/>KafkaLagBurnRate_Critical (&gt; 10,000 for 5m)"]:::prom
+            SLI --> BURN
+        end
+    end
+
+    subgraph AM["2. Alertmanager Routing &amp; Inhibition (monitoring/alertmanager.yml)"]
+        direction TB
+        GRP["Group &amp; Deduplicate<br/>group_by: [alertname, service, tier, journey]<br/>group_wait: 30s · group_interval: 5m · repeat: 4h"]:::route
+        INH["Inhibition Rule (equal: ['service'])<br/>severity = 'critical' suppresses severity = 'warning'<br/>(silences HighLatency &amp; HikariPoolSaturation noise)"]:::route
+        SEV{"Severity Matcher"}:::route
+        PD["pagerduty-tier0 (continue: true)<br/>Primary On-Call -&gt; 5m Backup Lead<br/>+ slack-incidents (#incidents)"]:::page
+        SLK["slack-alerts (#alerts)<br/>Warning &amp; Ticket Alerts<br/>(SLA: 60m ticket / 480m notification)"]:::route
+        GRP --> INH --> SEV
+        SEV -->|"severity =~ 'critical|page'"| PD
+        SEV -->|"severity = 'warning' or 'ticket'"| SLK
+    end
+
+    subgraph TRIAGE["3. First-5-Min Triage &amp; Telemetry Blind-Spot Guard"]
+        direction LR
+        CHK["Inspect Live Signals<br/>1. PromQL SLIs, readiness &amp; Temporal UI :8233<br/>2. Pod logs, Redis keys &amp; pg_stat_activity locks<br/>3. Kafka group lag &amp; outbox_events backlog"]:::triage
+        DRIFT["Known Monitoring Traps (Verify First)<br/>NetworkPolicy scrapes port: metrics (pods: http)<br/>wave-40 uses Spring metrics on Go/Python pods<br/>error-budget-policy (43.2m) != service-slos (8.6m)"]:::trap
+        CHK --- DRIFT
+    end
+
+    subgraph REM["4. Runbook, DLQ &amp; Release-Gate Remediation"]
+        direction LR
+        RB["Targeted Runbooks<br/>database-failover.md<br/>(dr-database-failover-drill.sh)<br/>jwks-key-rotation-runbook.md<br/>Helm flags, SQL &amp; Redis fixes"]:::fix
+        DLQ["Saga Compensation DLQ<br/>./scripts/saga-dlq-retry.sh<br/>--list / --retry / --resolve<br/>(pass ADMIN/INTERNAL JWT;<br/>or --replay orders.dlq)"]:::fix
+        GATE["Error Budget Gate (ADR-015)<br/>75–100% R4 -&gt; 0–25% Freeze (R0)<br/>./scripts/check-error-budget-gate.sh<br/>--service &lt;svc&gt;<br/>(&lt; 0% blocks CI w/o VP token)"]:::page
+    end
+
+    OPS --> GRP
+    BURN --> GRP
+    PD -->|"5m Ack SLA"| TRIAGE
+    SLK -->|"Ticket Triage"| TRIAGE
+    TRIAGE --> RB
+    TRIAGE --> DLQ
+    TRIAGE --> GATE

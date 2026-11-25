@@ -59,8 +59,7 @@ docker run -d \
 ### Build & Run Locally
 
 ```bash
-# Build
-cd /Users/omkarkumar/InstaCommerce
+# Build (from repository root)
 ./gradlew :services:checkout-orchestrator-service:build
 
 # Run
@@ -88,10 +87,10 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 **Build Image**:
 ```bash
 cd services/checkout-orchestrator-service
-docker build -t gcr.io/instacommerce/checkout-orchestrator:v1.0.0 .
+docker build -t asia-south1-docker.pkg.dev/instacommerce/images/checkout-orchestrator-service:v1.0.0 .
 
 # Push to registry
-docker push gcr.io/instacommerce/checkout-orchestrator:v1.0.0
+docker push asia-south1-docker.pkg.dev/instacommerce/images/checkout-orchestrator-service:v1.0.0
 ```
 
 ---
@@ -118,7 +117,7 @@ spec:
     spec:
       containers:
       - name: checkout-orchestrator
-        image: gcr.io/instacommerce/checkout-orchestrator:v1.0.0
+        image: asia-south1-docker.pkg.dev/instacommerce/images/checkout-orchestrator-service:v1.0.0
         ports:
         - containerPort: 8091
         env:
@@ -408,15 +407,15 @@ kubectl set env deployment/checkout-orchestrator \
 
 ```bash
 curl -X POST \
-  http://checkout-orchestrator:8089/actuator/circuitbreakers/cartService/reset
+  http://checkout-orchestrator:8091/actuator/circuitbreakers/cartService/reset
 curl -X POST \
-  http://checkout-orchestrator:8089/actuator/circuitbreakers/inventoryService/reset
+  http://checkout-orchestrator:8091/actuator/circuitbreakers/inventoryService/reset
 curl -X POST \
-  http://checkout-orchestrator:8089/actuator/circuitbreakers/paymentService/reset
+  http://checkout-orchestrator:8091/actuator/circuitbreakers/paymentService/reset
 curl -X POST \
-  http://checkout-orchestrator:8089/actuator/circuitbreakers/pricingService/reset
+  http://checkout-orchestrator:8091/actuator/circuitbreakers/pricingService/reset
 curl -X POST \
-  http://checkout-orchestrator:8089/actuator/circuitbreakers/orderService/reset
+  http://checkout-orchestrator:8091/actuator/circuitbreakers/orderService/reset
 ```
 
 ---

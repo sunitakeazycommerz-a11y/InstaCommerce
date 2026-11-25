@@ -1,0 +1,67 @@
+flowchart TB
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+    classDef broker fill:#F8FAFC,stroke:#475569,stroke-width:2px,color:#0F172A
+    classDef shared fill:#F5F3FF,stroke:#6D28D9,stroke-width:1.8px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef broken fill:#FEF2F2,stroke:#DC2626,stroke-width:2.2px,stroke-dasharray:6 4,color:#7F1D1D
+
+    subgraph UPSTREAM["1. Upstream WAL &amp; Kafka Inputs"]
+        direction TB
+        PGWal[("Source Postgres WAL<br/>(pgoutput logical slot)")]:::store
+        Debezium["Debezium Connect (Terraform)<br/>debezium-connector-reconciliation.tf<br/>Only reconciliation.cdc defined in TF"]:::warn
+        KafkaIn["Kafka Topics (KAFKA_TOPICS)<br/>Debezium CDC + Domain Envelopes<br/>Default group: cdc-consumer-service"]:::broker
+        PGWal -->|"Logical replication"| Debezium --> KafkaIn
+    end
+
+    subgraph HELM["2. Helm &amp; Startup Configuration Trap"]
+        direction TB
+        HelmKey["Helm Key: cdc-consumer (:8104)<br/>Replicas: 2, HPA 2..6 (prod VPA Off)<br/>ci.yml maps cdc-consumer-service &rarr; cdc-consumer"]:::prod
+        HelmCrash["CRITICAL HELM CRASH (values*.yaml)<br/>config.go exits(1) unless KAFKA_BROKERS,<br/>KAFKA_TOPICS, BQ_PROJECT, BQ_DATASET,<br/>BQ_TABLE are set — ALL 5 OMITTED!"]:::broken
+        HelmKey -.- HelmCrash
+    end
+
+    subgraph SVC["3. cdc-consumer-service Internals (Go 1.25 · package main · :8104)"]
+        direction TB
+        subgraph HTTP_OBS["HTTP Goroutine &amp; go-shared Stack (telemetry.go)"]
+            direction TB
+            HTTPMW["correlation.Middleware(mux)<br/>health.Handler.RegisterRoutes(mux)<br/>/health · /health/ready · /ready · /health/live<br/>/metrics (promhttp.Handler)"]:::shared
+            OTel["observability.InitOTel (gRPC)<br/>ResolveEnv=true · FallbackNoop=true<br/>Prometheus: cdc_consumer_lag,<br/>cdc_batch_latency_seconds,<br/>cdc_dlq_total, cdc_schema_evolution_errors_total"]:::shared
+        end
+
+        subgraph CONS["N× runConsumer Goroutines (1 per topic, consumer.go)"]
+            direction TB
+            Readers["*kafka.Reader (segmentio/kafka-go)<br/>CommitInterval=0 (manual only)<br/>StartOffset: earliest (or latest)<br/>sharedkafka.NewHeaderCarrier(&amp;Headers)"]:::prod
+            Schema["SchemaEvolutionHandler (schema_evolution.go)<br/>schemaTable interface (Metadata/Update)<br/>knownFields sync.Map + mu sync.Mutex<br/>30s failureTTL circuit breaker"]:::prod
+            Transform["transform.go<br/>processMessageForConsumer()<br/>transformParsedMessage() / Tombstone<br/>bqRow (17 cols, insertID={topic}-{part}-{off})"]:::prod
+            Readers --> Schema --> Transform
+        end
+
+        Chan["Bounded batchCh (chan batchItem)<br/>Capacity = BQ_BATCH_SIZE * 2 (1000)<br/>Exerts blocking backpressure on Readers"]:::prod
+
+        subgraph BATCH["1× runBatcherWithDeps Goroutine (consumer.go / dlq.go)"]
+            direction TB
+            Batcher["runBatcherWithDeps / flushBatchWithDeps<br/>Flushes on BatchSize (500) or 5s ticker<br/>Uses context.Background() on flush!"]:::prod
+            Inserter["bqInserter interface (Put)<br/>*bigquery.Inserter (IgnoreUnknownValues,<br/>SkipInvalidRows) OR noopBQInserter"]:::prod
+            DLQWriter["dlqMessageWriter (*kafka.Writer)<br/>LeastBytes · RequireAll · Async=false<br/>sendToDLQWithWriter (TruncateUTF8 512B)"]:::prod
+            Batcher --> Inserter
+            Batcher --> DLQWriter
+        end
+
+        Transform -->|"batchItem{row / transformErr}"| Chan --> Batcher
+    end
+
+    subgraph SINKS["4. Sinks, Lakehouse &amp; Observability Drift"]
+        direction TB
+        BQ[("Single BigQuery Sink<br/>{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}<br/>17-column streaming rows")]:::store
+        DbtDrift["Lakehouse &amp; Glossary Drift<br/>dbt sources.yml expects 8 raw_cdc.* tables<br/>TF tables.tf creates 4 analytics_raw_*<br/>GLOSSARY.md claims 'Stateless'"]:::broken
+        DLQ["Kafka DLQ: cdc.dlq<br/>DRIFT vs ADR-003 ({topic}.DLT)"]:::warn
+        AlertDrift["Alert &amp; Dashboard Drift<br/>wave-40: group='cdc-consumer-group'<br/>Grafana: cdc_events_{processed,failed}_total<br/>network-policy: port metrics vs http"]:::broken
+    end
+
+    KafkaIn -->|"FetchMessage"| Readers
+    Schema -->|"Metadata/Update"| BQ
+    Inserter -->|"insertWithRetryDeps"| BQ
+    DLQWriter -->|"WriteMessages (10s)"| DLQ
+    BQ -.- DbtDrift
+    OTel -.- AlertDrift

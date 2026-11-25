@@ -1,5 +1,7 @@
 # InstaCommerce System Documentation Portal
 
+> **Status:** ARCHIVED / HISTORICAL REFERENCE — Early documentation snapshot. See [`docs/README.md`](../../README.md), [`GLOSSARY.md`](../../../GLOSSARY.md), and [`docs/repo-truth/README.md`](../../repo-truth/README.md) for current canonical documentation.
+
 Welcome to the comprehensive, production-grade technical documentation for the **InstaCommerce** Q-Commerce monorepo. This directory houses deep-dive architecture, service design, operational runbooks, and implementation guides for all 30 microservices across Java, Go, and Python.
 
 ---

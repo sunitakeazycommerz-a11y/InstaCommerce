@@ -260,7 +260,7 @@ class PersonalizationTrainer:
             user_id = str(user_id_val)
             if user_id not in self.user_embeddings:
                 continue
-            scores = item_matrix @ self.user_embeddings[user_id]
+            scores = np.asarray(item_matrix @ self.user_embeddings[user_id], dtype=np.float64)
             ranked_items = [all_items[i] for i in np.argsort(-scores)]
             true_items = set(user_df["sku_id"].values)
             if not true_items:

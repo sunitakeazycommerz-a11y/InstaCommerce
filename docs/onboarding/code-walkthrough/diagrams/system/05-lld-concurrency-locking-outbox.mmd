@@ -1,0 +1,46 @@
+flowchart TB
+    classDef tx fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef lock fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph ROW_TOP["Idempotency Normalization & PostgreSQL Lock Primitives"]
+        direction LR
+        subgraph IDEM["1. Idempotency Normalization & Race Safety"]
+            direction TB
+            KEY_IN["Checkout workflowId ~93c + suffix (~100c)<br/>Order: body idempotencyKey -> SHA-256 if gt 64c<br/>Payment: IdempotencyKeys.normalize -> SHA-256 if gt 64c<br/>Both catch DataIntegrityViolationException"]:::tx
+            INV_BUG["BUG (inventory-service):<br/>V2 reservations.idempotency_key is VARCHAR(64)<br/>ReservationService passes ~100c key raw (no SHA-256)<br/>& lacks DataIntegrityViolationException catch"]:::gap
+            KEY_IN --- INV_BUG
+        end
+
+        subgraph LOCKS["2. PostgreSQL Concurrency & Lock Primitives"]
+            direction TB
+            SORT_LOCK["Sorted PESSIMISTIC_WRITE (ReservationService)<br/>Sort items by productId -> SELECT FOR UPDATE (2000ms)<br/>CHECK (reserved <= on_hand) + FEFO batch ASC"]:::lock
+            SKIP_LOCK["FOR UPDATE SKIP LOCKED<br/>outbox-relay: WHERE sent=false ORDER BY created_at<br/>rider-fleet: findEligibleNearestCandidates"]:::lock
+            ADV_LOCK["pg_advisory_xact_lock / Session Lock<br/>audit-trail: sha256('audit_chain:global') chain seq<br/>reconciliation-engine: lock ID 7283910451"]:::lock
+        end
+    end
+
+    subgraph ROW_BOT["2-TX Pending PSP Saga, Ledger & Outbox Delivery"]
+        direction LR
+        subgraph TWO_TX["3. 2-TX Pending PSP Pattern & Double-Entry Ledger"]
+            direction TB
+            TX1["TX1 (REQUIRES_NEW): Insert/lock *_PENDING (release PG conn)"]:::tx
+            EXT["External Stripe API (30s timeout · no DB conn held)"]:::warn
+            TX2["TX2 (REQUIRES_NEW): Finalize + outbox_events + LedgerService"]:::tx
+            LEDGER["Double-Entry (V14 idx_ledger_entries_dedup)<br/>Auth: DR customer_receivable / CR authorization_hold<br/>Capture: DR authorization_hold / CR merchant_payable"]:::lock
+            REC_OFF["TRAP: Helm sets PAYMENT_STALE_PENDING_RECOVERY_ENABLED='false'"]:::gap
+            TX1 --> EXT --> TX2 --> LEDGER
+            EXT -. "Crash before TX2" .-> REC_OFF
+        end
+
+        subgraph OUTBOX_LANE["4. Transactional Outbox Delivery"]
+            direction TB
+            APP_TX["Domain Service @Transactional<br/>Write entity + OutboxService.publish<br/>(Propagation.MANDATORY)"]:::tx
+            JAVA_JOB["catalog-service ONLY:<br/>ShedLock OutboxPublishJob (1s)"]:::lock
+            GO_RELAY["outbox-relay-service (x13):<br/>Open pgx.Tx across Sarama WaitForAll<br/>-> UPDATE sent=true or outbox.relay.dlq (3x)"]:::lock
+            APP_TX --> JAVA_JOB & GO_RELAY
+        end
+    end
+
+    ROW_TOP ~~~ ROW_BOT

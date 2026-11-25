@@ -4,6 +4,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
@@ -24,12 +25,10 @@ public class CacheConfig {
     @Value("${feature-flag.cache.max-size:5000}")
     private long maxSize;
 
-    @Value("${feature-flag.cache.redis-enabled:true}")
-    private boolean redisEnabled;
-
     @Bean
     public CacheManager cacheManager() {
-        CaffeineCacheManager manager = new CaffeineCacheManager("flags", "flag-overrides", "flag-overrides-bulk");
+        CaffeineCacheManager manager =
+                new CaffeineCacheManager("flags", "flags-all", "flag-overrides", "flag-overrides-bulk");
         manager.setCaffeine(Caffeine.newBuilder()
                 .maximumSize(maxSize)
                 .expireAfterWrite(flagsTtlSeconds, TimeUnit.SECONDS));
@@ -42,6 +41,7 @@ public class CacheConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "feature-flag.cache.redis-enabled", havingValue = "true", matchIfMissing = true)
     public RedisTemplate<String, String> redisTemplate(RedisConnectionFactory connectionFactory) {
         RedisTemplate<String, String> template = new RedisTemplate<>();
         template.setConnectionFactory(connectionFactory);
@@ -55,6 +55,7 @@ public class CacheConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(name = "feature-flag.cache.redis-enabled", havingValue = "true", matchIfMissing = true)
     public RedisMessageListenerContainer redisMessageListenerContainer(
             RedisConnectionFactory connectionFactory,
             MeterRegistry meterRegistry) {

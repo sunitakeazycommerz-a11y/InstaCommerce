@@ -76,10 +76,30 @@ class OrderEventParser(beam.DoFn):
     VALID_EVENT_TYPES = {
         "OrderPlaced",
         "ORDER_PLACED",
+        "OrderConfirmed",
+        "ORDER_CONFIRMED",
+        "OrderPacked",
+        "ORDER_PACKED",
         "OrderDelivered",
         "ORDER_DELIVERED",
         "OrderCreated",
         "ORDER_CREATED",
+        "OrderCancelled",
+        "ORDER_CANCELLED",
+        "OrderFailed",
+        "ORDER_FAILED",
+        "OrderStatusChanged",
+        "ORDER_STATUS_CHANGED",
+        "OrderRefunded",
+        "ORDER_REFUNDED",
+    }
+    VOLUME_EVENT_TYPES = {
+        "OrderPlaced",
+        "ORDER_PLACED",
+        "OrderCreated",
+        "ORDER_CREATED",
+        "OrderConfirmed",
+        "ORDER_CONFIRMED",
     }
 
     def process(self, element):
@@ -87,6 +107,14 @@ class OrderEventParser(beam.DoFn):
         try:
             event = json.loads(value.decode("utf-8"))
             payload = event.get("payload") or {}
+            event_type = _first_present(event, "eventType", "event_type")
+            raw_store_id = _first_present(payload, "storeId", "store_id") or _first_present(
+                event, "storeId", "store_id"
+            )
+            if event_type is None or event_type in self.VOLUME_EVENT_TYPES:
+                store_id = require_non_empty_str(raw_store_id, "store_id")
+            else:
+                store_id = str(raw_store_id or "UNKNOWN")
             event_time_str = _first_present(
                 event,
                 "eventTime",
@@ -99,7 +127,7 @@ class OrderEventParser(beam.DoFn):
                 "created_at",
             )
             parsed = {
-                "event_type": _first_present(event, "eventType", "event_type"),
+                "event_type": event_type,
                 "order_id": require_non_empty_str(
                     _first_present(event, "orderId", "order_id", "aggregateId", "aggregate_id")
                     or _first_present(payload, "orderId", "order_id"),
@@ -107,11 +135,7 @@ class OrderEventParser(beam.DoFn):
                 ),
                 "user_id": _first_present(payload, "userId", "user_id")
                 or _first_present(event, "userId", "user_id"),
-                "store_id": require_non_empty_str(
-                    _first_present(payload, "storeId", "store_id")
-                    or _first_present(event, "storeId", "store_id"),
-                    "store_id",
-                ),
+                "store_id": store_id,
                 "total_cents": coerce_int(
                     _first_present(payload, "totalCents", "total_amount_cents", "total_cents", "totalAmountCents", default=0),
                     "total_cents",
@@ -278,6 +302,8 @@ def build_pipeline(options):
 
         (
             events
+            | "FilterVolumeOrders"
+            >> beam.Filter(lambda e: e.get("event_type") in OrderEventParser.VOLUME_EVENT_TYPES)
             | "Window1Min" >> beam.WindowInto(
                 FixedWindows(60),
                 trigger=AfterWatermark(

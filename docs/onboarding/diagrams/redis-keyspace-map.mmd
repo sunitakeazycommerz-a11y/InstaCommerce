@@ -1,0 +1,67 @@
+flowchart TB
+    classDef svc fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef key fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef lua fill:#F5F3FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:1.7px,color:#78350F
+    classDef split fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph ROW_TOP["Edge, Auth, Flags & Distributed L2 Caches"]
+        direction LR
+        subgraph AUTH_FLAGS["1. Identity Auth & Feature Flags"]
+            direction TB
+            ID_SVC["identity-service (:8081)"]:::svc
+            ID_KEYS["identity:ratelimit:{baseName}:{ip} (STRING, Lua 60s)<br/>identity:failed_logins:{email}:{ip} (STRING, 15m, SCAN clear)<br/>identity:revoked_jti:{jti} (STRING, accessTtl ge 60s, fail-closed)<br/>identity:revoked_user_before:{userId} (STRING, 900s, fail-closed)"]:::lua
+            FF_SVC["config-feature-flag-service (:8098)"]:::svc
+            FF_KEYS["PUB/SUB flag-updates:{flagKey} & flag-updates:all<br/>Listener PatternTopic('flag-updates:*') -> evicts Caffeine<br/>(flags, flags-all, flag-overrides, flag-overrides-bulk)"]:::key
+            ID_SVC --> ID_KEYS
+            FF_SVC --> FF_KEYS
+        end
+
+        subgraph CACHE_L2["2. TwoLevelCache L2 + Pub/Sub & Promo Locks"]
+            direction TB
+            L2_SVCS["4 TwoLevelCache Java Services<br/>cart-service (:8090) -> prefix 'cart:'<br/>catalog-service (:8082) -> prefix 'catalog:'<br/>search-service (:8088) -> prefix 'search:'<br/>pricing-service (:8089) -> prefix 'pricing:'"]:::svc
+            L2_KEYS["STRING JSON caches + L1 Caffeine:<br/>cart:carts::{userId} (1h L2 / 30s L1)<br/>catalog:products::{id} (5m) · categories (10m) · search (1m)<br/>search:searchResults::{k} (5m) · autocomplete (2m) · trending (1m)<br/>pricing:productPrices::{id} (5m) · activePromotions (2m) · priceRules (5m)<br/>PUB/SUB {svc}:cache:invalidate -> '{instanceId}#124;{cache}:{key}'"]:::key
+            CART_PUB["CartSyncPublisher PUB/SUB -> mobile-bff SSE<br/>cart:updated:{userId} & cart:events"]:::key
+            PROMO_LOCK["pricing PromoReservationService<br/>promo:{CODE}:{userId} (STRING, SET NX EX 300)"]:::lua
+            L2_SVCS --> L2_KEYS
+            L2_SVCS --> CART_PUB
+            L2_SVCS --> PROMO_LOCK
+        end
+        AUTH_FLAGS ~~~ CACHE_L2
+    end
+
+    subgraph ROW_BOT["Real-Time Rider Split-Brain, Dedup, Stream Metrics & AI"]
+        direction LR
+        subgraph RIDER_SPLIT["3. Rider GPS 3-Way Split-Brain & Dispatch Mutex"]
+            direction TB
+            RF_SVC["rider-fleet-service (:8093)<br/>RiderAvailabilityService & RiderAssignmentService"]:::svc
+            LI_SVC["location-ingestion-service (:8105)"]:::svc
+            SP_RIDER["stream-processor-service (:8108)<br/>RiderProcessor"]:::svc
+            DO_SVC["dispatch-optimizer-service (:8102)<br/>RedisRiderMutex"]:::svc
+
+            RF_GEO["riders:active (GEO ZSET, NO TTL!)<br/>Written ONLY by rider-fleet updateLocation<br/>Read by GEORADIUS; toggleAvailability(false) never ZREMs!"]:::split
+            LOC_HASH["rider:location:{riderID} (HASH)<br/>Written by rider-fleet (NO TTL), location-ingestion<br/>(Lua CAS updatePositionScript, 10m / 60s floor),<br/>and stream-processor (10m TTL)"]:::split
+            H3_SET["riders:h3:{h3Index} (SET, PEXPIRE 2*ttl_ms)<br/>Written ONLY by location-ingestion Lua CAS<br/>NEVER read by rider-fleet!"]:::split
+            SP_GEO["riders:geo:{zoneID} (GEO, 24h) · rider:status:{id} (HASH, 24h)<br/>riders:zone:{zone}:{status} (STRING, 24h)<br/>rider:earnings:{id}:{YYYY-MM-DD} (STRING, 48h)"]:::warn
+            DO_LOCK["dispatch:rider:lock:{riderID} (STRING, SET NX 30s)<br/>Released by Lua CAS unlockScript (GET == token -> DEL)"]:::lua
+
+            RF_SVC --> RF_GEO & LOC_HASH
+            LI_SVC -->|"Lua CAS"| LOC_HASH & H3_SET
+            SP_RIDER --> LOC_HASH & SP_GEO
+            DO_SVC --> DO_LOCK
+        end
+
+        subgraph STREAM_AI["4. Dedup, Stream Counters, Feature Store & AI"]
+            direction TB
+            PW_KEY["payment-webhook (:8106)<br/>payment-webhook:event:{eventID} (STRING, SET NX EX 24h)"]:::key
+            SP_METRICS["stream-processor (:8108) Dedup & Metrics<br/>dedup:{topic}:event:{id} / {p}:{o} (Bloom + SET NX EX 24h)<br/>orders:{count,store,zone,stage,cancelled}:* (24h)<br/>delivery:time:{zone}:{min} (LIST, 24h) · gmv/revenue:total:{day} (48h)<br/>payments:{authorized,success,failed}:* · refunds:* (24h)<br/>inventory:{s}:{sku} · stockout:{s}:{sku} · low_stock:{s}:{sku} (24h)"]:::key
+            RETL["reverse-etl-orchestrator (:8109) Lua Atomic Swap<br/>writeTempHashLua + atomicSwapTTLLua (RENAME + PEXPIRE)<br/>user:features:{userId} (HASH, 36h via temp)<br/>fraud:score:{userId} (STRING JSON, 36h via temp)<br/>store:inventory:{storeId} (HASH, 24h via temp)<br/>DRIFT: Helm sets REDIS_ADDR=''!"]:::lua
+            AI_CONS["Consumers & AI Runtime<br/>fraud-detection reads fraud:score:{userId}<br/>ai-inference reads user:features:{id} / user_features:{id} / product_features:{id} (24h)<br/>ai-orchestrator writes instacommerce:agent:checkpoint:{thread} (1h),<br/>instacommerce:agent:budget:{session} (HASH, 1h), faq:{sha256[:16]} (HASH, no TTL)"]:::svc
+
+            PW_KEY ~~~ SP_METRICS
+            RETL --> AI_CONS
+        end
+        RIDER_SPLIT ~~~ STREAM_AI
+    end
+
+    ROW_TOP ~~~ ROW_BOT

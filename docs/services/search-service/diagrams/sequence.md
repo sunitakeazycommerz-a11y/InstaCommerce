@@ -8,8 +8,7 @@ sequenceDiagram
     participant BFF as mobile-bff
     participant Search as search-service
     participant Redis as Redis Cache
-    participant ES as Elasticsearch
-    participant DB as PostgreSQL
+    participant DB as PostgreSQL (tsvector FTS)
 
     Client->>BFF: GET /search?q=tomato
     BFF->>Search: Call /search?q=tomato&filters=...
@@ -18,10 +17,10 @@ sequenceDiagram
     Search->>Redis: GET search_results:tomato:filters_hash
     Redis-->>Search: cache miss (or expired)
 
-    Search->>ES: Query: match(name, description) tomato
-    activate ES
-    ES-->>Search: Results: [{id, name, store_id, inventory}]
-    deactivate ES
+    Search->>DB: Query: to_tsvector(name, description) @@ plainto_tsquery('tomato')
+    activate DB
+    DB-->>Search: Results: [{id, name, store_id, inventory}]
+    deactivate DB
 
     Search->>Search: Post-process: filter by store availability
     Search->>Search: Rank by: relevance + inventory count
@@ -50,8 +49,8 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> PRODUCT_INDEXED: ProductCreatedEvent received
 
-    PRODUCT_INDEXED --> INDEXED: ES indexing succeeds\n(replica synced)
-    PRODUCT_INDEXED --> PENDING_RETRY: ES indexing fails
+    PRODUCT_INDEXED --> INDEXED: PostgreSQL FTS projection updated
+    PRODUCT_INDEXED --> PENDING_RETRY: DB upsert fails
 
     PENDING_RETRY --> INDEXED: Retry succeeds\n(exponential backoff)
     PENDING_RETRY --> DLT: Max retries exceeded\n(routed to Dead-Letter Topic)
@@ -61,7 +60,7 @@ stateDiagram-v2
     DLT --> [*]: Manual review required\n(SRE investigates)
 
     INDEXED --> DELETED: ProductDeletedEvent received
-    DELETED --> [*]: Removed from ES
+    DELETED --> [*]: Removed from search projection
 
     note right of PRODUCT_INDEXED
         Just received from Kafka
@@ -69,7 +68,7 @@ stateDiagram-v2
     end note
 
     note right of INDEXED
-        Successfully in Elasticsearch
+        Upserted in PostgreSQL tsvector index
         Cache updated
         Query-able
     end note
@@ -94,7 +93,7 @@ sequenceDiagram
     participant Kafka as Kafka
     participant Search as search-service
     participant Redis as Redis
-    participant ES as Elasticsearch
+    participant DB as PostgreSQL (tsvector FTS)
     participant Customer as Customer App
 
     rect rgb(255, 240, 200)
@@ -110,10 +109,9 @@ sequenceDiagram
     end
 
     Kafka->>Search: ProductCreatedEvent consumed<br/>(batch consumer)
-    Search->>Search: Transform to SearchDoc<br/>(tokens, metadata, store_location)
-    Search->>ES: Bulk index request
-    ES->>ES: Index document<br/>(invert tokenize)<br/>Update replica shards
-    ES-->>Search: Success (all shards)
+    Search->>Search: Transform to SearchDocument<br/>(tsvector tokens, metadata, store_location)
+    Search->>DB: Upsert product projection + GIN tsvector
+    DB-->>Search: Committed
     Search->>Redis: Invalidate search cache<br/>(for product category)
     Search->>Kafka: Emit SearchIndexUpdatedEvent
 
@@ -123,8 +121,8 @@ sequenceDiagram
 
     Customer->>Customer: Types "tomato"<br/>in app search
     Customer->>Search: GET /search?q=tomato
-    Search->>ES: Query for "tomato"
-    ES-->>Search: Returns new product\n(ranking: high relevance,<br/>in stock)
+    Search->>DB: Query PostgreSQL FTS for "tomato"
+    DB-->>Search: Returns new product\n(ranking: high relevance,<br/>in stock)
     Search->>Redis: Cache results
     Search-->>Customer: Results include<br/>"Organic Tomatoes"
 

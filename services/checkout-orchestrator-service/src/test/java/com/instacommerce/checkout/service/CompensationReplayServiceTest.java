@@ -9,6 +9,7 @@ import com.instacommerce.checkout.workflow.activity.CouponActivity;
 import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
+import com.instacommerce.checkout.workflow.activity.PromotionActivity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,12 +31,15 @@ class CompensationReplayServiceTest {
     @Mock
     private CouponActivity couponActivity;
 
+    @Mock
+    private PromotionActivity promotionActivity;
+
     private CompensationReplayService replayService;
 
     @BeforeEach
     void setUp() {
         replayService = new CompensationReplayService(
-            inventoryActivity, paymentActivity, orderActivity, couponActivity);
+            inventoryActivity, paymentActivity, orderActivity, couponActivity, null, promotionActivity);
     }
 
     @Test
@@ -112,6 +116,17 @@ class CompensationReplayServiceTest {
             .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> replayService.replay(unknown))
             .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(inventoryActivity, paymentActivity, orderActivity, couponActivity, promotionActivity);
+    }
+
+    @Test
+    void replaysRollbackPromotionWithPromotionUserAndOrderId() {
+        CompensationDlq entry = new CompensationDlq(
+            "wf-7", "rollbackPromotion", "promo-1:usr-7:ord-7", "pricing down", null);
+
+        replayService.replay(entry);
+
+        verify(promotionActivity).rollbackPromotion("promo-1", "usr-7", "ord-7");
         verifyNoInteractions(inventoryActivity, paymentActivity, orderActivity, couponActivity);
     }
 }

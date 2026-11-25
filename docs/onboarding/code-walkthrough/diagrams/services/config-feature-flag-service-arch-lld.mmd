@@ -1,0 +1,56 @@
+flowchart LR
+    subgraph SecurityChain["Servlet Security Chain (:8098)"]
+        Internal["InternalServiceAuthFilter<br/>allowedCallers / shared token -> ROLE_INTERNAL_SERVICE"]
+        JwtFilt["JwtAuthenticationFilter<br/>Static RSA key, iss check only<br/>(Overwrites ROLE_INTERNAL_SERVICE if Bearer present!)"]
+        SecCfg["SecurityConfig<br/>permitAll: /flags/**, /experiments/**, /actuator/**<br/>authenticated: /flags/stream<br/>ADMIN|SUPER_ADMIN|INTERNAL_SERVICE: /admin/**"]
+        Internal --> JwtFilt --> SecCfg
+    end
+
+    subgraph Controllers["HTTP & SSE Controllers"]
+        EvalCtrl["FlagEvaluationController<br/>GET /flags, /flags/{key}, POST /flags/bulk"]
+        StreamCtrl["FlagChangeStreamController<br/>GET /flags/stream (max 200 SSE emitters, 30m)"]
+        ExpCtrl["ExperimentEvaluationController<br/>GET /experiments/{key}, POST /experiments/evaluate"]
+        AdminFlag["AdminFlagController<br/>/admin/flags/** & /emergency-stop/{flagKey}"]
+        AdminExp["AdminExperimentController<br/>/admin/experiments/**"]
+        SecCfg --> EvalCtrl
+        SecCfg --> StreamCtrl
+        SecCfg --> ExpCtrl
+        SecCfg --> AdminFlag
+        SecCfg --> AdminExp
+    end
+
+    subgraph Engines["Evaluation, Management & Caching Core"]
+        EvalSvc["FlagEvaluationService<br/>Murmur3 + segments + inner Caffeine (4096)<br/>NOTE: this.loadFlag() self-invocation bypasses @Cacheable!"]
+        BulkSvc["BulkEvaluationService<br/>Proxy-calls loadFlag() & loadAllFlags()"]
+        OvrSvc["FlagOverrideService<br/>In-place upsert, flag-overrides (30s) & bulk (10s)"]
+        MgmtSvc["FlagManagementService<br/>@CacheEvict + FlagAuditLog + afterCommit()"]
+        ExpEval["ExperimentEvaluationService<br/>Murmur3 + switchback window + exposure insert"]
+        RefreshJob["FlagCacheRefreshJob<br/>@Scheduled(30_000ms) NO @SchedulerLock"]
+        CacheMgr["CacheConfig: CaffeineCacheManager<br/>flags (30s), flags-all (30s), flag-overrides (30s),<br/>flag-overrides-bulk (10s)"]
+        EvalCtrl --> EvalSvc
+        EvalCtrl --> BulkSvc
+        BulkSvc --> EvalSvc
+        BulkSvc --> OvrSvc
+        EvalSvc --> OvrSvc
+        AdminFlag --> MgmtSvc
+        AdminFlag --> OvrSvc
+        ExpCtrl --> ExpEval
+        MgmtSvc --> CacheMgr
+        OvrSvc --> CacheMgr
+        RefreshJob --> CacheMgr
+    end
+
+    subgraph SyncAndStorage["PostgreSQL + Redis Pub/Sub Sync"]
+        EvtPub["FlagCacheEventListener<br/>convertAndSend('flag-updates:{key}' & ':all')"]
+        Invalidator["FlagCacheInvalidator<br/>PatternTopic('flag-updates:*')<br/>CB opens on 1st startup error"]
+        Redis["Redis Pub/Sub"]
+        PG["PostgreSQL feature_flags_db<br/>(Helm sets config_db!) V1-V8:<br/>feature_flags, flag_overrides, flag_audit_log,<br/>experiments, experiment_variants, experiment_exposures, shedlock"]
+        MgmtSvc --> EvtPub
+        OvrSvc --> EvtPub
+        EvtPub --> Redis --> Invalidator
+        Invalidator --> CacheMgr
+        Invalidator --> StreamCtrl
+        EvalSvc --> PG
+        MgmtSvc --> PG
+        ExpEval --> PG
+    end

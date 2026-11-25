@@ -3,11 +3,14 @@ Recomputes feature store features from BigQuery and pushes to online store.
 """
 
 from datetime import datetime, timedelta
+import os
+from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from google.cloud import bigquery  # type: ignore[import-untyped]
 from plugins.slack_alerts import send_slack_alert
+from plugins.sql_validation import validate_bq_identifier
 
 try:
     from google.cloud import aiplatform
@@ -35,14 +38,30 @@ default_args = {
 
 PROJECT_ID = "instacommerce-prod"
 FEATURE_STORE_ID = "instacommerce_features"
-FEATURE_STORE_REGION = "us-central1"
+FEATURE_STORE_REGION = "asia-south1"
+
+_REPO_FEATURE_SQL_DIR = Path(__file__).resolve().parents[3] / "ml" / "feature_store" / "sql"
+_CONTAINER_FEATURE_SQL_DIR = Path("/opt/airflow/ml/feature_store/sql")
+FEATURE_SQL_DIR = Path(
+    os.getenv(
+        "ML_FEATURE_SQL_DIR",
+        str(_REPO_FEATURE_SQL_DIR if _REPO_FEATURE_SQL_DIR.is_dir() else _CONTAINER_FEATURE_SQL_DIR),
+    )
+)
 
 FEATURE_QUERIES = {
-    "user_features": "sql/features/user_features.sql",
-    "product_features": "sql/features/product_features.sql",
-    "order_features": "sql/features/order_features.sql",
-    "delivery_features": "sql/features/delivery_features.sql",
+    "user_features": "user_features.sql",
+    "product_features": "product_features.sql",
+    "rider_features": "rider_features.sql",
+    "search_features": "search_features.sql",
+    "store_features": "store_features.sql",
 }
+
+
+def resolve_feature_sql_path(sql_file: str) -> Path:
+    if not isinstance(sql_file, str) or Path(sql_file).name != sql_file or not sql_file.endswith(".sql"):
+        raise ValueError(f"Invalid feature SQL filename: {sql_file!r}")
+    return FEATURE_SQL_DIR / sql_file
 
 FRESHNESS_THRESHOLD_MINUTES = 60
 
@@ -59,17 +78,18 @@ with DAG(
 
     def _run_feature_sql(feature_name: str, sql_path: str, **context):
         """Execute feature computation SQL in BigQuery."""
-        client = bigquery.Client(project=PROJECT_ID)
+        project_id = validate_bq_identifier(PROJECT_ID, "project")
+        feature_id = validate_bq_identifier(feature_name, "feature_name")
+        client = bigquery.Client(project=project_id)
 
-        with open(f"/opt/airflow/dbt/{sql_path}") as f:
-            query = f.read()
+        query = resolve_feature_sql_path(sql_path).read_text(encoding="utf-8")
 
         query = query.replace("{{ ds }}", context["ds"])
 
         job_config = bigquery.QueryJobConfig(
-            destination=f"{PROJECT_ID}.features.{feature_name}",
+            destination=f"{project_id}.features.{feature_id}",
             write_disposition="WRITE_TRUNCATE",
-            labels={"pipeline": "feature-refresh", "feature": feature_name},
+            labels={"pipeline": "feature-refresh", "feature": feature_id},
         )
 
         job = client.query(query, job_config=job_config)
@@ -97,13 +117,14 @@ with DAG(
         aiplatform.init(project=PROJECT_ID, location=FEATURE_STORE_REGION)
 
         for feature_name in FEATURE_QUERIES:
-            entity_type = aiplatform.featurestore.EntityType(
+            entity_type = aiplatform.EntityType(
                 entity_type_name=feature_name,
                 featurestore_id=FEATURE_STORE_ID,
             )
             entity_type.ingest_from_bq(
                 bq_source_uri=f"bq://{PROJECT_ID}.features.{feature_name}",
                 feature_ids=["*"],
+                feature_time="feature_timestamp",
                 entity_id_field="entity_id",
             )
 

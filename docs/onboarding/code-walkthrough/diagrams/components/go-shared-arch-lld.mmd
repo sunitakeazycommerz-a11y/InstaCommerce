@@ -1,0 +1,30 @@
+flowchart TB
+    subgraph GoShared["services/go-shared (Go 1.25.0, module github.com/instacommerce/go-shared)"]
+        direction TB
+        Auth["pkg/auth\nInternalAuthMiddleware\nper-service map + constant-time fallback"]
+        Cfg["pkg/config\nGetEnv*, SplitCSV, MustGetEnv"]
+        Corr["pkg/correlation\nMiddleware + FromContext (X-Correlation-ID)"]
+        Health["pkg/health\nHandler (/health, /ready, /live)\nShutdownServer + CheckTCPBrokers"]
+        Http["pkg/httpclient\nClient + 3-state CircuitBreaker\n5s DNSCache + WithInternalAuth + otelhttp"]
+        Kafka["pkg/kafka\nProducer + Consumer (manual commit)\nEventEnvelope (dual-emit) + HeaderCarrier\nValidateSchemaVersion + TruncateUTF8"]
+        Obs["pkg/observability\nInitOTel (HTTP/gRPC + metrics), NewLogger\nInitTracer + NewHTTPMetrics"]
+        Proto["pkg/proto\n10 generated .pb.go subpackages"]
+    end
+
+    subgraph Fleet["Go Microservice Fleet (8 Services in go.work)"]
+        direction TB
+        F1["correlation: 8/8 services\nInitOTel: 7/8 (all except reverse-etl)\nhealth: 7/8 (reverse-etl uses internal health)"]
+        F2["auth: 4/8 services\n(dispatch-optimizer, location-ingestion,\nreconciliation-engine, reverse-etl)"]
+        F3["config: 5/8 services\n(cdc-consumer, dispatch-optimizer,\nlocation-ingestion, payment-webhook, reconciliation)"]
+        F4["kafka helpers ONLY: 4/8 services\n(cdc-consumer, outbox-relay,\npayment-webhook, reconciliation-engine)\n(kafka.NewProducer & NewConsumer: 0/8)"]
+        F5["DORMANT / 0 CALLERS:\npkg/httpclient: 0/8\npkg/proto: 0/8\nInitTracer & NewHTTPMetrics: 0/8"]
+    end
+
+    Corr --> F1
+    Obs --> F1
+    Health --> F1
+    Auth --> F2
+    Cfg --> F3
+    Kafka --> F4
+    Http -. "0 callers" .-> F5
+    Proto -. "0 callers" .-> F5

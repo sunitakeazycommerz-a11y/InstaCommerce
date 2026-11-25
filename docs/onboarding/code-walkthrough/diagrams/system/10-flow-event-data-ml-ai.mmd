@@ -1,0 +1,50 @@
+flowchart TB
+    classDef pg fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef go fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef data fill:#F1F5F9,stroke:#334155,stroke-width:1.6px,color:#0F172A
+    classDef py fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#0F172A
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph TOP_FLOW["1. Event Production -> Kafka -> Streaming & Lakehouse Ingestion"]
+        direction LR
+        subgraph LANE_PRODUCE["Dual Event Production"]
+            direction TB
+            OB_PG["Service PG outbox_events<br/>Propagation.MANDATORY"]:::pg
+            OB_RELAY["outbox-relay :8103 (x13)<br/>SKIP LOCKED open tx -> Sarama WaitForAll<br/>Dual camel/snake + flat · outbox.relay.dlq<br/>notification -> notifications.events"]:::go
+            DEB["Debezium WAL pgoutput<br/>reconciliation.cdc<br/>(No payments.cdc connector!)"]:::gap
+            OB_PG --> OB_RELAY
+        end
+
+        KAFKA["Kafka KRaft<br/>20 domain + 3 non-domain + 1 .dlq"]:::data
+
+        subgraph LANE_STREAM["Real-Time & BQ Ingestion"]
+            direction TB
+            STR["stream-processor :8108 (Go)<br/>Bloom + Redis SetNX (fail-open)<br/>800/300 -> Redis + Prom ONLY"]:::go
+            CDC["cdc-consumer :8104 (Go)<br/>batchCh (500/5s) -> SchemaEvolution<br/>BQ insertID / cdc.dlq (Helm crash!)"]:::gap
+            BEAM["Beam / Dataflow (6)<br/>order_payment_join (600s TimerSpec)<br/>cart_events (900s) -> analytics.*"]:::data
+        end
+
+        OB_RELAY & DEB --> KAFKA --> STR & CDC & BEAM
+    end
+
+    subgraph BOT_FLOW["2. BigQuery Lakehouse, Offline ML, Reverse ETL & Online AI"]
+        direction LR
+        subgraph LAKE_ML["BigQuery, dbt, Airflow & Offline ML"]
+            direction LR
+            BQ["BigQuery asia-south1<br/>dbt: 8 staging -> 3 int -> 10 marts<br/>Airflow: dbt_marts KafkaLagSensor (<=100)"]:::data
+            LAKE_GAP["Table/Column Drift:<br/>raw_cdc.* vs BQ_TABLE vs analytics.*<br/>GE suites mismatch stg_*.sql<br/>ml_feature_refresh fails (entity_id)"]:::gap
+            ML["ml/ Offline Platform<br/>WINDOW_30D_EXCLUDING_TODAY<br/>6 Trainers · evaluate_promotion_gates<br/>(fraud test_df leak; ml/serving unused)"]:::py
+            BQ --- LAKE_GAP --> ML
+        end
+
+        subgraph SERVE_AI["Reverse ETL, Inference & LangGraph"]
+            direction LR
+            RETL["reverse-etl :8109 (Go)<br/>HTTP Push ONLY -> WorkerPool -> Lua swap<br/>user:features:{id} / fraud:score:{id}<br/>(Kafka/Temporal UNCONFIGURED)"]:::gap
+            AII["ai-inference :8101 (Py)<br/>Z-score + DynamicBatcher<br/>7 Routes (linear / fallback default)"]:::py
+            AIO["ai-orchestrator :8100 (Py)<br/>InjectionDetector -> PIIVault -> LangGraph<br/>0.50 USD / 25-call -> OutputPolicy<br/>8 Tools (tools.py token mismatch!)"]:::gap
+            RETL -->|"Redis"| AII
+            AIO -. "8 Tools" .-> AII
+        end
+    end
+
+    TOP_FLOW ~~~ BOT_FLOW

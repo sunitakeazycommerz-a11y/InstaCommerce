@@ -8,7 +8,7 @@ The warehouse-service is the operational authority for dark store registry, deli
 **Language**: Java 21 / Spring Boot 4.0
 **Default Port**: 8092
 **Status**: Tier 2 (Fulfillment path; operational criticality)
-**Database**: PostgreSQL 15+ (decimal coordinates, Haversine nearest-store search)
+**Database**: PostgreSQL 16 (decimal coordinates, Haversine nearest-store search)
 **Cache**: Caffeine (JVM-local, 5-minute TTL)
 
 ## SLOs & Availability
@@ -42,7 +42,7 @@ The warehouse-service is the operational authority for dark store registry, deli
 - **Liveness Probe**: `/actuator/health/liveness`
 
 ### Database
-- **Name**: `warehouse` (PostgreSQL 15+)
+- **Name**: `warehouse` (PostgreSQL 16)
 - **Migrations**: Flyway (V1-V10) auto-applied
 - **Connection Pool**: HikariCP 20 connections
 - **Indexes**: Composite on (latitude, longitude), status, city, pincode
@@ -343,15 +343,15 @@ Side Effects: Cache invalidated for "zones:{storeId}"
 
 ```bash
 # 1. Find nearest store (heavy hitter query)
-curl -s 'http://warehouse-service:8090/stores/nearest?latitude=12.9352&longitude=77.6245&radiusKm=10' \
+curl -s 'http://warehouse-service:8092/stores/nearest?latitude=12.9352&longitude=77.6245&radiusKm=10' \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.stores[0].name'
 
 # 2. Get store zones (for picking assignment)
-curl -s http://warehouse-service:8090/stores/store-uuid/zones \
+curl -s http://warehouse-service:8092/stores/store-uuid/zones \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.zones | length'
 
 # 3. Create store (admin)
-curl -s -X POST http://warehouse-service:8090/stores \
+curl -s -X POST http://warehouse-service:8092/stores \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
   -d '{
@@ -363,7 +363,7 @@ curl -s -X POST http://warehouse-service:8090/stores \
   }' | jq '.id'
 
 # 4. Get store hours
-curl -s http://warehouse-service:8090/stores/store-uuid/hours \
+curl -s http://warehouse-service:8092/stores/store-uuid/hours \
   -H "Authorization: Bearer $JWT_TOKEN" | jq '.hours'
 ```
 
@@ -504,17 +504,17 @@ psql -d warehouse -c "SELECT store_id, ST_AsText(location) FROM stores LIMIT 5;"
 **Diagnosis:**
 ```bash
 # Check cache metrics
-curl http://localhost:8090/actuator/metrics/cache.caffeine.hitRate
+curl http://localhost:8092/actuator/metrics/cache.caffeine.hitRate
 
 # Check zone lookup latency
-curl http://localhost:8090/actuator/metrics/warehouse.zone_lookup.latency_ms
+curl http://localhost:8092/actuator/metrics/warehouse.zone_lookup.latency_ms
 
 # Verify zones are cached
 kubectl exec pod/warehouse-service-0 -- \
-  curl -s http://localhost:8090/stores/store-uuid/zones | jq '.zones | length'
+  curl -s http://localhost:8092/stores/store-uuid/zones | jq '.zones | length'
 
 # Check cache size
-curl http://localhost:8090/actuator/metrics/cache.caffeine.size
+curl http://localhost:8092/actuator/metrics/cache.caffeine.size
 ```
 
 **Resolution:**
@@ -533,7 +533,7 @@ psql -d warehouse -c "SELECT * FROM store_hours WHERE store_id='store-uuid';"
 psql -d warehouse -c "SELECT COUNT(DISTINCT day_of_week) FROM store_hours WHERE store_id='store-uuid';"
 
 # Test API response
-curl -s http://localhost:8090/stores/store-uuid/hours | jq '.hours'
+curl -s http://localhost:8092/stores/store-uuid/hours | jq '.hours'
 ```
 
 **Resolution:**
@@ -546,7 +546,7 @@ curl -s http://localhost:8090/stores/store-uuid/hours | jq '.hours'
 ### Environment Variables
 ```env
 # Server
-SERVER_PORT=8090
+SERVER_PORT=8092
 SPRING_PROFILES_ACTIVE=gcp
 
 # Database (with PostGIS)
@@ -571,7 +571,7 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://otel-collector.monitoring:4318/v1/trac
 ### application.yml
 ```yaml
 server:
-  port: 8090
+  port: 8092
 spring:
   jpa:
     hibernate:
@@ -612,13 +612,13 @@ spec:
         app: warehouse-service
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8090"
+        prometheus.io/port: "8092"
     spec:
       containers:
       - name: warehouse-service
         image: warehouse-service:v1.2.3
         ports:
-        - containerPort: 8090
+        - containerPort: 8092
           name: http
         env:
         - name: SPRING_PROFILES_ACTIVE
@@ -633,12 +633,12 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/live
-            port: 8090
+            port: 8092
           initialDelaySeconds: 10
         readinessProbe:
           httpGet:
             path: /actuator/health/ready
-            port: 8090
+            port: 8092
           initialDelaySeconds: 15
 ---
 apiVersion: v1
@@ -650,8 +650,8 @@ spec:
   selector:
     app: warehouse-service
   ports:
-  - port: 8090
-    targetPort: 8090
+  - port: 8092
+    targetPort: 8092
   type: ClusterIP
 ```
 

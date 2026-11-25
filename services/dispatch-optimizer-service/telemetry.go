@@ -130,8 +130,12 @@ func instrumentHandler(route string, logger *slog.Logger, metrics *serviceMetric
 			status = http.StatusOK
 		}
 		duration := time.Since(start)
-		metrics.requestCount.WithLabelValues(route, r.Method, strconv.Itoa(status)).Inc()
-		metrics.requestDuration.WithLabelValues(route, r.Method, strconv.Itoa(status)).Observe(duration.Seconds())
+		if metrics != nil && metrics.requestCount != nil {
+			metrics.requestCount.WithLabelValues(route, r.Method, strconv.Itoa(status)).Inc()
+		}
+		if metrics != nil && metrics.requestDuration != nil {
+			metrics.requestDuration.WithLabelValues(route, r.Method, strconv.Itoa(status)).Observe(duration.Seconds())
+		}
 		if route != "health" {
 			traceID, spanID := traceFields(r.Context())
 			logger.Info("request completed",

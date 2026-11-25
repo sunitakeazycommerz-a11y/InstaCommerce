@@ -365,7 +365,7 @@ sequenceDiagram
 
     Client->>LegacyCheckoutController: POST /checkout
     LegacyCheckoutController-->>Client: 410 Gone<br/>{"code":"CHECKOUT_MOVED", "message":"Use checkout-orchestrator-service"}
-    Note over Client,CheckoutOrchestrator: Client redirects to checkout-orchestrator-service:8086
+    Note over Client,CheckoutOrchestrator: Client redirects to checkout-orchestrator-service:8091
     Client->>CheckoutOrchestrator: POST /api/v1/checkout
     CheckoutOrchestrator-->>Client: 202 Accepted {checkoutId}
 ```

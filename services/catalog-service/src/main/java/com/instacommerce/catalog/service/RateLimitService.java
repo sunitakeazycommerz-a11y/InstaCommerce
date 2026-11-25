@@ -2,6 +2,7 @@ package com.instacommerce.catalog.service;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
@@ -19,7 +20,18 @@ public class RateLimitService {
         this.limiters = Caffeine.newBuilder()
                 .maximumSize(10_000)
                 .expireAfterAccess(5, TimeUnit.MINUTES)
+                .executor(Runnable::run)
+                .removalListener((String key, RateLimiter value, RemovalCause cause) -> {
+                    if (key != null) {
+                        rateLimiterRegistry.remove(key);
+                    }
+                })
                 .build();
+    }
+
+    void cleanUpLocalLimiters() {
+        limiters.invalidateAll();
+        limiters.cleanUp();
     }
 
     public void checkProduct(String ipAddress) {

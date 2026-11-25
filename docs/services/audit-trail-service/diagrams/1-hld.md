@@ -7,7 +7,7 @@ flowchart TD
         KAFKA["Kafka (14 domain topics)<br/>identity, catalog, order, payment, etc."]
     end
 
-    subgraph ATS["audit-trail-service :8092"]
+    subgraph ATS["audit-trail-service :8096"]
         direction TB
         INGEST_CTRL["AuditIngestionController<br/>(REST ingestion)"]
         DOMAIN_CONSUMER["DomainEventConsumer<br/>(Kafka subscriber)"]

@@ -1,0 +1,35 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+
+mobile-bff:
+  jwt:
+    public-key: ${MOBILE_BFF_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+  upstream:
+    catalog-url: ${CATALOG_SERVICE_URL:http://localhost:8082}
+    search-url: ${SEARCH_SERVICE_URL:http://localhost:8088}
+    feature-flag-url: ${FEATURE_FLAG_SERVICE_URL:http://localhost:8098}
+    cart-url: ${CART_SERVICE_URL:http://localhost:8090}
+    order-url: ${ORDER_SERVICE_URL:http://localhost:8084}
+    identity-url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+    wallet-url: ${WALLET_LOYALTY_SERVICE_URL:http://localhost:8095}
+    pricing-url: ${PRICING_SERVICE_URL:http://localhost:8089}
+    inventory-url: ${INVENTORY_SERVICE_URL:http://localhost:8083}
+    fulfillment-url: ${FULFILLMENT_SERVICE_URL:http://localhost:8086}
+    routing-eta-url: ${ROUTING_ETA_SERVICE_URL:http://localhost:8094}
+    checkout-url: ${CHECKOUT_ORCHESTRATOR_SERVICE_URL:http://localhost:8091}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

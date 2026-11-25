@@ -45,8 +45,8 @@ graph LR
     end
 
     subgraph "Kafka Topics"
-        OE[order.events]
-        PE[payment.events]
+        OE[orders.events]
+        PE[payments.events]
         IE[identity.events]
         CE[catalog.events]
         INE[inventory.events]
@@ -293,7 +293,7 @@ them into BigQuery using the BigQuery streaming insert API (`table.Inserter()`).
 | Batch timeout | 5 s |
 | Insert timeout | 30 s |
 | Retry count | 5 (exponential backoff, 1 s base, 30 s max) |
-| DLQ topic | `cdc.dlq` |
+| DLQ topic | `cdc.events.DLT` |
 
 **BigQuery Row Schema (raw)**
 
@@ -355,11 +355,11 @@ Two complementary streaming paths handle sub-minute analytics.
 ```mermaid
 graph LR
     subgraph "Kafka Topics"
-        OE[order.events]
-        PE[payment.events]
+        OE[orders.events]
+        PE[payments.events]
         INE[inventory.events]
         CE2[cart.events]
-        RL[rider.location]
+        RL[rider.location.updates]
     end
 
     subgraph "Path A — Stream Processor (Go)"
@@ -395,7 +395,7 @@ graph LR
 The `stream-processor-service` maintains in-memory counters and pushes rolling
 aggregations into Redis for consumption by dashboards and API gateways.
 
-- **Input topics**: `order.events`, `payment.events`, `inventory.events`, `rider.events`
+- **Input topics**: `orders.events`, `payments.events`, `inventory.events`, `rider.events`
 - **Output**: Redis sorted sets / hashes, Prometheus counters and histograms
 - **Latency**: < 500 ms end-to-end
 
@@ -494,11 +494,11 @@ graph LR
 
 | Entity | Feature Group | # Features | Refresh | Ingestion |
 |--------|--------------|------------|---------|-----------|
-| `user` | user_features | 14 | per-event (streaming) | `order.events` |
+| `user` | user_features | 14 | per-event (streaming) | `orders.events` |
 | `product` | product_features | 12 | hourly (batch) | BigQuery SQL |
 | `store` | store_features | 8 | every 5 min | BigQuery SQL |
 | `rider` | rider_features | 9 | per-event (streaming) | `rider.location.updates`, `fulfillment.events` |
-| `search_query` | search_features | 10 | per-event (streaming) | `order.events` |
+| `search_query` | search_features | 10 | per-event (streaming) | `orders.events` |
 
 ### Feature Views (Model-Specific Projections)
 
@@ -543,8 +543,8 @@ compute SQL → materialize to online store (Redis) + offline store (BigQuery).
 
 | Topic | Producer(s) | Consumer(s) | Partitions | Retention |
 |-------|------------|-------------|------------|-----------|
-| `order.events` | Order Service | Wallet-Loyalty, Stream Processor, Fraud Detection, Audit Trail, Notification, CDC Consumer, Dataflow | 12 | 7 days |
-| `payment.events` | Payment Service | Wallet-Loyalty, Stream Processor, Fraud Detection, Audit Trail, Notification, CDC Consumer, Dataflow | 12 | 7 days |
+| `orders.events` | Order Service | Wallet-Loyalty, Stream Processor, Fraud Detection, Audit Trail, Notification, CDC Consumer, Dataflow | 12 | 7 days |
+| `payments.events` | Payment Service | Wallet-Loyalty, Stream Processor, Fraud Detection, Audit Trail, Notification, CDC Consumer, Dataflow | 12 | 7 days |
 | `identity.events` | Identity Service | Order Service, Fulfillment Service, Audit Trail, Notification, CDC Consumer | 6 | 14 days |
 | `catalog.events` | Catalog Service | Search Service, Pricing Service, Audit Trail, CDC Consumer | 6 | 7 days |
 | `inventory.events` | Inventory Service | Stream Processor, Audit Trail, CDC Consumer, Dataflow | 12 | 7 days |
@@ -556,8 +556,7 @@ compute SQL → materialize to online store (Redis) + offline store (BigQuery).
 
 | Topic | Producer(s) | Consumer(s) | Partitions | Retention |
 |-------|------------|-------------|------------|-----------|
-| `rider.location.updates` | Location Ingestion Service | Routing-ETA, Stream Processor | 24 | 24 hours |
-| `rider.location` | Location Ingestion Service | Dataflow (Rider Location Pipeline) | 24 | 24 hours |
+| `rider.location.updates` | Location Ingestion Service | Routing-ETA, Stream Processor, Dataflow (Rider Location Pipeline) | 24 | 24 hours |
 | `payment.webhooks` | Payment Webhook Service | Payment Service | 6 | 3 days |
 | `cart.events` | Cart Service | Dataflow (Cart Pipeline), Audit Trail | 6 | 3 days |
 | `reconciliation.events` | Reconciliation Engine | Audit Trail | 3 | 14 days |
@@ -573,13 +572,13 @@ compute SQL → materialize to online store (Redis) + offline store (BigQuery).
 | `customer-support.events` | _(external)_ | Audit Trail | 3 | 7 days |
 | `returns.events` | _(external)_ | Audit Trail | 3 | 7 days |
 
-### Dead-Letter Queue Topics
+### Dead-Letter Topics (`.DLT` per ADR-003)
 
 | Topic | Source Service | Partitions | Retention |
 |-------|---------------|------------|-----------|
-| `audit.dlq` | Audit Trail Service | 3 | 30 days |
-| `cdc.dlq` | CDC Consumer Service | 3 | 30 days |
-| `notification.dlq` | Notification Service | 3 | 30 days |
+| `audit.DLT` | Audit Trail Service | 3 | 30 days |
+| `cdc.events.DLT` | CDC Consumer Service | 3 | 30 days |
+| `notification.events.DLT` | Notification Service | 3 | 30 days |
 
 ### CDC Topics (Debezium-managed)
 

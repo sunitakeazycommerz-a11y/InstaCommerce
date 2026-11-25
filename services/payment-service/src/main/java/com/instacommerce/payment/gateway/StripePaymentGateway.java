@@ -13,27 +13,41 @@ import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.RefundCreateParams;
 import java.util.Collections;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 @Component
-@Profile("!test")
+@Profile("!test & !local")
 public class StripePaymentGateway implements PaymentGateway {
+    private static final String LOCAL_PLACEHOLDER_KEY = "sk_test_local_placeholder";
     private final String apiKey;
     private final int connectTimeoutMs;
     private final int readTimeoutMs;
+    private final boolean allowPlaceholderFallback;
+    private final MockPaymentGateway localFallback = new MockPaymentGateway();
 
+    public StripePaymentGateway(String apiKey, int connectTimeoutMs, int readTimeoutMs) {
+        this(apiKey, connectTimeoutMs, readTimeoutMs, false);
+    }
+
+    @Autowired
     public StripePaymentGateway(@Value("${stripe.api-key:}") String apiKey,
                                 @Value("${stripe.connect-timeout-ms:5000}") int connectTimeoutMs,
-                                @Value("${stripe.read-timeout-ms:15000}") int readTimeoutMs) {
+                                @Value("${stripe.read-timeout-ms:15000}") int readTimeoutMs,
+                                @Value("${payment.gateway.allow-placeholder-fallback:false}") boolean allowPlaceholderFallback) {
         this.apiKey = apiKey;
         this.connectTimeoutMs = connectTimeoutMs;
         this.readTimeoutMs = readTimeoutMs;
+        this.allowPlaceholderFallback = allowPlaceholderFallback;
     }
 
     @Override
     public GatewayAuthResult authorize(GatewayAuthRequest request) {
+        if (usePlaceholderFallback()) {
+            return localFallback.authorize(request);
+        }
         ensureApiKey();
         try {
             PaymentIntentCreateParams.Builder builder = PaymentIntentCreateParams.builder()
@@ -61,14 +75,18 @@ public class StripePaymentGateway implements PaymentGateway {
 
     @Override
     public GatewayCaptureResult capture(String pspReference, long amountCents, String idempotencyKey) {
+        if (usePlaceholderFallback()) {
+            return localFallback.capture(pspReference, amountCents, idempotencyKey);
+        }
         ensureApiKey();
-        RequestOptions options = buildOptions(idempotencyKey);
+        RequestOptions retrieveOptions = buildOptions(null);
+        RequestOptions captureOptions = buildOptions(idempotencyKey);
         try {
-            PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
+            PaymentIntent intent = PaymentIntent.retrieve(pspReference, retrieveOptions);
             PaymentIntentCaptureParams params = PaymentIntentCaptureParams.builder()
                 .setAmountToCapture(amountCents)
                 .build();
-            intent.capture(params, options);
+            intent.capture(params, captureOptions);
             return GatewayCaptureResult.ok();
         } catch (CardException ex) {
             String declineCode = ex.getDeclineCode();
@@ -80,11 +98,15 @@ public class StripePaymentGateway implements PaymentGateway {
 
     @Override
     public GatewayVoidResult voidAuth(String pspReference, String idempotencyKey) {
+        if (usePlaceholderFallback()) {
+            return localFallback.voidAuth(pspReference, idempotencyKey);
+        }
         ensureApiKey();
-        RequestOptions options = buildOptions(idempotencyKey);
+        RequestOptions retrieveOptions = buildOptions(null);
+        RequestOptions cancelOptions = buildOptions(idempotencyKey);
         try {
-            PaymentIntent intent = PaymentIntent.retrieve(pspReference, options);
-            intent.cancel(Collections.emptyMap(), options);
+            PaymentIntent intent = PaymentIntent.retrieve(pspReference, retrieveOptions);
+            intent.cancel(Collections.emptyMap(), cancelOptions);
             return GatewayVoidResult.ok();
         } catch (StripeException ex) {
             throw toGatewayException(ex);
@@ -93,6 +115,9 @@ public class StripePaymentGateway implements PaymentGateway {
 
     @Override
     public GatewayStatusResult getStatus(String pspReference) {
+        if (usePlaceholderFallback()) {
+            return localFallback.getStatus(pspReference);
+        }
         ensureApiKey();
         try {
             RequestOptions options = buildOptions(null);
@@ -106,6 +131,9 @@ public class StripePaymentGateway implements PaymentGateway {
 
     @Override
     public GatewayRefundStatusResult getRefundStatus(String pspRefundId) {
+        if (usePlaceholderFallback()) {
+            return localFallback.getRefundStatus(pspRefundId);
+        }
         ensureApiKey();
         try {
             RequestOptions options = buildOptions(null);
@@ -119,6 +147,9 @@ public class StripePaymentGateway implements PaymentGateway {
 
     @Override
     public GatewayRefundResult refund(String pspReference, long amountCents, String idempotencyKey, UUID internalRefundId) {
+        if (usePlaceholderFallback()) {
+            return localFallback.refund(pspReference, amountCents, idempotencyKey, internalRefundId);
+        }
         ensureApiKey();
         try {
             RefundCreateParams params = RefundCreateParams.builder()
@@ -179,6 +210,10 @@ public class StripePaymentGateway implements PaymentGateway {
         return "requires_capture".equals(status)
             || "succeeded".equals(status)
             || "processing".equals(status);
+    }
+
+    private boolean usePlaceholderFallback() {
+        return allowPlaceholderFallback && LOCAL_PLACEHOLDER_KEY.equals(apiKey);
     }
 
     private void ensureApiKey() {

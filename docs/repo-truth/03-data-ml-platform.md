@@ -121,18 +121,12 @@ Important reality check:
 
 ### ai-orchestrator-service
 
-There are effectively two sub-systems living together:
-
-1. A legacy request-handling and orchestration flow in [`../services/ai-orchestrator-service/app/main.py`](../../services/ai-orchestrator-service/app/main.py)
-2. A newer LangGraph-centered `/v2` path in:
-   - [`../services/ai-orchestrator-service/app/api/handlers.py`](../../services/ai-orchestrator-service/app/api/handlers.py)
-   - [`../services/ai-orchestrator-service/app/graph/graph.py`](../../services/ai-orchestrator-service/app/graph/graph.py)
+[`../services/ai-orchestrator-service/app/main.py`](../../services/ai-orchestrator-service/app/main.py) mounts both `v1_router` ([`app/api/v1.py`](../../services/ai-orchestrator-service/app/api/v1.py)) and `v2_router` ([`app/api/handlers.py`](../../services/ai-orchestrator-service/app/api/handlers.py)) over a unified `ExecutionService` ([`app/api/execution.py`](../../services/ai-orchestrator-service/app/api/execution.py)) and LangGraph runtime ([`app/graph/graph.py`](../../services/ai-orchestrator-service/app/graph/graph.py)), enforcing `app/guardrails/` (`InjectionDetector`, `PIIVault`, `OutputPolicy`, `EscalationPolicy`, `TokenBucketRateLimiter`) and `app/middleware.py`.
 
 Operational implication:
 
-- migration complexity exists inside the service itself
-- observability and behavior parity between v1 and v2 need to be watched
-- the codebase currently reflects transition, not consolidation
+- v1 and v2 API contracts share the same `ExecutionService`, LangGraph graph, and guardrail middleware
+- legacy v1 endpoint compatibility can be deprecated without duplicating core orchestration logic
 
 ### ai-inference-service
 
@@ -157,7 +151,7 @@ This is one of the cleaner Python services in the repo because the boundary is s
 - actual authorization policies
 - actual service env configuration shape
 
-Key observation: deploy policy is often ahead of service completeness. The mesh is prepared to route to `mobile-bff-service` and `admin-gateway-service`, even though their business logic is mostly scaffold.
+Key observation: deploy policy and edge gateways both enforce trust boundaries (`mobile-bff-service` and `admin-gateway-service` validate RS256 JWTs and propagate user/admin context alongside Istio mesh policies).
 
 ### ArgoCD
 
@@ -215,6 +209,6 @@ This is an important repo truth: the checked-in alert logic is more operationall
 
 - Very large blast radius for shared contract or event-envelope changes
 - Multiple languages increase operational and onboarding burden
-- Edge completeness lags behind back-end depth
-- AI subsystem is in a migration state
+- Edge aggregation breadth continues expanding iteratively over the hardened gateway foundations
+- AI API versioning maintains both v1 and v2 route surfaces over the unified `ExecutionService` runtime
 - Config truth is distributed across Java, Go, Helm, Terraform, and docs

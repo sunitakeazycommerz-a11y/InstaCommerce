@@ -45,30 +45,30 @@ canary:
         provider: prometheus
         successCondition: result < 0.005  # 0.5% error rate - stricter threshold
         query: |
-          sum(rate(http_requests_total{status=~"5..",service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
+          sum(rate(http_server_requests_seconds_count{status=~"5..",service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
           /
-          sum(rate(http_requests_total{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
+          sum(rate(http_server_requests_seconds_count{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
       - name: latency-p99
         provider: prometheus
         successCondition: result < 1500  # 1.5s p99 latency - stricter threshold
         query: |
           histogram_quantile(0.99,
-            sum(rate(http_request_duration_seconds_bucket{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m])) by (le)
+            sum(rate(http_server_requests_seconds_bucket{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m])) by (le)
           ) * 1000
       - name: latency-p95
         provider: prometheus
         successCondition: result < 800  # 800ms p95 latency
         query: |
           histogram_quantile(0.95,
-            sum(rate(http_request_duration_seconds_bucket{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m])) by (le)
+            sum(rate(http_server_requests_seconds_bucket{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m])) by (le)
           ) * 1000
       - name: success-rate
         provider: prometheus
         successCondition: result >= 0.995  # 99.5% success rate
         query: |
-          sum(rate(http_requests_total{status=~"2..",service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
+          sum(rate(http_server_requests_seconds_count{status=~"2..",service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
           /
-          sum(rate(http_requests_total{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
+          sum(rate(http_server_requests_seconds_count{service=~"{{ .Values.canary.targetService }}",region="{{ .Values.canary.region }}"}[5m]))
 
   # Automatic rollback configuration
   rollback:
@@ -206,9 +206,9 @@ monitoring:
     rules:
       - alert: AustinCanaryHighErrorRate
         expr: |
-          sum(rate(http_requests_total{status=~"5..",canary="true",region="us-central-1"}[5m]))
+          sum(rate(http_server_requests_seconds_count{status=~"5..",canary="true",region="us-central-1"}[5m]))
           /
-          sum(rate(http_requests_total{canary="true",region="us-central-1"}[5m]))
+          sum(rate(http_server_requests_seconds_count{canary="true",region="us-central-1"}[5m]))
           > 0.005
         for: 2m
         labels:
@@ -222,7 +222,7 @@ monitoring:
       - alert: AustinCanaryHighLatency
         expr: |
           histogram_quantile(0.99,
-            sum(rate(http_request_duration_seconds_bucket{canary="true",region="us-central-1"}[5m])) by (le)
+            sum(rate(http_server_requests_seconds_bucket{canary="true",region="us-central-1"}[5m])) by (le)
           ) * 1000 > 1500
         for: 2m
         labels:
@@ -235,9 +235,9 @@ monitoring:
           runbook_url: "https://runbooks.instacommerce.dev/canary-rollback"
       - alert: AustinCanaryLowAvailability
         expr: |
-          sum(rate(http_requests_total{status=~"2..",canary="true",region="us-central-1"}[5m]))
+          sum(rate(http_server_requests_seconds_count{status=~"2..",canary="true",region="us-central-1"}[5m]))
           /
-          sum(rate(http_requests_total{canary="true",region="us-central-1"}[5m]))
+          sum(rate(http_server_requests_seconds_count{canary="true",region="us-central-1"}[5m]))
           < 0.995
         for: 2m
         labels:
@@ -263,9 +263,9 @@ argoRollouts:
             prometheus:
               address: http://prometheus.monitoring:9090
               query: |
-                sum(rate(http_requests_total{status=~"5..",canary="true",region="us-central-1"}[5m]))
+                sum(rate(http_server_requests_seconds_count{status=~"5..",canary="true",region="us-central-1"}[5m]))
                 /
-                sum(rate(http_requests_total{canary="true",region="us-central-1"}[5m]))
+                sum(rate(http_server_requests_seconds_count{canary="true",region="us-central-1"}[5m]))
         - name: latency-p99
           interval: 5m
           successCondition: result[0] < 1500
@@ -275,7 +275,7 @@ argoRollouts:
               address: http://prometheus.monitoring:9090
               query: |
                 histogram_quantile(0.99,
-                  sum(rate(http_request_duration_seconds_bucket{canary="true",region="us-central-1"}[5m])) by (le)
+                  sum(rate(http_server_requests_seconds_bucket{canary="true",region="us-central-1"}[5m])) by (le)
                 ) * 1000
         - name: success-rate
           interval: 5m
@@ -285,6 +285,6 @@ argoRollouts:
             prometheus:
               address: http://prometheus.monitoring:9090
               query: |
-                sum(rate(http_requests_total{status=~"2..",canary="true",region="us-central-1"}[5m]))
+                sum(rate(http_server_requests_seconds_count{status=~"2..",canary="true",region="us-central-1"}[5m]))
                 /
-                sum(rate(http_requests_total{canary="true",region="us-central-1"}[5m]))
+                sum(rate(http_server_requests_seconds_count{canary="true",region="us-central-1"}[5m]))

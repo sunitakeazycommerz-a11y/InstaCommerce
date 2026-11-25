@@ -1,0 +1,65 @@
+flowchart TB
+    classDef caller fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef filter fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef ctrl fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef svc fill:#EEF2FF,stroke:#4F46E5,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph UPSTREAM["Upstream Callers"]
+        direction LR
+        BFF["mobile-bff-service :8080<br/>User JWT + SSE CartSyncService"]:::caller
+        CO["checkout-orchestrator :8091<br/>X-Internal-Service + X-Internal-Token<br/>CartActivityImpl"]:::caller
+        CLIENT["Admin / Direct Caller<br/>Bearer RS256 JWT"]:::caller
+    end
+
+    subgraph APP["cart-service :8090 (Java 21 / Spring Boot 4.0.0)"]
+        direction TB
+        subgraph CHAIN["Servlet Filter & Security Chain (SecurityConfig)"]
+            direction LR
+            CORR["CorrelationIdFilter<br/>Order HIGHEST_PRECEDENCE<br/>MDC correlationId, storeId, userId, tenantId"]:::filter
+            ISAF["SharedInternalServiceAuthFilter<br/>libs/platform-common (MessageDigest.isEqual)<br/>ROLE_INTERNAL_SERVICE + ROLE_SERVICE_{CALLER}"]:::filter
+            JWT["JwtAuthenticationFilter<br/>DefaultJwtService + JwtKeyLoader (RS256)<br/>skips /actuator, /error"]:::filter
+            EX["GlobalExceptionHandler<br/>ErrorResponse(code, traceId) + TraceIdProvider<br/>412 PRECONDITION_FAILED / 409 / 422"]:::filter
+        end
+
+        subgraph CTRL["REST Layer (CartController)"]
+            direction LR
+            CC["CartController<br/>/cart, /api/carts, /api/v1/cart<br/>authorizeUserAccess (BOLA) · ETag + parseIfMatchVersion"]:::ctrl
+        end
+
+        subgraph SERVICES["Service, Sole CartStore & Downstream Client"]
+            direction LR
+            CS["CartService<br/>@Cacheable/@CacheEvict(carts)<br/>executeAddWithRetry (MAX_ADD_RETRIES=3)<br/>CartProperties (50 items, 10 qty, 0..10M)"]:::svc
+            JCS["JpaCartStore (SOLE CartStore bean)<br/>findByUserIdForUpdate (SELECT FOR UPDATE)<br/>applyOrVerifyStoreId · OutboxService (MANDATORY)"]:::svc
+            PC["PricingClient<br/>RestTemplate (2s/3s) + InternalServiceAuthInterceptor<br/>Resilience4j CB(order=1) + Retry(order=2)"]:::svc
+            SYNC["CartSyncPublisher<br/>best-effort StringRedisTemplate<br/>cart:updated:{userId} + cart:events"]:::svc
+        end
+
+        subgraph CACHE_JOBS["Two-Level Cache, ShedLock Jobs & Unused Kafka"]
+            direction LR
+            TLC["CacheConfig + TwoLevelCacheManager<br/>L1 Caffeine (50k, 30s) + L2 Redis (1h, cart:*)<br/>Pub/Sub cart:cache:invalidate (ApplicationReady)"]:::svc
+            JOBS["CartCleanupJob (cron */15m, ShedLock)<br/>cache.clear() all carts; NO CartExpired outbox<br/>OutboxCleanupJob (cron 0 */6h, 7d)"]:::warn
+            DEAD["KafkaConfig + spring.kafka.producer<br/>DefaultErrorHandler + DLT bean<br/>ZERO KafkaTemplate or @KafkaListener"]:::warn
+        end
+    end
+
+    subgraph INFRA["Persistence, Cache, Pricing & Outbox Relay"]
+        direction LR
+        PG["PostgreSQL carts / cart_db (Hikari max=30, V1..V8)<br/>carts (uq_cart_user, store_id V8, @Version)<br/>cart_items (uq_cart_product) · outbox_events · shedlock"]:::db
+        REDIS["Redis<br/>L2 cart:carts::{userId} (1h TTL)<br/>Pub/Sub cart:cache:invalidate, cart:updated:{userId}, cart:events"]:::db
+        PRICING["pricing-service :8089<br/>GET /pricing/products/{productId} (no storeId!)<br/>POST /pricing/products/batch"]:::caller
+        RELAY["outbox-relay-cart :8103 (Go)<br/>FOR UPDATE SKIP LOCKED -> Kafka cart.events"]:::db
+    end
+
+    BFF & CO & CLIENT --> CORR --> ISAF --> JWT --> CC
+    CC -.-> EX
+    CC --> CS
+    CS -->|"outside DB TX"| PC --> PRICING
+    CS --> JCS --> PG
+    CS <--> TLC <--> REDIS
+    CS --> SYNC --> REDIS
+    REDIS -->|"cart:events"| BFF
+    JOBS --> PG
+    JOBS -.->|"cache.clear()"| TLC
+    PG -->|"outbox_events (sent=false)"| RELAY

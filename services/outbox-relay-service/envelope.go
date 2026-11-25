@@ -267,10 +267,6 @@ func resolveDLQSchemaVersion(evt outboxEvent, schemaVersion string) string {
 	return "unknown"
 }
 
-func buildDLQMessage(evt outboxEvent, targetTopic string, produceErr error) []byte {
-	return buildEnrichedDLQMessage(evt, targetTopic, strings.TrimSpace(evt.AggregateID), 1, produceErr, time.Now().UTC())
-}
-
 func buildEnrichedDLQMessage(evt outboxEvent, targetTopic, partitionKey string, attempts int, produceErr error, quarantinedAt time.Time) []byte {
 	var payload any
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {

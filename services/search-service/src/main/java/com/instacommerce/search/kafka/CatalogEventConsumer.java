@@ -89,7 +89,7 @@ public class CatalogEventConsumer {
                 ? ((Number) payload.get("priceCents")).longValue()
                 : (payload.get("basePriceCents") != null ? ((Number) payload.get("basePriceCents")).longValue() : 0L);
             String imageUrl = (String) payload.get("imageUrl");
-            boolean inStock = payload.get("inStock") != null && (Boolean) payload.get("inStock");
+            boolean inStock = Boolean.TRUE.equals(payload.get("inStock"));
             UUID storeId = payload.get("storeId") != null
                 ? UUID.fromString((String) payload.get("storeId")) : null;
 

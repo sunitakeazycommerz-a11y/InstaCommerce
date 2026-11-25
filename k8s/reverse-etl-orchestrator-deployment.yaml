@@ -65,7 +65,7 @@ spec:
 
       containers:
       - name: reverse-etl-orchestrator
-        image: asia-south1-docker.pkg.dev/instacommerce-prod/services/reverse-etl-orchestrator:1.0.0
+        image: asia-south1-docker.pkg.dev/instacommerce/images/reverse-etl-orchestrator:1.0.0
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
@@ -171,16 +171,6 @@ spec:
             configMapKeyRef:
               name: reverse-etl-config
               key: marketing.batch.timeout.ms
-        - name: ANALYTICS_HOSTS
-          valueFrom:
-            configMapKeyRef:
-              name: reverse-etl-analytics-config
-              key: hosts
-        - name: ANALYTICS_INDEX_PREFIX
-          valueFrom:
-            configMapKeyRef:
-              name: reverse-etl-analytics-config
-              key: index_prefix
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "http://otel-collector.observability.svc.cluster.local:4318"
         - name: OTEL_SERVICE_NAME

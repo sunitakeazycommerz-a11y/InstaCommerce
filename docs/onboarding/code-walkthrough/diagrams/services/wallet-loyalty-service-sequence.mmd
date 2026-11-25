@@ -1,0 +1,38 @@
+sequenceDiagram
+    autonumber
+    participant Client as Mobile / Internal Caller
+    participant WC as WalletController /<br/>LoyaltyController
+    participant PC as PaymentClient<br/>(Resilience4j)
+    participant WS as WalletService<br/>(@Transactional)
+    participant LS as LoyaltyService<br/>(@Retryable 3x)
+    participant WLS as WalletLedgerService<br/>(MANDATORY)
+    participant PG as PostgreSQL<br/>(wallets DB)
+    participant Outbox as OutboxService<br/>(outbox_events)
+
+    Note over Client,Outbox: 1. Verified Wallet Top-Up (POST /wallet/topup)
+    Client->>WC: POST /wallet/topup {amountCents, paymentReference}
+    WC->>PC: verifyPayment(paymentReference) [2s conn / 3s read, 3x Retry + CB]
+    PC-->>WC: PaymentResponse(userId, purpose, status, amountCents)
+    alt userId mismatch or purpose ineligible or status not CAPTURED/COMPLETED or amount mismatch
+        WC-->>Client: 403 / 400 / 402 ApiException (top-up rejected)
+    else Verified
+        WC->>WS: credit(userId, amountCents, TOPUP, "topup-" + ref)
+        WS->>PG: SELECT wallet FOR UPDATE (createWallet if absent) + save balance += amount
+        WS->>PG: INSERT wallet_transactions (uq_wallet_txn_idempotent)
+        WS->>WLS: recordDoubleEntry(TOPUP, isCredit=true) [MANDATORY]
+        WLS->>PG: INSERT wallet_ledger_entries (DR platform_float, CR user_wallet:{userId})
+        WS->>Outbox: publish("Wallet", walletId, "WalletCredited") [MANDATORY]
+        Outbox->>PG: INSERT outbox_events
+        WS-->>WC: WalletTransactionResponse (@CacheEvict walletBalance)
+        WC-->>Client: 200 OK
+    end
+
+    Note over Client,Outbox: 2. Loyalty Redeem → Wallet Credit (POST /loyalty/redeem)
+    Client->>WC: POST /loyalty/redeem {points, orderId}
+    WC->>LS: redeemPoints(userId, points, orderId)
+    LS->>PG: SELECT loyalty_accounts FOR UPDATE → decrement pointsBalance
+    LS->>PG: INSERT loyalty_transactions (REDEEM, REDEMPTION/{orderId})
+    LS->>WS: credit(userId, points * 100, PROMOTION, "loyalty-redeem-" + orderId) [joins TX!]
+    WS->>PG: SELECT wallet FOR UPDATE + INSERT wallet_transactions + ledger(marketing_budget → user_wallet)
+    LS->>Outbox: publish("Loyalty", accountId, "PointsRedeemed")
+    LS-->>Client: 200 LoyaltyResponse(pointsBalance, tier, walletCreditCents)

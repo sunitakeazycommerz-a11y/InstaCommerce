@@ -1,0 +1,30 @@
+flowchart TB
+    classDef cache fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef res fill:#ECFDF5,stroke:#059669,stroke-width:1.6px,color:#0F172A
+    classDef err fill:#FFFBEB,stroke:#D97706,stroke-width:1.6px,color:#78350F
+    classDef gap fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+
+    subgraph CACHE_TOP["1. TwoLevelCacheManager Protocol (4 Svcs: cart, catalog, pricing, search)"]
+        direction LR
+        READ["get(key)<br/>1. Check Caffeine L1<br/>2. Miss -> Redis L2 (try/catch)<br/>3. Populate L1 on L2 hit"]:::cache
+        EVICT["evict(key) / clear()<br/>1. Evict L1 + Redis L2<br/>2. Redis Pub/Sub publish:<br/>'{instanceId}#124;{cacheName}:{keyPattern}'"]:::cache
+        PEER["Peer Pods (onMessage)<br/>Ignore if origin == self.instanceId<br/>Else twoLevelCache.evictLocal(pattern)"]:::cache
+        FF_NOTE["config-feature-flag exception:<br/>Uses local Caffeine + flag-updates:{key}<br/>(opens CB on 1st startup Redis failure)"]:::err
+        READ --> EVICT --> PEER --- FF_NOTE
+    end
+
+    subgraph RESILIENCE["2. Polyglot Circuit Breakers, Retries & Backpressure"]
+        direction LR
+        R4J_JAVA["Java Resilience4j<br/>Payment: Retry (order 1, 3x 1s) -> CB (order 2, 20 calls, 50%, 30s)<br/>Cart PricingClient: 2s conn / 3s read, fail-closed on addItem<br/>CheckoutController: Semaphore(1500) -> 429 Retry-After: 5<br/>mobile-bff: critical vs degraded fallback metadata"]:::res
+        GO_HTTP["Go go-shared/pkg/httpclient<br/>30s timeout · 5s/1024 DNS cache · otelhttp + WithInternalAuth<br/>3 retries (500ms exp, Retry-After <=30s) · CB (5 failures / 30s)"]:::res
+        GO_STREAM["Go StreamDispatcher (stream-processor)<br/>Channel cap 1000 · HighWatermark 800 pauses fetch (10ms)<br/>LowWatermark 300 resumes · Monotonic per-partition offsetTracker"]:::res
+    end
+
+    subgraph ERR_TOP["3. Error Envelope & DLT Topology"]
+        direction LR
+        RFC7807["ProblemDetailFactory (RFC 7807)<br/>Adopted by ONLY 3 services:<br/>admin-gateway, catalog, wallet-loyalty<br/>type='urn:instacommerce:problem:{code}', traceId"]:::res
+        CUSTOM_ERR["Custom ErrorResponse JSON<br/>Edge & Core services (identity, mobile-bff,<br/>feature-flag, audit-trail, order, checkout)"]:::err
+        DLT_SPLIT["DLT/DLQ Split (ADR-003 Drift):<br/>Java & stream-processor -> {topic}.DLT<br/>outbox-relay -> outbox.relay.dlq<br/>cdc-consumer -> cdc.dlq"]:::gap
+    end
+
+    CACHE_TOP ~~~ RESILIENCE ~~~ ERR_TOP

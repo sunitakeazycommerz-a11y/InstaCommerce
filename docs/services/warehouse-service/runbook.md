@@ -55,7 +55,7 @@ kubectl exec deploy/warehouse-service -- \
 kubectl get deploy warehouse-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Upgrade
-helm upgrade warehouse-service deploy/helm/warehouse-service \
+helm upgrade instacommerce deploy/helm \
   --values deploy/helm/values.yaml
 
 # 3. Monitor rollout
@@ -243,7 +243,7 @@ CREATE INDEX idx_warehouse_capacity ON warehouses(available_capacity);
 
 ```bash
 # Enable PostGIS caching in Redis
-helm upgrade warehouse-service deploy/helm/warehouse-service \
+helm upgrade instacommerce deploy/helm \
   -n warehouse \
   --set redis.cache.ttlMinutes=60 \
   --set geo.cache.maxSize=50000
@@ -278,5 +278,5 @@ rate(warehouse_geo_query_errors_total[5m])
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/warehouse-service/`
+- **Deployment**: `deploy/helm/`
 - **Architecture**: `/docs/services/warehouse-service/README.md`

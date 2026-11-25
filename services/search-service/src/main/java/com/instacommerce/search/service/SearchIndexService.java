@@ -33,7 +33,6 @@ public class SearchIndexService {
                     existing.setCategory(category);
                     existing.setPriceCents(priceCents);
                     existing.setImageUrl(imageUrl);
-                    existing.setInStock(inStock);
                     existing.setStoreId(storeId);
                     searchDocumentRepository.save(existing);
                     log.debug("Updated search document for productId={}", productId);

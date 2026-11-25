@@ -20,10 +20,10 @@
     curl -s http://localhost:8082/actuator/health/readiness | jq '.components.kafka'
   ```
 
-- [ ] Validate product count in index (should match database)
+- [ ] Validate product catalog & outbox health
   ```bash
   kubectl exec -n engagement deploy/catalog-service -- \
-    curl -s http://localhost:8082/metrics/elasticsearch-product-count | jq '.value'
+    curl -s http://localhost:8082/actuator/health/readiness | jq '.status'
   ```
 
 ---
@@ -33,16 +33,16 @@
 ### Pre-Deployment Baseline
 
 ```bash
-# Elasticsearch index sync status
+# Database and outbox connectivity
 kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/metrics/elasticsearch-sync-lag | jq '.value'
+  curl -s http://localhost:8082/actuator/health/readiness | jq '.components.db.status'
 
 # Current replica count
 kubectl get deploy catalog-service -n engagement -o jsonpath='{.spec.replicas}'
 
-# Cache hit rate (should be 80%+)
+# Cache metrics (Caffeine / Micrometer)
 kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/metrics/cache-hit-rate | jq '.value'
+  curl -s http://localhost:8082/actuator/metrics/cache.gets | jq '.measurements'
 ```
 
 ### Blue-Green Deployment
@@ -52,20 +52,20 @@ kubectl exec -n engagement deploy/catalog-service -- \
 kubectl get deploy -n engagement catalog-service -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # 2. Upgrade
-helm upgrade catalog-service deploy/helm/catalog-service \
+helm upgrade instacommerce deploy/helm \
   -n engagement \
   --values deploy/helm/values.yaml
 
 # 3. Monitor rollout
 kubectl rollout status deploy/catalog-service -n engagement --timeout=10m
 
-# 4. Verify Elasticsearch sync recovered
+# 4. Verify readiness recovered
 kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/metrics/elasticsearch-sync-lag | jq '.value'
+  curl -s http://localhost:8082/actuator/health/readiness | jq '.status'
 
-# 5. Verify cache warmed up
+# 5. Verify cache metrics active
 kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/metrics/cache-hit-rate | jq '.value'
+  curl -s http://localhost:8082/actuator/metrics/cache.gets | jq '.measurements'
 ```
 
 ### Rollback
@@ -118,90 +118,81 @@ kubectl exec -n engagement pod/$POD -- \
 
 ### Readiness Probe: `/actuator/health/ready`
 
-**Load balancer removal triggers**: Elasticsearch down, database down, Kafka consumer not joined
+**Load balancer removal triggers**: database down, Redis cache unreachable, or readiness probe failure
 
 ---
 
 ## Incident Response Procedures
 
-### P0 - Product Search Down
+### P0 - Product Catalog / Search Read Path Down
 
-**Symptom**: Search queries failing or returning empty, product listing broken
+**Symptom**: Product queries or search projections failing or returning empty
 
 **Diagnosis**:
 ```bash
-# Check Elasticsearch
+# Check catalog-service readiness & database
 kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/actuator/health | jq '.components.elasticsearch'
-
-# Check database
-kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/actuator/health/db | jq '.status'
+  curl -s http://localhost:8082/actuator/health/readiness | jq '.components.db'
 
 # Test product lookup
 kubectl exec -n engagement deploy/catalog-service -- \
   curl -s "http://localhost:8082/v1/products/PROD-001"
 
-# Check Elasticsearch cluster health
-kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/v1/admin/elasticsearch-health | jq '.'
+# Check downstream search-service (PostgreSQL tsvector FTS)
+kubectl exec -n engagement deploy/search-service -- \
+  curl -s http://localhost:8082/actuator/health/readiness | jq '.'
 ```
 
 **Resolution**:
 1. Scale up: `kubectl scale deploy catalog-service -n engagement --replicas=5`
-2. If Elasticsearch down: Check Elasticsearch cluster or failover
-3. If database down: Check PostgreSQL cluster
+2. If database down: Check Cloud SQL PostgreSQL primary / read-replica health
+3. If search projection stale: Check `outbox_events` backlog and `search-service` (`8088`) Kafka consumer lag
 4. Restart pod: `kubectl rollout restart deploy/catalog-service -n engagement`
 
-### P1 - Search Latency High (>500ms) or Results Stale
+### P1 - Read Latency High (>500ms) or Search Results Stale
 
 **Diagnosis**:
 ```bash
-# Check Elasticsearch sync lag
+# Check HTTP request latency metrics
 kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/metrics/elasticsearch-sync-lag | jq '.value'
+  curl -s http://localhost:8082/actuator/metrics/http.server.requests | jq '.measurements'
 
-# Check search latency
-kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/metrics/search-latency-p99 | jq '.value'
+# Check search-service readiness (PostgreSQL FTS)
+kubectl exec -n engagement deploy/search-service -- \
+  curl -s http://localhost:8082/actuator/health/readiness | jq '.'
 ```
 
 **Resolution**:
-1. If sync lag high: Trigger manual sync or increase indexing throughput
+1. Check `outbox-relay-service` (`8103`) lag for `catalog.events` propagation to `search-service`
 2. Scale up replicas
-3. Check Elasticsearch cluster load
+3. Inspect PostgreSQL query latency and Caffeine cache hit ratio
 
 ---
 
 ## Common Issues & Troubleshooting
 
-### Issue: Elasticsearch Index Out of Sync
+### Issue: Search Projection Out of Sync
 
 ```bash
-# Check sync status
-kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/metrics/elasticsearch-sync-lag | jq '.value'
+# Check outbox-relay health and Kafka consumer lag on catalog.events
+kubectl exec -n engagement deploy/search-service -- \
+  curl -s http://localhost:8082/actuator/health/readiness | jq '.'
 
-# Trigger manual re-indexing
-kubectl exec -n engagement deploy/catalog-service -- \
-  curl -X POST http://localhost:8082/v1/admin/reindex \
-  -H "Authorization: Bearer admin-token" | jq '.status'
-
-# Monitor progress
-kubectl logs -n engagement deploy/catalog-service | grep "reindex"
+# Check catalog-service logs for outbox writes
+kubectl logs -n engagement deploy/catalog-service --tail=100 | grep -i "outbox\|catalog.events"
 ```
 
 ### Issue: Cache Eviction High
 
 ```bash
-# Monitor cache
+# Monitor Caffeine cache evictions
 kubectl exec -n engagement deploy/catalog-service -- \
-  curl -s http://localhost:8082/metrics/cache-evictions-total | jq '.value'
+  curl -s http://localhost:8082/actuator/metrics/cache.evictions | jq '.measurements'
 
-# Increase cache size
-helm upgrade catalog-service deploy/helm/catalog-service \
+# Update Helm cache values via shared chart
+helm upgrade instacommerce deploy/helm \
   -n engagement \
-  --set cache.maxSize=100000
+  --values deploy/helm/values.yaml
 ```
 
 ---
@@ -211,10 +202,9 @@ helm upgrade catalog-service deploy/helm/catalog-service \
 ### Cache Configuration
 
 ```bash
-helm upgrade catalog-service deploy/helm/catalog-service \
+helm upgrade instacommerce deploy/helm \
   -n engagement \
-  --set cache.ttlMinutes=30 \
-  --set cache.maxSize=50000
+  --values deploy/helm/values.yaml
 ```
 
 ---
@@ -224,26 +214,26 @@ helm upgrade catalog-service deploy/helm/catalog-service \
 ### Key Metrics
 
 ```
-# Product search latency
-histogram_quantile(0.99, rate(catalog_search_seconds_bucket[5m]))
+# Catalog HTTP p99 latency
+histogram_quantile(0.99, rate(http_server_requests_seconds_bucket{service="catalog-service"}[5m]))
 
-# Elasticsearch sync lag
-catalog_elasticsearch_sync_lag_seconds
+# Outbox relay backlog (catalog_db)
+outbox_events_pending{service="catalog-service"}
 
-# Search result accuracy (relevant results / total)
-catalog_search_relevance_ratio
+# Caffeine cache hit ratio
+rate(cache_gets_total{service="catalog-service",result="hit"}[5m]) / rate(cache_gets_total{service="catalog-service"}[5m])
 ```
 
 ---
 
 ## On-Call Handoff
 
-- [ ] Elasticsearch sync lag? `kubectl exec -n engagement deploy/catalog-service -- curl -s http://localhost:8082/metrics/elasticsearch-sync-lag`
-- [ ] Cache hit rate? `kubectl exec -n engagement deploy/catalog-service -- curl -s http://localhost:8082/metrics/cache-hit-rate`
+- [ ] Database & readiness OK? `kubectl exec -n engagement deploy/catalog-service -- curl -s http://localhost:8082/actuator/health/readiness`
+- [ ] Cache metrics active? `kubectl exec -n engagement deploy/catalog-service -- curl -s http://localhost:8082/actuator/metrics/cache.gets`
 
 ---
 
 ## Related Documentation
 
-- **Deployment**: `/deploy/helm/catalog-service/`
-- **Architecture**: `/docs/services/catalog-service/README.md`
+- **Deployment**: [`deploy/helm/`](../../../deploy/helm/)
+- **Architecture**: [`docs/services/catalog-service/README.md`](README.md)

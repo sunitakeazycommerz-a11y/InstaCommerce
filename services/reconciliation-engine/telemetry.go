@@ -11,7 +11,6 @@ import (
 
 	"github.com/instacommerce/go-shared/pkg/observability"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type Metrics struct {
@@ -63,10 +62,11 @@ func parseLogLevel(level string) slog.Level {
 
 func initTracer(ctx context.Context, serviceName string, logger *slog.Logger) (func(context.Context) error, error) {
 	providers, err := observability.InitOTel(ctx, observability.OTelConfig{
-		ServiceName:    serviceName,
-		Protocol:       observability.OTelProtocolGRPC,
-		ResolveEnv:     true,
-		StdoutFallback: true,
+		ServiceName:      serviceName,
+		Protocol:         observability.OTelProtocolGRPC,
+		ResolveEnv:       true,
+		NoopIfNoEndpoint: true,
+		FallbackNoop:     true,
 	}, logger)
 	if err != nil {
 		return nil, err
@@ -94,12 +94,4 @@ func initDatabase(ctx context.Context, cfg Config, logger *slog.Logger) (*sql.DB
 	}
 	logger.Info("database connection pool initialized", "host", cfg.DBHost, "port", cfg.DBPort, "database", cfg.DBName)
 	return db, nil
-}
-
-func loggerWithContext(ctx context.Context, logger *slog.Logger) *slog.Logger {
-	span := trace.SpanContextFromContext(ctx)
-	if !span.IsValid() {
-		return logger
-	}
-	return logger.With("trace_id", span.TraceID().String(), "span_id", span.SpanID().String())
 }

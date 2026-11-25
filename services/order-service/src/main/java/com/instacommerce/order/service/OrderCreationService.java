@@ -59,10 +59,16 @@ public class OrderCreationService {
             return existing.get().getId().toString();
         }
         validateCreateOrderCommand(command);
-        if (command.getQuoteId() != null && command.getQuoteToken() != null) {
+        boolean hasQuote = command.getQuoteId() != null
+            || (command.getQuoteToken() != null && !command.getQuoteToken().isBlank());
+        if (hasQuote) {
             boolean quoteValid = pricingQuoteClient.validateQuote(
-                command.getQuoteId(), command.getQuoteToken(),
-                command.getTotalCents(), command.getSubtotalCents(), command.getDiscountCents());
+                command.getUserId(),
+                command.getQuoteId(),
+                command.getQuoteToken(),
+                command.getTotalCents(),
+                command.getSubtotalCents(),
+                command.getDiscountCents());
             if (!quoteValid) {
                 throw new ApiException(HttpStatus.CONFLICT, "QUOTE_VALIDATION_FAILED",
                     "Price quote validation failed for quoteId=" + command.getQuoteId());
@@ -78,6 +84,10 @@ public class OrderCreationService {
     }
 
     private void validateCreateOrderCommand(CreateOrderCommand command) {
+        if (command.getItems() == null || command.getItems().isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "EMPTY_ORDER_ITEMS",
+                "Order must contain at least one item");
+        }
         if (command.getTotalCents() < 0
                 || command.getSubtotalCents() < 0
                 || command.getDiscountCents() < 0
@@ -89,6 +99,30 @@ public class OrderCreationService {
                 + ", deliveryFee=" + command.getDeliveryFeeCents()
                 + ", total=" + command.getTotalCents()
                 + ", walletAmount=" + command.getWalletAmountCents());
+        }
+        long computedSubtotalCents = 0L;
+        for (CartItem item : command.getItems()) {
+            if (item == null || item.quantity() == null || item.quantity() <= 0
+                    || item.unitPriceCents() == null || item.unitPriceCents() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_ITEM",
+                    "Order item must have positive quantity and unitPriceCents");
+            }
+            long expectedLineTotal = Math.multiplyExact((long) item.quantity(), item.unitPriceCents());
+            if (item.lineTotalCents() != null && item.lineTotalCents() != expectedLineTotal) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_TOTAL",
+                    "Order item lineTotalCents must equal quantity * unitPriceCents for product=" + item.productId());
+            }
+            computedSubtotalCents = Math.addExact(computedSubtotalCents, expectedLineTotal);
+        }
+        if (computedSubtotalCents != command.getSubtotalCents()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_TOTAL",
+                "Order subtotalCents must equal sum of item line totals: expected="
+                + computedSubtotalCents + ", actual=" + command.getSubtotalCents());
+        }
+        if (command.getDiscountCents() > command.getSubtotalCents()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_TOTAL",
+                "Discount cannot exceed order subtotal: discount=" + command.getDiscountCents()
+                + ", subtotal=" + command.getSubtotalCents());
         }
         if (command.getWalletAmountCents() > command.getTotalCents()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_TOTAL",
@@ -105,11 +139,16 @@ public class OrderCreationService {
                 + ", deliveryFee=" + command.getDeliveryFeeCents()
                 + ", total=" + command.getTotalCents());
         }
+        boolean hasQuoteId = command.getQuoteId() != null;
+        boolean hasQuoteToken = command.getQuoteToken() != null && !command.getQuoteToken().isBlank();
         if (command.getDiscountCents() > 0 || (command.getCouponCode() != null && !command.getCouponCode().isBlank())) {
-            if (command.getQuoteId() == null || command.getQuoteToken() == null || command.getQuoteToken().isBlank()) {
+            if (!hasQuoteId || !hasQuoteToken) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "DISCOUNT_REQUIRES_QUOTE",
                     "Orders with discounts or coupons must include a validated quoteId and quoteToken from pricing-service");
             }
+        } else if (hasQuoteId != hasQuoteToken) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_QUOTE",
+                "Both quoteId and quoteToken must be supplied together");
         }
     }
 

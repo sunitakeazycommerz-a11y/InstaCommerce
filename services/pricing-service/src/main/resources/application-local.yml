@@ -1,0 +1,35 @@
+spring:
+  cloud:
+    gcp:
+      secretmanager:
+        enabled: false
+      sql:
+        enabled: false
+        jdbc:
+          enabled: false
+  datasource:
+    password: ${PRICING_DB_PASSWORD:devpass}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+pricing:
+  jwt:
+    public-key: ${PRICING_JWT_PUBLIC_KEY:${JWT_PUBLIC_KEY:}}
+  quote:
+    hmac-secret: ${PRICING_QUOTE_HMAC_SECRET:dev-hmac-secret-change-in-prod}
+
+internal:
+  service:
+    token: ${INTERNAL_SERVICE_TOKEN:local-dev-internal-token}
+
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:0.0}
+  otlp:
+    tracing:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false

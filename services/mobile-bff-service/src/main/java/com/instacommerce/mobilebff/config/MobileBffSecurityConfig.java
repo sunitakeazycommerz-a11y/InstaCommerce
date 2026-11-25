@@ -6,6 +6,7 @@ import com.instacommerce.mobilebff.security.UserContextPropagationFilter;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
@@ -33,6 +34,7 @@ public class MobileBffSecurityConfig {
             .authorizeExchange(exchanges -> exchanges
                 .pathMatchers("/actuator/**", "/health/**").permitAll()
                 .pathMatchers("/bff/mobile/v1/home", "/m/v1/home").permitAll()
+                .pathMatchers(HttpMethod.GET, "/bff/mobile/v1/products/**", "/m/v1/products/**").permitAll()
                 .pathMatchers("/bff/mobile/v1/public/**", "/m/v1/public/**").permitAll()
                 .pathMatchers("/bff/mobile/v1/cart/stream/**", "/m/v1/cart/stream/**").authenticated()
                 .anyExchange().authenticated()

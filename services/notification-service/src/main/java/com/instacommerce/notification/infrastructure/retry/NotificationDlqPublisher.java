@@ -33,7 +33,7 @@ public class NotificationDlqPublisher {
             "eventType", request.eventType(),
             "channel", request.channel().name(),
             "reason", reason,
-            "maskedRecipient", MaskingUtil.maskRecipient(request.recipient())
+            "maskedRecipient", MaskingUtil.maskRecipient(request.recipient(), request.channel())
         );
         try {
             String body = objectMapper.writeValueAsString(payload);

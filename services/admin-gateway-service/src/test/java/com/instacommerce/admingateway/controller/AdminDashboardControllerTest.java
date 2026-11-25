@@ -8,11 +8,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -211,7 +213,7 @@ class AdminDashboardControllerTest {
     void shouldReturnFeatureFlags() throws Exception {
         Map<String, Object> flags = Map.of("feature-a", true, "feature-b", false);
         when(restTemplate.exchange(
-                eq("http://config-feature-flag-service:8098/flags"),
+                eq("http://config-feature-flag-service:8098/admin/flags"),
                 eq(HttpMethod.GET),
                 isNull(),
                 anyMapType()))
@@ -246,7 +248,7 @@ class AdminDashboardControllerTest {
     @WithMockUser(username = "admin", roles = "ADMIN")
     void shouldReturnBadGatewayProblemDetailWhenFlagsOrReconciliationUnreachable() throws Exception {
         when(restTemplate.exchange(
-                eq("http://config-feature-flag-service:8098/flags"),
+                eq("http://config-feature-flag-service:8098/admin/flags"),
                 eq(HttpMethod.GET),
                 isNull(),
                 anyMapType()))
@@ -431,5 +433,222 @@ class AdminDashboardControllerTest {
         mockMvc.perform(get("/admin/v1/reconciliation/pending")
                 .with(csrf()))
             .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = "ADMIN")
+    void shouldEnableAndDisableFlagForAdminWhileReservingEmergencyStopForSuperAdmin() throws Exception {
+        when(restTemplate.exchange(
+                eq("http://config-feature-flag-service:8098/admin/flags/{key}/enable"),
+                eq(HttpMethod.POST),
+                eq(HttpEntity.EMPTY),
+                anyMapType(),
+                eq("checkout_v2")))
+            .thenReturn(ResponseEntity.ok(Map.of("key", "checkout_v2", "enabled", true)));
+
+        when(restTemplate.exchange(
+                eq("http://config-feature-flag-service:8098/admin/flags/{key}/disable"),
+                eq(HttpMethod.POST),
+                eq(HttpEntity.EMPTY),
+                anyMapType(),
+                eq("checkout_v2")))
+            .thenReturn(ResponseEntity.ok(Map.of("key", "checkout_v2", "enabled", false)));
+
+        mockMvc.perform(post("/admin/v1/flags/checkout_v2/enable").with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.enabled").value(true));
+
+        mockMvc.perform(post("/admin/v1/flags/checkout_v2/disable").with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.enabled").value(false));
+
+        mockMvc.perform(post("/admin/v1/flags/checkout_v2/emergency-stop").with(csrf()))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @WithMockUser(username = "superadmin", roles = {"ADMIN", "SUPER_ADMIN"})
+    void shouldTriggerEmergencyStopForSuperAdmin() throws Exception {
+        when(restTemplate.exchange(
+                eq("http://config-feature-flag-service:8098/admin/flags/emergency-stop/{key}"),
+                eq(HttpMethod.POST),
+                eq(HttpEntity.EMPTY),
+                anyMapType(),
+                eq("checkout_v2")))
+            .thenReturn(ResponseEntity.ok().build());
+
+        mockMvc.perform(post("/admin/v1/flags/checkout_v2/emergency-stop").with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.flagKey").value("checkout_v2"))
+            .andExpect(jsonPath("$.status").value("emergency_stopped"));
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = "ADMIN")
+    void shouldProxyFraudOpsEndpointsForAdmin() throws Exception {
+        when(restTemplate.exchange(
+                ArgumentMatchers.argThat((java.net.URI u) -> u != null && u.toString().contains("/admin/fraud/rules")),
+                eq(HttpMethod.GET),
+                isNull(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.ok(Map.of("content", java.util.List.of(Map.of("name", "velocity-1")))));
+
+        when(restTemplate.exchange(
+                eq("http://fraud-detection-service:8097/admin/fraud/rules"),
+                eq(HttpMethod.POST),
+                anyEntity(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.status(HttpStatus.CREATED).body(Map.of("name", "new-rule")));
+
+        when(restTemplate.exchange(
+                ArgumentMatchers.argThat((java.net.URI u) -> u != null && u.toString().contains("/admin/fraud/blocklist")),
+                eq(HttpMethod.GET),
+                isNull(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.ok(Map.of("content", java.util.List.of())));
+
+        when(restTemplate.exchange(
+                eq("http://fraud-detection-service:8097/admin/fraud/blocklist"),
+                eq(HttpMethod.POST),
+                anyEntity(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.status(HttpStatus.CREATED).body(Map.of("entityValue", "1.2.3.4")));
+
+        when(restTemplate.exchange(
+                eq("http://fraud-detection-service:8097/admin/fraud/allowlist"),
+                eq(HttpMethod.GET),
+                isNull(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.ok(Map.of("items", java.util.List.of(Map.of("entityValue", "vip-1")))));
+
+        when(restTemplate.exchange(
+                eq("http://fraud-detection-service:8097/admin/fraud/allowlist"),
+                eq(HttpMethod.POST),
+                anyEntity(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.status(HttpStatus.CREATED).body(Map.of("entityValue", "vip-1")));
+
+        when(restTemplate.exchange(
+                eq("http://fraud-detection-service:8097/admin/fraud/allowlist/{id}"),
+                eq(HttpMethod.DELETE),
+                eq(HttpEntity.EMPTY),
+                anyMapType(),
+                eq("11111111-1111-1111-1111-111111111111")))
+            .thenReturn(ResponseEntity.noContent().build());
+
+        mockMvc.perform(get("/admin/v1/fraud/rules").with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content[0].name").value("velocity-1"));
+
+        mockMvc.perform(post("/admin/v1/fraud/rules")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"new-rule\",\"ruleType\":\"AMOUNT\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.name").value("new-rule"));
+
+        mockMvc.perform(get("/admin/v1/fraud/blocklist").with(csrf()))
+            .andExpect(status().isOk());
+
+        mockMvc.perform(post("/admin/v1/fraud/blocklist")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"entityType\":\"IP\",\"entityValue\":\"1.2.3.4\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.entityValue").value("1.2.3.4"));
+
+        mockMvc.perform(get("/admin/v1/fraud/allowlist").with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items[0].entityValue").value("vip-1"));
+
+        mockMvc.perform(post("/admin/v1/fraud/allowlist")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"entityType\":\"USER\",\"entityValue\":\"vip-1\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.entityValue").value("vip-1"));
+
+        mockMvc.perform(delete("/admin/v1/fraud/allowlist/11111111-1111-1111-1111-111111111111").with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("revoked"));
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = "ADMIN")
+    void shouldProxyAuditEventsAndIntegrityVerify() throws Exception {
+        when(restTemplate.exchange(
+                ArgumentMatchers.argThat((java.net.URI u) -> u != null && u.toString().contains("/admin/audit/events")),
+                eq(HttpMethod.GET),
+                anyEntity(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.ok(Map.of("content", java.util.List.of(Map.of("eventType", "ORDER_CREATED")))));
+
+        when(restTemplate.exchange(
+                ArgumentMatchers.argThat((java.net.URI u) -> u != null && u.toString().contains("/admin/audit/integrity/verify")),
+                eq(HttpMethod.GET),
+                anyEntity(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.ok(Map.of("eventsVerified", 12, "chainBreaks", 0, "intact", true)));
+
+        mockMvc.perform(get("/admin/v1/audit/events?eventType=ORDER_CREATED").with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content[0].eventType").value("ORDER_CREATED"));
+
+        mockMvc.perform(get("/admin/v1/audit/integrity/verify?batchSize=500").with(csrf()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.intact").value(true))
+            .andExpect(jsonPath("$.eventsVerified").value(12));
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = "ADMIN")
+    void shouldValidateAndEncodeAuditQueryParametersSafely() throws Exception {
+        when(restTemplate.exchange(
+                ArgumentMatchers.any(URI.class),
+                eq(HttpMethod.GET),
+                anyEntity(),
+                anyMapType()))
+            .thenReturn(ResponseEntity.ok(Map.of("content", java.util.List.of())));
+
+        String actorId = "11111111-1111-1111-1111-111111111111";
+        mockMvc.perform(get("/admin/v1/audit/events")
+                .param("actorId", actorId)
+                .param("resourceId", "ord-1&evil=true{foo}#bar")
+                .param("fromDate", "2026-11-25T00:00:00Z")
+                .param("toDate", "2026-11-25T12:00:00Z")
+                .with(csrf()))
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<URI> uriCaptor = ArgumentCaptor.forClass(URI.class);
+        verify(restTemplate).exchange(uriCaptor.capture(), eq(HttpMethod.GET), anyEntity(), anyMapType());
+        URI sentUri = uriCaptor.getValue();
+        assertThat(sentUri.getScheme()).isEqualTo("http");
+        assertThat(sentUri.getHost()).isEqualTo("audit-trail-service");
+        assertThat(sentUri.getPort()).isEqualTo(8096);
+        assertThat(sentUri.getPath()).isEqualTo("/admin/audit/events");
+        assertThat(sentUri.getRawQuery())
+            .contains("actorId=" + actorId)
+            .contains("resourceId=ord-1%26evil%3Dtrue%7Bfoo%7D%23bar")
+            .contains("fromDate=2026-11-25T00%3A00%3A00Z")
+            .contains("toDate=2026-11-25T12%3A00%3A00Z");
+
+        mockMvc.perform(get("/admin/v1/audit/events")
+                .param("actorId", "not-a-uuid")
+                .with(csrf()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+
+        mockMvc.perform(get("/admin/v1/audit/integrity/verify")
+                .param("from", "not-an-instant")
+                .with(csrf()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+
+        mockMvc.perform(get("/admin/v1/audit/events")
+                .param("resourceId", "bad\nvalue")
+                .with(csrf()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 }

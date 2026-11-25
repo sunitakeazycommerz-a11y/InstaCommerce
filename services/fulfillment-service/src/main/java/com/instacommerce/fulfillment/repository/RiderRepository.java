@@ -5,11 +5,23 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RiderRepository extends JpaRepository<Rider, UUID> {
     List<Rider> findByStoreId(UUID storeId);
+
+    @Modifying
+    @Query(value = """
+        INSERT INTO riders (id, name, store_id, is_available, created_at)
+        VALUES (:id, :name, :storeId, :available, NOW())
+        ON CONFLICT (id) DO NOTHING
+        """, nativeQuery = true)
+    void insertProjectionIfAbsent(@Param("id") UUID id,
+                                  @Param("name") String name,
+                                  @Param("storeId") UUID storeId,
+                                  @Param("available") boolean available);
 
     @Query(value = """
         SELECT * FROM riders r

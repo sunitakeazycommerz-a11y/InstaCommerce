@@ -1,0 +1,40 @@
+flowchart TB
+    subgraph StreamFlow["Lane A: Streaming Ingestion, Event-Time Windows & Stateful Join"]
+        direction TB
+        KIn["Kafka Topics: orders.events · payments.events · cart.events<br/>inventory.events · rider.location.updates"]
+        Parse["DoFn Parsers (validation.py + common.py)<br/>Extract envelope/payload · TimestampedValue(event_ts)"]
+        LateDLQ["Late / Corrupt Routing<br/>Order lateness ≥ 3600s → analytics_dlq.late_order_events<br/>Parse error → GCS dead-letter/*.json<br/>(Live LocationEvent missing zone_id → 100% DLQ)"]
+        WinAgg["Windowed Aggregations<br/>Orders: 1m Fixed + 30m/60s Sliding (early 30s, late 1)<br/>Payments: 1m Fixed (failed_rows → analytics_errors)<br/>Cart: 15m Session → 1m Fixed · Inv: 5m Fixed + Stockout<br/>Rider: 10s spatial cell → 1m zone sum (overcounts across batches)"]
+        JoinState["StatefulOrderPaymentJoinFn (GlobalWindows)<br/>ReadModifyWriteState: order · payment · emitted<br/>TimerSpec(WATERMARK) = event_ts + 600s"]
+        JoinEmit{"Both sides<br/>present?"}
+        EmitPair["Immediate Emit + emitted=True<br/>→ analytics.realtime_order_payments"]
+        OnTimer["on_expiry Timer Fires<br/>If not emitted: flush partial row<br/>Clear order, payment, emitted state"]
+
+        KIn --> Parse
+        Parse -->|"invalid / late"| LateDLQ
+        Parse -->|"valid stream"| WinAgg
+        Parse -->|"Flatten + Key(order_id)"| JoinState
+        JoinState --> JoinEmit
+        JoinEmit -->|"Yes (first match)"| EmitPair
+        JoinEmit -->|"Wait up to 600s"| OnTimer
+    end
+
+    subgraph BatchFlow["Lane B: Airflow Orchestration, Quality Gates & Feature/Backfill Seams"]
+        direction TB
+        StgDAG["dbt_staging (0 */2 * * *)<br/>dbt run --select staging (8 views)<br/>→ dbt test --select staging"]
+        QualDAG["data_quality (0 */2 * * *)<br/>ExternalTaskSensor(dbt_staging.dbt_test_staging)<br/>→ GE suites (orders, payments, inventory, users)<br/>(payments/inventory/users YAML cols absent in stg_*)"]
+        RevRec["reconcile_daily_revenue<br/>SUM(stg_orders) vs SUM(stg_payments)<br/>Fail-OPEN on BQ exception · block_downstream_if_critical<br/>(Only fails self; dbt_marts does NOT sense it)"]
+        MartsDAG["dbt_marts (0 2 * * *)<br/>1) ExternalTaskSensor(dbt_staging.dbt_test_staging)<br/>2) KafkaLagSensor(orders.events, max_lag=100, ALL CGs)<br/>→ dbt intermediate → dbt marts → dbt test → Slack"]
+        BackfillDAG["historical_backfill (Manual)<br/>Passes --vars {is_backfill, start_date, end_date} (unused)<br/>_validate_backfill_parity checks mart/stg_orders ≥ 0.999"]
+        MLFeatDAG["ml_feature_refresh (0 */4 * * *)<br/>Run 5 ml/feature_store/sql/*.sql → features.{name}<br/>(Fails: fact_*/dim_* missing; entity_id & _updated_at absent)"]
+        MonDAG["monitoring_alerts (*/15 * * * *)<br/>Kafka lag (10k) · BQ freshness (full stg_* scan;<br/>mart_daily_revenue 30m limit fails 23.5h/day)<br/>DagRun.execution_date (Airflow 2 API) · FS us-central1"]
+
+        StgDAG -->|"ExternalTaskSensor"| QualDAG
+        QualDAG --> RevRec
+        StgDAG -->|"ExternalTaskSensor"| MartsDAG
+        RevRec -.->|"does NOT gate"| MartsDAG
+        BackfillDAG -.->|"dbt run {model}+"| MartsDAG
+        MartsDAG -.->|"No fact_* tables built"| MLFeatDAG
+        MonDAG -.->|"polls lag & freshness"| StgDAG
+        MonDAG -.->|"polls SLA & freshness"| MartsDAG
+    end

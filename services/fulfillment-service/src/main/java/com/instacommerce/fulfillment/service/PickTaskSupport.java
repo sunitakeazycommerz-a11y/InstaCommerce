@@ -1,5 +1,6 @@
 package com.instacommerce.fulfillment.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import com.instacommerce.fulfillment.client.StoreCoordinates;
 import com.instacommerce.fulfillment.consumer.OrderPlacedItem;
 import com.instacommerce.fulfillment.domain.model.PickItem;
@@ -56,18 +57,15 @@ final class PickTaskSupport {
             && Objects.equals(item.getSubstituteProductId(), requestedSub);
     }
 
-    static void recordAndCheckDebounce(Map<String, Long> scanDebounceMap, UUID orderId, String barcode) {
+    static void recordAndCheckDebounce(Cache<String, Long> scanDebounceCache, UUID orderId, String barcode) {
         long now = System.currentTimeMillis();
-        if (scanDebounceMap.size() > 1000) {
-            scanDebounceMap.entrySet().removeIf(entry -> (now - entry.getValue()) >= 1000);
-        }
         String debounceKey = orderId + ":" + barcode;
-        Long lastScan = scanDebounceMap.get(debounceKey);
+        Long lastScan = scanDebounceCache.getIfPresent(debounceKey);
         if (lastScan != null && (now - lastScan) < 1000) {
             throw new DuplicateScanException(
                 "Duplicate scan detected for barcode " + barcode + " within 1000ms debounce window");
         }
-        scanDebounceMap.put(debounceKey, now);
+        scanDebounceCache.put(debounceKey, now);
     }
 
     static void applyItemUpdate(PickItem item, MarkItemPickedRequest request, int pickedQty) {
@@ -92,6 +90,16 @@ final class PickTaskSupport {
         int previousMissingQty = missingQtyForStatus(previousStatus, item.getQuantity(), previousPickedQty);
         int currentMissingQty = missingQtyForStatus(item.getStatus(), item.getQuantity(), item.getPickedQty());
         return Math.max(currentMissingQty - previousMissingQty, 0);
+    }
+
+    static int calculateSubstitutedQtyDelta(PickItemStatus previousStatus, int previousPickedQty, PickItem item) {
+        int previousSubstitutedQty = previousStatus == PickItemStatus.SUBSTITUTED
+            ? Math.max(0, previousPickedQty)
+            : 0;
+        int currentSubstitutedQty = item.getStatus() == PickItemStatus.SUBSTITUTED
+            ? Math.max(0, item.getPickedQty())
+            : 0;
+        return Math.max(currentSubstitutedQty - previousSubstitutedQty, 0);
     }
 
     private static int missingQtyForStatus(PickItemStatus status, int quantity, int pickedQty) {

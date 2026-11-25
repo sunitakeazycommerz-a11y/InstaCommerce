@@ -1,0 +1,82 @@
+flowchart TB
+    classDef svc fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef cache fill:#FFF7ED,stroke:#EA580C,stroke-width:1.6px,color:#0F172A
+    classDef db fill:#F8FAFC,stroke:#475569,stroke-width:1.6px,color:#0F172A
+    classDef broker fill:#FAF5FF,stroke:#7C3AED,stroke-width:1.6px,color:#0F172A
+    classDef ext fill:#F0FDF4,stroke:#16A34A,stroke-width:1.6px,color:#0F172A
+    classDef warn fill:#FEF2F2,stroke:#DC2626,stroke-width:1.8px,stroke-dasharray:5 3,color:#7F1D1D
+
+    subgraph Callers["Upstream Callers"]
+        direction LR
+        Cart["cart-service :8090<br/>GET /pricing/products/{id} (no storeId)<br/>POST /pricing/products/batch"]:::ext
+        BFF["mobile-bff :8080 &amp; ai-orch :8100<br/>GET /products/{id}, POST /calculate"]:::ext
+        CO["checkout-orchestrator :8091<br/>POST /calculate, /coupons/*, /promotions/*"]:::ext
+        Ord["order-service :8084<br/>POST /pricing/quotes/validate"]:::ext
+        AGW["admin-gateway :8099<br/>/admin/promotions, /admin/coupons"]:::ext
+    end
+
+    subgraph Svc["pricing-service :8089 (Java 21 / Spring Boot 4.0.0)"]
+        direction TB
+        Sec["SecurityConfig + Resilience4j RateLimiter<br/>SharedInternalServiceAuthFilter + JwtAuthenticationFilter<br/>pricingLimiter (100/60s) · adminLimiter (50/60s) -> 429"]:::svc
+
+        subgraph Ctrls["Controllers (controller/*)"]
+            direction LR
+            PC["PricingController + PriceLookupController<br/>/pricing/*, /api/pricing/*, /api/v1/pricing/*, /api/v1/prices/{id}<br/>coupons/*, promotions/*, quotes/validate -> INTERNAL_SERVICE|ADMIN"]:::svc
+            AC["AdminPromotionController<br/>AdminCouponController<br/>@PreAuthorize hasRole('ADMIN')"]:::svc
+        end
+
+        subgraph Engines["Core Pricing, Discount, Quote &amp; Surge Services"]
+            direction LR
+            PS["PricingService + ProductPriceLookupService<br/>@Cacheable productPrices · applyMultiplier HALF_UP"]:::svc
+            DC["DiscountCalculator + TaxCalculationService<br/>Exclusive vs Stackable+Coupon · 0.18 HALF_EVEN carry-over"]:::svc
+            QTS["QuoteTokenService<br/>SHA-256 contentHash + HmacSHA256 (300s TTL)"]:::svc
+            CS["CouponService + PromotionService<br/>@Retryable 3x · PESSIMISTIC_WRITE · @Cacheable activePromotions"]:::svc
+            PRS["PromoReservationService<br/>Redis SET promo:{CODE}:{userId} NX EX 300<br/>(CHM fallback)"]:::cache
+            Surge["SurgePricingService + StoreSurgeStateStore<br/>Pod-local ConcurrentHashMap (PT15M TTL, 2048 max)"]:::warn
+        end
+
+        subgraph Async["Kafka Consumers, Outbox &amp; Scheduled Jobs"]
+            direction LR
+            CEC["CatalogEventConsumer<br/>catalog.events (group: pricing-service-catalog)<br/>ProductCreated/Updated -> PriceRule"]:::warn
+            WEC["WarehouseEventConsumer<br/>warehouse.events (group: pricing-service-warehouse)<br/>SurgeModeChanged/Throttled/Paused"]:::warn
+            OBS["OutboxService (MANDATORY)<br/>OutboxCleanupJob (ShedLock 6h, 7d retention)<br/>KafkaConfig: 3x 1000ms -> .DLT"]:::svc
+        end
+
+        Sec --> Ctrls
+        PC --> PS --> DC --> QTS
+        PS --> Surge
+        PS --> CS
+        PC --> CS
+        PC --> QTS
+        AC --> CS
+        CS --> PRS
+        CS --> OBS
+        CEC -.->|"evicts productPrices, priceRules"| PS
+        WEC --> Surge
+    end
+
+    subgraph Infra["PostgreSQL (pricing), Redis &amp; Kafka"]
+        direction LR
+        PG[("PostgreSQL (pricing / pricing_db · Hikari 20/5)<br/>V1..V11: price_rules, promotions (stackable, priority),<br/>promotion_redemptions, coupons (@Version), coupon_redemptions,<br/>price_quotes, outbox_events (JSONB+envelope), shedlock")]:::db
+        Redis["Redis Cluster<br/>TwoLevelCache (productPrices 5m/15s, activePromotions 2m/30s,<br/>priceRules unused) · Pub/Sub pricing:cache:invalidate<br/>(ApplicationReadyEvent ping) · promo:{CODE}:{userId}"]:::cache
+        Kafka["Kafka &amp; Outbox Relay<br/>Consumes: catalog.events, warehouse.events (+ .DLT)<br/>outbox-relay-pricing (:8103) -> pricing.events"]:::broker
+    end
+
+    Seams["Verified Seams &amp; Drift:<br/>1. StoreSurgeStateStore is pod-local + single group = replica skew<br/>2. CatalogEventConsumer skips ProductDeactivated/Delisted<br/>3. price_quotes never marked consumed; Helm omits PRICING_QUOTE_HMAC_SECRET<br/>4. calculatePrice(id,storeId) surges SKU vs calculateCartPrice surges delivery"]:::warn
+
+    Cart --> PC
+    BFF --> PC
+    CO --> PC
+    Ord --> PC
+    AGW --> AC
+    PS --> PG
+    QTS --> PG
+    CS --> PG
+    OBS --> PG
+    PS --> Redis
+    CS --> Redis
+    PRS --> Redis
+    Kafka --> CEC --> PG
+    Kafka --> WEC
+    PG -.->|"outbox-relay-pricing"| Kafka
+    PG -.- Seams

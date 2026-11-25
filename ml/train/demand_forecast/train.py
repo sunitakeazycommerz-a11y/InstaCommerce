@@ -42,24 +42,97 @@ from ml.train.common import (
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-INDIAN_HOLIDAYS = pd.DataFrame({
-    "holiday": [
-        "republic_day", "holi", "good_friday", "eid_ul_fitr",
-        "independence_day", "janmashtami", "ganesh_chaturthi",
-        "navratri_start", "dussehra", "diwali", "bhai_dooj",
-        "guru_nanak_jayanti", "christmas", "new_years_eve",
-        "ipl_start", "ipl_final",
+_VARIABLE_HOLIDAYS_BY_YEAR: dict[int, list[tuple[str, str, int, int]]] = {
+    2024: [
+        ("holi", "2024-03-25", -1, 1),
+        ("good_friday", "2024-03-29", 0, 0),
+        ("eid_ul_fitr", "2024-04-11", -1, 1),
+        ("janmashtami", "2024-08-26", 0, 0),
+        ("ganesh_chaturthi", "2024-09-07", 0, 2),
+        ("navratri_start", "2024-10-03", 0, 8),
+        ("dussehra", "2024-10-12", -1, 1),
+        ("diwali", "2024-11-01", -3, 3),
+        ("bhai_dooj", "2024-11-03", 0, 0),
+        ("guru_nanak_jayanti", "2024-11-15", 0, 0),
+        ("ipl_start", "2024-03-22", 0, 0),
+        ("ipl_final", "2024-05-26", 0, 0),
     ],
-    "ds": pd.to_datetime([
-        "2024-01-26", "2024-03-25", "2024-03-29", "2024-04-11",
-        "2024-08-15", "2024-08-26", "2024-09-07",
-        "2024-10-03", "2024-10-12", "2024-11-01", "2024-11-03",
-        "2024-11-15", "2024-12-25", "2024-12-31",
-        "2024-03-22", "2024-05-26",
-    ]),
-    "lower_window": [0, -1, 0, -1, 0, 0, 0, 0, -1, -3, 0, 0, -1, 0, 0, 0],
-    "upper_window": [0, 1, 0, 1, 0, 0, 2, 8, 1, 3, 0, 0, 1, 1, 0, 0],
-})
+    2025: [
+        ("holi", "2025-03-14", -1, 1),
+        ("eid_ul_fitr", "2025-03-31", -1, 1),
+        ("good_friday", "2025-04-18", 0, 0),
+        ("janmashtami", "2025-08-16", 0, 0),
+        ("ganesh_chaturthi", "2025-08-27", 0, 2),
+        ("navratri_start", "2025-09-22", 0, 8),
+        ("dussehra", "2025-10-02", -1, 1),
+        ("diwali", "2025-10-20", -3, 3),
+        ("bhai_dooj", "2025-10-23", 0, 0),
+        ("guru_nanak_jayanti", "2025-11-05", 0, 0),
+        ("ipl_start", "2025-03-22", 0, 0),
+        ("ipl_final", "2025-05-25", 0, 0),
+    ],
+    2026: [
+        ("holi", "2026-03-04", -1, 1),
+        ("eid_ul_fitr", "2026-03-20", -1, 1),
+        ("good_friday", "2026-04-03", 0, 0),
+        ("janmashtami", "2026-09-04", 0, 0),
+        ("ganesh_chaturthi", "2026-09-14", 0, 2),
+        ("navratri_start", "2026-10-11", 0, 8),
+        ("dussehra", "2026-10-20", -1, 1),
+        ("diwali", "2026-11-08", -3, 3),
+        ("bhai_dooj", "2026-11-11", 0, 0),
+        ("guru_nanak_jayanti", "2026-11-24", 0, 0),
+        ("ipl_start", "2026-03-21", 0, 0),
+        ("ipl_final", "2026-05-24", 0, 0),
+    ],
+    2027: [
+        ("holi", "2027-03-22", -1, 1),
+        ("eid_ul_fitr", "2027-03-10", -1, 1),
+        ("good_friday", "2027-03-26", 0, 0),
+        ("janmashtami", "2027-08-25", 0, 0),
+        ("ganesh_chaturthi", "2027-09-04", 0, 2),
+        ("navratri_start", "2027-09-30", 0, 8),
+        ("dussehra", "2027-10-09", -1, 1),
+        ("diwali", "2027-10-29", -3, 3),
+        ("bhai_dooj", "2027-10-31", 0, 0),
+        ("guru_nanak_jayanti", "2027-11-14", 0, 0),
+        ("ipl_start", "2027-03-20", 0, 0),
+        ("ipl_final", "2027-05-23", 0, 0),
+    ],
+}
+
+_FIXED_HOLIDAYS: list[tuple[str, int, int, int, int]] = [
+    ("republic_day", 1, 26, 0, 0),
+    ("independence_day", 8, 15, 0, 0),
+    ("christmas", 12, 25, -1, 1),
+    ("new_years_eve", 12, 31, 0, 1),
+]
+
+
+def build_indian_holidays(start_year: int = 2024, end_year: int = 2027) -> pd.DataFrame:
+    """Build Prophet-compatible Indian holiday calendar covering [start_year, end_year]."""
+    rows: list[dict[str, Any]] = []
+    for year in range(start_year, end_year + 1):
+        for name, month, day, lower_w, upper_w in _FIXED_HOLIDAYS:
+            rows.append({
+                "holiday": name,
+                "ds": f"{year:04d}-{month:02d}-{day:02d}",
+                "lower_window": lower_w,
+                "upper_window": upper_w,
+            })
+        for name, date_str, lower_w, upper_w in _VARIABLE_HOLIDAYS_BY_YEAR.get(year, ()):
+            rows.append({
+                "holiday": name,
+                "ds": date_str,
+                "lower_window": lower_w,
+                "upper_window": upper_w,
+            })
+    df = pd.DataFrame(rows)
+    df["ds"] = pd.to_datetime(df["ds"])
+    return df.sort_values(["ds", "holiday"]).reset_index(drop=True)
+
+
+INDIAN_HOLIDAYS = build_indian_holidays(2024, 2027)
 
 REGRESSORS = [
     "temperature",

@@ -17,8 +17,43 @@ public record PriceCalculationResponse(
     String quoteToken,
     long estimatedTaxCents,
     BigDecimal taxRate,
-    long couponDiscountCents
+    long couponDiscountCents,
+    List<AppliedPromotionDetail> appliedPromotionDetails
 ) {
+    public record AppliedPromotionDetail(UUID promotionId, String name, long discountCents) {
+    }
+
+    public PriceCalculationResponse(
+            List<PricedItem> items,
+            long subtotalCents,
+            long discountCents,
+            long deliveryFeeCents,
+            long totalCents,
+            String currency,
+            List<String> appliedPromotions,
+            String appliedCoupon,
+            UUID quoteId,
+            String quoteToken,
+            long estimatedTaxCents,
+            BigDecimal taxRate,
+            long couponDiscountCents) {
+        this(
+                items,
+                subtotalCents,
+                discountCents,
+                deliveryFeeCents,
+                totalCents,
+                currency,
+                appliedPromotions,
+                appliedCoupon,
+                quoteId,
+                quoteToken,
+                estimatedTaxCents,
+                taxRate,
+                couponDiscountCents,
+                List.of());
+    }
+
     public PriceCalculationResponse(
             List<PricedItem> items,
             long subtotalCents,

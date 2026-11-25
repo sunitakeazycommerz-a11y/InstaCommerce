@@ -16,6 +16,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -121,9 +122,15 @@ public class FraudScoringService {
                     RiskLevel.CRITICAL, FraudAction.BLOCK, "BLOCKLIST_EVALUATION_ERROR");
         }
 
-        if (allowlistService != null && matchesAnyEntity(request, allowlistService::isAllowlisted)) {
-            return persistAndRespond(request, 0, RiskLevel.LOW, FraudAction.ALLOW,
-                    List.of("ALLOWLIST_BYPASS"));
+        try {
+            if (allowlistService != null && matchesAnyEntity(request, allowlistService::isAllowlisted)) {
+                return persistAndRespond(request, 0, RiskLevel.LOW, FraudAction.ALLOW,
+                        List.of("ALLOWLIST_BYPASS"));
+            }
+        } catch (Exception ex) {
+            log.error("Allowlist evaluation failed for order={}", request.orderId(), ex);
+            return failClosedOnDependencyError(request, mode, "allowlist",
+                    RiskLevel.CRITICAL, FraudAction.BLOCK, "ALLOWLIST_EVALUATION_ERROR");
         }
 
         Double cachedFraudScore = getCachedFraudRiskScore(request.userId(), mode);
@@ -359,16 +366,15 @@ public class FraudScoringService {
         FraudSignal saved = fraudSignalRepository.save(signal);
 
         if (action != FraudAction.ALLOW) {
-            outboxService.publish("Fraud", saved.getId().toString(), "FraudDetected",
-                    Map.of(
-                            "signalId", saved.getId(),
-                            "userId", request.userId(),
-                            "orderId", request.orderId(),
-                            "score", score,
-                            "riskLevel", riskLevel.name(),
-                            "action", action.name(),
-                            "rulesTriggered", triggeredRules
-                    ));
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("signalId", saved.getId());
+            payload.put("userId", request.userId());
+            payload.put("orderId", request.orderId());
+            payload.put("score", score);
+            payload.put("riskLevel", riskLevel.name());
+            payload.put("action", action.name());
+            payload.put("rulesTriggered", triggeredRules != null ? triggeredRules : List.of());
+            outboxService.publish("Fraud", saved.getId().toString(), "FraudDetected", payload);
         }
 
         return saved;

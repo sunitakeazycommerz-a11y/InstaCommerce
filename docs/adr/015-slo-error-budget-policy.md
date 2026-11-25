@@ -23,7 +23,7 @@ Decided
 - Weekly standup mentions outages, but no formal tracking
 
 **Requirements**:
-- Define SLOs for all 28 services (availability, latency, error rate per criticality)
+- Define SLOs for all 30 services (availability, latency, error rate per criticality)
 - Implement multi-window burn-rate alerting (fast/medium/slow to prevent alert fatigue)
 - Track monthly error budget consumption
 - Ensure incident response SLAs (P0 within 5 min, P1 within 1 hour)
@@ -162,7 +162,7 @@ Implement multi-window burn-rate alerting policy with monthly error-budget track
 ## SLO Definitions
 
 See `docs/slos/service-slos.md` for complete matrix:
-- All 28 services defined
+- All 30 services defined
 - Availability % + latency + error rate targets
 - Budget consumption tracking
 - Burn-rate thresholds
@@ -222,7 +222,7 @@ slo_breach_postmortem_count{service}
 
 **Option C**: No alerting; just SLO dashboards
 - ❌ Too reactive; humans would need to watch dashboards 24/7
-- ❌ Doesn't scale to 28 services + distributed teams
+- ❌ Doesn't scale to 30 services + distributed teams
 
 **Selected**: Option D (this ADR) provides actionable alerting with minimal false positives.
 

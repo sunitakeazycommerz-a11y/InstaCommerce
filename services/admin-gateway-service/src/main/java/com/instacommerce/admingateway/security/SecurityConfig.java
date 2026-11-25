@@ -27,11 +27,9 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/**", "/admin/health", "/admin/metrics", "/error").permitAll()
-                .requestMatchers(HttpMethod.POST, "/admin/v1/**").hasRole("SUPER_ADMIN")
-                .requestMatchers(HttpMethod.PUT, "/admin/v1/**").hasRole("SUPER_ADMIN")
-                .requestMatchers(HttpMethod.DELETE, "/admin/v1/**").hasRole("SUPER_ADMIN")
-                .requestMatchers(HttpMethod.PATCH, "/admin/v1/**").hasRole("SUPER_ADMIN")
-                .requestMatchers(HttpMethod.GET, "/admin/v1/**").hasAnyRole("ADMIN", "SUPER_ADMIN")
+                .requestMatchers(HttpMethod.POST, "/admin/v1/flags/*/override", "/admin/v1/flags/*/emergency-stop")
+                    .hasRole("SUPER_ADMIN")
+                .requestMatchers("/admin/v1/**").hasAnyRole("ADMIN", "SUPER_ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(authenticationEntryPoint)

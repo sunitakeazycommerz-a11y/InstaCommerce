@@ -10,6 +10,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.instacommerce.fulfillment.client.StoreCoordinates;
 import com.instacommerce.fulfillment.client.WarehouseClient;
 import com.instacommerce.fulfillment.consumer.OrderPlacedItem;
@@ -20,11 +22,13 @@ import com.instacommerce.fulfillment.domain.model.PickTask;
 import com.instacommerce.fulfillment.domain.model.PickTaskStatus;
 import com.instacommerce.fulfillment.dto.request.MarkItemPickedRequest;
 import com.instacommerce.fulfillment.dto.response.PickTaskResponse;
+import com.instacommerce.fulfillment.exception.DuplicateScanException;
 import com.instacommerce.fulfillment.exception.InvalidPickTaskStateException;
 import com.instacommerce.fulfillment.repository.PickItemRepository;
 import com.instacommerce.fulfillment.repository.PickTaskRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -288,9 +292,48 @@ class PickServiceTest {
         MarkItemPickedRequest subRequest = new MarkItemPickedRequest(
             PickItemStatus.SUBSTITUTED, 3, substituteProductId, "sub");
         pickService.markItem(orderId, productId, subRequest, pickerId);
-        verify(substitutionService).handleMissingItem(task, item, 1);
+        verify(substitutionService).handleMissingItem(task, item, 1, 3);
 
         pickService.markItem(orderId, productId, subRequest, pickerId);
-        verify(substitutionService, times(1)).handleMissingItem(any(), any(), any(Integer.class));
+        verify(substitutionService, times(1)).handleMissingItem(any(), any(), any(Integer.class), any(Integer.class));
+    }
+
+    @Test
+    void markItemPartialSubstitutedIncrementPropagatesSubstitutedQtyDelta() {
+        UUID orderId = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+        UUID substituteProductId = UUID.randomUUID();
+        UUID pickerId = UUID.randomUUID();
+
+        PickTask task = newPickTask(taskId, orderId, PickTaskStatus.IN_PROGRESS);
+        PickItem item = newPickItem(task, productId, 4);
+
+        when(pickTaskRepository.findByOrderIdForUpdate(orderId)).thenReturn(Optional.of(task));
+        when(pickItemRepository.findByPickTask_OrderIdAndProductId(orderId, productId)).thenReturn(Optional.of(item));
+        when(pickItemRepository.save(any(PickItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        stubItemCounts(taskId, 1L, 0L, 1L);
+
+        pickService.markItem(orderId, productId,
+            new MarkItemPickedRequest(PickItemStatus.SUBSTITUTED, 2, substituteProductId, "first"), pickerId);
+        verify(substitutionService).handleMissingItem(task, item, 2, 2);
+
+        pickService.markItem(orderId, productId,
+            new MarkItemPickedRequest(PickItemStatus.SUBSTITUTED, 3, substituteProductId, "second"), pickerId);
+        verify(substitutionService).handleMissingItem(task, item, 0, 1);
+    }
+
+    @Test
+    void boundedScanDebounceCacheRejectsDuplicateWithinWindow() {
+        Cache<String, Long> cache = Caffeine.newBuilder()
+            .maximumSize(100)
+            .expireAfterWrite(Duration.ofSeconds(10))
+            .build();
+        UUID orderId = UUID.randomUUID();
+
+        PickTaskSupport.recordAndCheckDebounce(cache, orderId, "BAR-123");
+        assertThatThrownBy(() -> PickTaskSupport.recordAndCheckDebounce(cache, orderId, "BAR-123"))
+            .isInstanceOf(DuplicateScanException.class);
+        assertThat(cache.estimatedSize()).isEqualTo(1L);
     }
 }

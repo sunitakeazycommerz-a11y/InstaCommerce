@@ -75,8 +75,9 @@ class AuditEventPublisher:
             )
             return
 
+        producer: Any = None
         try:
-            self._producer = AIOKafkaProducer(
+            producer = AIOKafkaProducer(
                 bootstrap_servers=self._bootstrap_servers,
                 client_id=self._client_id,
                 value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
@@ -85,7 +86,8 @@ class AuditEventPublisher:
                 retry_backoff_ms=100,
                 request_timeout_ms=5000,
             )
-            await self._producer.start()
+            await producer.start()
+            self._producer = producer
             self._started = True
             logger.info(
                 "audit.publisher.started",
@@ -95,27 +97,39 @@ class AuditEventPublisher:
                 },
             )
         except ImportError:
+            await self._close_producer(producer)
             logger.warning(
                 "audit.publisher.aiokafka_not_installed",
                 extra={"message": "aiokafka is not installed; audit events will only be logged"},
             )
         except Exception:
-            logger.exception(
+            await self._close_producer(producer)
+            logger.warning(
                 "audit.publisher.start_failed",
                 extra={"bootstrap_servers": self._bootstrap_servers},
+                exc_info=True,
             )
+
+    async def _close_producer(self, producer: Any) -> None:
+        if producer is not None:
+            try:
+                await producer.stop()
+            except Exception:
+                logger.debug("audit.publisher.cleanup_failed", exc_info=True)
+        self._producer = None
+        self._started = False
 
     async def stop(self) -> None:
         """Flush pending messages and shut down the producer."""
-        if self._producer and self._started:
+        producer = self._producer
+        self._producer = None
+        self._started = False
+        if producer is not None:
             try:
-                await self._producer.stop()
+                await producer.stop()
                 logger.info("audit.publisher.stopped")
             except Exception:
                 logger.exception("audit.publisher.stop_failed")
-            finally:
-                self._started = False
-                self._producer = None
 
     async def _send(self, envelope: Dict[str, Any]) -> None:
         """Publish an envelope to Kafka, falling back to structured log."""

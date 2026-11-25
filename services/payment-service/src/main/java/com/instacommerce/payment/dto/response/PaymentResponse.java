@@ -12,7 +12,9 @@ public record PaymentResponse(
     String pspReference,
     String paymentReference,
     long amountCents,
-    String currency
+    String currency,
+    UUID userId,
+    String purpose
 ) {
     public PaymentResponse(UUID paymentId, String status, String pspReference) {
         this(
@@ -23,7 +25,9 @@ public record PaymentResponse(
             pspReference,
             paymentId != null ? paymentId.toString() : null,
             0L,
-            "INR"
+            "INR",
+            null,
+            null
         );
     }
 
@@ -36,7 +40,25 @@ public record PaymentResponse(
             pspReference,
             paymentId != null ? paymentId.toString() : null,
             amountCents,
-            currency != null ? currency : "INR"
+            currency != null ? currency : "INR",
+            null,
+            null
+        );
+    }
+
+    public PaymentResponse(UUID paymentId, String status, String pspReference, long amountCents,
+                           String currency, UUID userId, String purpose) {
+        this(
+            paymentId,
+            status,
+            "AUTHORIZED".equalsIgnoreCase(status) || "CAPTURED".equalsIgnoreCase(status),
+            null,
+            pspReference,
+            paymentId != null ? paymentId.toString() : null,
+            amountCents,
+            currency != null ? currency : "INR",
+            userId,
+            purpose
         );
     }
 }

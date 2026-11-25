@@ -6,7 +6,9 @@ import com.instacommerce.checkout.workflow.activity.CouponActivity;
 import com.instacommerce.checkout.workflow.activity.InventoryActivity;
 import com.instacommerce.checkout.workflow.activity.OrderActivity;
 import com.instacommerce.checkout.workflow.activity.PaymentActivity;
+import com.instacommerce.checkout.workflow.activity.PromotionActivity;
 import com.instacommerce.checkout.workflow.activity.WalletActivity;
+import jakarta.annotation.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -22,12 +24,21 @@ public class CompensationReplayService {
     private final OrderActivity orderActivity;
     private final CouponActivity couponActivity;
     private final WalletActivity walletActivity;
+    private final PromotionActivity promotionActivity;
 
     public CompensationReplayService(InventoryActivity inventoryActivity,
                                      PaymentActivity paymentActivity,
                                      OrderActivity orderActivity,
                                      CouponActivity couponActivity) {
-        this(inventoryActivity, paymentActivity, orderActivity, couponActivity, null);
+        this(inventoryActivity, paymentActivity, orderActivity, couponActivity, null, null);
+    }
+
+    public CompensationReplayService(InventoryActivity inventoryActivity,
+                                     PaymentActivity paymentActivity,
+                                     OrderActivity orderActivity,
+                                     CouponActivity couponActivity,
+                                     WalletActivity walletActivity) {
+        this(inventoryActivity, paymentActivity, orderActivity, couponActivity, walletActivity, null);
     }
 
     @Autowired
@@ -35,12 +46,14 @@ public class CompensationReplayService {
                                      PaymentActivity paymentActivity,
                                      OrderActivity orderActivity,
                                      CouponActivity couponActivity,
-                                     WalletActivity walletActivity) {
+                                     @Nullable WalletActivity walletActivity,
+                                     @Nullable PromotionActivity promotionActivity) {
         this.inventoryActivity = inventoryActivity;
         this.paymentActivity = paymentActivity;
         this.orderActivity = orderActivity;
         this.couponActivity = couponActivity;
         this.walletActivity = walletActivity;
+        this.promotionActivity = promotionActivity;
     }
 
     public void replay(CompensationDlq entry) {
@@ -68,6 +81,7 @@ public class CompensationReplayService {
             case "cancelOrder" -> orderActivity.cancelOrder(targetId);
             case "rollbackUsage" -> replayRollbackUsage(targetId);
             case "unredeemCoupon" -> replayUnredeemCoupon(targetId);
+            case "rollbackPromotion" -> replayRollbackPromotion(targetId);
             default -> throw new IllegalArgumentException("Unsupported DLQ compensation activity: " + activityName);
         }
     }
@@ -106,6 +120,18 @@ public class CompensationReplayService {
                 "Invalid unredeemCoupon targetId (expected couponCode:userId:orderId): " + targetId);
         }
         couponActivity.unredeemCoupon(parts[0], parts[1], parts[2]);
+    }
+
+    private void replayRollbackPromotion(String targetId) {
+        if (promotionActivity == null) {
+            throw new IllegalStateException("PromotionActivity is not configured");
+        }
+        String[] parts = targetId.split(":", 3);
+        if (parts.length != 3 || parts[0].isBlank() || parts[1].isBlank() || parts[2].isBlank()) {
+            throw new IllegalArgumentException(
+                "Invalid rollbackPromotion targetId (expected promotionId:userId:orderId): " + targetId);
+        }
+        promotionActivity.rollbackPromotion(parts[0], parts[1], parts[2]);
     }
 
     private String requireNonBlank(String value, String field) {

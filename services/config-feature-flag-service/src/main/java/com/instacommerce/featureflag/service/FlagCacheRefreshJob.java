@@ -3,7 +3,6 @@ package com.instacommerce.featureflag.service;
 import com.instacommerce.featureflag.domain.model.FeatureFlag;
 import com.instacommerce.featureflag.repository.FeatureFlagRepository;
 import java.util.List;
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.CacheManager;
@@ -24,18 +23,23 @@ public class FlagCacheRefreshJob {
     }
 
     @Scheduled(fixedRate = 30_000)
-    @SchedulerLock(name = "FlagCacheRefreshJob", lockAtMostFor = "25s", lockAtLeastFor = "10s")
     public void refreshCache() {
-        log.debug("Refreshing feature flag cache");
+        log.debug("Refreshing local feature flag cache");
         try {
             var flagsCache = cacheManager.getCache("flags");
-            if (flagsCache == null) {
+            var allFlagsCache = cacheManager.getCache("flags-all");
+            if (flagsCache == null && allFlagsCache == null) {
                 return;
             }
 
             List<FeatureFlag> allFlags = flagRepository.findAll();
-            for (FeatureFlag flag : allFlags) {
-                flagsCache.put(flag.getKey(), flag);
+            if (flagsCache != null) {
+                for (FeatureFlag flag : allFlags) {
+                    flagsCache.put(flag.getKey(), flag);
+                }
+            }
+            if (allFlagsCache != null) {
+                allFlagsCache.put("all", List.copyOf(allFlags));
             }
             log.debug("Feature flag cache refreshed with {} flags", allFlags.size());
         } catch (Exception e) {

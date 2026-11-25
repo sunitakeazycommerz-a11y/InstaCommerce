@@ -1,0 +1,40 @@
+flowchart LR
+    subgraph SecurityChain["Servlet Security Pipeline (:8099, FilterRegistrationBean disabled)"]
+        Corr["CorrelationIdFilter<br/>@Order(HIGHEST_PRECEDENCE)<br/>MDC correlationId + X-Correlation-ID"]
+        JwtFilt["AdminJwtAuthenticationFilter<br/>strips x-admin-* / x-internal-*<br/>DefaultJwtService (static RSA, clockSkew=300s)"]
+        RateFilt["AdminRateLimitFilter<br/>Pod-local ConcurrentHashMap (max 4096)<br/>120 rpm per user:{sub} or ip:{ClientIpResolver}"]
+        AuditFilt["AdminSecurityAuditFilter<br/>Intercepts POST/PUT/DELETE/PATCH<br/>finally -> AdminAuditClient sync"]
+        SecCfg["SecurityConfig<br/>/override, /emergency-stop -> SUPER_ADMIN<br/>/admin/v1/** -> ADMIN or SUPER_ADMIN"]
+        Corr --> JwtFilt --> RateFilt --> AuditFilt --> SecCfg
+    end
+
+    subgraph ControllersAndServices["Controllers, Proxy & Dashboard Aggregation"]
+        DashCtrl["AdminDashboardController (/admin/v1)<br/>SAFE_IDENTIFIER validation, @PreAuthorize"]
+        HealthCtrl["AdminHealthController<br/>GET /admin/health -> UP"]
+        DashSvc["DashboardAggregationService<br/>8-thread dashboard-probe-* pool<br/>1000ms per-svc / 2000ms overall"]
+        AuditCli["AdminAuditClient<br/>RestTemplate POST /audit/events<br/>Counter: admin.audit.failures"]
+        RestCfg["UpstreamRestClientConfig<br/>RestTemplate (1500ms/2000ms)<br/>Injects X-Internal-*, X-Correlation-ID"]
+        ExHandler["GlobalExceptionHandler<br/>ProblemDetailFactory (RFC 7807)"]
+        SecCfg --> DashCtrl
+        SecCfg --> HealthCtrl
+        DashCtrl --> DashSvc
+        DashCtrl --> RestCfg
+        DashSvc --> RestCfg
+        AuditFilt --> AuditCli
+        AuditCli --> RestCfg
+        DashCtrl -. "Exceptions" .-> ExHandler
+    end
+
+    subgraph Downstreams["Downstream Microservices"]
+        FF["config-feature-flag-service :8098<br/>/admin/flags*, /emergency-stop/*"]
+        AuditSvc["audit-trail-service :8096<br/>POST /audit/events<br/>GET /admin/audit/* (forwards Authorization)"]
+        Fraud["fraud-detection-service :8097<br/>/admin/fraud/{rules,blocklist,allowlist}"]
+        Recon["reconciliation-engine :8107<br/>/pending, /reconciliation/runs<br/>Probe /ready -> 404 DRIFT!"]
+        CoreSvc["order :8084, payment :8085,<br/>fulfillment :8086 (/actuator/health & metrics)"]
+    end
+
+    RestCfg --> FF
+    RestCfg --> AuditSvc
+    RestCfg --> Fraud
+    RestCfg --> Recon
+    RestCfg --> CoreSvc

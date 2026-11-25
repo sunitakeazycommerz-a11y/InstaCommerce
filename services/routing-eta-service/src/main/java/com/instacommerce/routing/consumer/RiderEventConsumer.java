@@ -66,8 +66,16 @@ public class RiderEventConsumer {
             return;
         }
 
-        deliveryService.createDelivery(orderId, riderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng);
-        log.info("Created delivery for order {} with rider {}", orderId, riderId);
+        String vehicleType = readText(payload, "vehicleType", "vehicle_type");
+        if (vehicleType != null) {
+            deliveryService.createDelivery(
+                orderId, riderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng, vehicleType);
+        } else {
+            deliveryService.createDelivery(
+                orderId, riderId, storeId, pickupLat, pickupLng, dropoffLat, dropoffLng);
+        }
+        log.info("Created delivery for order {} with rider {} vehicleType={}",
+            orderId, riderId, vehicleType != null ? vehicleType : "DEFAULT");
     }
 
     private static JsonNode findNode(JsonNode container, String... fieldNames) {

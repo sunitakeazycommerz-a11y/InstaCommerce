@@ -1,0 +1,35 @@
+flowchart TD
+    classDef prod fill:#EFF6FF,stroke:#1D4ED8,stroke-width:1.8px,color:#0F172A
+    classDef warn fill:#FFFBEB,stroke:#D97706,stroke-width:2px,stroke-dasharray:5 4,color:#78350F
+    classDef err fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D
+    classDef store fill:#F0FDF4,stroke:#15803D,stroke-width:1.8px,color:#0F172A
+
+    FETCH(["reader.FetchMessage(ctx)"]):::prod --> FETCH_ERR{"Fetch error?"}
+    FETCH_ERR -->|"context.Canceled"| STOP(["Stop consumer goroutine"]):::prod
+    FETCH_ERR -->|"Transient err"| RETRY["waitForRetry(ctx, 1s)"]:::warn --> FETCH
+    FETCH_ERR -->|"OK"| EXT_ID["ExtractEventID(msg.Value)<br/>Check top-level or nested/string payload<br/>Key: dedup:{topic}:event:{id} or {part}:{off}"]:::prod
+
+    EXT_ID --> CHECK_DUP{"CheckDuplicatePayload<br/>(redis.Exists if redis!=nil;<br/>else Bloom.Contains)"}
+    CHECK_DUP -->|"Redis error"| FAIL_OPEN["dedup_errors_total++<br/>FAIL OPEN: process anyway"]:::warn --> SUBMIT
+    CHECK_DUP -->|"count &gt; 0 (Duplicate)"| SKIP["Bloom.Add(key) + dedup_skipped_total++<br/>dispatcher.Skip -&gt; offsetTracker.skip"]:::prod
+    SKIP --> FLUSH
+    CHECK_DUP -->|"Not duplicate"| SUBMIT["StreamDispatcher.Submit(msg)"]:::prod
+
+    SUBMIT --> BP{"len(ch) &gt;= 800?<br/>(HighWatermark)"}
+    BP -->|"Yes"| PAUSE["paused=true, pauseCount++<br/>Poll every 10ms until len(ch) &lt;= 300"]:::warn --> BP
+    BP -->|"No (or drained &le;300)"| ENQ["offsetTracker.enqueue(msg)<br/>(returns nil if failedSeen &amp;&amp; offset &gt; failedOffset)<br/>Push queuedMessage -&gt; ch (cap 1000)"]:::prod
+
+    ENQ --> WORKER["Worker (1 of 10): runHandlerSafely(msg)<br/>ExtractMessageEventTime(msg)"]:::prod
+    WORKER --> WM{"WatermarkTracker.ObserveWithAction<br/>(AllowedLateness=5m, MaxFutureSkew=5m)"}
+    WM -->|"eventTime &gt; now+5m"| SKEW["FutureSkewed=true: log warn,<br/>do NOT advance watermark"]:::warn --> PROC
+    WM -->|"eventTime &lt; max-5m"| LATE["Late=true: stream_late_events_total++<br/>DropLateEvents=false (accepted)"]:::warn --> PROC
+    WM -->|"In window"| PROC["Domain Processor (Order/Pay/Inv/Rider)<br/>unwrapEnvelope + alias map + cardinalityGuard(1000)<br/>In-memory window + Redis Pipeline.Exec()"]:::store
+
+    PROC -->|"Returns nil"| MARK["MarkProcessedPayload<br/>Bloom.Add + redis.SetNX(key, 1, 24h)<br/>(fail-open if Redis SetNX fails)"]:::store
+    MARK --> RES_OK["offsetTracker.resolve(succeeded=true)"]:::prod --> FLUSH["advanceLocked() + flushCommits()<br/>Commit contiguous completed offsets"]:::prod
+
+    PROC -->|"Error or panic()"| PERM{"isPermanentStreamError?<br/>(SyntaxError, UnmarshalTypeError,<br/>'unmarshal ', 'panic:')"}
+    PERM -->|"Yes (Poison)"| DLT["newDLQHandler -&gt; WriteMessages<br/>{topic}.DLT (RequireAll, 5s, dlt_* headers)"]:::err
+    DLT -->|"DLT write OK"| RES_OK
+    DLT -->|"DLT write fails"| RES_FAIL
+    PERM -->|"No (Transient e.g. Redis err)"| RES_FAIL["offsetTracker.resolve(succeeded=false)<br/>Set failedSeen=true, failedOffset=msg.Offset<br/>Discard queued offsets &gt; failedOffset &amp; halt commits"]:::err

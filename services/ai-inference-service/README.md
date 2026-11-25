@@ -626,7 +626,7 @@ All settings use the `AI_INFERENCE_` prefix, parsed once at module load via the 
 ```bash
 cd services/ai-inference-service
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8101 --reload
 ```
 
 Models start in **rule-based fallback mode** by default. To load ML artefacts, place model files on disk and configure paths in the per-model module constructors or via `weights.json`.

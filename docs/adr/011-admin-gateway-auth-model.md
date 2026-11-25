@@ -1,12 +1,12 @@
 # ADR-011: Admin-Gateway Authentication Model
 
 **Date**: 2026-03-21
-**Status**: Accepted
-**Context**: Securing admin-gateway-service endpoints with JWT validation
+**Status**: Accepted & Implemented (`AdminJwtAuthenticationFilter`, `SecurityConfig`, `AdminDashboardController`)
+**Context**: Securing admin-gateway-service (`8099`) endpoints with RS256 JWT validation and `ROLE_ADMIN` RBAC
 
 ## Problem
 
-Admin-gateway-service currently has no authentication layer, allowing unauthenticated access to sensitive operations including:
+At the time of this decision, `admin-gateway-service` had no authentication layer, allowing unauthenticated access to sensitive operations including:
 - Dashboard analytics aggregation
 - Feature flag overrides
 - Reconciliation engine access
@@ -44,7 +44,7 @@ Three audience buckets:
 
 #### 4. Certificate Rotation Without Downtime
 
-- JWKS endpoint: `http://identity-service:8080/jwt/jwks`
+- JWKS endpoint: `http://identity-service:8081/.well-known/jwks.json`
 - Caches public keys in-memory with TTL
 - New keys added to JWKS before old key expiry
 - Tokens signed with old keys remain valid during rotation window

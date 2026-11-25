@@ -1,0 +1,54 @@
+flowchart TB
+    classDef state fill:#EFF6FF,stroke:#2563EB,stroke-width:1.6px,color:#0F172A
+    classDef term fill:#FEF2F2,stroke:#DC2626,stroke-width:1.6px,color:#7F1D1D
+    classDef ok fill:#ECFDF5,stroke:#059669,stroke-width:1.8px,color:#065F46
+    classDef step fill:#F8FAFC,stroke:#475569,stroke-width:1.5px,color:#0F172A
+    classDef dec fill:#FEF3C7,stroke:#D97706,stroke-width:1.6px,color:#78350F
+
+    subgraph RES["1. ReservationService.reserve (Warehouse Gate + Sorted Locks)"]
+        direction LR
+        R_WH["OUTSIDE DB TX: RestWarehouseClient<br/>validateStoreActive (10m cache) + isStoreOpen (live)<br/>Note: Helm lacks WAREHOUSE_SERVICE_URL!"]:::dec -->|"inactive/closed/404/5xx"| R_WERR["422 STORE_TEMPORARILY_CLOSED<br/>404 STORE_NOT_FOUND / 500"]:::term
+        R_WH -->|"ACTIVE & open"| R_TX["reserveTransactionTemplate<br/>ISOLATION_READ_COMMITTED"]:::step
+        R_TX --> R_IDEM{"findByIdempotencyKey<br/>exists? (VARCHAR(64)!)"}:::dec
+        R_IDEM -->|Yes| R_RET["Return existing ReserveResponse<br/>(Note: race throws 409 DATA_INTEGRITY)"]:::ok
+        R_IDEM -->|No| R_SORT["Sort items by productId ASC<br/>Lock PESSIMISTIC_WRITE (2000ms)"]:::step
+        R_SORT --> R_FRZ{"stock.isFrozen?"}:::dec
+        R_FRZ -->|Yes| R_409F["409 STOCK_FROZEN"]:::term
+        R_FRZ -->|No| R_AVL["resolveSellableAvailable:<br/>batches? min(onHand,nonExpired)-reserved<br/>else onHand - reserved"]:::step
+        R_AVL -->|"< qty"| R_409S["409 INSUFFICIENT_STOCK"]:::term
+        R_AVL -->|"≥ qty"| R_OK["stock.reserve(qty) · save PENDING (5m TTL)<br/>StockReserved + StockLevelMonitor"]:::ok
+    end
+
+    subgraph CONF["2. ReservationService.confirm (FEFO & noRollbackFor)"]
+        direction LR
+        C_LK["@Transactional(noRollbackFor=<br/>ReservationExpiredException)<br/>findByIdForUpdate(reservationId)"]:::step --> C_ST{"Status?"}:::dec
+        C_ST -->|"CONFIRMED"| C_IDEM["Idempotent return"]:::ok
+        C_ST -->|"CANCELLED/EXPIRED"| C_409["409 RESERVATION_NOT_PENDING"]:::term
+        C_ST -->|"PENDING & expired"| C_EXP["expireReservation() -> EXPIRED<br/>StockReleased · throw 409 EXPIRED<br/>(COMMITS via noRollbackFor!)"]:::term
+        C_ST -->|"PENDING & valid"| C_FEFO["Sort lines by productId ASC<br/>Lock StockItem + allocateFefoForConfirm<br/>(batches FOR UPDATE ORDER BY expiryDate ASC)"]:::step
+        C_FEFO -->|"nonExpired < qty"| C_409B["409 INSUFFICIENT_STOCK"]:::term
+        C_FEFO -->|"OK"| C_OK["stock.confirm(qty): on_hand -= qty, reserved -= qty<br/>CONFIRMED + StockConfirmed(batches[])<br/>+ StockLevelMonitor"]:::ok
+    end
+
+    subgraph CAN["3. cancel & releasePartial Paths (noRollbackFor)"]
+        direction LR
+        X_IN["cancel(reservationId)<br/>findByIdForUpdate"]:::step --> X_ST{"cancel status?"}:::dec
+        X_ST -->|"CANCELLED"| X_IDEM["Idempotent return"]:::ok
+        X_ST -->|"CONFIRMED"| X_RC["releaseConfirmed: on_hand += qty<br/>+ restoreOnConfirmedCancel (no-op if batches expired!)<br/>-> CANCELLED + StockReleased"]:::step
+        X_ST -->|"PENDING expired"| X_EXP["EXPIRED + throw 409 (noRollbackFor)"]:::term
+        X_ST -->|"PENDING valid"| X_RP["releaseReserved: reserved -= qty<br/>-> CANCELLED + StockReleased"]:::ok
+        P_IN["releasePartial(id, items, key)<br/>findByIdForUpdate"]:::step --> P_KEY{"release_key seen in<br/>reservation_release_logs?"}:::dec
+        P_KEY -->|Yes| P_IDEM["Return current lines (no-op)"]:::ok
+        P_KEY -->|No| P_ACT["Check PENDING & !expired -> sort productId<br/>releaseReserved + prune 0-qty lines<br/>save release_log + StockReleased"]:::ok
+    end
+
+    subgraph OPS["4. Cycle-Count Clamp & Perishable Write-Off"]
+        direction LR
+        O_FRZ["reportMissingItem<br/>is_frozen=true + DarkStoreCycleCountTaskCreated"]:::step --> O_UNF["unfreezeStock(productId, storeId, verifiedQty)"]:::step
+        O_UNF --> O_CLAMP{"verifiedQty < reserved?"}:::dec
+        O_CLAMP -->|Yes| O_SHRT["Clamp onHand = max(verifiedQty, reserved)<br/>emit StockReservedShortfallDetected + AuditCompleted"]:::term
+        O_CLAMP -->|No| O_AUD["onHand = verifiedQty, is_frozen = false<br/>emit CycleCountAuditCompleted"]:::ok
+        W_IN["writeOffExpiredBatches(storeId)"]:::step --> W_ORD["Lock StockItem BEFORE StockBatch (productId ASC)<br/>deduct up to (onHand - reserved) + ExpiredStockWrittenOff"]:::step
+    end
+
+    RES ~~~ CONF ~~~ CAN ~~~ OPS

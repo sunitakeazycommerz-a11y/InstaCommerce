@@ -13,10 +13,10 @@ Implementation depth is based on repository structure, service READMEs, migratio
 | Service | Stack | Maturity | Evidence | Notes |
 |---|---|---|---|---|
 | `identity-service` | Java | Implemented | 65 Java files, 11 migrations, strong auth focus in docs/code layout | Trust anchor for JWT/JWKS and user lifecycle |
-| `mobile-bff-service` | Java | Scaffold | README explicitly says scaffold; source tree is effectively absent | Deploy shape exists before feature-complete aggregator code |
-| `admin-gateway-service` | Java | Scaffold | README explicitly says scaffold; no meaningful checked-in downstream logic | High-risk if treated as production-ready admin plane |
+| `mobile-bff-service` | Java | Implemented | WebFlux security chain, RS256 JWT validation, `HomeAggregator` parallel fan-out, Resilience4j timeouts/fallbacks, unit + integration tests | Hardened customer BFF gateway on `:8080`; Wave-5 adds product/cart/tracking/checkout aggregators |
+| `admin-gateway-service` | Java | Implemented | Spring MVC security chain, RS256 JWT (`aud=instacommerce-admin`), `ROLE_ADMIN` RBAC, `AdminDashboardController`, unit + integration tests | Hardened admin gateway on `:8099`; Wave-5 adds flag/fraud/audit endpoints |
 
-Main architectural takeaway: the identity core is real, but both edge gateways are ahead in docs and deploy artifacts relative to code.
+Main architectural takeaway: the identity core and both edge gateways implement JWT validation, resilience patterns, and downstream fan-out/proxying, while screen and admin endpoint coverage continues expanding iteratively.
 
 ## C2: Transactional Core
 
@@ -120,6 +120,7 @@ These services are cross-cutting force multipliers:
 | `outbox-relay-service` | Go | Implemented | Poll loop, Kafka producer, health/readiness, telemetry | Key bridge between OLTP and Kafka |
 | `cdc-consumer-service` | Go | Implemented | Kafka readers, batcher, BigQuery inserter, DLQ handling | Key bridge into analytics |
 | `stream-processor-service` | Go | Implemented | Topic consumers, dedupe, Redis, Prometheus | Operational metrics layer |
+| `reverse-etl-orchestrator` | Go | Implemented | BigQuery export/activation pipelines to Redis and PostgreSQL | Data mesh reverse-ETL bridge (`:8109`) |
 | `go-shared` | Go library | Implemented | Common Kafka, auth, observability packages | Shared blast radius for Go services |
 
 This plane is where many long-term maintenance costs live:
@@ -133,17 +134,15 @@ This plane is where many long-term maintenance costs live:
 
 | Service / Area | Stack | Maturity | Evidence | Notes |
 |---|---|---|---|---|
-| `ai-orchestrator-service` | Python | Transitional | Legacy `app/main.py` plus `/v2` LangGraph handlers | Two orchestration styles coexist |
-| `ai-inference-service` | Python | Implemented | FastAPI app, model registry, caching, feature-store hooks | Real online scoring gateway |
+| `ai-orchestrator-service` | Python | Implemented | Unified `ExecutionService` + LangGraph serving `v1_router` and `v2_router` with `app/guardrails/` | Runtime guardrails (`InjectionDetector`, `PIIVault`, `OutputPolicy`, `EscalationPolicy`, `TokenBucketRateLimiter`) enforced on `:8100` |
+| `ai-inference-service` | Python | Implemented | FastAPI app, model registry, caching, feature-store hooks | Real online scoring gateway on `:8101` |
 | `data-platform/` | Python + SQL | Implemented | dbt models, Airflow DAGs, Beam pipelines, GX suites | Real data engineering assets |
 | `ml/` | Python | Implemented with roadmap elements | train/eval/serving/feature store code exists, README includes aspirational statements | Productionization is partially ahead of artifact reality |
 
 Important AI detail:
 
-- [`../services/ai-orchestrator-service/app/main.py`](../../services/ai-orchestrator-service/app/main.py) contains the active legacy flow and request models
-- [`../services/ai-orchestrator-service/app/api/handlers.py`](../../services/ai-orchestrator-service/app/api/handlers.py) and [`../services/ai-orchestrator-service/app/graph/graph.py`](../../services/ai-orchestrator-service/app/graph/graph.py) implement the newer `/v2` LangGraph path
-
-That is a transition, not yet a single settled architecture.
+- [`../services/ai-orchestrator-service/app/main.py`](../../services/ai-orchestrator-service/app/main.py) mounts both `v1_router` ([`app/api/v1.py`](../../services/ai-orchestrator-service/app/api/v1.py)) and `v2_router` ([`app/api/handlers.py`](../../services/ai-orchestrator-service/app/api/handlers.py))
+- [`../services/ai-orchestrator-service/app/api/execution.py`](../../services/ai-orchestrator-service/app/api/execution.py) and [`../services/ai-orchestrator-service/app/graph/graph.py`](../../services/ai-orchestrator-service/app/graph/graph.py) back both surfaces through a unified LangGraph + `ExecutionService` runtime and `app/guardrails/` pipeline.
 
 ## Contracts Surface
 

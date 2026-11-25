@@ -93,7 +93,7 @@ flowchart LR
 Observations:
 
 - The deploy config in [`../deploy/helm/values.yaml`](../../deploy/helm/values.yaml) assumes Istio is the front door and encodes path routing plus service-to-service authorization.
-- The edge pattern exists architecturally, but only one side is deeply implemented: downstream domain services. The two edge services themselves are mostly scaffold.
+- Both edge gateways (`mobile-bff-service` on `8080` and `admin-gateway-service` on `8099`) enforce RS256 JWT validation, Resilience4j protection, and downstream aggregation/proxying (`HomeAggregator`, `AdminDashboardController`), with Wave-5 expanding product/cart/tracking/checkout BFF aggregators and flag/fraud/audit admin endpoints.
 
 ### 2. Checkout authority is orchestration-first
 
@@ -183,9 +183,9 @@ The repo has both code truth and aspirational design truth. A few important exam
 
 | Area | Code-backed reality | Target-state or overstated doc story |
 |---|---|---|
-| Edge gateways | `mobile-bff-service` and `admin-gateway-service` are scaffold-heavy | Multiple docs describe them as full aggregation and RBAC hubs |
+| Edge gateways | `mobile-bff-service` (`8080`) and `admin-gateway-service` (`8099`) are hardened RS256 JWT + Resilience4j gateways | Screen/endpoint aggregation breadth continues expanding iteratively |
 | Search | Search uses PostgreSQL full-text search and Caffeine | Older HLD language still references Elasticsearch |
-| Rider ingestion | Go location ingestion exposes HTTP/WebSocket ingress | Some HLD text frames rider ingestion as gRPC streaming |
-| AI orchestrator | Legacy v1 flow in `app/main.py` coexists with a `/v2` LangGraph path | Some docs speak as if a single settled orchestration stack exists |
+| Rider ingestion | Go location ingestion exposes HTTP/WebSocket ingress (`8105`) | Some HLD text frames rider ingestion as gRPC streaming |
+| AI orchestrator | `app/main.py` mounts `v1_router` and `v2_router` over unified `ExecutionService` + LangGraph + `app/guardrails/` | Centralized Governance PDP and external Copilot policy surfaces remain roadmap items |
 
 These mismatches do not mean the architecture is poor. They mean change programs and documentation have advanced faster than some implementation surfaces.

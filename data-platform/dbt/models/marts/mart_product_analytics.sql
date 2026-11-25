@@ -8,24 +8,66 @@ orders AS (
 inventory AS (
     SELECT * FROM {{ ref('stg_inventory_movements') }}
 ),
+cart_net_intent AS (
+    SELECT
+        ce.user_id,
+        ce.store_id,
+        ce.product_id,
+        DATE(ce.event_at) AS event_date,
+        MAX(ce.event_at) AS last_event_at,
+        SUM(
+            CASE
+                WHEN ce.event_type = 'ADD' THEN ce.quantity
+                WHEN ce.event_type = 'REMOVE' THEN -ce.quantity
+                ELSE 0
+            END
+        ) AS net_quantity,
+        MAX(ce.unit_price_cents) AS unit_price_cents
+    FROM {{ ref('stg_cart_events') }} ce
+    GROUP BY ce.user_id, ce.store_id, ce.product_id, DATE(ce.event_at)
+    HAVING SUM(
+        CASE
+            WHEN ce.event_type = 'ADD' THEN ce.quantity
+            WHEN ce.event_type = 'REMOVE' THEN -ce.quantity
+            ELSE 0
+        END
+    ) > 0
+),
+attributed_cart_orders AS (
+    SELECT
+        cni.product_id,
+        cni.store_id,
+        o.order_id,
+        o.user_id,
+        cni.net_quantity,
+        cni.unit_price_cents,
+        cni.last_event_at,
+        ROW_NUMBER() OVER (
+            PARTITION BY cni.user_id, cni.store_id, cni.product_id, cni.event_date
+            ORDER BY o.placed_at ASC, o.order_id ASC
+        ) AS rn
+    FROM cart_net_intent cni
+    INNER JOIN orders o
+        ON cni.user_id = o.user_id
+        AND cni.store_id = o.store_id
+        AND cni.event_date = o.order_date
+        AND o.placed_at >= cni.last_event_at
+    WHERE o.status = 'DELIVERED'
+),
 product_sales AS (
     SELECT
-        ce.product_id,
-        ce.store_id,
-        COUNT(DISTINCT o.order_id) AS orders_containing_product,
-        SUM(ce.quantity) AS total_units_sold,
-        SUM(ce.quantity * ce.unit_price_cents) / 100.0 AS total_sales_usd,
-        COUNT(DISTINCT o.user_id) AS unique_buyers,
-        MIN(ce.event_at) AS first_sold_at,
-        MAX(ce.event_at) AS last_sold_at,
-        DATE_DIFF(CURRENT_DATE(), DATE(MIN(ce.event_at)), DAY) AS days_since_first_sale
-    FROM {{ ref('stg_cart_events') }} ce
-    INNER JOIN orders o ON ce.user_id = o.user_id
-        AND ce.store_id = o.store_id
-        AND DATE(ce.event_at) = o.order_date
-    WHERE ce.event_type = 'ADD'
-        AND o.status = 'DELIVERED'
-    GROUP BY ce.product_id, ce.store_id
+        aco.product_id,
+        aco.store_id,
+        COUNT(DISTINCT aco.order_id) AS orders_containing_product,
+        SUM(aco.net_quantity) AS total_units_sold,
+        SUM(aco.net_quantity * aco.unit_price_cents) / 100.0 AS total_sales_usd,
+        COUNT(DISTINCT aco.user_id) AS unique_buyers,
+        MIN(aco.last_event_at) AS first_sold_at,
+        MAX(aco.last_event_at) AS last_sold_at,
+        DATE_DIFF(CURRENT_DATE(), DATE(MIN(aco.last_event_at)), DAY) AS days_since_first_sale
+    FROM attributed_cart_orders aco
+    WHERE aco.rn = 1
+    GROUP BY aco.product_id, aco.store_id
 ),
 product_returns AS (
     SELECT

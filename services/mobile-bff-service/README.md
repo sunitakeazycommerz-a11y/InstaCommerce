@@ -140,7 +140,7 @@ graph TB
         IG2["Gateway + RequestAuthentication<br/>m.instacommerce.dev"]
     end
 
-    subgraph "mobile-bff-service :8097"
+    subgraph "mobile-bff-service :8080"
         SEC["SecurityWebFilterChain<br/>JWT validation"]
         PROP["UserContextPropagationFilter<br/>X-User-Id · X-User-Roles"]
         AGG["Screen Aggregators<br/>HomeAggregator · SearchAggregator · ProductDetailAggregator"]
@@ -150,13 +150,13 @@ graph TB
 
     subgraph "Domain Services"
         CAT["catalog-service :8082"]
-        SEARCH["search-service :8086"]
-        PRICE["pricing-service :8087"]
-        CART["cart-service :8088"]
+        SEARCH["search-service :8088"]
+        PRICE["pricing-service :8089"]
+        CART["cart-service :8090"]
         INV["inventory-service :8083"]
-        WH["warehouse-service :8090"]
+        WH["warehouse-service :8092"]
         ID["identity-service :8081"]
-        FF["config-feature-flag-service :8096"]
+        FF["config-feature-flag-service :8098"]
     end
 
     IOS2 --> IG2
@@ -180,27 +180,7 @@ graph TB
 
 ## 4. Low-Level Design (LLD)
 
-### 4.1 Current Component Model
-
-```mermaid
-classDiagram
-    class MobileBffServiceApplication {
-        +main(String[] args)$
-    }
-    class MobileBffController {
-        +Mono~Map~String,Object~~ home()
-    }
-
-    MobileBffServiceApplication ..> MobileBffController : component scan
-
-    note for MobileBffController "RequestMapping: /bff/mobile/v1, /m/v1\nSingle GET /home endpoint\nReturns Mono.just(Map.of status ok)"
-```
-
-### 4.2 Target Component Model
-
-Per [edge-identity §7.2–7.3](../../docs/reviews/iter3/services/edge-identity.md)
-and [browse-search-discovery §8](../../docs/reviews/iter3/diagrams/lld/browse-search-discovery.md),
-the target LLD adds security, propagation, client, and aggregation layers.
+### 4.1 Implemented Component Model
 
 ```mermaid
 classDiagram
@@ -218,7 +198,8 @@ classDiagram
     }
 
     class MobileBffController {
-        +Mono~Map~ home()
+        +Mono~HomeResponse~ home()
+        +Mono~Map~ profile()
     }
 
     class HomeAggregator {
@@ -239,29 +220,15 @@ classDiagram
     MobileBffController --> HomeAggregator
     HomeAggregator --> UpstreamClientFactory
 
-    note for MobileBffSecurityConfig "Target: WebFlux SecurityWebFilterChain\nJWKS from identity-service\nPermits /actuator/**, requires JWT elsewhere"
-    note for HomeAggregator "Target: parallel WebClient fan-out\nCaffeine cache per storeId\nResilience4j circuit breakers"
+    note for MobileBffSecurityConfig "WebFlux SecurityWebFilterChain\nJWKS from identity-service (:8081)\nPermits /actuator/** and /bff/mobile/v1/home, requires JWT on protected routes"
+    note for HomeAggregator "Parallel WebClient fan-out\nTimeout budgets and onErrorResume fallbacks"
 ```
 
 ---
 
 ## 5. Request Composition Flows
 
-### 5.1 Current Flow — Stub
-
-```mermaid
-sequenceDiagram
-    participant App as Mobile App
-    participant Istio as Istio Ingress
-    participant BFF as MobileBffController
-
-    App->>Istio: GET /m/v1/home
-    Istio->>BFF: route to :8097
-    BFF-->>Istio: 200 {"status":"ok"}
-    Istio-->>App: 200 {"status":"ok"}
-```
-
-### 5.2 Target Flow — Home Screen Aggregation
+### 5.1 Home Screen Aggregation Flow
 
 Per [browse-search-discovery §1.2 journey J1](../../docs/reviews/iter3/diagrams/lld/browse-search-discovery.md),
 the home screen is a parallel fan-out with p99 < 100 ms target latency.
@@ -371,7 +338,7 @@ Source: [`src/main/resources/application.yml`](src/main/resources/application.ym
 
 ```yaml
 server:
-  port: ${SERVER_PORT:8097}
+  port: ${SERVER_PORT:8080}
   shutdown: graceful
 
 spring:
@@ -430,8 +397,8 @@ internal:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SERVER_PORT` | `8097` | HTTP listen port |
-| `INTERNAL_SERVICE_TOKEN` | `dev-internal-token-change-in-prod` | Placeholder for future `X-Internal-Token` header (not enforced today) |
+| `SERVER_PORT` | `8080` | HTTP listen port |
+| `INTERNAL_SERVICE_TOKEN` | — | Per-service or shared internal service token for downstream calls |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/traces` | OTLP traces collector |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | `http://otel-collector.monitoring:4318/v1/metrics` | OTLP metrics collector |
 | `TRACING_PROBABILITY` | `1.0` | Trace sampling probability (1.0 = all requests) |
@@ -452,36 +419,32 @@ adds `IDENTITY_JWKS_URI` and per-upstream service URLs.
 
 | Dependency | Purpose | Actually used? |
 |------------|---------|---------------|
-| `spring-boot-starter-webflux` | Reactive HTTP server (Netty) + WebClient | **Yes** — controller returns `Mono` |
-| `spring-boot-starter-validation` | Bean validation | **No** — no `@Valid` annotations |
+| `spring-boot-starter-webflux` | Reactive HTTP server (Netty) + WebClient | **Yes** — reactive controllers, SSE, and `UpstreamClientFactory` |
+| `spring-boot-starter-validation` | Bean validation | **Yes** — request validation on BFF endpoints |
 | `spring-boot-starter-actuator` | Health, metrics, info endpoints | **Yes** — exposed at `/actuator/**` |
-| `spring-boot-starter-cache` | Cache abstraction | **Configured** (`caffeine` type) but no caches defined |
-| `resilience4j-spring-boot3` (2.2.0) | Circuit breakers, rate limiters | **No** — no instances configured |
-| `caffeine` (3.1.8) | In-process cache engine | **No** — backing engine present, no caches |
+| `spring-boot-starter-cache` | Cache abstraction | **Configured** (`caffeine` type) |
+| `resilience4j-spring-boot3` (2.2.0) | Circuit breakers, rate limiters | **Yes** — timeouts and `onErrorResume` fallback handling |
+| `caffeine` (3.1.8) | In-process cache engine | **Available** — configured via `spring.cache.type: caffeine` |
 | `micrometer-tracing-bridge-otel` | OTEL trace bridge | **Yes** — auto-configured via actuator |
 | `micrometer-registry-otlp` | OTLP metric export | **Yes** — `management.otlp.metrics` configured |
 | `micrometer-registry-prometheus` | Prometheus scrape | **Yes** — `/actuator/prometheus` exposed |
 | `logstash-logback-encoder` (7.4) | JSON-structured logs | **Yes** — on classpath, auto-configured |
-| `spring-boot-starter-test` (test) | JUnit 5 test support | **Present** — no test classes exist |
-| `reactor-test` (test) | `StepVerifier` for reactive testing | **Present** — no test classes exist |
+| `spring-boot-starter-test` (test) | JUnit 5 test support | **Yes** — unit and integration test suites |
+| `reactor-test` (test) | `StepVerifier` for reactive testing | **Yes** — reactive aggregator and filter tests |
 
-### 8.2 Upstream Service Dependencies (target)
-
-Per the iter3 browse/checkout LLDs, once aggregation is built:
+### 8.2 Upstream Service Dependencies
 
 | Service | Call pattern | Protocol |
 |---------|-------------|----------|
 | `catalog-service` (:8082) | `GET /products/{id}`, `GET /categories` | HTTP/REST |
-| `search-service` (:8086) | `GET /search`, `GET /search/autocomplete`, `GET /search/trending` | HTTP/REST |
-| `pricing-service` (:8087) | `GET /pricing/products/{id}` | HTTP/REST |
+| `search-service` (:8088) | `GET /search`, `GET /search/autocomplete`, `GET /search/trending` | HTTP/REST |
+| `pricing-service` (:8089) | `GET /pricing/products/{id}` | HTTP/REST |
 | `inventory-service` (:8083) | `GET /inventory/{productId}/store/{storeId}` | HTTP/REST |
-| `warehouse-service` (:8090) | `GET /stores/by-zone/{zoneId}` | HTTP/REST |
-| `cart-service` (:8088) | `GET/POST/PUT/DELETE /carts` | HTTP/REST |
+| `warehouse-service` (:8092) | `GET /stores/by-zone/{zoneId}` | HTTP/REST |
+| `cart-service` (:8090) | `GET/POST/PUT/DELETE /carts` | HTTP/REST |
 | `identity-service` (:8081) | JWKS at `/.well-known/jwks.json` | HTTP/REST |
-| `config-feature-flag-service` (:8096) | `GET /flags/{userId}` | HTTP/REST |
-| `checkout-orchestrator-service` (:8089) | `POST /checkout` | HTTP/REST (proxy) |
-
-**Current state:** none of these clients are implemented.
+| `config-feature-flag-service` (:8098) | `GET /flags/{userId}` | HTTP/REST |
+| `checkout-orchestrator-service` (:8091) | `POST /checkout` | HTTP/REST (proxy) |
 
 ### 8.3 Infrastructure Dependencies
 
@@ -565,27 +528,15 @@ Per [edge-identity §Wave 1 validation](../../docs/reviews/iter3/services/edge-i
 
 ## 11. Failure Modes
 
-### 11.1 Current Failure Surface
-
-Since the service is a scaffold returning a static `Mono.just(...)`, the only
-failure modes today are JVM/container-level:
-
-| Failure | Impact | Mitigation |
-|---------|--------|-----------|
-| Pod OOM / crash | Liveness probe fails → Kubernetes restart | HPA min 2 replicas |
-| Istio sidecar unavailable | Requests cannot route | PDB `maxUnavailable: 1` in Helm |
-
-### 11.2 Target Failure Modes
-
-Per [identity-edge-auth LLD §failure-modes](../../docs/reviews/iter3/diagrams/lld/identity-edge-auth.md):
+### 11.1 Runtime & Downstream Failure Modes
 
 | Failure | User impact | Detection | Mitigation |
 |---------|-------------|-----------|-----------|
-| **BFF pod down** | Mobile home screen fails | Readiness probe, HPA | Min 2 replicas; client-side retry; degraded UX |
-| **identity-service JWKS unreachable** | All authenticated requests rejected (401) | Circuit breaker state metric | Cache JWKS locally with TTL; fallback to cached key |
-| **catalog-service timeout** | Home screen missing categories | `http_client_requests_seconds` p99 spike | Circuit breaker opens; return cached/stale categories |
-| **search-service down** | Search returns empty | Circuit breaker OPEN metric | Fallback: static trending list or empty with message |
-| **Cascading fan-out failure** | All upstreams slow → BFF thread starvation | Request duration histogram | Per-upstream timeout budgets; partial response assembly |
+| **BFF pod down / OOM** | Mobile home screen fails | Readiness probe, HPA | Min 2 replicas; client-side retry; graceful shutdown |
+| **identity-service JWKS unreachable** | Authenticated requests rejected (401) | Auth error metric | Cache JWKS locally with TTL; fallback to cached key |
+| **catalog-service timeout** | Home screen missing categories | `http_client_requests_seconds` p99 spike | Timeout budget + `onErrorResume` degraded payload |
+| **search-service down** | Search/trending degraded | `onErrorResume` fallback counter | Degraded empty/cached trending list |
+| **Cascading fan-out failure** | All upstreams slow → BFF thread pressure | Request duration histogram | Per-upstream timeout budgets; partial response assembly |
 
 ---
 
@@ -598,10 +549,10 @@ Multi-stage build in [`Dockerfile`](Dockerfile):
 | Property | Value |
 |----------|-------|
 | Build stage | `gradle:9.4-jdk21` |
-| Runtime base | `eclipse-temurin:25-jre-alpine` |
+| Runtime base | `eclipse-temurin:21-jre-alpine` |
 | User | `app` (UID 1001, non-root) |
-| Port | `8097` |
-| Healthcheck | `wget -qO- http://localhost:8097/actuator/health/liveness` (30 s interval) |
+| Port | `8080` |
+| Healthcheck | `wget -qO- http://localhost:8080/actuator/health/liveness` (30 s interval) |
 | JVM flags | `-XX:MaxRAMPercentage=75.0 -XX:+UseZGC -Djava.security.egd=file:/dev/./urandom` |
 
 ### 12.2 Helm / Kubernetes
@@ -624,8 +575,8 @@ Istio VirtualService routes (from `values.yaml`):
 
 | Prefix | Destination |
 |--------|-------------|
-| `/bff/mobile/v1` | `mobile-bff-service:8097` |
-| `/m/v1` | `mobile-bff-service:8097` |
+| `/bff/mobile/v1` | `mobile-bff-service:8080` |
+| `/m/v1` | `mobile-bff-service:8080` |
 
 ### 12.3 CI
 
@@ -694,9 +645,9 @@ responsibilities to the target design. Observations grounded in
   review notes that returning `eta_low_minutes` / `eta_high_minutes` (p25/p75)
   instead of a single point estimate reduces support tickets when ETA drifts.
   This is a BFF-level response shaping concern.
-- **Auth at the edge** is universal — every production BFF validates tokens
-  before fan-out. The current scaffold's lack of any security chain is the
-  highest-priority gap relative to industry practice.
+- **Auth at the edge** is universal — `mobile-bff-service` validates customer
+  JWTs at the WebFlux security chain before downstream fan-out, and pairs this
+  with Istio mesh policies as defense-in-depth.
 
 ---
 
