@@ -9,7 +9,7 @@ import random
 import time
 from math import exp
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import numpy as np
 from fastapi import HTTPException

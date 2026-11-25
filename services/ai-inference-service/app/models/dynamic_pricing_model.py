@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import Field
 from app.models.base import MLBaseModel
 from prometheus_client import Counter, Histogram
 

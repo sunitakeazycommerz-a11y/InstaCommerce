@@ -389,7 +389,7 @@ jobs:
         working-directory: services/${{ matrix.service }}
         run: go build ./...
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64
           install-mode: "goinstall"
@@ -468,12 +468,10 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          pip install -r services/${{ matrix.service }}/requirements.txt
           pip install -r ml/requirements.txt
           pip install -r data-platform/quality/requirements.txt
-          pip install -r data-platform/streaming/requirements.txt
-          pip install -r data-platform/airflow/requirements.txt
           pip install -r data-platform-jobs/requirements.txt
+          pip install -r services/${{ matrix.service }}/requirements.txt
           pip install pytest httpx pytest-asyncio ruff pyright
       - name: Lint with ruff
         run: |
@@ -726,7 +724,7 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           pip install -r ml/requirements.txt
-          pip install pyright ruff
+          pip install pytest pyright ruff
       - name: Lint ML code with ruff
         run: ruff check ml
       - name: Type check ML code with pyright
