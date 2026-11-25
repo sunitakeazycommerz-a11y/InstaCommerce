@@ -117,13 +117,14 @@ with DAG(
         aiplatform.init(project=PROJECT_ID, location=FEATURE_STORE_REGION)
 
         for feature_name in FEATURE_QUERIES:
-            entity_type = aiplatform.featurestore.EntityType(
+            entity_type = aiplatform.EntityType(
                 entity_type_name=feature_name,
                 featurestore_id=FEATURE_STORE_ID,
             )
             entity_type.ingest_from_bq(
                 bq_source_uri=f"bq://{PROJECT_ID}.features.{feature_name}",
                 feature_ids=["*"],
+                feature_time="feature_timestamp",
                 entity_id_field="entity_id",
             )
 

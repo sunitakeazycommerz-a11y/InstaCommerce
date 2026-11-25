@@ -478,9 +478,7 @@ jobs:
           ruff check .
           ruff check services/${{ matrix.service }}
       - name: Type check with pyright
-        run: |
-          pyright
-          pyright services/${{ matrix.service }}
+        run: pyright services/${{ matrix.service }}
       - name: Run tests
         run: |
           (
@@ -779,7 +777,7 @@ jobs:
       - name: Install governance tooling
         run: |
           python3 -m pip install --upgrade pip
-          pip install ruff pyright pyyaml
+          pip install ruff pyright pyyaml pytest
       - name: Lint repository Python code with ruff
         run: ruff check .
       - name: Type check platform scripts with pyright
