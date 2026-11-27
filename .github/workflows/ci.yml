@@ -375,7 +375,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: services/${{ matrix.service }}/go.mod
           cache: true
@@ -389,7 +389,7 @@ jobs:
         working-directory: services/${{ matrix.service }}
         run: go build ./...
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v1.64
           install-mode: "goinstall"
@@ -551,7 +551,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'services/go-shared/go.mod'
           cache-dependency-path: 'services/go-shared/go.sum'
